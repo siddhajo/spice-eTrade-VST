@@ -169,15 +169,27 @@ const ROLE_PERMISSIONS = {
     'export',       // download XLSX / PDF / CSV exports
     'self_password' // change own password
   ]),
+  // Field-staff role for the auction-hall lot entry workflow. Sees only
+  // the Lot Entry tab in the sidebar (everything else is gated by
+  // `view`, which lot_entry intentionally lacks). The narrow scope —
+  // create trades, search sellers, create/edit own lots — matches what
+  // the original PWA admin exposed to non-admin users in the field.
+  lot_entry: new Set([
+    'self_password',
+    'lot_entry_view',  // see auctions list + own lots only (NOT general 'view')
+    'lot_write',       // create/edit own lots; trader search via lot-entry views
+    'auction_write'    // create new trades on the fly during an auction day
+  ]),
   operator: new Set([
     'view', 'export', 'self_password',
+    'lot_entry_view', // operators can also use the Lot Entry tab if they want
     'lot_write',     // create/edit lots, calculate, validate, price-import
     'invoice_write', // generate sales/purchase/bills + edit
     'trader_write',  // create/edit/delete-bank traders
     'buyer_write'    // create/edit buyers (per user decision: tax fields editable)
   ]),
   manager: new Set([
-    'view', 'export', 'self_password',
+    'view', 'export', 'self_password', 'lot_entry_view',
     'lot_write', 'invoice_write', 'trader_write', 'buyer_write',
     'auction_write',  // create/edit auctions (trades)
     'invoice_revert', // revert sales/purchase/bills (undo invoice)
@@ -185,7 +197,7 @@ const ROLE_PERMISSIONS = {
     'state_toggle'    // toggle business state TN ↔ KL
   ]),
   admin: new Set([
-    'view', 'export', 'self_password',
+    'view', 'export', 'self_password', 'lot_entry_view',
     'lot_write', 'invoice_write', 'trader_write', 'buyer_write',
     'auction_write', 'invoice_revert', 'settings_write', 'state_toggle',
     'delete',       // delete any individual record
@@ -228,9 +240,32 @@ function requirePermission(capability) {
   };
 }
 
+// Same idea but accepts ANY of a list of capabilities. Used for endpoints
+// that serve multiple roles — e.g., the trader search endpoint, which
+// general operators reach through 'view' and lot-entry users reach
+// through their own lot_entry_view capability.
+function requireAnyPermission(...capabilities) {
+  return (req, res, next) => {
+    requireAuth(req, res, (err) => {
+      if (err) return next(err);
+      if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+      const hasAny = capabilities.some(c => userHas(req.user.role, c));
+      if (!hasAny) {
+        return res.status(403).json({
+          error: `Your role (${req.user.role}) does not allow this action`,
+          required: capabilities.join(' or '),
+          role: req.user.role
+        });
+      }
+      next();
+    });
+  };
+}
+
 // Convenience aliases — readable names for the most common gate points.
 // Encapsulates the permission name so callers don't repeat string literals.
 const requireView          = requirePermission('view');
+const requireViewOrLotEntry = requireAnyPermission('view', 'lot_entry_view');
 const requireLotWrite      = requirePermission('lot_write');
 const requireInvoiceWrite  = requirePermission('invoice_write');
 const requireInvoiceRevert = requirePermission('invoice_revert');
@@ -269,7 +304,7 @@ app.post('/api/logout', (req, res) => {
   if (t) getDb().run('DELETE FROM sessions WHERE token = ?', [t]);
   res.json({ success: true });
 });
-app.get('/api/me', requireView, (req, res) => {
+app.get('/api/me', requireAnyPermission('view', 'lot_entry_view', 'self_password'), (req, res) => {
   const permissions = Array.from(ROLE_PERMISSIONS[req.user.role] || ROLE_PERMISSIONS.viewer);
   res.json({ username: req.user.username, role: req.user.role, permissions });
 });
@@ -296,7 +331,7 @@ app.post('/api/users', requireUserManage, (req, res) => {
   // Validate role against the known set. Default to 'operator' (the most
   // common and least privileged write-capable role) if missing or invalid.
   // Legacy 'user' role is mapped to 'viewer' for backward compat.
-  const VALID_ROLES = ['viewer', 'operator', 'manager', 'admin'];
+  const VALID_ROLES = ['viewer', 'lot_entry', 'operator', 'manager', 'admin'];
   let finalRole = (role || '').toLowerCase();
   if (finalRole === 'user') finalRole = 'viewer';
   if (!VALID_ROLES.includes(finalRole)) finalRole = 'operator';
@@ -315,7 +350,7 @@ app.post('/api/users', requireUserManage, (req, res) => {
 // recreating them). Admin-only — same gate as creating users.
 app.put('/api/users/:id/role', requireUserManage, (req, res) => {
   const { role } = req.body || {};
-  const VALID_ROLES = ['viewer', 'operator', 'manager', 'admin'];
+  const VALID_ROLES = ['viewer', 'lot_entry', 'operator', 'manager', 'admin'];
   let finalRole = String(role || '').toLowerCase();
   if (finalRole === 'user') finalRole = 'viewer';
   if (!VALID_ROLES.includes(finalRole)) {
@@ -405,14 +440,14 @@ app.delete('/api/me/sessions/:tokenSuffix', requireView, (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // COMPANY SETTINGS
 // ══════════════════════════════════════════════════════════════
-app.get('/api/company-settings', requireView, (req, res) => {
+app.get('/api/company-settings', requireViewOrLotEntry, (req, res) => {
   res.json({ categories: CATEGORIES, settings: getAllSettings(getDb()) });
 });
 app.put('/api/company-settings', requireSettingsWrite, (req, res) => {
   const count = updateSettings(getDb(), req.body.settings || {});
   res.json({ success: true, updated: count });
 });
-app.get('/api/company-settings/flat', requireView, (req, res) => res.json(getSettingsFlat(getDb())));
+app.get('/api/company-settings/flat', requireViewOrLotEntry, (req, res) => res.json(getSettingsFlat(getDb())));
 
 // ── Company identity presets — REMOVED in e-Trade-only build ──────────
 // The original Spice Config app had ISP/ASP preset switching tied to the
@@ -596,7 +631,7 @@ app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // TRADERS (NAM.DBF — sellers/poolers)
 // ══════════════════════════════════════════════════════════════
-app.get('/api/traders', requireView, (req, res) => {
+app.get('/api/traders', requireViewOrLotEntry, (req, res) => {
   const { search, limit } = req.query;
   const db = getDb();
   // Helper: attach the `banks` array to each trader row (from trader_banks
@@ -632,7 +667,7 @@ app.get('/api/traders', requireView, (req, res) => {
   }
   res.json(hydrateBanks(db.all('SELECT * FROM traders ORDER BY name LIMIT 500')));
 });
-app.get('/api/traders/:id', requireView, (req, res) => {
+app.get('/api/traders/:id', requireViewOrLotEntry, (req, res) => {
   const db = getDb();
   const row = db.get('SELECT * FROM traders WHERE id = ?', [req.params.id]);
   if (!row) return res.status(404).json({ error: 'Not found' });
@@ -930,7 +965,7 @@ app.get('/api/buyers/template', requireExport, async (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // AUCTIONS
 // ══════════════════════════════════════════════════════════════
-app.get('/api/auctions', requireView, (req, res) => {
+app.get('/api/auctions', requireViewOrLotEntry, (req, res) => {
   const rows = getDb().all('SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) as lot_count FROM auctions ORDER BY date DESC, ano DESC LIMIT 100');
   res.json(withFmtDate(rows));
 });
@@ -1243,7 +1278,7 @@ app.get('/api/auctions/template', requireExport, async (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // LOTS (CPA1.DBF — main data)
 // ══════════════════════════════════════════════════════════════
-app.get('/api/lots/:auctionId', requireView, (req, res) => {
+app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
   const { branch, name, buyer } = req.query;
   // Correlated subquery (not LEFT JOIN) to avoid any risk of row duplication
   // if the same buyer code exists multiple times in the buyers table.
@@ -1316,7 +1351,7 @@ app.post('/api/lots/calculate-all', requireLotWrite, (req, res) => {
 });
 
 // ── Data validation (PRICHECK.PRG) ───────────────────────────
-app.get('/api/lots/validate/:auctionId', requireView, (req, res) => {
+app.get('/api/lots/validate/:auctionId', requireViewOrLotEntry, (req, res) => {
   const rows = getDb().all(
     `SELECT * FROM lots WHERE auction_id = ? AND (price = 0 OR amount = 0 OR buyer = '' OR code = '' OR ROUND(qty*price,2) <> ROUND(amount,2))`,
     [req.params.auctionId]);

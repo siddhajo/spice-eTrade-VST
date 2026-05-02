@@ -59,6 +59,7 @@ const DEFAULTS = [
   { key: 'sb_refund',       value: '2.85',           category: 'rates',     label: 'SB Sample Refund (Kgs)',   type: 'number' },
   { key: 'gst_goods',       value: '5',              category: 'rates',     label: 'GST Goods Rate %',         type: 'number' },
   { key: 'gst_service',     value: '18',             category: 'rates',     label: 'GST Service Rate %',       type: 'number' },
+  { key: 'discount_gst',    value: '5',              category: 'rates',     label: 'Discount GST %',           type: 'number' },
   { key: 'tcs_tds',         value: '0.1',            category: 'rates',     label: 'TCS / TDS Rate %',         type: 'number' },
   { key: 'tds_purchase_rate', value: '0.1',          category: 'rates',     label: 'TDS on Purchase Rate % (Section 194Q)',  type: 'number' },
   { key: 'tds_threshold',   value: '5000000',        category: 'rates',     label: 'TDS / TCS Annual Threshold (₹) — default ₹50 lakh per Section 194Q/206C(1H)',  type: 'number' },

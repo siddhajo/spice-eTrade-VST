@@ -1040,7 +1040,8 @@ input.dt-search{
 .needs-delete,
 .needs-delete-all,
 .needs-user-manage,
-.needs-export{display:none !important}
+.needs-export,
+.needs-lot-entry-view{display:none !important}
 body[data-perm-lot-write="1"]      .needs-lot-write,
 body[data-perm-invoice-write="1"]  .needs-invoice-write,
 body[data-perm-invoice-revert="1"] .needs-invoice-revert,
@@ -1052,6 +1053,7 @@ body[data-perm-state-toggle="1"]   .needs-state-toggle,
 body[data-perm-delete="1"]         .needs-delete,
 body[data-perm-delete-all="1"]     .needs-delete-all,
 body[data-perm-user-manage="1"]    .needs-user-manage,
+body[data-perm-lot-entry-view="1"] .needs-lot-entry-view,
 body[data-perm-export="1"]         .needs-export{display:initial !important}
 /* Restore inline-flex for buttons since `display:initial` reverts to inline */
 body[data-perm-lot-write="1"]      .btn.needs-lot-write,
@@ -1072,6 +1074,16 @@ body[data-perm-invoice-revert="1"] .icon-btn.needs-invoice-revert{display:inline
 /* Sidebar entries for restricted sections */
 body[data-perm-user-manage="1"]    .side-item.needs-user-manage{display:flex !important}
 body[data-perm-settings-write="1"] .side-item.needs-settings-write{display:flex !important}
+body[data-perm-lot-entry-view="1"] .side-item.needs-lot-entry-view{display:flex !important}
+
+/* Lot-entry-only role: hide every sidebar item except Lot Entry.
+   Sidebar items get scoped this way so a lot_entry user can't even
+   navigate to other tabs through the URL — buttons are gone, deep
+   links are protected by the server's permission gates anyway. */
+body[data-role="lot_entry"] .side-item:not([data-tab="lotentry"]):not(.sb-collapse-btn),
+body[data-role="lot_entry"] .side-group-lbl,
+body[data-role="lot_entry"] .topbar-comfort,
+body[data-role="lot_entry"] #comfort-toggle{display:none !important}
 
 /* ── Comfort Mode ──────────────────────────────────────
    Toggleable larger-text mode for older / vision-impaired users.
@@ -1404,6 +1416,15 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           Lots
         </button>
+        <!-- Lot Entry — fast desktop entry form for the auction-hall
+             workflow (one row per lot, seller search, save & next).
+             Uses the existing /api/traders + /api/lots endpoints so
+             data flows straight into the same DB the admin views.
+             Visible to lot_entry, operator, manager, admin roles. -->
+        <button class="side-item needs-lot-entry-view" data-tab="lotentry" onclick="go('lotentry')">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Lot Entry
+        </button>
       </div>
       <div class="side-group">
         <div class="side-group-lbl">Transactions</div>
@@ -1450,6 +1471,25 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           To Tally
         </button>
+      </div>
+      <!-- External apps — open in new tab, hosted as separate Railway
+           deployments. The lot-entry PWA has its own DB; lot data still
+           flows into e-Trade via the existing Import (DBF/Excel) workflow.
+           Using <a target="_blank"> instead of a button so the browser
+           handles the new-tab open natively (middle-click / Cmd-click
+           behavior works as expected). -->
+      <div class="side-group">
+        <div class="side-group-lbl">External</div>
+        <a class="side-item"
+           href="https://spice-auction-lot-entry-production.up.railway.app/app.html"
+           target="_blank" rel="noopener noreferrer"
+           style="text-decoration:none">
+          <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <span style="display:flex;align-items:center;gap:6px;flex:1">
+            Lot Entry
+            <svg viewBox="0 0 24 24" style="width:11px;height:11px;opacity:.6;flex-shrink:0"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+          </span>
+        </a>
       </div>
     </aside>
 
@@ -1793,6 +1833,164 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="overflow-x:auto"><table><thead><tr><th>Lot</th><th>Name</th><th>Branch</th><th>Bags</th><th>Qty</th><th>Price</th><th>Amount</th><th>Buyer</th><th>PurAmt</th><th>Payable</th><th>Actions</th></tr></thead><tbody id="lots-list"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- LOT ENTRY — fast desktop entry form modeled on the PWA app.html
+         workflow but using e-Trade's existing /api/auctions, /api/traders,
+         /api/lots endpoints. Layout: trade + branch picker on top, then
+         a single-column entry form, then a recent-entries panel below.
+         Save & Next keeps the seller selected and clears only the
+         lot-specific fields (lot no, bags, litre, qty). -->
+    <div class="tc" id="tc-lotentry">
+      <div class="card" style="padding:18px 22px;margin-bottom:16px">
+        <h2 style="display:flex;align-items:center;gap:10px;margin:0">
+          <span style="width:36px;height:36px;border-radius:10px;background:#DBEAFE;display:inline-flex;align-items:center;justify-content:center;font-size:20px">📝</span>
+          Lot Entry
+          <span style="font-weight:400;font-size:12px;color:var(--text3);margin-left:auto">Fast entry — Tab between fields, Enter to save</span>
+        </h2>
+      </div>
+
+      <!-- Trade + branch picker — small bar at the top, sticky-feeling -->
+      <div class="card" style="padding:12px 18px;margin-bottom:14px">
+        <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Trade (Auction)</div>
+            <div style="display:flex;gap:6px">
+              <select id="le-auction" onchange="leOnAuctionChange()" style="flex:1;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff"></select>
+              <button class="btn btn-g" onclick="leOpenNewTradeModal()" title="Create a new trade" style="height:38px;padding:0 12px;font-size:13px;font-weight:600;flex-shrink:0">+ New Trade</button>
+            </div>
+          </div>
+          <div style="min-width:160px">
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Branch</div>
+            <input type="text" id="le-branch" placeholder="e.g. BODI" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;text-transform:uppercase">
+          </div>
+          <div style="min-width:140px">
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">My Today's Lots</div>
+            <div id="le-stats" style="height:38px;padding:0 12px;display:inline-flex;align-items:center;background:var(--green-bg);color:var(--green);font-weight:700;border-radius:8px;font-size:14px;font-family:monospace">0 lots · 0 kg</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- New Trade modal — quick form, mirrors PWA admin's Create Trade UX
+           but trimmed to essentials. Lot allocations are skipped here;
+           admin can still edit them later from the Auctions tab if needed. -->
+      <div class="modal-overlay" id="le-newtrade-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
+        <div style="background:#fff;border-radius:14px;width:min(440px,92vw);padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+          <h3 style="margin:0 0 14px;font-size:16px;display:flex;align-items:center;gap:8px">
+            <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
+            Create New Trade
+          </h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Trade #</div>
+              <input type="number" id="le-nt-ano" min="1" placeholder="e.g. 16" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Date</div>
+              <input type="date" id="le-nt-date" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Crop Type</div>
+              <input type="text" id="le-nt-crop" placeholder="e.g. ASP" value="ASP" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;text-transform:uppercase">
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">State</div>
+              <select id="le-nt-state" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff">
+                <option value="TAMIL NADU" selected>TAMIL NADU</option>
+                <option value="KERALA">KERALA</option>
+              </select>
+            </div>
+          </div>
+          <div id="le-nt-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-o" onclick="leCloseNewTradeModal()" style="height:38px;padding:0 16px">Cancel</button>
+            <button class="btn btn-g" id="le-nt-save" onclick="leSaveNewTrade()" style="height:38px;padding:0 18px;font-weight:600">Create Trade</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Entry form — main card -->
+      <div class="card" id="le-form-card" style="padding:20px 24px;display:none">
+        <!-- Seller picker / search -->
+        <div id="le-seller-row" style="margin-bottom:16px">
+          <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Seller</div>
+          <!-- Search box (visible until a seller is picked) -->
+          <div id="le-seller-search-wrap" style="position:relative">
+            <input type="text" id="le-seller-search" placeholder="Search by name, phone, CR no, or PAN…" autocomplete="off" oninput="leSearchSeller(this.value)" onfocus="leSearchSeller(this.value)" style="width:100%;height:42px;padding:0 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            <div id="le-seller-results" style="display:none;position:absolute;top:46px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);max-height:280px;overflow-y:auto;z-index:10"></div>
+          </div>
+          <!-- Selected seller card (hidden until a seller is picked) -->
+          <div id="le-seller-card" style="display:none;padding:10px 14px;border:1.5px solid var(--green);background:var(--green-bg);border-radius:8px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="flex:1">
+                <div id="le-seller-name" style="font-weight:700;font-size:14px;color:var(--text)"></div>
+                <div id="le-seller-meta" style="font-size:11px;color:var(--text3);margin-top:2px"></div>
+              </div>
+              <button class="btn btn-o" onclick="leClearSeller()" style="padding:4px 10px;font-size:12px;height:32px">Change</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lot fields grid -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Lot No</div>
+            <input type="text" id="le-lotno" placeholder="e.g. 501" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;font-family:monospace;font-weight:600">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Grade</div>
+            <select id="le-grade" style="width:100%;height:40px;padding:0 8px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff">
+              <option value="1">1</option>
+              <option value="1A">1A</option>
+              <option value="2">2</option>
+              <option value="2A">2A</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Bags</div>
+            <input type="number" id="le-bags" min="0" placeholder="0" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Litre Wt</div>
+            <input type="number" id="le-litre" min="0" placeholder="0" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px">
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Net Weight (kg)</div>
+            <input type="number" id="le-qty" step="0.001" min="0" placeholder="0.000" oninput="leCalcGross()" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--green);border-radius:8px;font-size:16px;font-weight:700;color:var(--green)">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Sample Wt</div>
+            <input type="number" id="le-sample" step="0.001" min="0" placeholder="0.000" oninput="leCalcGross()" readonly style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--text3)">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Gross Wt</div>
+            <input type="number" id="le-gross" readonly style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--green);font-weight:700">
+          </div>
+        </div>
+
+        <div id="le-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:12px"></div>
+
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn btn-g" id="le-save-btn" onclick="leSaveLot()" style="flex:2;height:46px;font-size:15px;font-weight:700">
+            <span>Save &amp; Next</span>
+            <span style="font-size:11px;opacity:.7;margin-left:8px">[Enter]</span>
+          </button>
+          <button class="btn btn-o" onclick="leResetForm()" style="flex:1;height:46px;font-size:14px">Clear</button>
+        </div>
+      </div>
+
+      <!-- Recent entries — today's lots from this auction -->
+      <div class="card" style="padding:16px 20px;margin-top:16px">
+        <h3 style="margin:0 0 12px;font-size:14px;color:var(--text);display:flex;align-items:center;gap:8px">
+          <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
+          Recent entries — this auction
+          <span id="le-recent-count" style="font-weight:400;color:var(--text3);font-size:12px;margin-left:auto"></span>
+        </h3>
+        <div id="le-recent-list" style="font-size:13px"></div>
       </div>
     </div>
 
@@ -3590,14 +3788,18 @@ function can(capability){
 // like .needs-lot-write — see styles below.
 function applyPermissionAttributes(){
   const body = document.body;
-  // Clear all old perm-* attributes
+  // Clear all old perm-* attributes + role attribute
   for (const attr of Array.from(body.attributes)) {
     if (attr.name.startsWith('data-perm-')) body.removeAttribute(attr.name);
   }
+  body.removeAttribute('data-role');
   // Set fresh attributes for current permissions
   for (const cap of window._userPerms) {
     body.setAttribute('data-perm-' + cap.replace(/_/g,'-'), '1');
   }
+  // Set role attribute for role-based UI gating (lot_entry hides
+  // everything except Lot Entry sidebar item, etc.)
+  if (window._userRole) body.setAttribute('data-role', window._userRole);
   // Update the role badge in the topbar with role-themed colors
   const badge = document.getElementById('user-role-badge');
   if (badge && window._userRole) {
@@ -3606,13 +3808,14 @@ function applyPermissionAttributes(){
       admin:    { bg:'var(--spice-chili-lt)',    fg:'var(--spice-chili-dk)' },
       manager:  { bg:'var(--spice-cardamom-lt)', fg:'var(--spice-cardamom-dk)' },
       operator: { bg:'var(--spice-saffron-lt)',  fg:'var(--spice-saffron-dk)' },
+      lot_entry:{ bg:'#DBEAFE',                  fg:'#1E40AF' }, // blue — field staff
       viewer:   { bg:'#f1f5f9',                  fg:'#64748b' },
       user:     { bg:'#f1f5f9',                  fg:'#64748b' }, // legacy
     };
     const t = themes[role] || themes.viewer;
     badge.style.background = t.bg;
     badge.style.color = t.fg;
-    badge.textContent = role === 'user' ? 'viewer' : role;
+    badge.textContent = role === 'user' ? 'viewer' : role.replace('_',' ');
     badge.style.display = 'inline-block';
   }
 }
@@ -3631,7 +3834,9 @@ async function login(){
   // new tab/window leaves the badge showing the fallback until the user
   // navigates to Settings.
   try { await loadSettings(); } catch(_) {}
-  go('dash');}
+  // lot_entry users land directly on the Lot Entry tab — they can't see
+  // dash/anything else anyway, so this saves a click.
+  go(window._userRole === 'lot_entry' ? 'lotentry' : 'dash');}
   catch(x){e.textContent='Invalid credentials';e.style.display='block'}}
 function logout(){h('/api/logout',{method:'POST'});T='';localStorage.removeItem('t');
   window._userRole=null;window._userPerms=new Set();
@@ -3656,7 +3861,7 @@ function logout(){h('/api/logout',{method:'POST'});T='';localStorage.removeItem(
   // Await loadSettings so _sdata is populated before any UI renders —
   // ensures the topbar badge shows the correct Logo Code on tab open.
   try { await loadSettings(); } catch(_) {}
-  go('dash');}catch(e){T='';localStorage.removeItem('t')}})();
+  go(window._userRole === 'lot_entry' ? 'lotentry' : 'dash');}catch(e){T='';localStorage.removeItem('t')}})();
 
 // ── Navigation ────────────────────────────────────────────
 // Track the most recently activated tab so the topbar Refresh button
@@ -3667,7 +3872,15 @@ function go(tab){
   document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
   document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
   const el=document.getElementById('tc-'+tab);if(el)el.classList.add('active');
-  const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,users:loadUsers,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
+  // Refresh the topbar badge on every tab change. This is belt-and-
+  // suspenders defense against race conditions where the badge didn't
+  // get its display flipped during the initial load — if `_sdata` is
+  // populated (which is by the time any tab is reachable), the badge
+  // text will pick up the correct Logo Code value.
+  if (typeof applyLogoBadge === 'function') {
+    try { applyLogoBadge(); } catch(_) {}
+  }
+  const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
     bills:loadBillAuctions,debit:loadDebitNotes,journals:loadJournalDefault,tally:loadTallyAuctions};
@@ -4464,10 +4677,10 @@ async function loadFormulas(){
     },
     {
       label: 'GST on Discount (only when "Discount includes GST" flag is ON)',
-      note: 'Discount is treated as a finance/credit service when this flag is on; uses the Service GST rate (default 18%).',
-      formula: `Intra-state:  CGST = round( Discount × ${pill('Service GST/2', '(' + num('gst_service','18') + '/2)')} / 100 )<br>
+      note: 'Discount-on-purchase GST. Configurable separately from goods/service GST — use the Discount GST % setting in Rates.',
+      formula: `Intra-state:  CGST = round( Discount × ${pill('Discount GST/2', '(' + num('discount_gst','5') + '/2)')} / 100 )<br>
                 Intra-state:  SGST = same as CGST<br>
-                Inter-state:  IGST = round( Discount × ${pill('Service GST', num('gst_service','18'))} / 100 )<br>
+                Inter-state:  IGST = round( Discount × ${pill('Discount GST', num('discount_gst','5'))} / 100 )<br>
                 Discount-includes-GST flag: ${pill('flag_disc_gst', v('flag_disc_gst','false'))}`,
     },
     {
@@ -4588,6 +4801,372 @@ async function loadFormulas(){
   html += '</div>';
   host.innerHTML = html;
 }
+
+// ══════════════════════════════════════════════════════════════
+// LOT ENTRY — fast desktop entry form
+// ══════════════════════════════════════════════════════════════
+// Modeled on the PWA app.html workflow but speaks directly to e-Trade's
+// existing /api/auctions, /api/traders, /api/lots endpoints. Keeping the
+// state confined to a single `_le` object so it's easy to reset between
+// auctions and so we don't pollute window.* with another half-dozen
+// globals.
+const _le = {
+  selectedSeller: null,    // { id, name, cr, pan, tel, ppla, pin, ... } from /api/traders
+  searchTimer: null,       // debounce timer for seller search
+  recentLots: [],          // today's lots in this auction (refreshed after each save)
+  sampleWeight: 0,         // from settings (sample_wt config key, defaults to 0)
+};
+
+// ── New Trade modal ────────────────────────────────────────
+// Quick-create flow — admin/operator/manager/lot_entry can spin up a
+// new trade without leaving the Lot Entry tab. Posts to e-Trade's
+// existing POST /api/auctions endpoint, which means the new trade is
+// immediately visible in the regular Auctions tab too.
+function leOpenNewTradeModal(){
+  // Default date to today, suggest next trade number based on existing
+  // auctions visible in the dropdown (max ano + 1, or 1 if empty).
+  const sel = document.getElementById('le-auction');
+  let maxAno = 0;
+  for (const opt of sel.options) {
+    const m = (opt.textContent || '').match(/Trade #(\d+)/);
+    if (m) maxAno = Math.max(maxAno, parseInt(m[1], 10));
+  }
+  document.getElementById('le-nt-ano').value = maxAno + 1;
+  document.getElementById('le-nt-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('le-nt-crop').value = 'ASP';
+  document.getElementById('le-nt-state').value = 'TAMIL NADU';
+  document.getElementById('le-nt-err').style.display = 'none';
+  document.getElementById('le-newtrade-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('le-nt-ano').focus(), 50);
+}
+
+function leCloseNewTradeModal(){
+  document.getElementById('le-newtrade-modal').style.display = 'none';
+}
+
+async function leSaveNewTrade(){
+  const ano   = parseInt(document.getElementById('le-nt-ano').value, 10);
+  const date  = document.getElementById('le-nt-date').value;
+  const crop  = (document.getElementById('le-nt-crop').value || 'ASP').trim().toUpperCase();
+  const state = document.getElementById('le-nt-state').value;
+  const err   = document.getElementById('le-nt-err');
+  const showErr = (msg) => { err.textContent = msg; err.style.display = 'block'; };
+
+  if (!Number.isFinite(ano) || ano < 1) return showErr('Trade # must be a positive number');
+  if (!date) return showErr('Date is required');
+
+  const btn = document.getElementById('le-nt-save');
+  btn.disabled = true;
+  try {
+    const result = await j('/api/auctions', {
+      method: 'POST',
+      body: JSON.stringify({ ano, date, crop_type: crop, state })
+    });
+    toast(`Trade #${ano} created ✓`);
+    leCloseNewTradeModal();
+    // Reload the auction list and auto-select the newly created trade.
+    // The server returns { id } from POST /api/auctions, but the GET
+    // includes more fields — easier to just refresh and select by id.
+    const auctions = await j('/api/auctions');
+    const sel = document.getElementById('le-auction');
+    sel.innerHTML = '<option value="">-- Select trade --</option>' +
+      (auctions || []).map(a => {
+        const dateFmt = (a.date || '').split('T')[0];
+        const status = a.status || '';
+        const label = `Trade #${a.ano} · ${dateFmt}${status === 'closed' ? ' (closed)' : ''}`;
+        return `<option value="${a.id}" ${status==='closed'?'disabled':''}>${esc(label)}</option>`;
+      }).join('');
+    if (result && result.id) {
+      sel.value = String(result.id);
+      leOnAuctionChange();
+    }
+  } catch (e) {
+    showErr(e.message || 'Failed to create trade');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadLotEntry(){
+  // Populate the auction picker with active auctions, then wait for the
+  // user to pick one before showing the entry form. We don't auto-select
+  // because picking the wrong auction is the most expensive mistake in
+  // this workflow — better to make it a deliberate click.
+  try {
+    const auctions = await j('/api/auctions');
+    const sel = document.getElementById('le-auction');
+    sel.innerHTML = '<option value="">-- Select trade --</option>' +
+      (auctions || []).map(a => {
+        const dateFmt = (a.date || '').split('T')[0];
+        const status = a.status || '';
+        const label = `Trade #${a.ano} · ${dateFmt}${status === 'closed' ? ' (closed)' : ''}`;
+        return `<option value="${a.id}" ${status==='closed'?'disabled':''}>${esc(label)}</option>`;
+      }).join('');
+    // Read sample weight from settings (cfg key 'sample_wt' if present —
+    // matches the PWA's cfgSampleWeight). Fallback 0.
+    try {
+      const cfg = await j('/api/company-settings/flat');
+      _le.sampleWeight = Number(cfg.sample_wt || cfg.sampleWeight || 0) || 0;
+    } catch(e) { _le.sampleWeight = 0; }
+    // Pre-fill the branch from the current logged-in user's preference,
+    // saved in localStorage. Same key the PWA used so phones logging in
+    // here keep their branch.
+    const savedBranch = (typeof localStorage !== 'undefined') ? (localStorage.getItem('le_branch') || '') : '';
+    document.getElementById('le-branch').value = savedBranch;
+  } catch (e) {
+    console.error('Lot Entry: failed to load auctions', e);
+    toast('Could not load auctions');
+  }
+}
+
+function leOnAuctionChange(){
+  const aid = document.getElementById('le-auction').value;
+  document.getElementById('le-form-card').style.display = aid ? 'block' : 'none';
+  if (!aid) { _le.recentLots = []; renderLeRecent(); return; }
+  // Reset fields, then load this auction's existing lots so the user
+  // sees what's already been entered (helps avoid duplicates).
+  leResetForm();
+  // Default sample weight from config
+  document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
+  // Persist the picked auction so the user doesn't have to reselect
+  // after a refresh.
+  try { localStorage.setItem('le_aid', aid); } catch(e){}
+  // Save branch as user types
+  document.getElementById('le-branch').addEventListener('change', function(){
+    try { localStorage.setItem('le_branch', this.value.trim().toUpperCase()); } catch(e){}
+  }, { once: true });
+  // Focus seller search to start fast entry flow
+  setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
+  loadLeRecent();
+}
+
+// Live seller search — debounced 200ms, hits /api/traders?search=
+async function leSearchSeller(q){
+  clearTimeout(_le.searchTimer);
+  const results = document.getElementById('le-seller-results');
+  if (!q || q.trim().length < 2) {
+    results.style.display = 'none';
+    return;
+  }
+  _le.searchTimer = setTimeout(async () => {
+    try {
+      const traders = await j(`/api/traders?search=${encodeURIComponent(q.trim())}&limit=10`);
+      if (!Array.isArray(traders) || !traders.length) {
+        results.innerHTML = '<div style="padding:12px;color:var(--text3);font-size:13px;text-align:center">No sellers found. Ask admin to add this seller.</div>';
+        results.style.display = 'block';
+        return;
+      }
+      results.innerHTML = traders.map((t, i) => {
+        const loc = [t.ppla, t.pin].filter(Boolean).join(', ');
+        const meta = [t.cr, t.tel].filter(Boolean).join(' · ');
+        return `<div class="le-seller-result" data-idx="${i}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s">
+          <div style="font-weight:600;color:var(--text)">${esc(t.name||'')}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(loc)}${meta?' — '+esc(meta):''}</div>
+        </div>`;
+      }).join('');
+      results.style.display = 'block';
+      results._traders = traders;
+      results.querySelectorAll('.le-seller-result').forEach(el => {
+        el.onmouseenter = () => el.style.background = 'var(--bg)';
+        el.onmouseleave = () => el.style.background = '';
+        el.onclick = () => lePickSeller(traders[parseInt(el.dataset.idx,10)]);
+      });
+    } catch (e) {
+      console.error('Seller search failed:', e);
+    }
+  }, 200);
+}
+
+function lePickSeller(t){
+  _le.selectedSeller = t;
+  document.getElementById('le-seller-name').textContent = t.name || '';
+  const loc = [t.ppla, t.pin, t.pstate].filter(Boolean).join(', ');
+  const meta = [t.cr, t.tel, t.pan].filter(Boolean).join(' · ');
+  document.getElementById('le-seller-meta').textContent = [loc, meta].filter(Boolean).join('  ·  ');
+  document.getElementById('le-seller-card').style.display = 'block';
+  document.getElementById('le-seller-search-wrap').style.display = 'none';
+  document.getElementById('le-seller-results').style.display = 'none';
+  // Auto-select grade based on CR field — same heuristic as the PWA:
+  //   CR.* prefix → grade 1 (registered)
+  //   GSTIN-shaped (15 chars) → grade 2 (GST-registered)
+  //   anything else → grade 1
+  const cr = String(t.cr || '').trim();
+  let grade = '1';
+  if (cr.length > 5 && !cr.toUpperCase().startsWith('CR.')) grade = '2';
+  document.getElementById('le-grade').value = grade;
+  // Focus lot no field next
+  setTimeout(() => document.getElementById('le-lotno').focus(), 50);
+}
+
+function leClearSeller(){
+  _le.selectedSeller = null;
+  document.getElementById('le-seller-card').style.display = 'none';
+  document.getElementById('le-seller-search-wrap').style.display = 'block';
+  document.getElementById('le-seller-search').value = '';
+  document.getElementById('le-seller-results').style.display = 'none';
+  setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
+}
+
+function leCalcGross(){
+  const qty = parseFloat(document.getElementById('le-qty').value) || 0;
+  const sample = parseFloat(document.getElementById('le-sample').value) || 0;
+  const gross = qty + sample;
+  document.getElementById('le-gross').value = gross > 0 ? gross.toFixed(3) : '';
+}
+
+function leShowError(msg){
+  const el = document.getElementById('le-err');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+async function leSaveLot(){
+  const aid = document.getElementById('le-auction').value;
+  if (!aid) { leShowError('Select a trade first'); return; }
+  if (!_le.selectedSeller) { leShowError('Search and pick a seller'); return; }
+  const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
+  if (!branch) { leShowError('Enter a branch code'); return; }
+  const lotNo = (document.getElementById('le-lotno').value || '').trim();
+  if (!lotNo) { leShowError('Enter the lot number'); return; }
+  const grade = document.getElementById('le-grade').value || '1';
+  const bags  = parseInt(document.getElementById('le-bags').value, 10);
+  const litre = parseInt(document.getElementById('le-litre').value, 10);
+  const qty   = parseFloat(document.getElementById('le-qty').value);
+  if (!Number.isFinite(bags) || bags < 0)   { leShowError('Bags must be a non-negative number'); return; }
+  if (!Number.isFinite(litre) || litre < 0) { leShowError('Litre weight must be a non-negative number'); return; }
+  if (!Number.isFinite(qty) || qty <= 0)    { leShowError('Net weight (kg) must be greater than 0'); return; }
+  const sample = parseFloat(document.getElementById('le-sample').value) || 0;
+  const gross  = parseFloat(document.getElementById('le-gross').value) || (qty + sample);
+
+  const btn = document.getElementById('le-save-btn');
+  btn.disabled = true;
+  try {
+    // Map onto e-Trade's /api/lots POST shape. e-Trade's lots table has
+    // many more columns than the PWA payload — we send only what the
+    // user supplied; e-Trade fills the rest from the trader record.
+    const payload = {
+      auction_id: parseInt(aid, 10),
+      lot_no: lotNo,
+      trader_id: _le.selectedSeller.id,
+      branch: branch,
+      grade: grade,
+      bags: bags,
+      litre: litre,
+      qty: qty,
+      // e-Trade's lots table uses sample_wt / gross_wt (NOT sample_weight /
+      // gross_weight as in the PWA). Ship the e-Trade names so the INSERT
+      // doesn't silently default these to 0.
+      sample_wt: sample,
+      gross_wt: gross,
+      state: _le.selectedSeller.pstate || 'TAMIL NADU',
+      // Pull seller's denormalised fields onto the lot row so existing
+      // listings (Lots tab, exports) work without a join.
+      name: _le.selectedSeller.name || '',
+      padd: _le.selectedSeller.padd || '',
+      ppla: _le.selectedSeller.ppla || '',
+      ppin: _le.selectedSeller.pin  || '',
+      pstate: _le.selectedSeller.pstate || '',
+      cr: _le.selectedSeller.cr || '',
+      pan: _le.selectedSeller.pan || '',
+      tel: _le.selectedSeller.tel || '',
+      aadhar: _le.selectedSeller.aadhar || '',
+    };
+    await j('/api/lots', { method: 'POST', body: JSON.stringify(payload) });
+    toast(`Lot ${lotNo} saved ✓`);
+    // Keep seller, clear lot-specific fields, focus lot no for the next
+    // entry. Matches the PWA's resetFormKeepSeller flow.
+    document.getElementById('le-lotno').value = '';
+    document.getElementById('le-bags').value = '';
+    document.getElementById('le-litre').value = '';
+    document.getElementById('le-qty').value = '';
+    document.getElementById('le-gross').value = '';
+    document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
+    setTimeout(() => document.getElementById('le-lotno').focus(), 50);
+    loadLeRecent();
+    leUpdateStats();
+  } catch (e) {
+    leShowError(e.message || 'Save failed');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function leResetForm(){
+  leClearSeller();
+  document.getElementById('le-lotno').value = '';
+  document.getElementById('le-bags').value = '';
+  document.getElementById('le-litre').value = '';
+  document.getElementById('le-qty').value = '';
+  document.getElementById('le-gross').value = '';
+  document.getElementById('le-grade').value = '1';
+  document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
+  document.getElementById('le-err').style.display = 'none';
+}
+
+async function loadLeRecent(){
+  const aid = document.getElementById('le-auction').value;
+  if (!aid) return;
+  try {
+    const lots = await j(`/api/lots/${aid}`);
+    _le.recentLots = Array.isArray(lots) ? lots : [];
+    renderLeRecent();
+    leUpdateStats();
+  } catch (e) {
+    console.error('Failed to load recent lots:', e);
+  }
+}
+
+function renderLeRecent(){
+  const host = document.getElementById('le-recent-list');
+  const count = document.getElementById('le-recent-count');
+  if (!_le.recentLots.length) {
+    host.innerHTML = '<div style="padding:12px;color:var(--text3);font-size:12px;text-align:center">No lots in this trade yet</div>';
+    if (count) count.textContent = '';
+    return;
+  }
+  // Show the latest 25 lots (most-recent first) for the trade. Higher
+  // counts can be reviewed in the regular Lots tab.
+  const recent = [..._le.recentLots].sort((a,b) => (b.id||0) - (a.id||0)).slice(0, 25);
+  if (count) count.textContent = `Showing ${recent.length} of ${_le.recentLots.length}`;
+  host.innerHTML = `
+    <div style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 80px;gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border)">
+      <div>Lot</div><div>Seller</div><div>Branch</div><div style="text-align:right">Bags</div><div style="text-align:right">Litre</div><div style="text-align:right">Qty (kg)</div>
+    </div>
+    ${recent.map(l => `
+      <div style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 80px;gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px">
+        <div style="font-family:monospace;font-weight:700;color:var(--green)">${esc(l.lot_no || '')}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.name||'')}">${esc(l.name || '—')}</div>
+        <div style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(l.branch || '')}</div>
+        <div style="text-align:right">${esc(String(l.bags ?? ''))}</div>
+        <div style="text-align:right">${esc(String(l.litre ?? l.lit ?? ''))}</div>
+        <div style="text-align:right;font-weight:600">${Number(l.qty || 0).toFixed(3)}</div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function leUpdateStats(){
+  const stats = document.getElementById('le-stats');
+  if (!stats) return;
+  const n = _le.recentLots.length;
+  const totalKg = _le.recentLots.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+  stats.textContent = `${n} lots · ${totalKg.toFixed(1)} kg`;
+}
+
+// Press Enter in the lot-form fields to save (skip from textareas/selects).
+// Listener attached at module level so dynamically-rendered inputs still
+// trigger Save without per-input bindings.
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter') return;
+  const target = ev.target;
+  if (!target || !target.id) return;
+  const formIds = ['le-lotno','le-bags','le-litre','le-qty','le-sample','le-grade'];
+  if (formIds.includes(target.id) && document.getElementById('tc-lotentry')?.classList.contains('active')) {
+    ev.preventDefault();
+    leSaveLot();
+  }
+});
 
 async function loadSettings(){
   const root=document.getElementById('settings-root');
@@ -4712,51 +5291,29 @@ function applyAspContextVisibility(){
 // to "All kinds" if they really need a one-off cross-company action),
 // but the default selection moves to the active mode's primary kind.
 function applyTallyCompanyVisibility(){
-  const co = (typeof getCurrentLogoCode === 'function')
-    ? String(getCurrentLogoCode() || 'isp').toLowerCase()
-    : 'isp';
+  // Single-company build: every Tally widget belongs to the one company.
+  // The data-tally-co="isp"/"asp" attributes are vestigial markup from
+  // the old dual-company app — we leave them in the HTML for back-compat
+  // but the filter no longer hides anything based on Logo Code value
+  // (which is now a free-text identifier the user can set to any string).
+  // All cards stay visible regardless of what's in the Logo Code field.
 
-  // Cards
+  // Cards: clear any previous display:none we may have set
   document.querySelectorAll('[data-tally-co]').forEach(el => {
-    if (el.dataset.tallyKeep === '1') { el.style.display = ''; return; }
-    // <option> elements use the same attribute; their hide rule differs
-    // (option visibility doesn't always honor display:none in some
-    // browsers — we set `hidden` and `disabled` to be robust).
-    if (el.tagName === 'OPTION') return;
-    const tag = String(el.dataset.tallyCo || '').toLowerCase();
-    el.style.display = (tag === co) ? '' : 'none';
+    if (el.tagName === 'OPTION') {
+      // Options: ensure not hidden/disabled
+      el.hidden = false;
+      el.disabled = false;
+      return;
+    }
+    // Wipe any inline display we set from a previous (now-removed) filter.
+    // Empty string lets CSS / parent styles control visibility again.
+    if (el.style.display === 'none') el.style.display = '';
   });
+  // No more option-filtering reset logic — every option stays selectable.
 
-  // Filter <option> entries inside the kind dropdowns + reset selection
-  // if the currently-selected option is now hidden.
-  for (const selId of ['tally-party-kind', 'tally-pv-kind']) {
-    const sel = document.getElementById(selId);
-    if (!sel) continue;
-    let needReset = false;
-    for (const opt of sel.options) {
-      const tag = String(opt.dataset.tallyCo || '').toLowerCase();
-      if (!tag) { opt.hidden = false; opt.disabled = false; continue; }
-      const hide = tag !== co;
-      opt.hidden = hide;
-      opt.disabled = hide;
-      if (hide && opt.selected) needReset = true;
-    }
-    if (needReset) {
-      // Pick the first non-hidden option for the active company
-      const firstVisible = Array.from(sel.options).find(o => !o.hidden);
-      if (firstVisible) {
-        sel.value = firstVisible.value;
-        // Trigger the onchange handler so the list re-renders
-        sel.dispatchEvent(new Event('change'));
-      }
-    }
-  }
-
-  // Re-render the single-party lists if they're already populated. Even
-  // when the dropdown selection didn't change (e.g. user was on "All
-  // kinds"), the per-row buttons need to refresh to drop off-mode actions.
-  // We call the renderers directly — they no-op cleanly if the list
-  // hasn't been loaded yet.
+  // Re-render the single-party lists if they're already populated. The
+  // renderers no-op cleanly if the list hasn't been loaded yet.
   if (typeof renderTallyPartyList === 'function') {
     try { renderTallyPartyList(); } catch (_) {}
   }
@@ -5133,7 +5690,8 @@ const FIELD_HELP = {
   refund:          'Sample quantity (in kilograms) added to the lot qty in e-Trade mode to compute P_Qty. P_Qty = Qty + Sample Refund.',
   sb_refund:       'SB (Sample Bag) refund in kilograms, multiplied by Price to compute the Refund amount in e-Auction mode.',
   gst_goods:       'GST rate applied on goods (e.g. spices). Split equally into CGST + SGST for intra-state, or IGST for inter-state. Default 5%.',
-  gst_service:     'GST rate applied on services (commission, handling, discount). Default 18%.',
+  gst_service:     'GST rate applied on services (commission, handling). Default 18%.',
+  discount_gst:    'GST rate applied on the discount-on-purchase amount when the "Discount includes GST" flag is on. Typically 5%.',
   discount_pct:    'Trade credit discount percentage per 1000 rupees per day. Discount = round(PurAmt/1000 × days × %).',
   discount_days:   'Number of days the trade credit is extended. Multiplied with Discount % to compute the Discount amount.',
   flag_disc_gst:   'When ON, GST is charged on top of the Discount amount (using the service rate) and subtracted from the Payable.',

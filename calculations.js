@@ -85,10 +85,15 @@ function calculateLot(lot, cfg) {
   const companyGstState = cfg.business_state === 'KERALA' ? '32' : '33';
   const isIntra = (sellerGstState === companyGstState);
 
-  // GST on the Discount uses Service Rate (the discount is treated as a
-  // credit/finance service when flag_disc_gst is ON).
-  const gstServiceRate = Number(cfg.gst_service) || 18;
-  const halfRate = gstServiceRate / 2;
+  // GST on the Discount. Single dedicated `discount_gst` setting drives
+  // this so the user can configure it independently from gst_service
+  // (which historically defaulted to 18%, but the actual discount-GST
+  // rate in the trade can be different — typically 5%). Falls back to
+  // gst_service for older DBs that don't have the new key yet.
+  const gstDiscRate = Number(cfg.discount_gst);
+  const gstServiceFallback = Number(cfg.gst_service) || 18;
+  const discRate = Number.isFinite(gstDiscRate) && gstDiscRate >= 0 ? gstDiscRate : gstServiceFallback;
+  const halfRate = discRate / 2;
 
   result.cgst = 0;
   result.sgst = 0;
@@ -106,7 +111,7 @@ function calculateLot(lot, cfg) {
       result.cgst = Math.round(result.refund * halfRate / 100 * 100) / 100;
       result.sgst = Math.round(result.refund * halfRate / 100 * 100) / 100;
     } else {
-      result.igst = Math.round(result.refund * gstServiceRate / 100 * 100) / 100;
+      result.igst = Math.round(result.refund * discRate / 100 * 100) / 100;
     }
   }
 
