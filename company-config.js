@@ -5,31 +5,31 @@
 
 const DEFAULTS = [
   // ── COMPANY (Primary - ISP) ────────────────────────────────
-  { key: 'logo',            value: 'ISP',           category: 'company',   label: 'Logo Code',                type: 'text' },
-  { key: 'trade_name',      value: 'IDEAL SPICES',  category: 'company',   label: 'Trade Name',               type: 'text' },
-  { key: 'legal_name',      value: ' PRIVATE LIMITED', category: 'company', label: 'Legal Name Suffix',        type: 'text' },
-  { key: 'short_name',      value: 'IDEAL SPICES PRIVATE LIMITED', category: 'company', label: 'Short Name', type: 'text' },
-  { key: 'pan',             value: 'AAICI5415L',    category: 'company',   label: 'PAN',                      type: 'text' },
-  { key: 'cin',             value: 'U47211TN2025PTC186657', category: 'company', label: 'CIN',                type: 'text' },
+  { key: 'logo',            value: '',           category: 'company',   label: 'Logo Code',                type: 'text' },
+  { key: 'trade_name',      value: '',  category: 'company',   label: 'Trade Name',               type: 'text' },
+  { key: 'legal_name',      value: '', category: 'company', label: 'Legal Name Suffix',        type: 'text' },
+  { key: 'short_name',      value: '', category: 'company', label: 'Short Name', type: 'text' },
+  { key: 'pan',             value: '',    category: 'company',   label: 'PAN',                      type: 'text' },
+  { key: 'cin',             value: '', category: 'company', label: 'CIN',                type: 'text' },
   { key: 'fssai',           value: '',               category: 'company',   label: 'FSSAI No.',               type: 'text' },
   { key: 'sbl',             value: '',               category: 'company',   label: 'SBL No.',                 type: 'text' },
 
   // ── ADDRESS (Kerala) ───────────────────────────────────────
-  { key: 'kl_address1',     value: 'FLAT No.42,V.O.C.1ST STREET,MELACHOKKANATHAPURAM', category: 'address_kl', label: 'Address Line 1', type: 'text' },
-  { key: 'kl_address2',     value: 'BODINAYAKANUR, THENI-625582 TAMIL NADU CODE:33 Mobile:8610943865', category: 'address_kl', label: 'Address Line 2', type: 'text' },
-  { key: 'kl_phone',        value: '8610943865',    category: 'address_kl', label: 'Phone',                   type: 'text' },
-  { key: 'kl_email',        value: 'idealspicesbodi@gmail.com', category: 'address_kl', label: 'Email',       type: 'text' },
-  { key: 'kl_gstin',        value: '32AAICI5415L1ZX', category: 'address_kl', label: 'GSTIN',                 type: 'text' },
-  { key: 'kl_branch',       value: 'BODINAYAKANUR', category: 'address_kl', label: 'Office Branch',           type: 'text' },
+  { key: 'kl_address1',     value: '', category: 'address_kl', label: 'Address Line 1', type: 'text' },
+  { key: 'kl_address2',     value: '', category: 'address_kl', label: 'Address Line 2', type: 'text' },
+  { key: 'kl_phone',        value: '',    category: 'address_kl', label: 'Phone',                   type: 'text' },
+  { key: 'kl_email',        value: '', category: 'address_kl', label: 'Email',       type: 'text' },
+  { key: 'kl_gstin',        value: '', category: 'address_kl', label: 'GSTIN',                 type: 'text' },
+  { key: 'kl_branch',       value: '', category: 'address_kl', label: 'Office Branch',           type: 'text' },
 
   // ── ADDRESS (Tamil Nadu) ───────────────────────────────────
-  { key: 'tn_address1',     value: 'DOOR No.42,V.O.C.1ST STREET,MELACHOKKANATHAPURAM', category: 'address_tn', label: 'Address Line 1', type: 'text' },
-  { key: 'tn_address2',     value: 'BODINAYAKANUR, THENI-625582 TAMIL NADU CODE:33 Mobile:8610943865', category: 'address_tn', label: 'Address Line 2', type: 'text' },
+  { key: 'tn_address1',     value: '', category: 'address_tn', label: 'Address Line 1', type: 'text' },
+  { key: 'tn_address2',     value: '', category: 'address_tn', label: 'Address Line 2', type: 'text' },
   { key: 'tn_dispatch',     value: 'AMAZING SPICE PARK PVT LTD WARD No.6 ELLIKKANAM DOOR No.650 NEDUMKANDAM IDUKKI KERALA CODE:32', category: 'address_tn', label: 'Dispatch Address', type: 'text' },
-  { key: 'tn_phone',        value: '8610943865',    category: 'address_tn', label: 'Phone',                   type: 'text' },
-  { key: 'tn_email',        value: 'idealspicesbodi@gmail.com', category: 'address_tn', label: 'Email',       type: 'text' },
-  { key: 'tn_gstin',        value: '33AAICI5415L1ZH', category: 'address_tn', label: 'GSTIN',                 type: 'text' },
-  { key: 'tn_branch',       value: 'BODINAYAKANUR', category: 'address_tn', label: 'Office Branch',           type: 'text' },
+  { key: 'tn_phone',        value: '',    category: 'address_tn', label: 'Phone',                   type: 'text' },
+  { key: 'tn_email',        value: '', category: 'address_tn', label: 'Email',       type: 'text' },
+  { key: 'tn_gstin',        value: '', category: 'address_tn', label: 'GSTIN',                 type: 'text' },
+  { key: 'tn_branch',       value: '', category: 'address_tn', label: 'Office Branch',           type: 'text' },
 
   // ── BRANCHES ───────────────────────────────────────────────
   { key: 'br1',             value: 'NEDUMKANDAM',    category: 'branches',  label: 'Branch 1',                type: 'text' },
@@ -86,13 +86,13 @@ const DEFAULTS = [
   { key: 'bank_tn_ifsc',    value: 'CIUB0000346',   category: 'bank',      label: 'TN IFSC Code',             type: 'text' },
 
   // ── SEASON ─────────────────────────────────────────────────
-  { key: 'season',          value: '2026 - 27',      category: 'season',    label: 'Season Name',              type: 'text' },
+  { key: 'season',          value: '',      category: 'season',    label: 'Season Name',              type: 'text' },
   { key: 'season_short',    value: '26-27',          category: 'season',    label: 'Season Short',             type: 'text' },
   { key: 'season_start',    value: '2026-04-01',     category: 'season',    label: 'FY Start Date',            type: 'date' },
   { key: 'season_end',      value: '2027-03-31',     category: 'season',    label: 'FY End Date',              type: 'date' },
 
   // ── INVOICE SETTINGS ───────────────────────────────────────
-  { key: 'inv_prefix',      value: 'ISP',            category: 'invoice',   label: 'Invoice Prefix',           type: 'text' },
+  { key: 'inv_prefix',      value: '',            category: 'invoice',   label: 'Invoice Prefix',           type: 'text' },
   { key: 'separator',       value: '-',              category: 'invoice',   label: 'Separator Symbol',         type: 'text' },
   { key: 'hsn_cardamom',    value: '09083120',       category: 'invoice',   label: 'HSN/SAC — Cardamom',       type: 'text' },
   { key: 'hsn_gunny',       value: '63051040',       category: 'invoice',   label: 'HSN/SAC — Gunny',          type: 'text' },
@@ -130,10 +130,10 @@ const DEFAULTS = [
   // ── TALLY EXPORT ──────────────────────────────────────────
   // Settings here mirror the macro's Configration form (UserForm1) field-for-field.
   // Identity & defaults
-  { key: 'tally_company_name',     value: 'Ideal Spices Private Limited',      category: 'tally', label: 'Tally Company Name (must match Tally company exactly)', type: 'text' },
+  { key: 'tally_company_name',     value: '',      category: 'tally', label: 'Tally Company Name (must match Tally company exactly)', type: 'text' },
   { key: 'tally_season',          value: '2026-27',        category: 'tally', label: 'Season Suffix',                  type: 'text' },
   { key: 'tally_separator',       value: '/',              category: 'tally', label: 'Voucher Separator',              type: 'text' },
-  { key: 'tally_inv_prefix',      value: 'ISP/',           category: 'tally', label: 'Voucher Prefix (legacy — Logo Code drives Tally now)', type: 'text' },
+  { key: 'tally_inv_prefix',      value: '',           category: 'tally', label: 'Voucher Prefix (legacy — Logo Code drives Tally now)', type: 'text' },
   { key: 'tally_state_code',      value: '33',             category: 'tally', label: 'Home GSTIN State Code (intra)',  type: 'text' },
   { key: 'tally_home_state',      value: 'Tamil Nadu',     category: 'tally', label: 'Home Place of Supply',           type: 'text' },
   { key: 'tally_urd_state',       value: 'Kerala',         category: 'tally', label: 'URD Purchase State (agriculturist)', type: 'text' },
@@ -302,10 +302,11 @@ function initCompanySettings(db) {
   // mode-switching build must not leak through to calculation paths.
   db.prepare("UPDATE company_settings SET value = 'e-Trade' WHERE key = 'business_mode'").run();
 
-  // Reset stale Logo Code if a previous build wrote 'ASP'. Single-company
-  // build only has ISP — anything else here is leftover preset state
-  // from the old ISP/ASP-switching app.
-  db.prepare("UPDATE company_settings SET value = 'ISP' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
+  // Clear stale Logo Code if a previous build wrote 'ASP' (sister-company
+  // preset state from the old ISP/ASP app). Set to blank so the user
+  // explicitly fills in their identifier — no "ISP" appearing where the
+  // user never typed it.
+  db.prepare("UPDATE company_settings SET value = '' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
 
   console.log('Company settings ready (%d defaults)', DEFAULTS.length);
 }

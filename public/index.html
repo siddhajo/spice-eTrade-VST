@@ -3626,7 +3626,11 @@ async function login(){
   window._userPerms = new Set(d.permissions || []);
   applyPermissionAttributes();
   document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';
-  loadSettings();  // fire-and-forget: populates _sdata so mode-aware UI works across all tabs
+  // Await loadSettings so _sdata (and the topbar badge that depends on it)
+  // is populated before the dashboard renders. Without await, opening a
+  // new tab/window leaves the badge showing the fallback until the user
+  // navigates to Settings.
+  try { await loadSettings(); } catch(_) {}
   go('dash');}
   catch(x){e.textContent='Invalid credentials';e.style.display='block'}}
 function logout(){h('/api/logout',{method:'POST'});T='';localStorage.removeItem('t');
@@ -3649,7 +3653,9 @@ function logout(){h('/api/logout',{method:'POST'});T='';localStorage.removeItem(
   applyPermissionAttributes();
   document.getElementById('login').style.display='none';
   document.getElementById('app').style.display='block';
-  loadSettings();  // fire-and-forget: populates _sdata so mode-aware UI works across all tabs
+  // Await loadSettings so _sdata is populated before any UI renders —
+  // ensures the topbar badge shows the correct Logo Code on tab open.
+  try { await loadSettings(); } catch(_) {}
   go('dash');}catch(e){T='';localStorage.removeItem('t')}})();
 
 // ── Navigation ────────────────────────────────────────────
@@ -4658,25 +4664,20 @@ function getCurrentBusinessState(){
 // Mirrors server-side effectiveCompany(): Kerala + e-Trade → sister company
 // (ASP); otherwise use primary (ISP). Falls back to configured codes.
 function getCurrentLogoCode(){
-  // e-Trade-only single-company build: read the live Logo Code value
-  // straight from the company settings so the sidebar badge, topbar
-  // logo image, and any UI label reflects whatever the user typed in
-  // (could be 'ISP', 'ABC', 'XYZ' — anything). Fallback to 'ISP' only
-  // when settings haven't loaded yet.
-  // Defensive lookup: try multiple categories in case of older payloads
-  // where 'logo' wandered between categories. The logo field is in
-  // 'company' but try every category as a safety net.
+  // e-Trade-only single-company build: returns the user's saved Logo
+  // Code value. Returns empty string when nothing's set — applyLogoBadge
+  // hides the badge in that case rather than showing a fabricated 'ISP'
+  // that the user never typed.
   const data = window._sdata || {};
   for (const cat of Object.keys(data)) {
     const arr = data[cat];
     if (!Array.isArray(arr)) continue;
     const f = arr.find(x => x && x.key === 'logo');
     if (f && f.value) {
-      return String(f.value).trim() || 'ISP';
+      return String(f.value).trim();
     }
   }
-  // Last-resort: read from window._cachedLogoCode if any flow set it
-  return window._cachedLogoCode || 'ISP';
+  return window._cachedLogoCode || '';
 }
 
 function isCategoryHiddenByMode(catKey){
@@ -5148,7 +5149,7 @@ function fld(f){
   // payload still contains it, fall through to the generic renderer.
   if (f.key === 'logo') {
     const tip = FIELD_HELP[f.key] ? helpTip(FIELD_HELP[f.key]) : '';
-    return `<div class="fg"><label>${esc(f.label)}${tip}</label><input type="text" data-key="${f.key}" value="${esc(f.value || 'ISP')}"></div>`;
+    return `<div class="fg"><label>${esc(f.label)}${tip}</label><input type="text" data-key="${f.key}" value="${esc(f.value || '')}" placeholder="e.g. ISP, ABC, MYCO"></div>`;
   }
   const t = f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : 'text';
   const tip = FIELD_HELP[f.key] ? helpTip(FIELD_HELP[f.key]) : '';
