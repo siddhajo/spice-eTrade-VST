@@ -5450,6 +5450,21 @@ async function saveSettings(){
   }
   await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings:s})});
   _companyDirty = false;
+
+  // Refresh _sdata from the server — defensive measure that handles
+  // edge cases where captureCurrentPanel might have missed a tab the
+  // user edited then navigated away from. The server is the canonical
+  // source of truth post-save, so this guarantees the in-memory state
+  // matches what was persisted.
+  try {
+    const fresh = await j('/api/company-settings');
+    if (fresh && fresh.settings && typeof fresh.settings === 'object') {
+      _sdata = fresh.settings;
+    }
+  } catch (e) {
+    console.warn('Post-save refresh failed (non-fatal):', e);
+  }
+
   // Logo Code may have just changed — refresh the topbar badge so the
   // user sees the new identifier immediately without a page reload.
   applyLogoBadge();
