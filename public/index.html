@@ -1863,7 +1863,9 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
           <div style="min-width:160px">
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Branch</div>
-            <input type="text" id="le-branch" placeholder="e.g. BODI" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;text-transform:uppercase">
+            <select id="le-branch" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff;text-transform:uppercase">
+              <option value="">— select —</option>
+            </select>
           </div>
           <div style="min-width:140px">
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">My Today's Lots</div>
@@ -1912,6 +1914,14 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
       <!-- Entry form — main card -->
       <div class="card" id="le-form-card" style="padding:20px 24px;display:none">
+        <!-- Mode banner — flips between Create and Edit. Hidden in create
+             mode, visible (with a Cancel-edit chip) in edit mode. -->
+        <div id="le-edit-banner" style="display:none;padding:8px 14px;background:#FEF3C7;color:#92400E;border-radius:8px;font-size:13px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
+          <span style="font-weight:700">✏ Editing lot #<span id="le-edit-lotno"></span></span>
+          <span style="flex:1"></span>
+          <button class="btn btn-o" onclick="leExitEditMode()" style="padding:2px 10px;font-size:12px;height:28px">Cancel edit</button>
+        </div>
+
         <!-- Seller picker / search -->
         <div id="le-seller-row" style="margin-bottom:16px">
           <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Seller</div>
@@ -1929,6 +1939,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
               </div>
               <button class="btn btn-o" onclick="leClearSeller()" style="padding:4px 10px;font-size:12px;height:32px">Change</button>
             </div>
+            <!-- Bank picker — only shown when seller has 1+ bank accounts.
+                 Selecting a bank here makes it the seller's default for
+                 next time (saved when the lot is saved). -->
+            <div id="le-bank-row" style="display:none;margin-top:10px;padding-top:10px;border-top:1px dashed rgba(22,101,52,.25)">
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Bank Account</div>
+              <select id="le-bank-select" style="width:100%;height:34px;padding:0 10px;border:1.5px solid var(--border);border-radius:6px;font-size:13px;background:#fff;font-family:monospace"></select>
+            </div>
           </div>
         </div>
 
@@ -1936,7 +1953,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Lot No</div>
-            <input type="text" id="le-lotno" placeholder="e.g. 501" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;font-family:monospace;font-weight:600">
+            <input type="text" id="le-lotno" placeholder="auto" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;font-family:monospace;font-weight:600">
           </div>
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Grade</div>
@@ -1972,11 +1989,19 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
         </div>
 
+        <!-- Moisture row — visibility driven by 'show_moisture' setting.
+             Hidden by default so the form stays compact for trades that
+             don't track moisture (most cardamom auctions). -->
+        <div id="le-moisture-wrap" style="display:none;margin-bottom:16px">
+          <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Moisture %</div>
+          <input type="number" id="le-moisture" step="0.1" min="0" max="100" placeholder="e.g. 12.5" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+        </div>
+
         <div id="le-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:12px"></div>
 
         <div style="display:flex;gap:10px;align-items:center">
           <button class="btn btn-g" id="le-save-btn" onclick="leSaveLot()" style="flex:2;height:46px;font-size:15px;font-weight:700">
-            <span>Save &amp; Next</span>
+            <span id="le-save-btn-label">Save &amp; Next</span>
             <span style="font-size:11px;opacity:.7;margin-left:8px">[Enter]</span>
           </button>
           <button class="btn btn-o" onclick="leResetForm()" style="flex:1;height:46px;font-size:14px">Clear</button>
@@ -1991,6 +2016,71 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <span id="le-recent-count" style="font-weight:400;color:var(--text3);font-size:12px;margin-left:auto"></span>
         </h3>
         <div id="le-recent-list" style="font-size:13px"></div>
+      </div>
+
+      <!-- ───────────────────────────────────────────────────────────
+           Add New Seller modal — minimal-fields quick add for the
+           auction-hall workflow. Admin can fill out missing details
+           later from the Sellers tab. Mirrors PWA app.html's flow. -->
+      <div class="modal-overlay" id="le-newseller-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
+        <div style="background:#fff;border-radius:14px;width:min(480px,92vw);padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+          <h3 style="margin:0 0 14px;font-size:16px;display:flex;align-items:center;gap:8px">
+            <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
+            Add New Seller
+          </h3>
+          <div style="margin-bottom:10px">
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Name *</div>
+            <input type="text" id="le-ns-name" autocomplete="off" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;text-transform:uppercase">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">GSTIN / CR</div>
+              <input type="text" id="le-ns-cr" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">PAN</div>
+              <input type="text" id="le-ns-pan" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;text-transform:uppercase">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Phone</div>
+              <input type="text" id="le-ns-tel" inputmode="tel" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Address</div>
+              <input type="text" id="le-ns-padd" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Place</div>
+              <input type="text" id="le-ns-ppla" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;text-transform:uppercase">
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">PIN</div>
+              <input type="text" id="le-ns-pin" inputmode="numeric" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:10px;margin-bottom:12px">
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">State</div>
+              <select id="le-ns-pstate" onchange="document.getElementById('le-ns-pst').value = this.value === 'KERALA' ? '32' : '33'" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff">
+                <option value="TAMIL NADU" selected>TAMIL NADU</option>
+                <option value="KERALA">KERALA</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">State Code</div>
+              <input type="text" id="le-ns-pst" value="33" style="width:100%;height:38px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            </div>
+          </div>
+          <div id="le-ns-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-o" onclick="leCloseNewSellerModal()" style="height:38px;padding:0 16px">Cancel</button>
+            <button class="btn btn-g" id="le-ns-save" onclick="leSaveNewSeller()" style="height:38px;padding:0 18px;font-weight:600">Add &amp; Continue</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2406,9 +2496,10 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <h2>Debit Notes <span style="font-weight:400;font-size:12px;color:var(--text3)">For discounts/adjustments on sales invoices</span></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <button class="btn btn-g" onclick="showModal('gen-debit-modal')">Generate Debit Note</button>
+          <button class="btn btn-a" onclick="showModal('gen-debit-bulk-modal')">Generate All</button>
           <button class="needs-delete-all btn" style="background:#c0392b;color:#fff;margin-left:auto" onclick="deleteAll('debit-notes','Debit Notes')">Delete All</button>
         </div>
-        <div style="overflow-x:auto"><table><thead><tr><th>Note#</th><th>Date</th><th>Auction</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
       </div>
     </div>
 
@@ -2918,6 +3009,23 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-debit-modal')">Cancel</button>
     <button class="btn btn-g" onclick="generateDebitNote()">Generate</button>
+  </div>
+</div></div>
+
+<!-- Bulk-generate debit notes from a single purchase invoice number.
+     Server-side iterates every eligible sales invoice tied to the
+     purchase and emits one DN per invoice. Idempotent — already-DN'd
+     invoices are skipped, not duplicated. Single input by design (per
+     spec): keep the field surface minimal so dad doesn't fat-finger
+     a discount value mid-bulk. -->
+<div class="modal-bg" id="gen-debit-bulk-modal"><div class="modal">
+  <h2>Generate All Debit Notes</h2>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Enter a purchase invoice number — one debit note will be generated for every sales invoice connected to that purchase. Already-DN'd invoices are skipped.</p>
+  <div class="fg"><label>Purchase Invoice #</label><input id="gd-bulk-purchno" autocomplete="off"></div>
+  <div id="gd-bulk-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('gen-debit-bulk-modal')">Cancel</button>
+    <button class="btn btn-g" id="gd-bulk-save" onclick="generateAllDebitNotes()">Generate All</button>
   </div>
 </div></div>
 
@@ -4811,10 +4919,17 @@ async function loadFormulas(){
 // auctions and so we don't pollute window.* with another half-dozen
 // globals.
 const _le = {
-  selectedSeller: null,    // { id, name, cr, pan, tel, ppla, pin, ... } from /api/traders
+  selectedSeller: null,    // { id, name, cr, pan, tel, ppla, pin, banks: [...] }
+  selectedBankId: null,    // chosen bank account id (null if seller has no banks)
   searchTimer: null,       // debounce timer for seller search
   recentLots: [],          // today's lots in this auction (refreshed after each save)
-  sampleWeight: 0,         // from settings (sample_wt config key, defaults to 0)
+  sampleWeight: 0,         // from settings (sample_weight key, defaults to 0)
+  defaultLitre: '',        // from settings — pre-fills litre input on each new lot
+  showMoisture: false,     // from settings — toggles the moisture column/input
+  editEnabled: true,       // from settings — when false, only admins can edit lots
+  editTimeoutSec: 0,       // from settings — seconds after creation a non-admin can still edit (0 = no limit)
+  editingLotId: null,      // when non-null, Save updates instead of inserts
+  lastSearchQuery: '',     // remembered so the "+ Add new seller" option uses it
 };
 
 // ── New Trade modal ────────────────────────────────────────
@@ -4902,17 +5017,52 @@ async function loadLotEntry(){
         const label = `Trade #${a.ano} · ${dateFmt}${status === 'closed' ? ' (closed)' : ''}`;
         return `<option value="${a.id}" ${status==='closed'?'disabled':''}>${esc(label)}</option>`;
       }).join('');
-    // Read sample weight from settings (cfg key 'sample_wt' if present —
-    // matches the PWA's cfgSampleWeight). Fallback 0.
+    // Read Lot Entry defaults from settings. Keys match the PWA app.html
+    // 1:1 so behavior is consistent: sample_weight pre-fills each new
+    // lot, default_litre pre-fills litre wt, show_moisture toggles the
+    // moisture column on/off, edit_enabled + edit_timeout_sec govern
+    // who can edit existing lots and for how long.
+    let branches = [];
     try {
       const cfg = await j('/api/company-settings/flat');
-      _le.sampleWeight = Number(cfg.sample_wt || cfg.sampleWeight || 0) || 0;
-    } catch(e) { _le.sampleWeight = 0; }
-    // Pre-fill the branch from the current logged-in user's preference,
-    // saved in localStorage. Same key the PWA used so phones logging in
-    // here keep their branch.
-    const savedBranch = (typeof localStorage !== 'undefined') ? (localStorage.getItem('le_branch') || '') : '';
-    document.getElementById('le-branch').value = savedBranch;
+      // Sample weight — accept legacy 'sample_wt' key too for older DBs
+      _le.sampleWeight = Number(cfg.sample_weight ?? cfg.sample_wt ?? cfg.sampleWeight ?? 0) || 0;
+      _le.defaultLitre  = String(cfg.default_litre || '').trim();
+      _le.showMoisture  = String(cfg.show_moisture || 'false') === 'true';
+      _le.editEnabled   = String(cfg.edit_enabled  || 'true')  === 'true';
+      _le.editTimeoutSec = parseInt(cfg.edit_timeout_sec, 10) || 0;
+      for (let i = 1; i <= 9; i++) {
+        const v = String(cfg['br' + i] || '').trim();
+        if (v) branches.push(v.toUpperCase());
+      }
+    } catch(e) {
+      _le.sampleWeight = 0;
+      _le.defaultLitre = '';
+      _le.showMoisture = false;
+      _le.editEnabled  = true;
+      _le.editTimeoutSec = 0;
+    }
+    // Apply moisture-column visibility — there's a wrap div around the
+    // moisture row that we toggle. Keeps the form compact when the
+    // workflow doesn't need moisture.
+    const moistureWrap = document.getElementById('le-moisture-wrap');
+    if (moistureWrap) moistureWrap.style.display = _le.showMoisture ? '' : 'none';
+    // Render branch dropdown. Show a helpful empty state if no branches
+    // are configured yet — the field user can't proceed without one
+    // because lot save requires a branch.
+    const branchSel = document.getElementById('le-branch');
+    if (branches.length) {
+      branchSel.innerHTML = '<option value="">— select —</option>' +
+        branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+      // Restore last-used branch from localStorage if it's still in the
+      // list (admin may have removed it).
+      const savedBranch = (typeof localStorage !== 'undefined') ? (localStorage.getItem('le_branch') || '') : '';
+      if (savedBranch && branches.includes(savedBranch.toUpperCase())) {
+        branchSel.value = savedBranch.toUpperCase();
+      }
+    } else {
+      branchSel.innerHTML = '<option value="">⚠ Configure branches in Settings first</option>';
+    }
   } catch (e) {
     console.error('Lot Entry: failed to load auctions', e);
     toast('Could not load auctions');
@@ -4923,26 +5073,37 @@ function leOnAuctionChange(){
   const aid = document.getElementById('le-auction').value;
   document.getElementById('le-form-card').style.display = aid ? 'block' : 'none';
   if (!aid) { _le.recentLots = []; renderLeRecent(); return; }
-  // Reset fields, then load this auction's existing lots so the user
-  // sees what's already been entered (helps avoid duplicates).
+  // Reset fields (which applies sample + litre defaults from settings),
+  // then load existing lots so the user sees what's already entered.
   leResetForm();
-  // Default sample weight from config
-  document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
   // Persist the picked auction so the user doesn't have to reselect
   // after a refresh.
   try { localStorage.setItem('le_aid', aid); } catch(e){}
-  // Save branch as user types
-  document.getElementById('le-branch').addEventListener('change', function(){
-    try { localStorage.setItem('le_branch', this.value.trim().toUpperCase()); } catch(e){}
-  }, { once: true });
   // Focus seller search to start fast entry flow
   setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
   loadLeRecent();
 }
 
+// Wire branch dropdown change handler. Persists the branch value to
+// localStorage AND re-runs the lot-no auto-suggest if a seller is
+// currently selected (the suggested number is branch-scoped). Uses the
+// `change` event because branch is now a <select>; `input` works on
+// some browsers but `change` is the canonical select event.
+document.addEventListener('DOMContentLoaded', () => {
+  const branchEl = document.getElementById('le-branch');
+  if (!branchEl) return;
+  branchEl.addEventListener('change', () => {
+    try { localStorage.setItem('le_branch', branchEl.value.trim().toUpperCase()); } catch(e){}
+    if (_le.selectedSeller && !_le.editingLotId) {
+      leAutoSuggestLotNo();
+    }
+  });
+});
+
 // Live seller search — debounced 200ms, hits /api/traders?search=
 async function leSearchSeller(q){
   clearTimeout(_le.searchTimer);
+  _le.lastSearchQuery = q || '';
   const results = document.getElementById('le-seller-results');
   if (!q || q.trim().length < 2) {
     results.style.display = 'none';
@@ -4951,25 +5112,36 @@ async function leSearchSeller(q){
   _le.searchTimer = setTimeout(async () => {
     try {
       const traders = await j(`/api/traders?search=${encodeURIComponent(q.trim())}&limit=10`);
-      if (!Array.isArray(traders) || !traders.length) {
-        results.innerHTML = '<div style="padding:12px;color:var(--text3);font-size:13px;text-align:center">No sellers found. Ask admin to add this seller.</div>';
-        results.style.display = 'block';
-        return;
+      // Render the trader hits AND a trailing "+ Add new seller" option.
+      // Both empty-results and matches show the add-new affordance — even
+      // when the search hits something, the user might want a different
+      // seller with a similar name.
+      const list = Array.isArray(traders) ? traders : [];
+      let html = '';
+      if (list.length) {
+        html = list.map((t, i) => {
+          const loc = [t.ppla, t.pin].filter(Boolean).join(', ');
+          const meta = [t.cr, t.tel].filter(Boolean).join(' · ');
+          return `<div class="le-seller-result" data-idx="${i}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s">
+            <div style="font-weight:600;color:var(--text)">${esc(t.name||'')}</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(loc)}${meta?' — '+esc(meta):''}</div>
+          </div>`;
+        }).join('');
+      } else {
+        html = '<div style="padding:10px 14px;color:var(--text3);font-size:13px;text-align:center">No sellers match this search.</div>';
       }
-      results.innerHTML = traders.map((t, i) => {
-        const loc = [t.ppla, t.pin].filter(Boolean).join(', ');
-        const meta = [t.cr, t.tel].filter(Boolean).join(' · ');
-        return `<div class="le-seller-result" data-idx="${i}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s">
-          <div style="font-weight:600;color:var(--text)">${esc(t.name||'')}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(loc)}${meta?' — '+esc(meta):''}</div>
-        </div>`;
-      }).join('');
+      // Always append the add-new row at the end, styled to stand apart
+      const safeQ = String(q || '').trim().replace(/'/g, "\\'");
+      html += `<div class="le-seller-addnew" style="padding:10px 14px;cursor:pointer;background:var(--green-bg);color:var(--green);font-weight:600;font-size:13px;border-top:1px solid var(--border);transition:background .1s" onclick="leOpenNewSellerModal('${safeQ}')">
+        + Add new seller${q ? ` "${esc(q.trim().toUpperCase())}"` : ''}
+      </div>`;
+      results.innerHTML = html;
       results.style.display = 'block';
-      results._traders = traders;
+      results._traders = list;
       results.querySelectorAll('.le-seller-result').forEach(el => {
         el.onmouseenter = () => el.style.background = 'var(--bg)';
         el.onmouseleave = () => el.style.background = '';
-        el.onclick = () => lePickSeller(traders[parseInt(el.dataset.idx,10)]);
+        el.onclick = () => lePickSeller(list[parseInt(el.dataset.idx,10)]);
       });
     } catch (e) {
       console.error('Seller search failed:', e);
@@ -4986,6 +5158,9 @@ function lePickSeller(t){
   document.getElementById('le-seller-card').style.display = 'block';
   document.getElementById('le-seller-search-wrap').style.display = 'none';
   document.getElementById('le-seller-results').style.display = 'none';
+  // Render the bank picker — only shown if seller has 1+ bank rows.
+  // Default selection: the bank flagged is_default, else first bank.
+  leRenderBankPicker(t);
   // Auto-select grade based on CR field — same heuristic as the PWA:
   //   CR.* prefix → grade 1 (registered)
   //   GSTIN-shaped (15 chars) → grade 2 (GST-registered)
@@ -4994,16 +5169,95 @@ function lePickSeller(t){
   let grade = '1';
   if (cr.length > 5 && !cr.toUpperCase().startsWith('CR.')) grade = '2';
   document.getElementById('le-grade').value = grade;
-  // Focus lot no field next
+  // Auto-suggest the next lot number for the current branch + auction.
+  // Keeps fields blank in edit mode so we don't clobber an existing lot
+  // number being edited.
+  if (!_le.editingLotId) leAutoSuggestLotNo();
+  // Focus lot no field next so the user can confirm/correct the suggestion
   setTimeout(() => document.getElementById('le-lotno').focus(), 50);
+}
+
+// Render the bank-account picker inside the selected-seller card. Visible
+// when the seller has 1+ bank rows; hidden otherwise. Selection updates
+// _le.selectedBankId. The save flow then PUTs the choice as the seller's
+// new default if it changed.
+function leRenderBankPicker(t){
+  const wrap = document.getElementById('le-bank-row');
+  const sel  = document.getElementById('le-bank-select');
+  const banks = Array.isArray(t.banks) ? t.banks : [];
+  if (!banks.length) {
+    wrap.style.display = 'none';
+    sel.innerHTML = '';
+    _le.selectedBankId = null;
+    return;
+  }
+  // Pick a default: first is_default=1 bank, else the first bank in the list
+  const defaultBank = banks.find(b => b.is_default) || banks[0];
+  _le.selectedBankId = defaultBank ? defaultBank.id : null;
+  sel.innerHTML = banks.map(b => {
+    const labelParts = [b.acctnum];
+    if (b.bank_name) labelParts.push(b.bank_name);
+    if (b.is_default) labelParts.push('★ default');
+    return `<option value="${b.id}" ${b.id === _le.selectedBankId ? 'selected' : ''}>${esc(labelParts.join(' · '))}</option>`;
+  }).join('');
+  sel.onchange = () => {
+    const v = parseInt(sel.value, 10);
+    _le.selectedBankId = Number.isFinite(v) ? v : null;
+  };
+  wrap.style.display = 'block';
+}
+
+// Find the highest existing lot number on the current trade for THIS
+// branch and suggest +1. Falls back to "1" when nothing exists yet.
+// Pure numeric strings only — alphanumeric prefixes (e.g. "A001") aren't
+// auto-incremented because the trade's numbering scheme is ambiguous.
+function leAutoSuggestLotNo(){
+  const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
+  if (!branch) return; // can't suggest without a branch
+  const lots = Array.isArray(_le.recentLots) ? _le.recentLots : [];
+  let maxNum = 0;
+  let prefix = '';
+  let allowSuggest = true;
+  for (const l of lots) {
+    if (!l || (l.branch || '').toUpperCase() !== branch) continue;
+    const lotStr = String(l.lot_no || '').trim();
+    // Match optional alpha prefix + digits
+    const m = lotStr.match(/^([A-Za-z]*)(\d+)$/);
+    if (!m) { allowSuggest = false; break; }
+    if (prefix === '' && m[1]) prefix = m[1].toUpperCase();
+    if (m[1].toUpperCase() !== prefix) { allowSuggest = false; break; }
+    const n = parseInt(m[2], 10);
+    if (Number.isFinite(n) && n > maxNum) maxNum = n;
+  }
+  if (!allowSuggest) return;
+  const next = maxNum + 1;
+  // Preserve zero-padding by looking at one of the existing lot numbers
+  // in this branch. Default to no padding when there's no precedent.
+  let padded = String(next);
+  for (const l of lots) {
+    if (!l || (l.branch || '').toUpperCase() !== branch) continue;
+    const lotStr = String(l.lot_no || '').trim();
+    const m = lotStr.match(/^([A-Za-z]*)(\d+)$/);
+    if (m) {
+      // Keep existing total width if the existing number was zero-padded
+      const width = m[2].length;
+      if (width > 1 && /^0/.test(m[2])) {
+        padded = String(next).padStart(width, '0');
+      }
+      break;
+    }
+  }
+  document.getElementById('le-lotno').value = prefix + padded;
 }
 
 function leClearSeller(){
   _le.selectedSeller = null;
+  _le.selectedBankId = null;
   document.getElementById('le-seller-card').style.display = 'none';
   document.getElementById('le-seller-search-wrap').style.display = 'block';
   document.getElementById('le-seller-search').value = '';
   document.getElementById('le-seller-results').style.display = 'none';
+  document.getElementById('le-bank-row').style.display = 'none';
   setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
 }
 
@@ -5038,6 +5292,13 @@ async function leSaveLot(){
   if (!Number.isFinite(qty) || qty <= 0)    { leShowError('Net weight (kg) must be greater than 0'); return; }
   const sample = parseFloat(document.getElementById('le-sample').value) || 0;
   const gross  = parseFloat(document.getElementById('le-gross').value) || (qty + sample);
+  // Moisture only when the show-moisture setting is on; we still read
+  // the input value defensively because users may have typed something
+  // before the wrap was hidden.
+  const moistureRaw = document.getElementById('le-moisture')?.value || '';
+  const moisture = (_le.showMoisture && moistureRaw.trim() !== '')
+    ? String(parseFloat(moistureRaw) || '')
+    : '';
 
   const btn = document.getElementById('le-save-btn');
   btn.disabled = true;
@@ -5059,6 +5320,7 @@ async function leSaveLot(){
       // doesn't silently default these to 0.
       sample_wt: sample,
       gross_wt: gross,
+      moisture: moisture,
       state: _le.selectedSeller.pstate || 'TAMIL NADU',
       // Pull seller's denormalised fields onto the lot row so existing
       // listings (Lots tab, exports) work without a join.
@@ -5072,18 +5334,49 @@ async function leSaveLot(){
       tel: _le.selectedSeller.tel || '',
       aadhar: _le.selectedSeller.aadhar || '',
     };
-    await j('/api/lots', { method: 'POST', body: JSON.stringify(payload) });
-    toast(`Lot ${lotNo} saved ✓`);
+    await j(_le.editingLotId
+      ? `/api/lots/${_le.editingLotId}`
+      : '/api/lots',
+      { method: _le.editingLotId ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    // Sync the chosen bank as the seller's default ONLY if the user
+    // picked a different bank than the seller's current default. Avoids
+    // unnecessary writes for the common case where the picker just
+    // showed the existing default and the user didn't touch it.
+    if (_le.selectedBankId && _le.selectedSeller && Array.isArray(_le.selectedSeller.banks)) {
+      const currentDefault = _le.selectedSeller.banks.find(b => b.is_default);
+      if (!currentDefault || currentDefault.id !== _le.selectedBankId) {
+        try {
+          await j(`/api/traders/${_le.selectedSeller.id}/bank-default/${_le.selectedBankId}`, { method: 'PUT' });
+          // Reflect locally so we don't re-PUT on next save with the
+          // same selection.
+          for (const b of _le.selectedSeller.banks) b.is_default = (b.id === _le.selectedBankId) ? 1 : 0;
+        } catch (e) {
+          console.warn('Bank-default sync failed (non-fatal):', e);
+        }
+      }
+    }
+    toast(_le.editingLotId ? `Lot ${lotNo} updated ✓` : `Lot ${lotNo} saved ✓`);
+    const wasEditing = !!_le.editingLotId;
+    _le.editingLotId = null;
+    document.getElementById('le-edit-banner').style.display = 'none';
+    document.getElementById('le-save-btn-label').textContent = 'Save & Next';
     // Keep seller, clear lot-specific fields, focus lot no for the next
-    // entry. Matches the PWA's resetFormKeepSeller flow.
+    // entry. Matches the PWA's resetFormKeepSeller flow. Litre + sample
+    // get pre-filled from the configured defaults so the user only types
+    // truly variable values (lot no, bags, qty).
     document.getElementById('le-lotno').value = '';
     document.getElementById('le-bags').value = '';
-    document.getElementById('le-litre').value = '';
+    document.getElementById('le-litre').value = _le.defaultLitre || '';
     document.getElementById('le-qty').value = '';
     document.getElementById('le-gross').value = '';
     document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
+    const moistureEl = document.getElementById('le-moisture');
+    if (moistureEl) moistureEl.value = '';
     setTimeout(() => document.getElementById('le-lotno').focus(), 50);
-    loadLeRecent();
+    await loadLeRecent();
+    // After a successful create (not edit), auto-suggest the next lot
+    // number for this branch so the user can hit Save again immediately.
+    if (!wasEditing) leAutoSuggestLotNo();
     leUpdateStats();
   } catch (e) {
     leShowError(e.message || 'Save failed');
@@ -5096,12 +5389,177 @@ function leResetForm(){
   leClearSeller();
   document.getElementById('le-lotno').value = '';
   document.getElementById('le-bags').value = '';
-  document.getElementById('le-litre').value = '';
+  document.getElementById('le-litre').value = _le.defaultLitre || '';
   document.getElementById('le-qty').value = '';
   document.getElementById('le-gross').value = '';
   document.getElementById('le-grade').value = '1';
   document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
+  const moistureEl = document.getElementById('le-moisture');
+  if (moistureEl) moistureEl.value = '';
   document.getElementById('le-err').style.display = 'none';
+  // Drop edit mode if active
+  _le.editingLotId = null;
+  document.getElementById('le-edit-banner').style.display = 'none';
+  document.getElementById('le-save-btn-label').textContent = 'Save & Next';
+}
+
+// Begin editing an existing lot. Loads the lot into the form, picks the
+// seller (with a fresh /api/traders/:id call to get up-to-date banks),
+// and switches the Save button into update mode.
+async function leEditLot(lotId){
+  const lot = (_le.recentLots || []).find(l => l.id === lotId);
+  if (!lot) return;
+  // Edit gating — admin/manager bypass these checks (they always edit).
+  // Field staff and operators are subject to the editEnabled flag and
+  // edit-timeout window (in seconds since the lot was created).
+  const isAdminish = (window._userRole === 'admin' || window._userRole === 'manager');
+  if (!isAdminish) {
+    if (!_le.editEnabled) {
+      toast('Lot editing is disabled. Ask admin to enable it in Settings.');
+      return;
+    }
+    if (_le.editTimeoutSec > 0 && lot.created_at) {
+      // created_at is stored as a SQLite localtime string — parse via
+      // Date which handles 'YYYY-MM-DD HH:MM:SS' reliably enough for
+      // this purpose.
+      const created = new Date(lot.created_at.replace(' ', 'T'));
+      const ageSec = (Date.now() - created.getTime()) / 1000;
+      if (Number.isFinite(ageSec) && ageSec > _le.editTimeoutSec) {
+        toast(`Edit window expired (${_le.editTimeoutSec}s). Ask admin to update this lot.`);
+        return;
+      }
+    }
+  }
+  _le.editingLotId = lotId;
+  document.getElementById('le-edit-lotno').textContent = lot.lot_no || '?';
+  document.getElementById('le-edit-banner').style.display = 'flex';
+  document.getElementById('le-save-btn-label').textContent = 'Update Lot';
+  document.getElementById('le-lotno').value  = lot.lot_no || '';
+  document.getElementById('le-grade').value  = lot.grade || '1';
+  document.getElementById('le-bags').value   = lot.bags ?? '';
+  document.getElementById('le-litre').value  = lot.litre ?? '';
+  document.getElementById('le-qty').value    = lot.qty ?? '';
+  document.getElementById('le-sample').value = lot.sample_wt ?? (_le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000');
+  const moistureEl = document.getElementById('le-moisture');
+  if (moistureEl) moistureEl.value = lot.moisture || '';
+  leCalcGross();
+  // Branch may differ from the toolbar — pre-fill so the user sees what
+  // this lot's branch is. Don't overwrite the toolbar branch input
+  // because the user may want to keep entering for their own branch.
+  // Pull seller details fresh so we have the up-to-date banks array
+  if (lot.trader_id) {
+    try {
+      const seller = await j(`/api/traders/${lot.trader_id}`);
+      lePickSeller(seller);
+    } catch (e) {
+      // Fall back to the denormalised seller fields stored on the lot row
+      lePickSeller({
+        id: lot.trader_id,
+        name: lot.name || '', cr: lot.cr || '', pan: lot.pan || '',
+        tel: lot.tel || '', ppla: lot.ppla || '', pin: lot.ppin || '',
+        pstate: lot.pstate || '', banks: []
+      });
+    }
+  }
+  // Scroll the form into view so the user sees what they're editing
+  setTimeout(() => {
+    document.getElementById('le-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 100);
+}
+
+function leExitEditMode(){
+  leResetForm();
+}
+
+// Delete a lot from the recent list. Only available to roles with the
+// `delete` capability (icon-btn carries needs-delete CSS gate). The
+// confirm prompt is intentional — single-click delete is too easy to
+// trigger accidentally during fast entry.
+async function leDeleteLot(lotId, lotNo){
+  if (!confirm(`Delete lot #${lotNo}? This cannot be undone.`)) return;
+  try {
+    await j(`/api/lots/${lotId}`, { method: 'DELETE' });
+    toast(`Lot ${lotNo} deleted`);
+    // If we were editing the lot we just deleted, exit edit mode
+    if (_le.editingLotId === lotId) leExitEditMode();
+    await loadLeRecent();
+    leUpdateStats();
+  } catch (e) {
+    toast(`Delete failed: ${e.message || e}`);
+  }
+}
+
+// ── New Seller modal ─────────────────────────────────────
+// Quick-add for the auction-hall workflow. Pre-fills the name from the
+// search query the user typed. POST hits /api/traders/quick which
+// accepts lot_entry role too.
+function leOpenNewSellerModal(prefilledName){
+  const modal = document.getElementById('le-newseller-modal');
+  // Reset all fields, then pre-fill name from the search box content.
+  // Phone-shaped queries (4+ digits, no letters) go in the phone slot
+  // instead of the name slot — matches the PWA's heuristic.
+  document.getElementById('le-ns-name').value  = '';
+  document.getElementById('le-ns-cr').value    = '';
+  document.getElementById('le-ns-pan').value   = '';
+  document.getElementById('le-ns-tel').value   = '';
+  document.getElementById('le-ns-padd').value  = '';
+  document.getElementById('le-ns-ppla').value  = '';
+  document.getElementById('le-ns-pin').value   = '';
+  document.getElementById('le-ns-pstate').value = 'TAMIL NADU';
+  document.getElementById('le-ns-pst').value   = '33';
+  document.getElementById('le-ns-err').style.display = 'none';
+  const q = String(prefilledName || _le.lastSearchQuery || '').trim();
+  if (q) {
+    if (/^\d{4,}$/.test(q)) {
+      document.getElementById('le-ns-tel').value = q;
+    } else {
+      document.getElementById('le-ns-name').value = q.toUpperCase();
+    }
+  }
+  modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('le-ns-name').focus(), 50);
+}
+
+function leCloseNewSellerModal(){
+  document.getElementById('le-newseller-modal').style.display = 'none';
+}
+
+async function leSaveNewSeller(){
+  const name = (document.getElementById('le-ns-name').value || '').trim();
+  const err  = document.getElementById('le-ns-err');
+  const showErr = (msg) => { err.textContent = msg; err.style.display = 'block'; };
+  if (!name) return showErr('Name is required');
+
+  const payload = {
+    name,
+    cr:     (document.getElementById('le-ns-cr').value   || '').trim(),
+    pan:    (document.getElementById('le-ns-pan').value  || '').trim(),
+    tel:    (document.getElementById('le-ns-tel').value  || '').trim(),
+    padd:   (document.getElementById('le-ns-padd').value || '').trim(),
+    ppla:   (document.getElementById('le-ns-ppla').value || '').trim(),
+    pin:    (document.getElementById('le-ns-pin').value  || '').trim(),
+    pstate: (document.getElementById('le-ns-pstate').value || 'TAMIL NADU'),
+    pst_code: (document.getElementById('le-ns-pst').value || '33').trim(),
+  };
+
+  const btn = document.getElementById('le-ns-save');
+  btn.disabled = true;
+  try {
+    const result = await j('/api/traders/quick', { method: 'POST', body: JSON.stringify(payload) });
+    if (result && result.deduped) {
+      toast(`Existing seller picked: ${result.trader.name}`);
+    } else {
+      toast(`Seller ${name} added ✓`);
+    }
+    leCloseNewSellerModal();
+    if (result && result.trader) {
+      lePickSeller(result.trader);
+    }
+  } catch (e) {
+    showErr(e.message || 'Failed to add seller');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function loadLeRecent(){
@@ -5126,23 +5584,30 @@ function renderLeRecent(){
     return;
   }
   // Show the latest 25 lots (most-recent first) for the trade. Higher
-  // counts can be reviewed in the regular Lots tab.
+  // counts can be reviewed in the regular Lots tab. Each row is clickable
+  // (loads into the form for editing); admins/operators get a delete
+  // icon — gated by needs-delete CSS so lot_entry users don't see it.
   const recent = [..._le.recentLots].sort((a,b) => (b.id||0) - (a.id||0)).slice(0, 25);
   if (count) count.textContent = `Showing ${recent.length} of ${_le.recentLots.length}`;
   host.innerHTML = `
-    <div style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 80px;gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border)">
-      <div>Lot</div><div>Seller</div><div>Branch</div><div style="text-align:right">Bags</div><div style="text-align:right">Litre</div><div style="text-align:right">Qty (kg)</div>
+    <div style="display:grid;grid-template-columns:80px 1fr 90px 70px 70px 80px 64px;gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border)">
+      <div>Lot</div><div>Seller</div><div>Branch</div><div style="text-align:right">Bags</div><div style="text-align:right">Litre</div><div style="text-align:right">Qty (kg)</div><div></div>
     </div>
-    ${recent.map(l => `
-      <div style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 80px;gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px">
+    ${recent.map(l => {
+      const safeLotNo = String(l.lot_no || '').replace(/'/g, "\\'");
+      return `
+      <div class="le-recent-row" data-lot-id="${l.id}" style="display:grid;grid-template-columns:80px 1fr 90px 70px 70px 80px 64px;gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .1s" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''" onclick="leEditLot(${l.id})" title="Click to edit">
         <div style="font-family:monospace;font-weight:700;color:var(--green)">${esc(l.lot_no || '')}</div>
         <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.name||'')}">${esc(l.name || '—')}</div>
         <div style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(l.branch || '')}</div>
         <div style="text-align:right">${esc(String(l.bags ?? ''))}</div>
         <div style="text-align:right">${esc(String(l.litre ?? l.lit ?? ''))}</div>
         <div style="text-align:right;font-weight:600">${Number(l.qty || 0).toFixed(3)}</div>
-      </div>
-    `).join('')}
+        <div style="text-align:right" onclick="event.stopPropagation()">
+          <button class="needs-delete" onclick="event.stopPropagation();leDeleteLot(${l.id},'${safeLotNo}')" title="Delete this lot" style="background:transparent;border:none;cursor:pointer;color:var(--spice-chili);padding:2px 6px;border-radius:4px;font-size:14px">✕</button>
+        </div>
+      </div>`;
+    }).join('')}
   `;
 }
 
@@ -7402,7 +7867,9 @@ async function loadInvoices(){
       //   2. route_distances[(dispatch_pin → buyer_pin)]
       //   3. blank
       // Set / managed via "To Tally → 🗺️ E-way Bill Distance".
-      { key:'resolved_distance_km', label:'Distance (km)', sort:'number', numeric:true,
+      // noTotal: distance is per-route, not additive — summing kilometres
+      // across invoices is meaningless and would mislead the user.
+      { key:'resolved_distance_km', label:'Distance (km)', sort:'number', numeric:true, noTotal:true,
         render:(i)=>{
           const v = i.resolved_distance_km;
           if (v == null || v === '') return '<span style="color:var(--text3)">—</span>';
@@ -8413,6 +8880,38 @@ async function generateDebitNote(){
   }catch(e){showError(e)}}
 async function delDebitNote(id){if(!confirm('Delete debit note?'))return;await j(`/api/debit-notes/${id}`,{method:'DELETE'});loadDebitNotes()}
 
+// Bulk-generate debit notes for every sales invoice tied to one purchase
+// invoice. Single input by spec — discount / note-no are auto-derived
+// server-side (next note no, discount from settings × invoice qty).
+async function generateAllDebitNotes(){
+  const purchno = (document.getElementById('gd-bulk-purchno').value || '').trim();
+  const errEl   = document.getElementById('gd-bulk-err');
+  const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+  if (!purchno) return showErr('Enter a purchase invoice number');
+  const btn = document.getElementById('gd-bulk-save');
+  btn.disabled = true;
+  try {
+    const r = await fetch(B + '/api/debit-notes/generate-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + T },
+      body: JSON.stringify({ purchno })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Failed');
+    hideModal('gen-debit-bulk-modal');
+    document.getElementById('gd-bulk-purchno').value = '';
+    errEl.style.display = 'none';
+    const created = d.created || 0;
+    const skipped = d.skipped || 0;
+    toast(`${created} debit note${created === 1 ? '' : 's'} generated${skipped ? ` · ${skipped} skipped (already exist)` : ''}`);
+    loadDebitNotes();
+  } catch (e) {
+    showErr(e.message || 'Failed');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Journals ───────────────────────────────────────────────
 async function loadJournalDefault(){
   // e-Trade-only build: journals filter by TRADE (auction), not date
@@ -8984,10 +9483,14 @@ async function loadJournal(){
   const auctionId=document.getElementById('jr-auction').value;
   if(!auctionId){alert('Select a trade');return}
   let url,cols;
+  // Column tuple: [label, key, decimals]
+  //   decimals = 0 → integer with commas, no decimals (used for Bags)
+  //   decimals = N → N decimal places with comma grouping (Indian thousands separator)
+  //   decimals = undefined → text column, no formatting
   if(type==='sales'){
     const saleType=document.getElementById('jr-sale').value;
     url=`/api/journals/sales?auctionId=${auctionId}${saleType?'&saleType='+saleType:''}`;
-    cols=[['Date','date'],['Sale','sale'],['Inv#','invo'],['Buyer','buyer'],['Trade Name','buyer1'],['GSTIN','gstin'],['Bags','bag',1],['Qty','qty',3],['Cardamom','cardamom',2],['Gunny','gunny',2],['CGST','cgst',2],['SGST','sgst',2],['IGST','igst',2],['Total','total',2]];
+    cols=[['Date','date'],['Sale','sale'],['Inv#','invo'],['Buyer','buyer'],['Trade Name','buyer1'],['GSTIN','gstin'],['Bags','bag',0],['Qty','qty',3],['Cardamom','cardamom',2],['Gunny','gunny',2],['CGST','cgst',2],['SGST','sgst',2],['IGST','igst',2],['Total','total',2]];
   }else if(type==='dealer'){
     url=`/api/journals/purchase?auctionId=${auctionId}&type=dealer`;
     cols=[['Date','date'],['Inv#','invoice_no'],['Name','name'],['Place','place'],['GSTIN','gstin'],['Qty','qty',3],['Amount','amount',2],['CGST','cgst',2],['SGST','sgst',2],['IGST','igst',2],['Total','total',2],['TDS','tds',2]];
@@ -8996,10 +9499,20 @@ async function loadJournal(){
     cols=[['Date','date'],['Bill#','bill_no'],['Name','name'],['Place','place'],['State','state'],['CR','cr'],['PAN','pan'],['Qty','qty',3],['Cost','cost',2],['Net','net',2]];
   }
   const d=await j(url);
-  document.getElementById('jr-head').innerHTML='<tr>'+cols.map(c=>`<th${c[2]?' class="num"':''}>${c[0]}</th>`).join('')+'</tr>';
+  // Number formatter — Indian thousands grouping (1,00,000 style). Integer
+  // columns (Bags) round to whole number; decimal columns show fixed
+  // precision with grouping.
+  const fmtNum = (v, decimals) => {
+    const n = Number(v) || 0;
+    if (decimals === 0) {
+      return Math.round(n).toLocaleString('en-IN');
+    }
+    return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  };
+  document.getElementById('jr-head').innerHTML='<tr>'+cols.map(c=>`<th${c[2]!==undefined?' class="num"':''}>${c[0]}</th>`).join('')+'</tr>';
   document.getElementById('jr-body').innerHTML=d.map(r=>'<tr>'+cols.map(c=>{
     const v=r[c[1]];
-    if(c[2]!==undefined)return`<td class="num">${(v||0).toFixed(c[2])}</td>`;
+    if(c[2]!==undefined)return`<td class="num">${fmtNum(v,c[2])}</td>`;
     return`<td>${esc(v)}</td>`;
   }).join('')+'</tr>').join('')||'<tr><td colspan="'+cols.length+'" style="text-align:center;color:var(--text3);padding:20px">No records for this trade</td></tr>';
 }

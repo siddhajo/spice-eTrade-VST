@@ -215,15 +215,19 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
-  // Voucher prefix for <VOUCHERNUMBER> always derives from the live
-  // Logo Code (cfg.logo). Single source of truth: change Logo Code in
-  // Settings, and Tally vouchers re-prefix automatically. Trailing
-  // '/' appended only if the code doesn't already end with one or '-'.
-  // (`tally_inv_prefix` setting is intentionally ignored — having two
-  // separate "prefix" fields was a recurring source of confusion in
-  // the old Spice Config app.)
-  const _logoCode = String(cfgGet(cfg, 'logo', 'ISP')).trim() || 'ISP';
-  const invPrefix = /[/\-]$/.test(_logoCode) ? _logoCode : (_logoCode + '/');
+  // Voucher prefix priority for <VOUCHERNUMBER>:
+  //   1. tally_inv_prefix setting (e.g. 'VSTK') — explicit, season-stable
+  //   2. cfg.logo (live Logo Code) — back-compat for installs that
+  //      historically used the Logo Code as the prefix
+  //   3. 'ISP' literal — final safety net so we never emit blank prefixes
+  // Trailing '/' appended only if the code doesn't already end with one
+  // or '-'. The slash is necessary because <VOUCHERNUMBER> is rendered
+  // as `${invPrefix}${separator}${seasonNum}` and a missing slash
+  // produces invalid voucher numbers in Tally.
+  const _tallyPrefix = String(cfgGet(cfg, 'tally_inv_prefix', '')).trim();
+  const _logoCode    = String(cfgGet(cfg, 'logo', '')).trim();
+  const _activePrefix = _tallyPrefix || _logoCode || 'ISP';
+  const invPrefix = /[/\-]$/.test(_activePrefix) ? _activePrefix : (_activePrefix + '/');
   const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', 'ASP/');
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = cfgBool(cfg, 'tally_dispatch_from', true);
@@ -588,6 +592,52 @@ ${TAGS.DEEMNO}
 <LEDGERNAME>${xe(cardLedger)}</LEDGERNAME>
 ${TAGS.DEEMNO}
 <AMOUNT>${r2(lot.amount)}</AMOUNT>
+</ACCOUNTINGALLOCATIONS.LIST>
+${isIntra && !isExport ? `${rates.cgst}\n${rates.sgst}` : (isExport ? '' : rates.igst)}
+${rates.cess}
+</ALLINVENTORYENTRIES.LIST>`;
+      }
+    } else {
+      // Aggregate-mode cardamom inventory — single entry covering all lots.
+      // Without this, the cardamom sales ledger never reaches the voucher
+      // (the per-lot loop above is skipped) and Tally rejects the import
+      // with "missing ledger" because the goods amount has nowhere to
+      // post. Quantity/amount summed from lots; if lots weren't passed,
+      // fall back to row-level totals (row.qty, row.amounttot).
+      const lots = Array.isArray(row.lots) ? row.lots : [];
+      const aggQty   = lots.length ? lots.reduce((s, l) => s + (Number(l.qty) || 0), 0)    : Number(row.qty || 0);
+      const aggAmt   = lots.length ? lots.reduce((s, l) => s + (Number(l.amount) || 0), 0) : Number(row.amounttot || row.amount || 0);
+      const aggBags  = lots.length ? lots.reduce((s, l) => s + (Number(l.bag) || 0), 0)    : Number(row.bag || 0);
+      const aggRate  = aggQty > 0 ? (aggAmt / aggQty) : 0;
+      if (aggAmt > 0) {
+        xml += `
+<ALLINVENTORYENTRIES.LIST>
+<STOCKITEMNAME>${xe(Item_Card)}</STOCKITEMNAME>
+<GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>
+<HSNSOURCETYPE>Stock Item</HSNSOURCETYPE>
+<HSNITEMSOURCE>${xe(Item_Card)}</HSNITEMSOURCE>
+<GSTOVRDNSTOREDNATURE>${cardNature}</GSTOVRDNSTOREDNATURE>
+<GSTOVRDNTYPEOFSUPPLY>Goods</GSTOVRDNTYPEOFSUPPLY>
+<GSTHSNNAME>${xe(HSN_Card)}</GSTHSNNAME>
+<GSTHSNDESCRIPTION>${xe(Item_Card)}</GSTHSNDESCRIPTION>
+<BASICNUMPACKAGES>${r0(aggBags)}</BASICNUMPACKAGES>
+${TAGS.DEEMNO}
+<RATE>${r2(aggRate)}/Kgs.</RATE>
+<AMOUNT>${r2(aggAmt)}</AMOUNT>
+<ACTUALQTY>${r2(aggQty)}Kgs.</ACTUALQTY>
+<BILLEDQTY>${r2(aggQty)}Kgs.</BILLEDQTY>
+<BATCHALLOCATIONS.LIST>
+<GODOWNNAME>Main Location</GODOWNNAME>
+<BATCHNAME>Primary Batch</BATCHNAME>
+<DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>
+<AMOUNT>${r2(aggAmt)}</AMOUNT>
+<ACTUALQTY>${r2(aggQty)}Kgs.</ACTUALQTY>
+<BILLEDQTY>${r2(aggQty)}Kgs.</BILLEDQTY>
+</BATCHALLOCATIONS.LIST>
+<ACCOUNTINGALLOCATIONS.LIST>
+<LEDGERNAME>${xe(cardLedger)}</LEDGERNAME>
+${TAGS.DEEMNO}
+<AMOUNT>${r2(aggAmt)}</AMOUNT>
 </ACCOUNTINGALLOCATIONS.LIST>
 ${isIntra && !isExport ? `${rates.cgst}\n${rates.sgst}` : (isExport ? '' : rates.igst)}
 ${rates.cess}

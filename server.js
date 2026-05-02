@@ -6,7 +6,7 @@ const multer = require('multer');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
-const { initCompanySettings, CATEGORIES, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
+const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
 const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, buildDebitNote, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
 const { EXPORT_TYPES } = require('./exports');
@@ -555,6 +555,27 @@ app.delete('/api/purchases/delete-all',   requireDeleteAll, makeDeleteAll('purch
 app.delete('/api/bills/delete-all',       requireDeleteAll, makeDeleteAll('bills'));
 app.delete('/api/debit-notes/delete-all', requireDeleteAll, makeDeleteAll('debit_notes'));
 
+// Trades (auctions) bulk-delete — cascades through every child table that
+// references auction_id. Order matters: clear leaf rows first so foreign-
+// key dependencies don't block the parent delete. Wraps in a try/catch
+// per-table because some installs may not have every optional table.
+app.delete('/api/auctions/delete-all', requireDeleteAll, (req, res) => {
+  try {
+    const db = getDb();
+    const before = db.get('SELECT COUNT(*) as c FROM auctions').c;
+    const childTables = ['lots', 'invoices', 'purchases', 'bills', 'debit_notes', 'lot_allocations'];
+    for (const t of childTables) {
+      try { db.run(`DELETE FROM ${t}`); } catch(_) {}
+      try { db.exec(`DELETE FROM sqlite_sequence WHERE name = '${t}'`); } catch(_) {}
+    }
+    db.run('DELETE FROM auctions');
+    try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'auctions'"); } catch(_) {}
+    res.json({ success: true, deleted: before });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════
 // GST LOOKUP — fetch trade name/address/state from GSTIN
 // Uses gstincheck.co.in if an API key is configured in settings
@@ -643,9 +664,9 @@ app.get('/api/traders', requireViewOrLotEntry, (req, res) => {
     const ids = rows.map(r => r.id);
     const placeholders = ids.map(() => '?').join(',');
     const banks = db.all(
-      `SELECT trader_id, bank_name, acctnum, ifsc, holder_name
+      `SELECT id, trader_id, bank_name, acctnum, ifsc, holder_name, is_default
        FROM trader_banks WHERE trader_id IN (${placeholders})
-       ORDER BY trader_id, id`, ids
+       ORDER BY trader_id, is_default DESC, id`, ids
     );
     const byTrader = new Map();
     for (const b of banks) {
@@ -673,7 +694,7 @@ app.get('/api/traders/:id', requireViewOrLotEntry, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Not found' });
   // Attach banks array so the edit modal sees all bank accounts.
   row.banks = db.all(
-    'SELECT trader_id, bank_name, acctnum, ifsc, holder_name FROM trader_banks WHERE trader_id = ? ORDER BY id',
+    'SELECT id, trader_id, bank_name, acctnum, ifsc, holder_name, is_default FROM trader_banks WHERE trader_id = ? ORDER BY is_default DESC, id',
     [row.id]
   );
   res.json(row);
@@ -730,6 +751,82 @@ app.delete('/api/traders/:id', requireDelete, (req, res) => {
   // Clear child rows first (trader_banks FK) before deleting the parent
   db.run('DELETE FROM trader_banks WHERE trader_id = ?', [req.params.id]);
   db.run('DELETE FROM traders WHERE id = ?', [req.params.id]);
+  res.json({ success: true });
+});
+
+// ── LOT-ENTRY QUICK-ADD SELLER ─────────────────────────────────
+// Field-staff endpoint for adding a seller on the fly during the auction
+// hall workflow. Same shape as POST /api/traders but reachable by the
+// lot_entry role (which doesn't have full trader_write capability).
+// Validates only the minimum required fields — admins can fill out
+// missing details later from the Sellers tab.
+app.post('/api/traders/quick', requireAnyPermission('trader_write', 'lot_write'), (req, res) => {
+  const t = req.body || {};
+  if (!t.name || !String(t.name).trim()) {
+    return res.status(400).json({ error: 'Name is required' });
+  }
+  const db = getDb();
+  // De-dupe: if a seller with the same name AND (CR or phone) already
+  // exists, return that one instead of creating a duplicate. Helps when
+  // multiple field users create the same seller around the same time.
+  let existing = null;
+  if (t.cr && String(t.cr).trim()) {
+    existing = db.get('SELECT * FROM traders WHERE name = ? AND cr = ? LIMIT 1',
+      [String(t.name).trim(), String(t.cr).trim()]);
+  }
+  if (!existing && t.tel && String(t.tel).trim()) {
+    existing = db.get('SELECT * FROM traders WHERE name = ? AND tel = ? LIMIT 1',
+      [String(t.name).trim(), String(t.tel).trim()]);
+  }
+  if (existing) {
+    return res.json({ success: true, id: existing.id, deduped: true, trader: existing });
+  }
+  const info = db.run(`INSERT INTO traders (name,cr,pan,tel,aadhar,padd,ppla,pin,pstate,pst_code,ifsc,acctnum,holder_name)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      String(t.name).trim().toUpperCase(),
+      (t.cr || '').toString().trim(),
+      (t.pan || '').toString().trim().toUpperCase(),
+      (t.tel || '').toString().trim(),
+      (t.aadhar || '').toString().trim(),
+      (t.padd || '').toString().trim(),
+      (t.ppla || '').toString().trim().toUpperCase(),
+      (t.pin || '').toString().trim(),
+      (t.pstate || 'TAMIL NADU').toString().trim().toUpperCase(),
+      (t.pst_code || '33').toString().trim(),
+      '', '', ''
+    ]);
+  // Read back the row to return the full trader shape (matches what the
+  // search endpoint returns so the client can drop it straight into the
+  // selectedSeller state).
+  const created = db.get('SELECT * FROM traders WHERE id = ?', [info.lastInsertRowid]);
+  if (created) created.banks = [];
+  res.json({ success: true, id: info.lastInsertRowid, trader: created });
+});
+
+// Set a bank as the trader's default. Used by the Lot Entry bank-picker
+// so picking a bank on a lot save updates the trader's default for next
+// time. Also syncs the legacy traders.acctnum/ifsc/holder_name fields
+// since several existing exports read directly from the traders row.
+app.put('/api/traders/:id/bank-default/:bankId', requireAnyPermission('trader_write', 'lot_write'), (req, res) => {
+  const traderId = parseInt(req.params.id, 10);
+  const bankId   = parseInt(req.params.bankId, 10);
+  if (!Number.isFinite(traderId) || !Number.isFinite(bankId)) {
+    return res.status(400).json({ error: 'Invalid trader or bank id' });
+  }
+  const db = getDb();
+  const bank = db.get('SELECT * FROM trader_banks WHERE id = ? AND trader_id = ?', [bankId, traderId]);
+  if (!bank) return res.status(404).json({ error: 'Bank not found for this trader' });
+  // Clear is_default on every bank for this trader, then set it on the
+  // chosen one. Done in two statements (sql.js doesn't support RETURNING
+  // and we want both updates atomic-feeling without extra wiring).
+  db.run('UPDATE trader_banks SET is_default = 0 WHERE trader_id = ?', [traderId]);
+  db.run('UPDATE trader_banks SET is_default = 1 WHERE id = ?', [bankId]);
+  // Sync the legacy single-bank fields on traders. Existing exports
+  // (DBF, XLSX) read these columns directly so we keep them in lockstep
+  // with the chosen default.
+  db.run('UPDATE traders SET acctnum = ?, ifsc = ?, holder_name = ? WHERE id = ?',
+    [bank.acctnum || '', bank.ifsc || '', bank.holder_name || '', traderId]);
   res.json({ success: true });
 });
 
@@ -973,14 +1070,15 @@ app.post('/api/auctions', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
   const db = getDb();
   const d = normalizeDate(date);
-  db.run('INSERT INTO auctions (ano,date,crop_type,state) VALUES (?,?,?,?)', [ano, d, crop_type||'ASP', state||'TAMIL NADU']);
+  const defaultCrop = getSetting(db, 'default_crop_type') || 'VST';
+  db.run('INSERT INTO auctions (ano,date,crop_type,state) VALUES (?,?,?,?)', [ano, d, crop_type||defaultCrop, state||'TAMIL NADU']);
   const created = db.get('SELECT id FROM auctions WHERE ano = ? AND date = ? ORDER BY id DESC LIMIT 1', [ano, d]);
   res.json({ success: true, id: created ? created.id : null });
 });
 app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
   getDb().run('UPDATE auctions SET ano=?, date=?, crop_type=?, state=? WHERE id=?',
-    [ano, normalizeDate(date), crop_type||'ASP', state||'TAMIL NADU', req.params.id]);
+    [ano, normalizeDate(date), crop_type||(getSetting(getDb(), 'default_crop_type')||'VST'), state||'TAMIL NADU', req.params.id]);
   res.json({ success: true });
 });
 app.delete('/api/auctions/:id', requireDelete, (req, res) => {
@@ -1018,7 +1116,7 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
     // Otherwise → resolve auction per row from its own ANO/DATE columns (multi-auction import)
     const overrideAno = req.body.ano;
     const overrideDate = normalizeDate(req.body.date);
-    const cropType = req.body.crop_type || mapCol(rows[0], 'CRPT', 'CROP_TYPE', 'CROPTYPE') || 'ASP';
+    const cropType = req.body.crop_type || mapCol(rows[0], 'CRPT', 'CROP_TYPE', 'CROPTYPE') || (getSetting(db, 'default_crop_type') || 'VST');
     const state = req.body.state || mapCol(rows[0], 'STATE') || 'TAMIL NADU';
 
     // Cache of resolved auctions so we don't query the DB for every row
@@ -2505,7 +2603,7 @@ app.post('/api/bills/generate/:auctionId', requireInvoiceWrite, (req, res) => {
   const s = bill.summary;
   db.run(`INSERT INTO bills (auction_id,ano,date,state,br,crpt,bil,name,add_line,pla,pstate,st_code,crr,pan,qty,cost,igst,net)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||'ASP',
+    [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
      parseInt(billNo),bill.seller.name,bill.seller.address||'',bill.seller.place||'',
      bill.seller.state||'',bill.seller.st_code||'',bill.seller.cr||'',bill.seller.pan||'',
      s.totalQty,s.totalPuramt,0,s.netAmount]);
@@ -2548,7 +2646,7 @@ app.post('/api/bills/generate-all/:auctionId', requireInvoiceWrite, (req, res) =
       const s = bill.summary;
       db.run(`INSERT INTO bills (auction_id,ano,date,state,br,crpt,bil,name,add_line,pla,pstate,st_code,crr,pan,qty,cost,igst,net)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||'ASP',
+        [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
          nextNo,bill.seller.name,bill.seller.address||'',bill.seller.place||'',
          bill.seller.state||'',bill.seller.st_code||'',bill.seller.cr||'',bill.seller.pan||'',
          s.totalQty,s.totalPuramt,0,s.netAmount]);
@@ -2712,6 +2810,101 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
      note.amount, note.cgst, note.sgst, note.igst, note.total]);
   
   res.json({ success: true, note });
+});
+
+// Bulk DN generation — single input: purchase invoice number. Finds the
+// trade (`ano`) that purchase belongs to, then generates one DN per
+// sales invoice in that trade. Idempotent: invoices that already have a
+// DN matching their (ano, name) are skipped.
+//
+// Discount is auto-derived from settings:
+//   discount_pct × invoice qty × purchase rate
+// (mirrors the per-lot discount calculation in calculations.js — keeps
+// the bulk DN consistent with what a user would have manually entered).
+app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const cfg = getSettingsFlat(db);
+  const purchno = String(req.body.purchno || '').trim();
+  if (!purchno) return res.status(400).json({ error: 'purchno required' });
+
+  // Find the purchase invoice → the trade (ano). One purchno usually
+  // maps to a single ano; if multiple rows share the invo (rare), we
+  // collect their distinct ano values and process each.
+  const purchases = db.all('SELECT DISTINCT ano FROM purchases WHERE invo = ?', [purchno]);
+  if (!purchases.length) {
+    return res.status(404).json({ error: `Purchase invoice ${purchno} not found` });
+  }
+  const anos = purchases.map(p => p.ano).filter(Boolean);
+  if (!anos.length) return res.status(404).json({ error: 'No trade linked to that purchase' });
+
+  // Pull all sales invoices for those trades, skipping ones that already
+  // have a DN (matched by ano + buyer name — the natural join key since
+  // a DN is one-per-buyer-per-trade in this app's data model).
+  const placeholders = anos.map(() => '?').join(',');
+  const invoices = db.all(
+    `SELECT * FROM invoices WHERE ano IN (${placeholders})`, anos
+  );
+  if (!invoices.length) {
+    return res.json({ created: 0, skipped: 0, note: 'No sales invoices in this trade' });
+  }
+
+  // Pre-fetch existing DN keys for skip detection. Minimal join: just
+  // ano + name. If you want stricter idempotency (e.g. one DN per
+  // sales-invoice number), extend the key here.
+  const existing = new Set(
+    db.all(
+      `SELECT ano, name FROM debit_notes WHERE ano IN (${placeholders})`, anos
+    ).map(r => `${r.ano}::${r.name || ''}`)
+  );
+
+  // Determine starting note number: max(existing note_no across whole
+  // table) + 1. Note_no is stored as text; parse defensively.
+  let nextNoteNo = (() => {
+    const row = db.get('SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes');
+    const mx = parseInt(row && row.mx, 10);
+    return Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
+  })();
+
+  const discountPct = Number(cfg.discount_pct) || 0;
+  const discountDays = Number(cfg.discount_days) || 0;
+  let created = 0, skipped = 0;
+  const generated = [];
+
+  for (const inv of invoices) {
+    const key = `${inv.ano}::${inv.buyer1 || inv.buyer || ''}`;
+    if (existing.has(key)) { skipped++; continue; }
+
+    // Discount amount: same shape as per-lot calc — round((PurAmt × days × pct) / 1000).
+    // Falls back to invoice.amount × pct/100 when puramt isn't available
+    // (some legacy invoices may not have puramt populated).
+    const baseAmt = Number(inv.puramt || inv.amount || 0);
+    let discountAmt;
+    if (discountDays > 0 && discountPct > 0) {
+      discountAmt = Math.round((baseAmt / 1000) * discountDays * discountPct);
+    } else if (discountPct > 0) {
+      discountAmt = Math.round(baseAmt * discountPct / 100);
+    } else {
+      // No discount configured — skip rather than create zero-rupee DNs
+      skipped++;
+      continue;
+    }
+    if (discountAmt <= 0) { skipped++; continue; }
+
+    const note = buildDebitNote(db, inv.invo, inv.sale, discountAmt, cfg);
+    if (!note) { skipped++; continue; }
+
+    db.run(`INSERT INTO debit_notes (ano,date,state,name,note_no,amount,cgst,sgst,igst,total)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [note.invoice.ano, new Date().toISOString().slice(0,10), note.invoice.state || '',
+       note.invoice.buyer1 || note.invoice.buyer, String(nextNoteNo),
+       note.amount, note.cgst, note.sgst, note.igst, note.total]);
+    existing.add(key);
+    generated.push({ note_no: nextNoteNo, invo: inv.invo, total: note.total });
+    nextNoteNo++;
+    created++;
+  }
+
+  res.json({ success: true, created, skipped, generated });
 });
 
 app.delete('/api/debit-notes/:id', requireDelete, (req, res) => {

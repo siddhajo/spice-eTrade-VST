@@ -119,6 +119,19 @@ const DEFAULTS = [
   { key: 'flag_round',      value: 'true',           category: 'flags',     label: 'Round Invoice Amounts',    type: 'boolean' },
   { key: 'flag_export',     value: 'false',          category: 'flags',     label: 'Export Invoices',          type: 'boolean' },
 
+  // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
+  // These values pre-populate the Lot Entry form so field staff don't
+  // re-type the same numbers every lot. Sample weight is the most
+  // commonly-used one — it's the cardamom sample taken from each lot
+  // for grading, typically a constant per season. Moisture, default
+  // litre, and edit timeout match the PWA's config keys 1:1.
+  { key: 'sample_weight',   value: '0.000',          category: 'lot_entry', label: 'Default Sample Weight (kg)', type: 'number' },
+  { key: 'show_moisture',   value: 'false',          category: 'lot_entry', label: 'Show Moisture Column',     type: 'boolean' },
+  { key: 'default_litre',   value: '',               category: 'lot_entry', label: 'Default Litre Weight',     type: 'text' },
+  { key: 'default_crop_type', value: 'VST',          category: 'lot_entry', label: 'Default Crop Type',        type: 'text' },
+  { key: 'edit_enabled',    value: 'true',           category: 'lot_entry', label: 'Allow Lot Edits (non-admin)', type: 'boolean' },
+  { key: 'edit_timeout_sec', value: '0',             category: 'lot_entry', label: 'Edit Timeout (sec; 0 = no limit)', type: 'number' },
+
   // ── BUSINESS MODE ──────────────────────────────────────────
   // This build is e-Trade only. business_mode is kept in the DB so calc
   // and exports continue to read it, but rendered as read-only in UI.
@@ -131,10 +144,10 @@ const DEFAULTS = [
   // ── TALLY EXPORT ──────────────────────────────────────────
   // Settings here mirror the macro's Configration form (UserForm1) field-for-field.
   // Identity & defaults
-  { key: 'tally_company_name',     value: '',      category: 'tally', label: 'Tally Company Name (must match Tally company exactly)', type: 'text' },
+  { key: 'tally_company_name',     value: '',      category: 'tally', label: 'Tally Company Name', type: 'text' },
   { key: 'tally_season',          value: '2026-27',        category: 'tally', label: 'Season Suffix',                  type: 'text' },
   { key: 'tally_separator',       value: '/',              category: 'tally', label: 'Voucher Separator',              type: 'text' },
-  { key: 'tally_inv_prefix',      value: '',           category: 'tally', label: 'Voucher Prefix (legacy — Logo Code drives Tally now)', type: 'text' },
+  { key: 'tally_inv_prefix',      value: 'VSTK',           category: 'tally', label: 'Voucher Prefix', type: 'text' },
   { key: 'tally_state_code',      value: '33',             category: 'tally', label: 'Home GSTIN State Code (intra)',  type: 'text' },
   { key: 'tally_home_state',      value: 'Tamil Nadu',     category: 'tally', label: 'Home Place of Supply',           type: 'text' },
   { key: 'tally_urd_state',       value: 'Kerala',         category: 'tally', label: 'URD Purchase State (agriculturist)', type: 'text' },
@@ -249,6 +262,7 @@ const CATEGORIES = {
   season:     { order: 9, title: 'Season / Financial Year', icon: '📅' },
   invoice:    { order: 10, title: 'Invoice Settings',     icon: '📄' },
   flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
+  lot_entry:  { order: 11.5, title: 'Lot Entry Defaults',   icon: '📝', description: 'Defaults applied when field staff enter lots from the Lot Entry tab. Sample weight is auto-filled into each new lot; moisture column shows when enabled; edit timeout limits how long after creation a non-admin user can edit their own lots.' },
   integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },
   tally:      { order: 13, title: 'To Tally',             icon: '📤', description: 'Configure all settings for the Tally XML export — laid out exactly like the original Configration form. Ledger names here MUST match what exists in your Tally company; if a ledger is missing or misspelled, Tally will reject the import.' },
 };
