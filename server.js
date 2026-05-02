@@ -102,6 +102,34 @@ function normalizeDate(v) {
   return s;
 }
 
+// Add N days to an ISO date string (YYYY-MM-DD). String-based to avoid
+// timezone drift — operating on a plain Date() in JS will silently shift
+// the day across DST boundaries or when the server is in a non-UTC TZ.
+// Uses Date in UTC mode purely for the calendar math (month/year rollover,
+// leap years), then re-extracts the YYYY-MM-DD components.
+//
+// Edge cases handled:
+//   - Month rollover:  '2026-01-31' + 1  → '2026-02-01'
+//   - Year rollover:   '2026-12-31' + 1  → '2027-01-01'
+//   - Leap year:       '2028-02-28' + 1  → '2028-02-29'
+//   - Non-leap year:   '2026-02-28' + 1  → '2026-03-01'
+//   - Negative offset: '2026-03-01' + -1 → '2026-02-28'
+//   - Empty input:                       → '' (no throw)
+function addDays(isoDate, days) {
+  const iso = normalizeDate(isoDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  // Date.UTC anchors the math at midnight UTC so DST never enters the
+  // calculation — month rollover, year rollover, and leap years all
+  // resolve correctly via the underlying calendar arithmetic.
+  const ms = Date.UTC(y, m - 1, d) + (Number(days) || 0) * 86400 * 1000;
+  const out = new Date(ms);
+  const yy = out.getUTCFullYear();
+  const mm = String(out.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(out.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 // Display: yyyy-mm-dd → dd/mm/yyyy (handles Excel serials defensively too)
 function fmtDate(d) {
   if (!d && d !== 0) return '';
@@ -2802,13 +2830,22 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   
   const note = buildDebitNote(db, invoiceNo, saleType, parseFloat(discount), cfg);
   if (!note) return res.status(404).json({ error: `Invoice ${invoiceNo} (${saleType}) not found` });
-  
+
+  // DN date rule: trade (auction) date + 1. Look up the auction by `ano`
+  // (which the invoice carries). Fall back to today's date if the trade
+  // record can't be found — the user can edit the date afterwards if
+  // needed, but never block the DN generation on a missing parent row.
+  const trade = db.get('SELECT date FROM auctions WHERE ano = ? LIMIT 1', [note.invoice.ano]);
+  const dnDate = trade && trade.date
+    ? addDays(trade.date, 1)
+    : new Date().toISOString().slice(0, 10);
+
   db.run(`INSERT INTO debit_notes (ano,date,state,name,note_no,amount,cgst,sgst,igst,total)
     VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    [note.invoice.ano, new Date().toISOString().slice(0,10), note.invoice.state||'',
+    [note.invoice.ano, dnDate, note.invoice.state||'',
      note.invoice.buyer1||note.invoice.buyer, String(noteNo),
      note.amount, note.cgst, note.sgst, note.igst, note.total]);
-  
+
   res.json({ success: true, note });
 });
 
@@ -2825,86 +2862,228 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
   const db = getDb();
   const cfg = getSettingsFlat(db);
   const purchno = String(req.body.purchno || '').trim();
-  if (!purchno) return res.status(400).json({ error: 'purchno required' });
 
-  // Find the purchase invoice → the trade (ano). One purchno usually
-  // maps to a single ano; if multiple rows share the invo (rare), we
-  // collect their distinct ano values and process each.
-  const purchases = db.all('SELECT DISTINCT ano FROM purchases WHERE invo = ?', [purchno]);
-  if (!purchases.length) {
+  // Input validation — reject empty / whitespace-only invoice numbers.
+  if (!purchno) {
+    return res.status(400).json({ error: 'Purchase invoice number is required' });
+  }
+
+  // Resolve the purchase row. A purchno SHOULD be unique within active
+  // data; if multiple rows match (legacy / re-used numbers across years),
+  // pick the most recent — predictable and idempotent.
+  const purchase = db.get(
+    `SELECT * FROM purchases
+      WHERE invo = ?
+      ORDER BY date DESC, id DESC
+      LIMIT 1`,
+    [purchno]
+  );
+  if (!purchase) {
     return res.status(404).json({ error: `Purchase invoice ${purchno} not found` });
   }
-  const anos = purchases.map(p => p.ano).filter(Boolean);
-  if (!anos.length) return res.status(404).json({ error: 'No trade linked to that purchase' });
-
-  // Pull all sales invoices for those trades, skipping ones that already
-  // have a DN (matched by ano + buyer name — the natural join key since
-  // a DN is one-per-buyer-per-trade in this app's data model).
-  const placeholders = anos.map(() => '?').join(',');
-  const invoices = db.all(
-    `SELECT * FROM invoices WHERE ano IN (${placeholders})`, anos
-  );
-  if (!invoices.length) {
-    return res.json({ created: 0, skipped: 0, note: 'No sales invoices in this trade' });
+  if (!purchase.ano) {
+    return res.status(400).json({ error: 'Purchase row has no trade number — data integrity issue' });
   }
 
-  // Pre-fetch existing DN keys for skip detection. Minimal join: just
-  // ano + name. If you want stricter idempotency (e.g. one DN per
-  // sales-invoice number), extend the key here.
+  // Idempotency: if a DN for this exact purchase invoice already exists,
+  // return success without creating another. Prevents accidental double-
+  // generation when the user clicks Generate twice. The natural key here
+  // is (ano, name) — same as everywhere else in this app.
+  const dupe = db.get(
+    `SELECT id, note_no FROM debit_notes WHERE ano = ? AND name = ? LIMIT 1`,
+    [purchase.ano, purchase.name || '']
+  );
+  if (dupe) {
+    return res.json({
+      success: true, created: 0, skipped: 1, generated: [],
+      skippedDetails: [{
+        invo: purchno, sale: '', ano: purchase.ano,
+        buyer: purchase.name || '',
+        reason: `duplicate (DN #${dupe.note_no} already exists)`
+      }],
+      note: `Debit note already exists for purchase ${purchno}`
+    });
+  }
+
+  // Discount math: prefer the (days × pct / 1000) formula matching the
+  // per-lot calc; fall back to flat pct of amount when days isn't set.
+  const discountPct  = Number(cfg.discount_pct)  || 0;
+  const discountDays = Number(cfg.discount_days) || 0;
+  const baseAmt = Number(purchase.amount || 0);
+  if (baseAmt <= 0) {
+    return res.status(400).json({ error: 'Purchase amount is zero — cannot compute discount' });
+  }
+  let discountAmt;
+  if (discountDays > 0 && discountPct > 0) {
+    discountAmt = Math.round((baseAmt / 1000) * discountDays * discountPct);
+  } else if (discountPct > 0) {
+    discountAmt = Math.round(baseAmt * discountPct / 100);
+  } else {
+    return res.status(400).json({ error: 'Discount % not configured in settings' });
+  }
+  if (discountAmt <= 0) {
+    return res.status(400).json({ error: 'Computed discount is zero — check settings or invoice amount' });
+  }
+
+  // GST split mirrors the purchase row's GST shape (intra → CGST+SGST,
+  // inter → IGST). The DN inherits the rate structure of its source.
+  // If the purchase has no GST (e.g. URD agriculturist), the DN goes
+  // out as exempt — cgst/sgst/igst all zero.
+  const isInter = (Number(purchase.igst) || 0) > 0;
+  const dnGstRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
+  let cgst = 0, sgst = 0, igst = 0;
+  if (Number(purchase.cgst) || Number(purchase.sgst) || Number(purchase.igst)) {
+    if (isInter) {
+      igst = Math.round(discountAmt * dnGstRate / 100 * 100) / 100;
+    } else {
+      const half = Math.round(discountAmt * (dnGstRate / 2) / 100 * 100) / 100;
+      cgst = half; sgst = half;
+    }
+  }
+  const total = Math.round((discountAmt + cgst + sgst + igst) * 100) / 100;
+
+  // DN date = trade date + 1
+  const trade = db.get('SELECT date FROM auctions WHERE ano = ? LIMIT 1', [purchase.ano]);
+  const dnDate = trade && trade.date
+    ? addDays(trade.date, 1)
+    : new Date().toISOString().slice(0, 10);
+
+  // Next note number.
+  const nextNoteNo = (() => {
+    const row = db.get('SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes');
+    const mx = parseInt(row && row.mx, 10);
+    return Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
+  })();
+
+  db.run(
+    `INSERT INTO debit_notes (ano,date,state,name,note_no,amount,cgst,sgst,igst,total)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [purchase.ano, dnDate, purchase.state || '', purchase.name || '',
+     String(nextNoteNo), discountAmt, cgst, sgst, igst, total]
+  );
+
+  res.json({
+    success: true,
+    created: 1,
+    skipped: 0,
+    generated: [{ note_no: nextNoteNo, purchno, total }],
+    skippedDetails: []
+  });
+});
+
+// Generate DNs across EVERY purchase invoice in the system. Equivalent
+// to calling /generate-bulk for each distinct purchno. Implemented as a
+// dedicated endpoint so we can de-duplicate the trade-date map and the
+// DN-skip set across the whole sweep — avoids re-querying per purchase.
+//
+// Skip rules (same as /generate-bulk, applied across the whole DB):
+//   - invoice already has a DN (key: ano + buyer name)
+//   - discount setting is zero / unconfigured
+//   - buildDebitNote() can't resolve the invoice (orphan invo / sale)
+app.post('/api/debit-notes/generate-all', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const cfg = getSettingsFlat(db);
+  const discountPct = Number(cfg.discount_pct) || 0;
+  const discountDays = Number(cfg.discount_days) || 0;
+
+  // Distinct trade numbers across every purchase invoice. SELECT DISTINCT
+  // on `ano` because multiple purchase rows in the same trade share the
+  // same ano and we only need to expand each trade once.
+  const trades = db.all(`SELECT DISTINCT ano FROM purchases WHERE ano IS NOT NULL AND ano != ''`);
+  const anos = trades.map(t => t.ano).filter(Boolean);
+  if (!anos.length) {
+    return res.json({ success: true, created: 0, skipped: 0, purchases_scanned: 0 });
+  }
+
+  const placeholders = anos.map(() => '?').join(',');
+
+  // Pre-fetch trade dates + existing DN keys + sales invoices in one
+  // batch each. Three queries total — significantly faster than N+1
+  // when the DB has many trades.
+  const tradeDates = new Map();
+  for (const row of db.all(
+    `SELECT ano, date FROM auctions WHERE ano IN (${placeholders})`, anos
+  )) {
+    tradeDates.set(row.ano, row.date);
+  }
   const existing = new Set(
     db.all(
       `SELECT ano, name FROM debit_notes WHERE ano IN (${placeholders})`, anos
     ).map(r => `${r.ano}::${r.name || ''}`)
   );
+  const invoices = db.all(
+    `SELECT * FROM invoices WHERE ano IN (${placeholders})`, anos
+  );
 
-  // Determine starting note number: max(existing note_no across whole
-  // table) + 1. Note_no is stored as text; parse defensively.
+  // Starting note number: max + 1. Cached; we increment locally as we
+  // generate to keep it monotonic without re-querying.
   let nextNoteNo = (() => {
     const row = db.get('SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes');
     const mx = parseInt(row && row.mx, 10);
     return Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
   })();
 
-  const discountPct = Number(cfg.discount_pct) || 0;
-  const discountDays = Number(cfg.discount_days) || 0;
   let created = 0, skipped = 0;
-  const generated = [];
+  // skippedDetails: same shape as the bulk endpoint — surfaces every
+  // bypassed invoice with a reason tag so the UI can show the user
+  // exactly why each one was skipped.
+  const skippedDetails = [];
+  const recordSkip = (inv, reason) => {
+    skipped++;
+    skippedDetails.push({
+      invo: inv.invo, sale: inv.sale, ano: inv.ano,
+      buyer: inv.buyer1 || inv.buyer || '',
+      reason
+    });
+  };
 
   for (const inv of invoices) {
     const key = `${inv.ano}::${inv.buyer1 || inv.buyer || ''}`;
-    if (existing.has(key)) { skipped++; continue; }
+    if (existing.has(key)) { recordSkip(inv, 'duplicate (DN already exists)'); continue; }
 
-    // Discount amount: same shape as per-lot calc — round((PurAmt × days × pct) / 1000).
-    // Falls back to invoice.amount × pct/100 when puramt isn't available
-    // (some legacy invoices may not have puramt populated).
     const baseAmt = Number(inv.puramt || inv.amount || 0);
+    if (baseAmt <= 0) { recordSkip(inv, 'invoice base amount is zero'); continue; }
+
     let discountAmt;
     if (discountDays > 0 && discountPct > 0) {
       discountAmt = Math.round((baseAmt / 1000) * discountDays * discountPct);
     } else if (discountPct > 0) {
       discountAmt = Math.round(baseAmt * discountPct / 100);
     } else {
-      // No discount configured — skip rather than create zero-rupee DNs
-      skipped++;
-      continue;
+      recordSkip(inv, 'discount % not configured in settings'); continue;
     }
-    if (discountAmt <= 0) { skipped++; continue; }
+    if (discountAmt <= 0) { recordSkip(inv, 'computed discount is zero'); continue; }
 
     const note = buildDebitNote(db, inv.invo, inv.sale, discountAmt, cfg);
-    if (!note) { skipped++; continue; }
+    if (!note) { recordSkip(inv, 'invoice not resolvable (missing fields)'); continue; }
+
+    const tradeDate = tradeDates.get(inv.ano);
+    const dnDate = tradeDate
+      ? addDays(tradeDate, 1)
+      : new Date().toISOString().slice(0, 10);
 
     db.run(`INSERT INTO debit_notes (ano,date,state,name,note_no,amount,cgst,sgst,igst,total)
       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [note.invoice.ano, new Date().toISOString().slice(0,10), note.invoice.state || '',
+      [note.invoice.ano, dnDate, note.invoice.state || '',
        note.invoice.buyer1 || note.invoice.buyer, String(nextNoteNo),
        note.amount, note.cgst, note.sgst, note.igst, note.total]);
     existing.add(key);
-    generated.push({ note_no: nextNoteNo, invo: inv.invo, total: note.total });
     nextNoteNo++;
     created++;
   }
 
-  res.json({ success: true, created, skipped, generated });
+  // Total distinct purchase invoices we considered (informational; the
+  // client uses this for the toast).
+  const purchScan = db.get(
+    `SELECT COUNT(DISTINCT invo) AS n FROM purchases WHERE invo IS NOT NULL AND invo != ''`
+  );
+  res.json({
+    success: true,
+    created,
+    skipped,
+    skippedDetails,
+    purchases_scanned: (purchScan && purchScan.n) || 0
+  });
 });
 
 app.delete('/api/debit-notes/:id', requireDelete, (req, res) => {
@@ -3880,11 +4059,70 @@ app.post('/api/system/restore', requireAdmin, restoreUpload.single('file'), asyn
   }
 });
 
+// ── /api JSON-safety middleware ─────────────────────────────────
+// Every /api/* request must return JSON, never an HTML error page.
+// Without these handlers, Express's default 404 + 500 produce HTML
+// responses ("Cannot POST /api/..." / stack-trace pages) which crash
+// the frontend with "Unexpected token '<' is not valid JSON".
+//
+// Position: AFTER all routes are registered (so this catches anything
+// not handled), BEFORE app.listen().
+
+// 404 for unmatched /api routes — JSON body, never HTML
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    error: `Not Found: ${req.method} ${req.originalUrl}`,
+    code: 'route_not_found'
+  });
+});
+
+// Global error handler — also JSON-only. Must have 4 args for Express
+// to recognize it as an error handler. Logs full error server-side
+// while sending a sanitized message to the client.
+app.use((err, req, res, next) => {
+  console.error('[server] unhandled error:', err);
+  // If the response already started, defer to default handler (rare,
+  // mostly relevant for streamed responses).
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    code: err.code || 'internal_error'
+  });
+});
+
+// Schema sanity check — runs once at startup. Catches the "no such
+// column" class of bug early (loud server-log warning) instead of at
+// request time. Currently asserts a few columns we've historically
+// gotten wrong; extend the list as more land-mines surface.
+function assertSchemaSanity(db) {
+  const checks = [
+    // [table, expected_column, hint]
+    ['lots',         'auction_id', 'lots tracks the trade via auction_id, NOT a denormalised "ano" column'],
+    ['lots',         'buyer',      'lots.buyer is the buyer code on the lot'],
+    ['lots',         'name',       'lots.name is the seller name'],
+    ['auctions',     'ano',        'trade number lives on auctions.ano (string)'],
+    ['debit_notes',  'ano',        'DN keeps the trade number denormalised on the row'],
+    ['purchases',    'invo',       'purchase invoice number'],
+    ['purchases',    'name',       'purchases.name is the seller'],
+  ];
+  for (const [tbl, col, hint] of checks) {
+    try {
+      const cols = db.all(`PRAGMA table_info(${tbl})`).map(r => r.name);
+      if (!cols.includes(col)) {
+        console.warn(`[schema-check] ⚠ table ${tbl} is missing expected column "${col}" — ${hint}`);
+      }
+    } catch (e) {
+      console.warn(`[schema-check] could not introspect ${tbl}:`, e.message);
+    }
+  }
+}
+
 const PORT = process.env.PORT || 3001;
 (async () => {
   const db = await initDb();
   initCompanySettings(db);
   repairBadDates(db);
+  assertSchemaSanity(db);
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n  Spice Config running at http://localhost:${PORT}\n`);
   });

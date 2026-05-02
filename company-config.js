@@ -162,6 +162,7 @@ const DEFAULTS = [
   { key: 'tally_local_transport', value: 'true',           category: 'tally', label: 'Local Transport (use local transport rate)', type: 'boolean' },
   { key: 'tally_local_insurance', value: 'true',           category: 'tally', label: 'Local Insurance (use local insurance rate)', type: 'boolean' },
   { key: 'tally_ship_to',         value: 'false',          category: 'tally', label: 'Ship To (override consignee with separate Ship-To party)', type: 'boolean' },
+  { key: 'tally_dispatch_from',   value: 'true',           category: 'tally', label: 'Dispatch From Address (emit DISPATCHFROMADDRESS in Sales XML)', type: 'boolean' },
 
   // Sales Account Ledgers (Cardamom)
   { key: 'tally_sales_inter',     value: 'Cardamom Sales 5%',          category: 'tally', label: 'Cardamom Inter-State Sales',  type: 'text' },
@@ -299,7 +300,7 @@ function initCompanySettings(db) {
     's_logo', 's_company', 's_short_name', 's_address1', 's_address2',
     's_phone', 's_email', 's_gstin', 's_cin', 's_pan', 's_fssai', 's_sbl',
     'tally_asp_company_name', 'tally_ainv_prefix', 'tally_state_code_amazing',
-    'tally_amazing_mode', 'tally_dispatch_from',
+    'tally_amazing_mode',
     'tally_commission', 'tally_cash_handling', 'tally_cash_handling_planter',
     'tally_chc_planter', 'tally_unit_rate',
     'tally_dispatch_company', 'tally_dispatch_address', 'tally_dispatch_place',

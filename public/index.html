@@ -2160,7 +2160,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
         </div>
 
-        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Sale</th><th>Inv#</th><th>Buyer</th><th>Qty</th><th>Amount</th><th>Insurance</th><th>Transport</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Lorry</th><th>Distance (km)</th><th>Actions</th></tr></thead><tbody id="invoices-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Sale</th><th>Inv#</th><th>Lorry</th><th>Distance (km)</th><th>Buyer</th><th>Qty</th><th>Amount</th><th>Insurance</th><th>Transport</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="invoices-list"></tbody></table></div>
       </div>
     </div>
 
@@ -2311,7 +2311,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <span>Export Center — XLSX</span>
           </h3>
           <div class="tally-section-body">
-            <div class="fg" style="max-width:300px;margin-top:12px"><label>Select Auction</label><select id="exp-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select></div>
+            <div class="fg" style="max-width:300px;margin-top:12px"><label>Select Trade</label><select id="exp-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select></div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:12px" id="export-btns"></div>
           </div>
         </div>
@@ -2329,7 +2329,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
             <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Per Auction</h3>
             <div style="display:flex;gap:8px;align-items:end;margin-bottom:12px;flex-wrap:wrap">
-              <div class="fg" style="margin:0;flex:1;min-width:200px"><label>Auction</label><select id="dbf-auction" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:100%"></select></div>
+              <div class="fg" style="margin:0;flex:1;min-width:200px"><label>Trade</label><select id="dbf-auction" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:100%"></select></div>
               <button class="btn btn-a" onclick="downloadDbf('lots',{auctionId:document.getElementById('dbf-auction').value})">Lots (CPA1.DBF)</button>
             </div>
 
@@ -2361,7 +2361,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <h2>Lorry Reports
           <span style="font-weight:400;font-size:12px;color:var(--text3)">Auction-floor reports for the day's trade</span>
         </h2>
-        <div class="fg" style="max-width:360px"><label>Select Auction</label>
+        <div class="fg" style="max-width:360px"><label>Select Trade</label>
           <select id="lorry-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
         </div>
 
@@ -2495,7 +2495,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div class="card">
         <h2>Debit Notes <span style="font-weight:400;font-size:12px;color:var(--text3)">For discounts/adjustments on sales invoices</span></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <!-- Generate Debit Note: prompts for ONE purchase invoice number;
+               creates DNs for every sales invoice tied to that purchase's
+               trade. Idempotent skip on already-DN'd invoices. -->
           <button class="btn btn-g" onclick="showModal('gen-debit-modal')">Generate Debit Note</button>
+          <!-- Generate All: no input — iterates every purchase invoice in
+               the system and generates DNs across ALL trades. Confirm
+               required because this can create hundreds of rows. -->
           <button class="btn btn-a" onclick="showModal('gen-debit-bulk-modal')">Generate All</button>
           <button class="needs-delete-all btn" style="background:#c0392b;color:#fff;margin-left:auto" onclick="deleteAll('debit-notes','Debit Notes')">Delete All</button>
         </div>
@@ -2510,7 +2516,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <span style="font-weight:400;font-size:12px;color:var(--text3)">Generate Tally-importable XML files from your auction data</span>
         </h2>
 
-        <div class="fg" style="max-width:360px"><label>Select Auction</label>
+        <div class="fg" style="max-width:360px"><label>Select Trade</label>
           <select id="tally-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
         </div>
 
@@ -2738,7 +2744,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
             <button class="btn btn-a" onclick="loadInvoiceDistances()" style="padding:6px 12px;font-size:12px">Refresh</button>
-            <label style="font-size:11px;color:var(--text2);font-weight:600">Auction:</label>
+            <label style="font-size:11px;color:var(--text2);font-weight:600">Trade:</label>
             <select id="dist-inv-auction" style="padding:5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></select>
             <span id="dist-inv-count" style="font-size:11px;color:var(--text3)"></span>
             <button class="btn" onclick="clearAllDistanceOverrides()" title="Wipe all per-invoice manual distances so every ISP invoice resolves via the route table" style="padding:6px 12px;font-size:11px;background:#FEF3C7;color:#B45309;border:1px solid #F59E0B;margin-left:auto">Clear all overrides</button>
@@ -2999,33 +3005,54 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   </div>
 </div></div>
 
+<!-- Generate Debit Note: takes ONE purchase invoice number, generates DNs
+     for every sales invoice in that purchase's trade. (Replaces the old
+     manual single-DN modal which required invoice no + discount + note no
+     — that flow is gone, the user no longer keys discount/note manually.) -->
 <div class="modal-bg" id="gen-debit-modal"><div class="modal">
   <h2>Generate Debit Note</h2>
-  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Create a debit note against an existing sales invoice for discounts or adjustments.</p>
-  <div class="fg"><label>Invoice No (existing sales invoice)</label><input id="gd-invno"></div>
-  <div class="fg"><label>Sale Type</label><select id="gd-sale"><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option></select></div>
-  <div class="fg"><label>Discount Amount (₹)</label><input id="gd-discount" type="number" step="0.01"></div>
-  <div class="fg"><label>Debit Note No</label><input id="gd-noteno" type="number"></div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Enter a purchase invoice number — debit notes will be generated for every sales invoice connected to that purchase's trade. Already-DN'd invoices are skipped.</p>
+  <div class="fg"><label>Purchase Invoice #</label><input id="gd-purchno" autocomplete="off"></div>
+  <div id="gd-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-debit-modal')">Cancel</button>
-    <button class="btn btn-g" onclick="generateDebitNote()">Generate</button>
+    <button class="btn btn-g" id="gd-save" onclick="generateDebitNote()">Generate</button>
   </div>
 </div></div>
 
-<!-- Bulk-generate debit notes from a single purchase invoice number.
-     Server-side iterates every eligible sales invoice tied to the
-     purchase and emits one DN per invoice. Idempotent — already-DN'd
-     invoices are skipped, not duplicated. Single input by design (per
-     spec): keep the field surface minimal so dad doesn't fat-finger
-     a discount value mid-bulk. -->
+<!-- Generate All: NO input — iterates every purchase invoice across every
+     trade in the system. Used for end-of-season cleanup or when bulk-DN
+     posture needs to be applied across the whole DB. Confirmation required
+     since this can insert hundreds of rows in one click. -->
 <div class="modal-bg" id="gen-debit-bulk-modal"><div class="modal">
   <h2>Generate All Debit Notes</h2>
-  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Enter a purchase invoice number — one debit note will be generated for every sales invoice connected to that purchase. Already-DN'd invoices are skipped.</p>
-  <div class="fg"><label>Purchase Invoice #</label><input id="gd-bulk-purchno" autocomplete="off"></div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:14px"><strong>This will scan every purchase invoice in the database</strong> and generate debit notes for every linked sales invoice. Already-DN'd invoices are skipped.</p>
+  <p style="font-size:12px;color:#92400E;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:8px 10px;margin-bottom:14px">⚠ Depending on your DB size, this can insert hundreds of debit notes.</p>
   <div id="gd-bulk-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-debit-bulk-modal')">Cancel</button>
-    <button class="btn btn-g" id="gd-bulk-save" onclick="generateAllDebitNotes()">Generate All</button>
+    <button class="btn btn-g" id="gd-bulk-save" onclick="generateAllDebitNotes()">Generate for ALL purchases</button>
+  </div>
+</div></div>
+
+<!-- Skipped-records viewer — shown after a generate run that bypassed
+     one or more invoices. Each row lists invoice no, sale type, buyer,
+     trade, and the reason the invoice was skipped (duplicate / zero
+     amount / unconfigured discount / unresolvable). Reasons are grouped
+     server-side and surfaced verbatim — no transformation. -->
+<div class="modal-bg" id="dn-skipped-modal"><div class="modal" style="max-width:780px;max-height:85vh">
+  <h2>Skipped Debit Notes <span id="dn-skipped-count" style="font-weight:400;font-size:12px;color:var(--text3)"></span></h2>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:10px">These invoices did not produce a debit note. Click a row's reason to filter, or use the search box.</p>
+  <input type="text" id="dn-skipped-search" placeholder="Filter by invoice, buyer, or reason…" oninput="renderSkippedDnRows()" style="width:100%;height:34px;padding:0 10px;border:1.5px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:10px">
+  <div id="dn-skipped-summary" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+  <div style="max-height:50vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+    <table style="width:100%;font-size:12.5px"><thead style="position:sticky;top:0;background:var(--bg);z-index:1">
+      <tr><th style="text-align:left;padding:8px 10px">Invoice</th><th style="text-align:left;padding:8px 10px">Sale</th><th style="text-align:left;padding:8px 10px">Trade</th><th style="text-align:left;padding:8px 10px">Buyer</th><th style="text-align:left;padding:8px 10px">Reason</th></tr>
+    </thead><tbody id="dn-skipped-rows"></tbody></table>
+  </div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('dn-skipped-modal')">Close</button>
+    <button class="btn btn-a" onclick="copySkippedDnToClipboard()">Copy as text</button>
   </div>
 </div></div>
 
@@ -4125,7 +4152,7 @@ async function loadStats(auctionId){
   ` : (A ? `
     <div class="auction-hero" style="background:var(--spice-cardamom-lt);color:var(--spice-text-main)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
-        <div class="auction-hero-label" style="color:var(--spice-cardamom-dk);opacity:.85">Current Auction</div>
+        <div class="auction-hero-label" style="color:var(--spice-cardamom-dk);opacity:.85">Current Trade</div>
         ${picker}
       </div>
       <div class="auction-hero-number" style="color:var(--spice-cardamom-dk)">Trade #${esc(A.ano)}</div>
@@ -4146,7 +4173,7 @@ async function loadStats(auctionId){
     </div>
   ` : `
     <div class="auction-hero" style="background:var(--tab-bg);color:var(--spice-text-main)">
-      <div class="auction-hero-label" style="color:var(--spice-text-mute)">No active auction</div>
+      <div class="auction-hero-label" style="color:var(--spice-text-mute)">No active trade</div>
       <div class="auction-hero-number" style="color:var(--spice-text-main);font-size:22px">Create your first auction</div>
       <div class="auction-hero-date" style="color:var(--spice-text-mute);opacity:1">Head to the Auctions tab to get started.</div>
       <button class="btn btn-a" onclick="go('auctions')" style="margin-top:8px">+ New Auction</button>
@@ -4334,7 +4361,7 @@ async function loadStats(auctionId){
             </button>
             <button class="qa" onclick="go('auctions')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div>
-              <div class="qa-label">New Auction</div>
+              <div class="qa-label">New Trade</div>
               <div class="qa-sub">Start today's trade</div>
             </button>
             <button class="qa" onclick="go('payments')">
@@ -7837,6 +7864,30 @@ async function loadInvoices(){
       { key:'invo', label:'Inv#', sort:'text',
         // Bold + dark green to make the primary identifier pop in a wide row
         render:(i)=>`<strong style="color:var(--spice-cardamom-dk);font-weight:700">${esc(i.invo)}</strong>` },
+      // Lorry + Distance moved up to sit right after Inv# (per spec) so
+      // the e-way-bill identifiers cluster with the invoice number for
+      // faster visual scanning.
+      // Lorry / vehicle number — set via the "Set Lorry No" button above
+      // (bulk on ticked rows). Picked up by the Tally sales voucher
+      // generator as e-way bill VehicleNo. Empty rendered as a muted dash
+      // so the user can see at a glance which invoices are missing one.
+      { key:'lorry_no', label:'Lorry', sort:'text',
+        render:(i)=> i.lorry_no
+          ? `<span style="font-family:monospace;font-weight:600;color:var(--spice-cardamom-dk);font-size:12px;letter-spacing:.5px">${esc(i.lorry_no)}</span>`
+          : '<span style="color:var(--text3)">—</span>' },
+      // Distance (km) for the e-way bill. Server hydrates `resolved_distance_km`
+      // using the same resolution chain the Tally voucher generator uses:
+      //   1. invoices.distance_km (per-invoice override)
+      //   2. route_distances[(dispatch_pin → buyer_pin)]
+      //   3. blank
+      // noTotal: distance is per-route, not additive — summing kilometres
+      // across invoices is meaningless and would mislead the user.
+      { key:'resolved_distance_km', label:'Distance (km)', sort:'number', numeric:true, noTotal:true,
+        render:(i)=>{
+          const v = i.resolved_distance_km;
+          if (v == null || v === '') return '<span style="color:var(--text3)">—</span>';
+          return `<span style="font-family:monospace;color:var(--green);font-weight:600">${Number(v)}</span>`;
+        } },
       { key:'_buyer', label:'Buyer', sort:'text',
         value:(i)=>i.buyer1||i.buyer,
         render:(i)=>esc(i.buyer1||i.buyer) },
@@ -7853,28 +7904,6 @@ async function loadInvoices(){
         fmt:(n)=>fmtI(n,2),
         // Bigger + darker total to make it the "answer" column at a glance
         render:(i)=>`<span style="font-weight:700;color:var(--spice-text-main);font-size:14px">${fmtI(i.tot||0,2)}</span>` },
-      // Lorry / vehicle number — set via the "Set Lorry No" button above
-      // (bulk on ticked rows). Picked up by the Tally sales voucher
-      // generator as e-way bill VehicleNo. Empty rendered as a muted dash
-      // so the user can see at a glance which invoices are missing one.
-      { key:'lorry_no', label:'Lorry', sort:'text',
-        render:(i)=> i.lorry_no
-          ? `<span style="font-family:monospace;font-weight:600;color:var(--spice-cardamom-dk);font-size:12px;letter-spacing:.5px">${esc(i.lorry_no)}</span>`
-          : '<span style="color:var(--text3)">—</span>' },
-      // Distance (km) for the e-way bill. Server hydrates `resolved_distance_km`
-      // using the same resolution chain the Tally voucher generator uses:
-      //   1. invoices.distance_km (per-invoice override)
-      //   2. route_distances[(dispatch_pin → buyer_pin)]
-      //   3. blank
-      // Set / managed via "To Tally → 🗺️ E-way Bill Distance".
-      // noTotal: distance is per-route, not additive — summing kilometres
-      // across invoices is meaningless and would mislead the user.
-      { key:'resolved_distance_km', label:'Distance (km)', sort:'number', numeric:true, noTotal:true,
-        render:(i)=>{
-          const v = i.resolved_distance_km;
-          if (v == null || v === '') return '<span style="color:var(--text3)">—</span>';
-          return `<span style="font-family:monospace;color:var(--green);font-weight:600">${Number(v)}</span>`;
-        } },
       { key:'_actions', label:'Actions', sortable:false, searchable:false, render:(i)=>{
           // Purchase-view button is ALWAYS shown so users see the feature exists,
           // but is DISABLED outside ASP context (not Kerala + e-Trade). The
@@ -8825,7 +8854,7 @@ async function loadDebitNotes(){
     columns: [
       { key:'note_no', label:'Note#', sort:'text' },
       { key:'date', label:'Date', sort:'date', render:(n)=>fmtD(n.date) },
-      { key:'ano', label:'Auction', sort:'text', render:(n)=>n.ano?('#'+esc(n.ano)):'—' },
+      { key:'ano', label:'Trade', sort:'text', render:(n)=>n.ano?('#'+esc(n.ano)):'—' },
       { key:'name', label:'Name', sort:'text' },
       { key:'amount', label:'Amount', sort:'number', numeric:true, fmt:(v)=>fmtI(v,2) },
       { key:'cgst', label:'CGST', sort:'number', numeric:true, fmt:(v)=>fmtI(v,2) },
@@ -8862,54 +8891,167 @@ async function saveDebitEdit(){
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
     hideModal('dn-edit-modal');toast('Debit note updated');loadDebitNotes();
   }catch(e){showError(e)}}
+// "Generate Debit Note" — one purchase invoice number, server expands to
+// all DNs for that purchase's trade. Replaces the old manual single-DN
+// flow which required invoice no + discount + note no separately.
 async function generateDebitNote(){
-  const invoiceNo=document.getElementById('gd-invno').value.trim();
-  const saleType=document.getElementById('gd-sale').value;
-  const discount=document.getElementById('gd-discount').value.trim();
-  const noteNo=document.getElementById('gd-noteno').value.trim();
-  if(!invoiceNo||!discount||!noteNo){alert('Fill all fields');return}
-  try{
-    const r=await fetch(B+'/api/debit-notes/generate',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},
-      body:JSON.stringify({invoiceNo,saleType,discount,noteNo})});
-    const d=await r.json();
-    if(!r.ok)throw new Error(d.error||'Failed');
-    hideModal('gen-debit-modal');
-    toast('Debit note created — Total: ₹'+Number(d.note.total).toFixed(2));
-    loadDebitNotes();
-  }catch(e){showError(e)}}
-async function delDebitNote(id){if(!confirm('Delete debit note?'))return;await j(`/api/debit-notes/${id}`,{method:'DELETE'});loadDebitNotes()}
-
-// Bulk-generate debit notes for every sales invoice tied to one purchase
-// invoice. Single input by spec — discount / note-no are auto-derived
-// server-side (next note no, discount from settings × invoice qty).
-async function generateAllDebitNotes(){
-  const purchno = (document.getElementById('gd-bulk-purchno').value || '').trim();
-  const errEl   = document.getElementById('gd-bulk-err');
+  const purchno = (document.getElementById('gd-purchno').value || '').trim();
+  const errEl   = document.getElementById('gd-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
   if (!purchno) return showErr('Enter a purchase invoice number');
-  const btn = document.getElementById('gd-bulk-save');
+  const btn = document.getElementById('gd-save');
   btn.disabled = true;
   try {
-    const r = await fetch(B + '/api/debit-notes/generate-bulk', {
+    // Use j() wrapper — handles non-JSON responses (e.g. Railway's HTML
+    // error pages, expired-session redirect pages), surfaces a clean
+    // error message, and auto-redirects to login on 401. Raw fetch +
+    // .json() was throwing "Unexpected token '<' ..." when the server
+    // returned anything other than JSON.
+    const d = await j('/api/debit-notes/generate-bulk', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + T },
       body: JSON.stringify({ purchno })
     });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Failed');
-    hideModal('gen-debit-bulk-modal');
-    document.getElementById('gd-bulk-purchno').value = '';
+    hideModal('gen-debit-modal');
+    document.getElementById('gd-purchno').value = '';
     errEl.style.display = 'none';
-    const created = d.created || 0;
-    const skipped = d.skipped || 0;
-    toast(`${created} debit note${created === 1 ? '' : 's'} generated${skipped ? ` · ${skipped} skipped (already exist)` : ''}`);
+    const c = d.created || 0;
+    const s = d.skipped || 0;
+    window._lastSkippedDn = Array.isArray(d.skippedDetails) ? d.skippedDetails : [];
+    // When server returns nothing-to-do (0/0), surface the explanatory
+    // `note` field so the user knows WHY (e.g. "No sales invoices in
+    // this trade", "Purchase invoice not found"). Without this they'd
+    // see a confusing "0 DNs · 0 skipped" with no context.
+    if (c === 0 && s === 0 && d.note) {
+      toast(d.note);
+    } else {
+      showDnGenerateResult(c, s);
+    }
     loadDebitNotes();
   } catch (e) {
     showErr(e.message || 'Failed');
   } finally {
     btn.disabled = false;
   }
+}
+
+async function delDebitNote(id){if(!confirm('Delete debit note?'))return;await j(`/api/debit-notes/${id}`,{method:'DELETE'});loadDebitNotes()}
+
+// "Generate All" — no input. Server iterates every distinct purchase
+// invoice in the system and generates DNs for each linked sales invoice.
+async function generateAllDebitNotes(){
+  const errEl = document.getElementById('gd-bulk-err');
+  const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+  if (!confirm('Generate debit notes for EVERY purchase invoice in the system? This may insert hundreds of rows.')) {
+    return;
+  }
+  const btn = document.getElementById('gd-bulk-save');
+  btn.disabled = true;
+  try {
+    const d = await j('/api/debit-notes/generate-all', {
+      method: 'POST',
+      body: '{}'
+    });
+    hideModal('gen-debit-bulk-modal');
+    errEl.style.display = 'none';
+    window._lastSkippedDn = Array.isArray(d.skippedDetails) ? d.skippedDetails : [];
+    const c = d.created || 0;
+    const s = d.skipped || 0;
+    const p = d.purchases_scanned || 0;
+    showDnGenerateResult(c, s, `Scanned ${p} purchase invoice${p === 1 ? '' : 's'}`);
+    loadDebitNotes();
+  } catch (e) {
+    showErr(e.message || 'Failed');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Result toast with optional "View skipped" affordance. Used by both
+// generateDebitNote (single purchase) and generateAllDebitNotes (full
+// sweep). When skipped > 0, the toast is rendered as an inline element
+// with a clickable link that opens the skipped-details modal.
+function showDnGenerateResult(created, skipped, prefix){
+  const baseMsg = `${prefix ? prefix + ' · ' : ''}${created} DN${created === 1 ? '' : 's'} created · ${skipped} skipped`;
+  if (skipped > 0 && (window._lastSkippedDn || []).length) {
+    // Render as an HTML toast with a clickable "View" link. Existing
+    // toast() supports plain text; we extend by writing a custom node
+    // that mimics the same visual style.
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--text);color:#fff;padding:12px 18px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.2);display:flex;gap:14px;align-items:center;max-width:90vw';
+    wrap.innerHTML = `<span>${esc(baseMsg)}</span>
+      <button onclick="openSkippedDnModal();this.parentElement.remove()" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35);padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer">View skipped</button>`;
+    document.body.appendChild(wrap);
+    setTimeout(() => wrap.remove(), 8000);
+  } else {
+    toast(baseMsg);
+  }
+}
+
+function openSkippedDnModal(){
+  showModal('dn-skipped-modal');
+  document.getElementById('dn-skipped-search').value = '';
+  renderSkippedDnRows();
+}
+
+// Render the skipped-rows table from window._lastSkippedDn, applying
+// the active search filter. Rebuilds the reason-summary chips so the
+// user can see at a glance how many invoices fell into each bucket.
+function renderSkippedDnRows(){
+  const data = window._lastSkippedDn || [];
+  const q = (document.getElementById('dn-skipped-search')?.value || '').toLowerCase().trim();
+  const filtered = q
+    ? data.filter(r => {
+        const hay = `${r.invo || ''} ${r.buyer || ''} ${r.reason || ''} ${r.ano || ''}`.toLowerCase();
+        return hay.includes(q);
+      })
+    : data;
+
+  // Reason summary chips — group by reason, count, render as small pills
+  const reasonCounts = data.reduce((acc, r) => {
+    const k = r.reason || 'unknown';
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+  const summaryEl = document.getElementById('dn-skipped-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = Object.entries(reasonCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, n]) => `<span style="display:inline-block;padding:3px 9px;border-radius:10px;background:var(--bg);color:var(--text2);font-size:11px;border:1px solid var(--border)"><strong>${n}</strong> · ${esc(reason)}</span>`)
+      .join('');
+  }
+
+  document.getElementById('dn-skipped-count').textContent =
+    filtered.length === data.length
+      ? `(${data.length} record${data.length === 1 ? '' : 's'})`
+      : `(${filtered.length} of ${data.length})`;
+
+  const rowsEl = document.getElementById('dn-skipped-rows');
+  if (!filtered.length) {
+    rowsEl.innerHTML = '<tr><td colspan="5" style="padding:14px;text-align:center;color:var(--text3)">No matching skipped records</td></tr>';
+    return;
+  }
+  rowsEl.innerHTML = filtered.map(r => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:7px 10px;font-family:monospace;font-weight:600">${esc(r.invo || '')}</td>
+      <td style="padding:7px 10px;font-family:monospace">${esc(r.sale || '')}</td>
+      <td style="padding:7px 10px">${r.ano ? '#' + esc(String(r.ano)) : '—'}</td>
+      <td style="padding:7px 10px">${esc(r.buyer || '—')}</td>
+      <td style="padding:7px 10px;color:var(--text2)">${esc(r.reason || '')}</td>
+    </tr>
+  `).join('');
+}
+
+function copySkippedDnToClipboard(){
+  const data = window._lastSkippedDn || [];
+  if (!data.length) { toast('Nothing to copy'); return; }
+  // Tab-separated so it pastes cleanly into Excel
+  const header = 'Invoice\tSale\tTrade\tBuyer\tReason';
+  const body = data.map(r => `${r.invo || ''}\t${r.sale || ''}\t${r.ano || ''}\t${r.buyer || ''}\t${r.reason || ''}`).join('\n');
+  const text = header + '\n' + body;
+  navigator.clipboard.writeText(text).then(
+    () => toast(`Copied ${data.length} row${data.length === 1 ? '' : 's'} to clipboard`),
+    () => toast('Copy failed')
+  );
 }
 
 // ── Journals ───────────────────────────────────────────────
