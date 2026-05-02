@@ -1,0 +1,458 @@
+/**
+ * dbf-exports.js — DBF (FoxPro) format exports
+ * 
+ * Exports spice-config data in FoxPro-compatible DBF format so the legacy
+ * application can continue to consume records during the transition period.
+ * 
+ * Field types:
+ *   C = Character (text)
+ *   N = Numeric
+ *   D = Date
+ *   L = Logical (boolean)
+ * 
+ * Key DBF rules learned from the previous chat:
+ *   - LotNo, grade, pst_code, ppin, litre → store as TEXT (preserves leading zeros)
+ *   - Date format: DD/MM/YYYY (string, not D type — FoxPro reads this)
+ *   - Qty: 3 decimal places
+ *   - Amount: 2 decimal places
+ */
+
+const { DBFFile } = require('dbffile');
+const path = require('path');
+const fs = require('fs');
+
+const TMP_DIR = path.join(__dirname, 'data', 'tmp-dbf');
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+
+// Format date as DD/MM/YYYY string (FoxPro-friendly)
+function fmtDate(d) {
+  if (!d) return '';
+  const s = String(d).trim();
+  if (s.includes('/')) return s;
+  // ISO format YYYY-MM-DD → DD/MM/YYYY
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return s;
+}
+
+// Safely trim string values to fit DBF field size
+function fit(val, maxLen) {
+  if (val === null || val === undefined) return '';
+  return String(val).substring(0, maxLen);
+}
+
+// Round number to N decimals
+function num(val, dec = 2) {
+  const n = parseFloat(val);
+  if (isNaN(n)) return 0;
+  return parseFloat(n.toFixed(dec));
+}
+
+/**
+ * Create a DBF file and write records to it
+ * Returns a Buffer containing the DBF file contents
+ */
+async function writeDbfBuffer(fields, records) {
+  const tmpFile = path.join(TMP_DIR, `export-${Date.now()}-${Math.random().toString(36).slice(2)}.dbf`);
+  try {
+    const dbf = await DBFFile.create(tmpFile, fields);
+    if (records.length) await dbf.appendRecords(records);
+    const buffer = fs.readFileSync(tmpFile);
+    return buffer;
+  } finally {
+    // Cleanup temp file
+    try { fs.unlinkSync(tmpFile); } catch(e) {}
+  }
+}
+
+// ── LOTS (CPA1.DBF structure) ─────────────────────────────────
+async function exportLotsDbf(db, auctionId) {
+  const rows = db.all(`
+    SELECT l.*, a.ano as trade_no, a.date as trade_date 
+    FROM lots l JOIN auctions a ON a.id = l.auction_id
+    WHERE l.auction_id = ? ORDER BY l.lot_no
+  `, [auctionId]);
+
+  const fields = [
+    { name: 'ANO',      type: 'C', size: 10 },
+    { name: 'DATE',     type: 'C', size: 10 },
+    { name: 'LOT',      type: 'C', size: 10 },
+    { name: 'CROP',     type: 'C', size: 10 },
+    { name: 'GRADE',    type: 'C', size: 10 },
+    { name: 'CRPT',     type: 'C', size: 10 },
+    { name: 'BR',       type: 'C', size: 30 },
+    { name: 'STATE',    type: 'C', size: 20 },
+    { name: 'NAME',     type: 'C', size: 50 },
+    { name: 'PADD',     type: 'C', size: 80 },
+    { name: 'PPLA',     type: 'C', size: 30 },
+    { name: 'PPIN',     type: 'C', size: 10 },
+    { name: 'PSTATE',   type: 'C', size: 20 },
+    { name: 'PST_CODE', type: 'C', size: 10 },
+    { name: 'CR',       type: 'C', size: 40 },
+    { name: 'PAN',      type: 'C', size: 14 },
+    { name: 'TEL',      type: 'C', size: 20 },
+    { name: 'AADHAR',   type: 'C', size: 20 },
+    { name: 'BAG',      type: 'N', size: 6, decimalPlaces: 0 },
+    { name: 'LITRE',    type: 'C', size: 10 },
+    { name: 'QTY',      type: 'N', size: 12, decimalPlaces: 3 },
+    { name: 'PRICE',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'AMOUNT',   type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'CODE',     type: 'C', size: 10 },
+    { name: 'BUYER',    type: 'C', size: 10 },
+    { name: 'BUYER1',   type: 'C', size: 50 },
+    { name: 'SALE',     type: 'C', size: 2 },
+    { name: 'INVO',     type: 'C', size: 10 },
+    { name: 'PQTY',     type: 'N', size: 12, decimalPlaces: 3 },
+    { name: 'PRATE',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'PURAMT',   type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'COM',      type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'CGST',     type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'SGST',     type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'IGST',     type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'ADVANCE',  type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'BALANCE',  type: 'N', size: 14, decimalPlaces: 2 },
+  ];
+
+  const records = rows.map(r => ({
+    ANO: fit(r.trade_no, 10),
+    DATE: fmtDate(r.trade_date),
+    LOT: fit(r.lot_no, 10),
+    CROP: '',
+    GRADE: fit(r.grade, 10),
+    CRPT: fit(r.crpt, 10),
+    BR: fit(r.branch, 30),
+    STATE: fit(r.state, 20),
+    NAME: fit(r.name, 50),
+    PADD: fit(r.padd, 80),
+    PPLA: fit(r.ppla, 30),
+    PPIN: fit(r.ppin, 10),
+    PSTATE: fit(r.pstate, 20),
+    PST_CODE: fit(r.pst_code, 10),
+    CR: fit(r.cr, 40),
+    PAN: fit(r.pan, 14),
+    TEL: fit(r.tel, 20),
+    AADHAR: fit(r.aadhar, 20),
+    BAG: parseInt(r.bags) || 0,
+    LITRE: fit(r.litre, 10),
+    QTY: num(r.qty, 3),
+    PRICE: num(r.price, 2),
+    AMOUNT: num(r.amount, 2),
+    CODE: fit(r.code, 10),
+    BUYER: fit(r.buyer, 10),
+    BUYER1: fit(r.buyer1, 50),
+    SALE: fit(r.sale, 2),
+    INVO: fit(r.invo, 10),
+    PQTY: num(r.pqty, 3),
+    PRATE: num(r.prate, 2),
+    PURAMT: num(r.puramt, 2),
+    COM: num(r.com, 2),
+    CGST: num(r.cgst, 2),
+    SGST: num(r.sgst, 2),
+    IGST: num(r.igst, 2),
+    ADVANCE: num(r.advance, 2),
+    BALANCE: num(r.balance, 2),
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── SALES INVOICES (INV.DBF structure) ────────────────────────
+async function exportInvoicesDbf(db, filters = {}) {
+  let query = 'SELECT * FROM invoices WHERE 1=1';
+  const params = [];
+  if (filters.ano) { query += ' AND ano = ?'; params.push(filters.ano); }
+  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  query += ' ORDER BY date, sale, invo';
+  const rows = db.all(query, params);
+
+  const fields = [
+    { name: 'ANO',     type: 'C', size: 10 },
+    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'STATE',   type: 'C', size: 20 },
+    { name: 'SALE',    type: 'C', size: 2 },
+    { name: 'INVO',    type: 'C', size: 10 },
+    { name: 'BUYER',   type: 'C', size: 10 },
+    { name: 'BUYER1',  type: 'C', size: 50 },
+    { name: 'GSTIN',   type: 'C', size: 20 },
+    { name: 'PLACE',   type: 'C', size: 30 },
+    { name: 'BAG',     type: 'N', size: 6, decimalPlaces: 0 },
+    { name: 'QTY',     type: 'N', size: 12, decimalPlaces: 3 },
+    { name: 'AMOUNT',  type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'GUNNY',   type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'PAVA_HC', type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'INS',     type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'CGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'SGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'IGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'TCS',     type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'RUND',    type: 'N', size: 8, decimalPlaces: 2 },
+    { name: 'TOT',     type: 'N', size: 14, decimalPlaces: 2 },
+  ];
+
+  const records = rows.map(r => ({
+    ANO: fit(r.ano, 10),
+    DATE: fmtDate(r.date),
+    STATE: fit(r.state, 20),
+    SALE: fit(r.sale, 2),
+    INVO: fit(r.invo, 10),
+    BUYER: fit(r.buyer, 10),
+    BUYER1: fit(r.buyer1, 50),
+    GSTIN: fit(r.gstin, 20),
+    PLACE: fit(r.place, 30),
+    BAG: parseInt(r.bag) || 0,
+    QTY: num(r.qty, 3),
+    AMOUNT: num(r.amount, 2),
+    GUNNY: num(r.gunny, 2),
+    PAVA_HC: num(r.pava_hc, 2),
+    INS: num(r.ins, 2),
+    CGST: num(r.cgst, 2),
+    SGST: num(r.sgst, 2),
+    IGST: num(r.igst, 2),
+    TCS: num(r.tcs, 2),
+    RUND: num(r.rund, 2),
+    TOT: num(r.tot, 2),
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── PURCHASES (PURCHASE.DBF structure) ────────────────────────
+async function exportPurchasesDbf(db, filters = {}) {
+  let query = 'SELECT * FROM purchases WHERE 1=1';
+  const params = [];
+  if (filters.ano) { query += ' AND ano = ?'; params.push(filters.ano); }
+  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  query += ' ORDER BY date, invo';
+  const rows = db.all(query, params);
+
+  const fields = [
+    { name: 'ANO',     type: 'C', size: 10 },
+    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'STATE',   type: 'C', size: 20 },
+    { name: 'BR',      type: 'C', size: 30 },
+    { name: 'NAME',    type: 'C', size: 50 },
+    { name: 'ADD_LINE',type: 'C', size: 80 },
+    { name: 'PLACE',   type: 'C', size: 30 },
+    { name: 'GSTIN',   type: 'C', size: 40 },
+    { name: 'INVO',    type: 'C', size: 10 },
+    { name: 'QTY',     type: 'N', size: 12, decimalPlaces: 3 },
+    { name: 'AMOUNT',  type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'CGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'SGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'IGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'RUND',    type: 'N', size: 8, decimalPlaces: 2 },
+    { name: 'TOTAL',   type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'TDS',     type: 'N', size: 12, decimalPlaces: 2 },
+  ];
+
+  const records = rows.map(r => ({
+    ANO: fit(r.ano, 10),
+    DATE: fmtDate(r.date),
+    STATE: fit(r.state, 20),
+    BR: fit(r.br, 30),
+    NAME: fit(r.name, 50),
+    ADD_LINE: fit(r.add_line, 80),
+    PLACE: fit(r.place, 30),
+    GSTIN: fit(r.gstin, 40),
+    INVO: fit(r.invo, 10),
+    QTY: num(r.qty, 3),
+    AMOUNT: num(r.amount, 2),
+    CGST: num(r.cgst, 2),
+    SGST: num(r.sgst, 2),
+    IGST: num(r.igst, 2),
+    RUND: num(r.rund, 2),
+    TOTAL: num(r.total, 2),
+    TDS: num(r.tds, 2),
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── BILLS of SUPPLY (BILL.DBF structure) ──────────────────────
+async function exportBillsDbf(db, filters = {}) {
+  let query = 'SELECT * FROM bills WHERE 1=1';
+  const params = [];
+  if (filters.ano) { query += ' AND ano = ?'; params.push(filters.ano); }
+  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  query += ' ORDER BY date, bil';
+  const rows = db.all(query, params);
+
+  const fields = [
+    { name: 'ANO',     type: 'C', size: 10 },
+    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'STATE',   type: 'C', size: 20 },
+    { name: 'BR',      type: 'C', size: 30 },
+    { name: 'CRPT',    type: 'C', size: 10 },
+    { name: 'BIL',     type: 'N', size: 8, decimalPlaces: 0 },
+    { name: 'NAME',    type: 'C', size: 50 },
+    { name: 'ADD_LINE',type: 'C', size: 80 },
+    { name: 'PLA',     type: 'C', size: 30 },
+    { name: 'PSTATE',  type: 'C', size: 20 },
+    { name: 'ST_CODE', type: 'C', size: 10 },
+    { name: 'CRR',     type: 'C', size: 20 },
+    { name: 'PAN',     type: 'C', size: 14 },
+    { name: 'QTY',     type: 'N', size: 12, decimalPlaces: 3 },
+    { name: 'COST',    type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'IGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'NET',     type: 'N', size: 14, decimalPlaces: 2 },
+  ];
+
+  const records = rows.map(r => ({
+    ANO: fit(r.ano, 10),
+    DATE: fmtDate(r.date),
+    STATE: fit(r.state, 20),
+    BR: fit(r.br, 30),
+    CRPT: fit(r.crpt, 10),
+    BIL: parseInt(r.bil) || 0,
+    NAME: fit(r.name, 50),
+    ADD_LINE: fit(r.add_line, 80),
+    PLA: fit(r.pla, 30),
+    PSTATE: fit(r.pstate, 20),
+    ST_CODE: fit(r.st_code, 10),
+    CRR: fit(r.crr, 20),
+    PAN: fit(r.pan, 14),
+    QTY: num(r.qty, 3),
+    COST: num(r.cost, 2),
+    IGST: num(r.igst, 2),
+    NET: num(r.net, 2),
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── TRADERS / SELLERS (NAM.DBF structure) ─────────────────────
+async function exportTradersDbf(db) {
+  const rows = db.all('SELECT * FROM traders ORDER BY name');
+
+  const fields = [
+    { name: 'NAME',       type: 'C', size: 50 },
+    { name: 'CR',         type: 'C', size: 40 },
+    { name: 'PAN',        type: 'C', size: 14 },
+    { name: 'TEL',        type: 'C', size: 20 },
+    { name: 'AADHAR',     type: 'C', size: 20 },
+    { name: 'PADD',       type: 'C', size: 80 },
+    { name: 'PPLA',       type: 'C', size: 30 },
+    { name: 'PIN',        type: 'C', size: 10 },
+    { name: 'PSTATE',     type: 'C', size: 20 },
+    { name: 'PST_CODE',   type: 'C', size: 10 },
+    { name: 'IFSC',       type: 'C', size: 15 },
+    { name: 'ACCTNUM',    type: 'C', size: 25 },
+    { name: 'HOLDER_NM',  type: 'C', size: 50 },
+  ];
+
+  const records = rows.map(r => ({
+    NAME: fit(r.name, 50),
+    CR: fit(r.cr, 40),
+    PAN: fit(r.pan, 14),
+    TEL: fit(r.tel, 20),
+    AADHAR: fit(r.aadhar, 20),
+    PADD: fit(r.padd, 80),
+    PPLA: fit(r.ppla, 30),
+    PIN: fit(r.pin, 10),
+    PSTATE: fit(r.pstate, 20),
+    PST_CODE: fit(r.pst_code, 10),
+    IFSC: fit(r.ifsc, 15),
+    ACCTNUM: fit(r.acctnum, 25),
+    HOLDER_NM: fit(r.holder_name, 50),
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── BUYERS / DEALERS (SBL.DBF structure) ──────────────────────
+async function exportBuyersDbf(db) {
+  const rows = db.all('SELECT * FROM buyers ORDER BY buyer');
+
+  const fields = [
+    { name: 'BUYER',    type: 'C', size: 10 },
+    { name: 'BUYER1',   type: 'C', size: 50 },
+    { name: 'ADD1',     type: 'C', size: 80 },
+    { name: 'ADD2',     type: 'C', size: 80 },
+    { name: 'PLA',      type: 'C', size: 30 },
+    { name: 'PIN',      type: 'C', size: 10 },
+    { name: 'STATE',    type: 'C', size: 20 },
+    { name: 'ST_CODE',  type: 'C', size: 10 },
+    { name: 'GSTIN',    type: 'C', size: 20 },
+    { name: 'PAN',      type: 'C', size: 14 },
+    { name: 'TEL',      type: 'C', size: 20 },
+    { name: 'TI',       type: 'C', size: 20 },
+    { name: 'SALE',     type: 'C', size: 2 },
+  ];
+
+  const records = rows.map(r => ({
+    BUYER: fit(r.buyer, 10),
+    BUYER1: fit(r.buyer1, 50),
+    ADD1: fit(r.add1, 80),
+    ADD2: fit(r.add2, 80),
+    PLA: fit(r.pla, 30),
+    PIN: fit(r.pin, 10),
+    STATE: fit(r.state, 20),
+    ST_CODE: fit(r.st_code, 10),
+    GSTIN: fit(r.gstin, 20),
+    PAN: fit(r.pan, 14),
+    TEL: fit(r.tel, 20),
+    TI: fit(r.ti, 20),
+    SALE: fit(r.sale, 2) || 'L',
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── DEBIT NOTES ───────────────────────────────────────────────
+async function exportDebitNotesDbf(db, filters = {}) {
+  let query = 'SELECT * FROM debit_notes WHERE 1=1';
+  const params = [];
+  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  query += ' ORDER BY date, note_no';
+  const rows = db.all(query, params);
+
+  const fields = [
+    { name: 'ANO',     type: 'C', size: 10 },
+    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'STATE',   type: 'C', size: 20 },
+    { name: 'NAME',    type: 'C', size: 50 },
+    { name: 'NOTE_NO', type: 'C', size: 10 },
+    { name: 'AMOUNT',  type: 'N', size: 14, decimalPlaces: 2 },
+    { name: 'CGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'SGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'IGST',    type: 'N', size: 12, decimalPlaces: 2 },
+    { name: 'TOTAL',   type: 'N', size: 14, decimalPlaces: 2 },
+  ];
+
+  const records = rows.map(r => ({
+    ANO: fit(r.ano, 10),
+    DATE: fmtDate(r.date),
+    STATE: fit(r.state, 20),
+    NAME: fit(r.name, 50),
+    NOTE_NO: fit(r.note_no, 10),
+    AMOUNT: num(r.amount, 2),
+    CGST: num(r.cgst, 2),
+    SGST: num(r.sgst, 2),
+    IGST: num(r.igst, 2),
+    TOTAL: num(r.total, 2),
+  }));
+
+  return writeDbfBuffer(fields, records);
+}
+
+// ── Registry for easy routing ─────────────────────────────────
+const DBF_EXPORTS = {
+  lots:         { fn: exportLotsDbf,        name: 'CPA1',     needsAuction: true, label: 'Lots (CPA1.DBF)' },
+  invoices:     { fn: exportInvoicesDbf,    name: 'INV',      needsDateRange: true, label: 'Sales Invoices (INV.DBF)' },
+  purchases:    { fn: exportPurchasesDbf,   name: 'PURCHASE', needsDateRange: true, label: 'Purchases (PURCHASE.DBF)' },
+  bills:        { fn: exportBillsDbf,       name: 'BILL',     needsDateRange: true, label: 'Bills of Supply (BILL.DBF)' },
+  traders:      { fn: exportTradersDbf,     name: 'NAM',      label: 'Sellers (NAM.DBF)' },
+  buyers:       { fn: exportBuyersDbf,      name: 'SBL',      label: 'Buyers (SBL.DBF)' },
+  debit_notes:  { fn: exportDebitNotesDbf,  name: 'DEBIT',    needsDateRange: true, label: 'Debit Notes' },
+};
+
+module.exports = {
+  DBF_EXPORTS,
+  exportLotsDbf,
+  exportInvoicesDbf,
+  exportPurchasesDbf,
+  exportBillsDbf,
+  exportTradersDbf,
+  exportBuyersDbf,
+  exportDebitNotesDbf,
+};

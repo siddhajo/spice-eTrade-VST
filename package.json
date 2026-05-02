@@ -1,0 +1,77 @@
+{
+  "name": "spice-etrade",
+  "productName": "Spice e-Trade",
+  "version": "1.0.0",
+  "description": "Spice e-Trade — admin app for invoices, payments, and exports (e-Trade only)",
+  "author": "Vinoth",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:electron": "electron .",
+    "build:win": "electron-builder --win --publish never",
+    "build:win:release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dbffile": "^1.12.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.0",
+    "multer": "^2.1.1",
+    "pdfkit": "^0.15.0",
+    "sql.js": "^1.10.3",
+    "xlsx": "^0.18.5"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^25.0.0",
+    "electron-updater": "^6.3.0"
+  },
+  "build": {
+    "appId": "com.vinoth.spice-etrade",
+    "productName": "Spice e-Trade",
+    "copyright": "© 2026",
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "*.js",
+      "!electron/README.md",
+      "!**/*.map",
+      "!**/*.md",
+      "!data",
+      "!.git"
+    ],
+    "extraResources": [],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "public/logo-ispl.png",
+      "artifactName": "SpiceETrade-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Spice e-Trade"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "REPLACE_WITH_YOUR_GITHUB_USERNAME",
+        "repo": "REPLACE_WITH_YOUR_REPO_NAME"
+      }
+    ]
+  }
+}

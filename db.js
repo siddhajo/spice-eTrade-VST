@@ -1,0 +1,726 @@
+/**
+ * db.js — SQL.js variant for cloud deploy (Railway etc.)
+ *
+ * Why: better-sqlite3 needs native compilation that's been failing on
+ * Railway's build infra. sql.js is pure JavaScript — no native bindings,
+ * no architecture issues, no compile step.
+ *
+ * Trade-off: sql.js holds the entire DB in memory and writes the whole
+ * file on every commit. For a single-server Railway deployment this is
+ * fine since concurrent writes within one Node process are sequential.
+ * For multi-machine deploys, switch back to better-sqlite3.
+ *
+ * Compatibility: This wrapper preserves the same API server.js,
+ * calculations.js, company-config.js, exports.js, etc. already use:
+ *
+ *   db.run(sql, params)           // INSERT/UPDATE/DELETE (params array or spread)
+ *   db.get(sql, params)           // SELECT one row
+ *   db.all(sql, params)           // SELECT many rows
+ *   db.exec(sql)                  // multi-statement SQL
+ *   db.prepare(sql).run(...args)  // prepared INSERT/UPDATE
+ *   db.prepare(sql).get(...args)  // prepared SELECT one
+ *   db.prepare(sql).all(...args)  // prepared SELECT many
+ *   db.transaction(fn)            // returns a wrapped function
+ */
+
+const initSqlJs = require('sql.js');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+// DB path: defaults to ./data/config.db (dev / standalone node).
+// Electron packaging sets SPICE_DATA_DIR to %APPDATA%\SpiceConfig so the
+// database survives app updates and doesn't sit inside the read-only
+// installation folder.
+const DB_DIR = process.env.SPICE_DATA_DIR || path.join(__dirname, 'data');
+const DB_PATH = path.join(DB_DIR, 'config.db');
+
+let SQL = null;        // sql.js module instance (loaded once)
+let rawDb = null;       // sql.js Database instance
+let wrapped = null;     // our API wrapper
+let pendingSave = null; // debounced fs.writeFile timer
+
+/**
+ * Persist the in-memory DB to disk. Debounced 200ms so a burst of writes
+ * (e.g. invoice generation) only triggers one write.
+ */
+function scheduleSave() {
+  if (pendingSave) clearTimeout(pendingSave);
+  pendingSave = setTimeout(() => {
+    pendingSave = null;
+    if (!rawDb) return;
+    try {
+      const buf = Buffer.from(rawDb.export());
+      const tmp = DB_PATH + '.tmp';
+      fs.writeFileSync(tmp, buf);
+      fs.renameSync(tmp, DB_PATH);
+    } catch (e) {
+      console.error('[db] save failed:', e.message);
+    }
+  }, 200);
+}
+
+/**
+ * Force-flush any pending save synchronously. Called on shutdown/close.
+ */
+function flushSave() {
+  if (pendingSave) { clearTimeout(pendingSave); pendingSave = null; }
+  if (!rawDb) return;
+  try {
+    const buf = Buffer.from(rawDb.export());
+    const tmp = DB_PATH + '.tmp';
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, DB_PATH);
+  } catch (e) {
+    console.error('[db] flush failed:', e.message);
+  }
+}
+
+/**
+ * Initialize the database. async/await is necessary because sql.js loads
+ * its WASM module asynchronously.
+ */
+async function initDb() {
+  if (wrapped) return wrapped;
+
+  const dir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  // Load sql.js wasm runtime once
+  if (!SQL) SQL = await initSqlJs();
+
+  // Open existing DB or create empty one
+  if (fs.existsSync(DB_PATH)) {
+    const buf = fs.readFileSync(DB_PATH);
+    rawDb = new SQL.Database(buf);
+  } else {
+    rawDb = new SQL.Database();
+  }
+
+  // Enable foreign keys
+  rawDb.run("PRAGMA foreign_keys = ON;");
+
+  wrapped = makeWrapper();
+
+  // Save on process exit (best-effort)
+  const onExit = () => { flushSave(); };
+  process.on('SIGINT', onExit);
+  process.on('SIGTERM', onExit);
+  process.on('beforeExit', onExit);
+
+  // ── SESSIONS ───────────────────────────────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    last_used_at TEXT DEFAULT (datetime('now','localtime')),
+    device_label TEXT DEFAULT '',
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  )`);
+
+  // ── USERS ──────────────────────────────────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    token TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── TRADERS (NAM.DBF — sellers/poolers) ────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS traders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    cr TEXT DEFAULT '',
+    pan TEXT DEFAULT '',
+    tel TEXT DEFAULT '',
+    aadhar TEXT DEFAULT '',
+    padd TEXT DEFAULT '',
+    ppla TEXT DEFAULT '',
+    pin TEXT DEFAULT '',
+    pstate TEXT DEFAULT '',
+    pst_code TEXT DEFAULT '',
+    ifsc TEXT DEFAULT '',
+    acctnum TEXT DEFAULT '',
+    holder_name TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── TRADER BANKS ───────────────────────────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS trader_banks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trader_id INTEGER NOT NULL,
+    bank_name TEXT DEFAULT '',
+    acctnum TEXT NOT NULL,
+    ifsc TEXT NOT NULL,
+    holder_name TEXT DEFAULT '',
+    is_default INTEGER DEFAULT 0,
+    FOREIGN KEY (trader_id) REFERENCES traders(id)
+  )`);
+
+  // ── BUYERS (SBL.DBF — buyers/dealers/traders) ──────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS buyers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    buyer TEXT NOT NULL,
+    buyer1 TEXT DEFAULT '',
+    code TEXT DEFAULT '',
+    sbl TEXT DEFAULT '',
+    add1 TEXT DEFAULT '',
+    add2 TEXT DEFAULT '',
+    pla TEXT DEFAULT '',
+    pin TEXT DEFAULT '',
+    state TEXT DEFAULT '',
+    st_code TEXT DEFAULT '',
+    gstin TEXT DEFAULT '',
+    pan TEXT DEFAULT '',
+    tel TEXT DEFAULT '',
+    ti TEXT DEFAULT '',
+    sale TEXT DEFAULT 'L',
+    email TEXT DEFAULT '',
+    tdsq TEXT DEFAULT '',
+    cbuyer1 TEXT DEFAULT '',
+    cadd1 TEXT DEFAULT '',
+    cadd2 TEXT DEFAULT '',
+    cpla TEXT DEFAULT '',
+    cpin TEXT DEFAULT '',
+    cstate TEXT DEFAULT '',
+    cst_code TEXT DEFAULT '',
+    cgstin TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── AUCTIONS (trade sessions) ──────────────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS auctions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ano TEXT NOT NULL,
+    date TEXT NOT NULL,
+    crop_type TEXT DEFAULT 'ASP',
+    state TEXT DEFAULT 'TAMIL NADU',
+    start_time TEXT,
+    end_time TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── LOTS (CPA1.DBF — main lot data, before + after trade) ─
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS lots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    auction_id INTEGER NOT NULL,
+    lot_no TEXT NOT NULL,
+    crop TEXT DEFAULT '',
+    grade TEXT DEFAULT '',
+    crpt TEXT DEFAULT '',
+    branch TEXT DEFAULT '',
+    state TEXT DEFAULT 'TAMIL NADU',
+    trader_id INTEGER,
+    name TEXT DEFAULT '',
+    padd TEXT DEFAULT '',
+    ppla TEXT DEFAULT '',
+    ppin TEXT DEFAULT '',
+    pstate TEXT DEFAULT '',
+    pst_code TEXT DEFAULT '',
+    cr TEXT DEFAULT '',
+    pan TEXT DEFAULT '',
+    tel TEXT DEFAULT '',
+    aadhar TEXT DEFAULT '',
+    bags INTEGER DEFAULT 0,
+    litre TEXT DEFAULT '',
+    qty REAL DEFAULT 0,
+    gross_wt REAL DEFAULT 0,
+    sample_wt REAL DEFAULT 0,
+    moisture TEXT DEFAULT '',
+    price REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    code TEXT DEFAULT '',
+    buyer TEXT DEFAULT '',
+    buyer1 TEXT DEFAULT '',
+    sale TEXT DEFAULT '',
+    invo TEXT DEFAULT '',
+    pqty REAL DEFAULT 0,
+    prate REAL DEFAULT 0,
+    puramt REAL DEFAULT 0,
+    com REAL DEFAULT 0,
+    sertax REAL DEFAULT 0,
+    cgst REAL DEFAULT 0,
+    sgst REAL DEFAULT 0,
+    igst REAL DEFAULT 0,
+    dcgst REAL DEFAULT 0,
+    dsgst REAL DEFAULT 0,
+    digst REAL DEFAULT 0,
+    refud REAL DEFAULT 0,
+    refund REAL DEFAULT 0,
+    advance REAL DEFAULT 0,
+    balance REAL DEFAULT 0,
+    bilamt REAL DEFAULT 0,
+    paid TEXT DEFAULT '',
+    user_id TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (auction_id) REFERENCES auctions(id),
+    FOREIGN KEY (trader_id) REFERENCES traders(id)
+  )`);
+
+  // ── INVOICES (INV.DBF — sales invoices) ────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS invoices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    auction_id INTEGER,
+    ano TEXT NOT NULL,
+    date TEXT NOT NULL,
+    state TEXT DEFAULT '',
+    sale TEXT DEFAULT 'L',
+    invo TEXT NOT NULL,
+    buyer TEXT DEFAULT '',
+    buyer1 TEXT DEFAULT '',
+    gstin TEXT DEFAULT '',
+    place TEXT DEFAULT '',
+    lot TEXT DEFAULT '',
+    bag INTEGER DEFAULT 0,
+    qty REAL DEFAULT 0,
+    price REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    gunny REAL DEFAULT 0,
+    pava_hc REAL DEFAULT 0,
+    ins REAL DEFAULT 0,
+    cgst REAL DEFAULT 0,
+    sgst REAL DEFAULT 0,
+    igst REAL DEFAULT 0,
+    tcs REAL DEFAULT 0,
+    rund REAL DEFAULT 0,
+    tot REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── PURCHASES (PURCHASE.DBF — purchase invoices for registered dealers)
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    auction_id INTEGER,
+    ano TEXT NOT NULL,
+    date TEXT NOT NULL,
+    state TEXT DEFAULT '',
+    br TEXT DEFAULT '',
+    name TEXT DEFAULT '',
+    add_line TEXT DEFAULT '',
+    place TEXT DEFAULT '',
+    gstin TEXT DEFAULT '',
+    invo TEXT DEFAULT '',
+    qty REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    cgst REAL DEFAULT 0,
+    sgst REAL DEFAULT 0,
+    igst REAL DEFAULT 0,
+    rund REAL DEFAULT 0,
+    total REAL DEFAULT 0,
+    tds REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── BILLS (BILL.DBF — bills of supply for unregistered/agriculturist)
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS bills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ano TEXT NOT NULL,
+    date TEXT NOT NULL,
+    state TEXT DEFAULT '',
+    br TEXT DEFAULT '',
+    crpt TEXT DEFAULT '',
+    bil INTEGER DEFAULT 0,
+    name TEXT DEFAULT '',
+    add_line TEXT DEFAULT '',
+    pla TEXT DEFAULT '',
+    pstate TEXT DEFAULT '',
+    st_code TEXT DEFAULT '',
+    crr TEXT DEFAULT '',
+    pan TEXT DEFAULT '',
+    qty REAL DEFAULT 0,
+    cost REAL DEFAULT 0,
+    igst REAL DEFAULT 0,
+    net REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── DEBIT NOTES ────────────────────────────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS debit_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ano TEXT NOT NULL,
+    date TEXT NOT NULL,
+    state TEXT DEFAULT '',
+    name TEXT DEFAULT '',
+    note_no TEXT DEFAULT '',
+    amount REAL DEFAULT 0,
+    cgst REAL DEFAULT 0,
+    sgst REAL DEFAULT 0,
+    igst REAL DEFAULT 0,
+    total REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── ROUTE DISTANCES (e-way bill <DISTANCE> field) ──────────
+  // Saved per (from_pin, to_pin) pair, normalised so the smaller PIN
+  // is always stored first — that way A↔B and B↔A share one row. Used
+  // by the To Tally → 🗺️ E-way Bill Distance UI: user looks up the
+  // distance once on the NIC portal, types it in, and every invoice
+  // between the same two PINs (this auction and all future ones) picks
+  // it up automatically.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS route_distances (
+    from_pin TEXT NOT NULL,
+    to_pin TEXT NOT NULL,
+    km INTEGER NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (from_pin, to_pin)
+  )`);
+
+  // ── AUDIT LOG ──────────────────────────────────────────────
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entity TEXT NOT NULL,
+    entity_id INTEGER,
+    details TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // ── INDEXES ────────────────────────────────────────────────
+  const indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_traders_name ON traders(name)',
+    'CREATE INDEX IF NOT EXISTS idx_lots_auction ON lots(auction_id)',
+    'CREATE INDEX IF NOT EXISTS idx_lots_lot ON lots(lot_no)',
+    'CREATE INDEX IF NOT EXISTS idx_lots_name ON lots(name)',
+    'CREATE INDEX IF NOT EXISTS idx_lots_buyer ON lots(buyer)',
+    'CREATE INDEX IF NOT EXISTS idx_lots_sale ON lots(sale)',
+    'CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date)',
+    'CREATE INDEX IF NOT EXISTS idx_invoices_sale ON invoices(sale, invo)',
+    'CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date)',
+    'CREATE INDEX IF NOT EXISTS idx_purchases_name ON purchases(name)',
+    'CREATE INDEX IF NOT EXISTS idx_bills_date ON bills(date)',
+    'CREATE INDEX IF NOT EXISTS idx_bills_name ON bills(name)',
+    'CREATE INDEX IF NOT EXISTS idx_buyers_buyer ON buyers(buyer)',
+    'CREATE INDEX IF NOT EXISTS idx_buyers_buyer1 ON buyers(buyer1)',
+  ];
+  for (const idx of indexes) { try { wrapped.exec(idx); } catch (e) {} }
+
+  // ── MIGRATIONS (for existing databases created before schema changes) ──
+  const migrations = [
+    'ALTER TABLE purchases ADD COLUMN auction_id INTEGER',
+    'ALTER TABLE invoices ADD COLUMN auction_id INTEGER',
+    'ALTER TABLE bills ADD COLUMN auction_id INTEGER',
+    'ALTER TABLE debit_notes ADD COLUMN auction_id INTEGER',
+    "ALTER TABLE buyers ADD COLUMN code TEXT DEFAULT ''",
+    "ALTER TABLE buyers ADD COLUMN cadd2 TEXT DEFAULT ''",
+    "ALTER TABLE buyers ADD COLUMN email TEXT DEFAULT ''",
+    "ALTER TABLE buyers ADD COLUMN tdsq TEXT DEFAULT ''",
+    "ALTER TABLE buyers ADD COLUMN sbl TEXT DEFAULT ''",
+    // Discount GST columns (per-lot, when flag_disc_gst is ON)
+    'ALTER TABLE lots ADD COLUMN dcgst REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN dsgst REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN digst REAL DEFAULT 0',
+    // ASP invoice traceability — when a lot is first invoiced as an ASP
+    // sale (state=Kerala), `lots.invo` gets the ASP invoice number AND a
+    // copy is preserved here. Then when the same lot is invoiced as an
+    // ISP sale (state=Tamil Nadu) later, `lots.invo` is overwritten with
+    // the ISP invoice number, but `lots.asp_invo` keeps the original ASP
+    // ref. This lets the sales list show both numbers side-by-side.
+    "ALTER TABLE lots ADD COLUMN asp_invo TEXT DEFAULT ''",
+    // ── Dual-view planter calculation columns ─────────────────
+    // calculateLot() chooses ISP vs ASP rules based on cfg.business_state,
+    // then writes the active view into pqty/prate/puramt. The Tally URD
+    // voucher needs ISP values regardless of which mode dad is currently in,
+    // so we now ALWAYS persist BOTH calculations on every save:
+    //   isp_pqty/isp_prate/isp_puramt → planter side as ISP would compute
+    //   asp_pqty/asp_prate/asp_puramt → planter side as ASP would compute
+    // The legacy pqty/prate/puramt columns continue to mirror whichever
+    // matches the current business_state, so the existing UI / reports /
+    // exports keep working unchanged. Reports that need a specific view
+    // (like the URD Tally voucher) read the prefixed columns directly.
+    'ALTER TABLE lots ADD COLUMN isp_pqty REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN isp_prate REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN isp_puramt REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN asp_pqty REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN asp_prate REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN asp_puramt REAL DEFAULT 0',
+    // Distance for e-way bill <DISTANCE> field on ISP sales vouchers.
+    // Populated manually per-invoice from the To Tally → 🗺️ E-way Bill
+    // Distance UI: user looks up the value on NIC's Pin-to-Pin Distance
+    // Search page (or Google Maps), pastes it here, clicks Save. Value
+    // is then emitted verbatim on the next voucher regen.
+    'ALTER TABLE invoices ADD COLUMN distance_km INTEGER',
+    // Per-invoice lorry / truck number. Set from the Invoices tab via a
+    // bulk-action button; emitted into the e-way bill <VEHICLENUMBER>
+    // (and BASICSHIPVESSELNO) fields when generating sales vouchers
+    // so dad doesn't have to type it into Tally manually.
+    'ALTER TABLE invoices ADD COLUMN lorry_no TEXT',
+    // Drop legacy pincodes/pin_distances tables that supported the old
+    // haversine auto-compute path. We replaced that with the manual-
+    // override workflow (above), so these tables are now dead weight.
+    // IF EXISTS makes this idempotent — fresh DBs have nothing to drop;
+    // upgraded DBs shed the orphan tables on next restart.
+    'DROP TABLE IF EXISTS pin_distances',
+    'DROP TABLE IF EXISTS pincodes',
+  ];
+  for (const m of migrations) {
+    try { wrapped.exec(m); console.log('Migration applied:', m); }
+    catch (e) { /* column already exists — ignore */ }
+  }
+
+  // One-time data fix: legacy ASP-only lots (where invo==asp_invo) had their
+  // `sale` field set during the old ASP-generation logic. The current logic
+  // doesn't set it (so ISP can pick the right sale type per buyer). Clear
+  // those legacy rows so they show up in ISP eligibility.
+  // Idempotent: subsequent runs do nothing because the rows are already
+  // cleared. Safe to run on a fresh DB (no rows match the WHERE).
+  try {
+    const fix = wrapped.run(
+      `UPDATE lots SET sale = ''
+       WHERE asp_invo IS NOT NULL AND asp_invo != ''
+         AND invo = asp_invo
+         AND sale IS NOT NULL AND sale != ''`
+    );
+    if (fix && fix.changes > 0) {
+      console.log(`Migration: cleared sale on ${fix.changes} ASP-only lots so ISP eligibility works`);
+    }
+  } catch (e) { /* ignore — column may not exist on first run */ }
+
+  // One-time data fix: legacy invoices were stamped with the auction's
+  // state (TAMIL NADU/KERALA based on physical auction location), not the
+  // business context state. Retag them so the sales list can correctly
+  // distinguish ASP rows from ISP rows.
+  //
+  // Heuristic per invoice:
+  //   - If the invoice's `invo` equals `lots.asp_invo` for any of its
+  //     buyer/auction lots AND those lots' current `invo` differs from
+  //     `asp_invo` → invoice was the ASP step (stamp KERALA).
+  //   - Else if any of those lots have `asp_invo == invo == this invoice's
+  //     invo` → ASP-only run (stamp KERALA).
+  //   - Otherwise → ISP invoice (stamp TAMIL NADU).
+  // Safe-by-default: only updates rows we can confidently classify.
+  // Idempotent: re-running produces the same labels.
+  try {
+    const allInvs = wrapped.all('SELECT id, auction_id, buyer, invo FROM invoices');
+    let aspCount = 0, ispCount = 0;
+    for (const inv of allInvs) {
+      const lotMatches = wrapped.all(
+        `SELECT invo, asp_invo FROM lots
+         WHERE auction_id = ? AND buyer = ?
+           AND (invo = ? OR asp_invo = ?)`,
+        [inv.auction_id, inv.buyer, inv.invo, inv.invo]
+      );
+      // Determine state: ASP if this invoice matches asp_invo on any lot,
+      // ISP otherwise (lots have a different ISP invo and asp_invo links
+      // back to this row).
+      let isASP = false;
+      for (const l of lotMatches) {
+        if (l.asp_invo === inv.invo) { isASP = true; break; }
+        // If lot's invo == this inv's invo AND lot's asp_invo is empty,
+        // this is most likely an ISP-only invoice — but COULD be an ASP
+        // run pre-asp_invo column. Default to ISP context (TN).
+      }
+      const newState = isASP ? 'KERALA' : 'TAMIL NADU';
+      wrapped.run('UPDATE invoices SET state = ? WHERE id = ?', [newState, inv.id]);
+      if (isASP) aspCount++; else ispCount++;
+    }
+    if (aspCount + ispCount > 0) {
+      console.log(`Migration: retagged ${aspCount} invoices as KERALA (ASP) and ${ispCount} as TAMIL NADU (ISP) based on lot lineage`);
+    }
+  } catch (e) { /* table may not exist on fresh DB — ignore */ }
+
+  const row = wrapped.get('SELECT COUNT(*) as cnt FROM users');
+  if (!row || row.cnt === 0) {
+    const hash = crypto.createHash('sha256').update('admin123').digest('hex');
+    wrapped.run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)', ['admin', hash, 'admin']);
+    console.log('Default admin created (admin / admin123)');
+  }
+
+  console.log('Database ready at', DB_PATH, '(better-sqlite3, WAL mode)');
+  return wrapped;
+}
+
+/**
+ * Normalize params so callers can pass either an array or spread arguments.
+ * Accepts: fn('sql', [a, b, c])  OR  fn('sql', a, b, c)  OR  fn('sql')
+ */
+function normalizeParams(args) {
+  if (args.length === 0) return [];
+  if (args.length === 1 && Array.isArray(args[0])) return args[0];
+  return args;
+}
+
+function makeWrapper() {
+  // sql.js note: prepared statements need .free() to release memory.
+  // We create-use-free per call to keep the API simple and match the
+  // existing usage patterns (no long-lived prepared statements).
+
+  /**
+   * Run a SQL with bound params and return rows as objects.
+   * Internal helper used by get/all.
+   */
+  function execStatement(sql, params) {
+    const stmt = rawDb.prepare(sql);
+    try {
+      stmt.bind(params);
+      const rows = [];
+      while (stmt.step()) rows.push(stmt.getAsObject());
+      return rows;
+    } finally {
+      stmt.free();
+    }
+  }
+
+  /**
+   * Run an INSERT/UPDATE/DELETE/etc with bound params (no result rows).
+   */
+  function runStatement(sql, params) {
+    const stmt = rawDb.prepare(sql);
+    try {
+      stmt.run(params);
+    } finally {
+      stmt.free();
+    }
+    // sql.js doesn't expose lastInsertRowid/changes per-statement easily.
+    // Use the connection-level helpers.
+    return {
+      lastInsertRowid: rawDb.exec("SELECT last_insert_rowid()")[0]?.values[0]?.[0] ?? 0,
+      changes: rawDb.getRowsModified(),
+    };
+  }
+
+  return {
+    /**
+     * Execute multi-statement SQL (no params, no return).
+     */
+    exec(sql) {
+      rawDb.exec(sql);
+      scheduleSave();
+    },
+
+    /**
+     * Run an INSERT/UPDATE/DELETE. Accepts params as array or spread.
+     */
+    run(sql, ...rest) {
+      const params = normalizeParams(rest);
+      const info = runStatement(sql, params);
+      scheduleSave();
+      return info;
+    },
+
+    /**
+     * SELECT one row. Returns row object or null.
+     */
+    get(sql, ...rest) {
+      const params = normalizeParams(rest);
+      const rows = execStatement(sql, params);
+      return rows[0] || null;
+    },
+
+    /**
+     * SELECT many rows. Returns array (possibly empty).
+     */
+    all(sql, ...rest) {
+      const params = normalizeParams(rest);
+      return execStatement(sql, params);
+    },
+
+    /**
+     * Prepare a statement. sql.js doesn't naturally cache prepared
+     * statements across reuses (and freeing too early causes errors),
+     * so we re-prepare on each call. Slower than better-sqlite3 but
+     * functionally equivalent.
+     */
+    prepare(sql) {
+      return {
+        run(...args) {
+          const info = runStatement(sql, args);
+          scheduleSave();
+          return info;
+        },
+        get(...args) {
+          const rows = execStatement(sql, args);
+          return rows[0] || null;
+        },
+        all(...args) {
+          return execStatement(sql, args);
+        }
+      };
+    },
+
+    /**
+     * Wrap a function in a transaction. Implements via BEGIN/COMMIT/ROLLBACK.
+     */
+    transaction(fn) {
+      return function (...args) {
+        rawDb.run("BEGIN");
+        try {
+          const result = fn(...args);
+          rawDb.run("COMMIT");
+          scheduleSave();
+          return result;
+        } catch (e) {
+          rawDb.run("ROLLBACK");
+          throw e;
+        }
+      };
+    },
+
+    // Escape hatch — only for code that needs the raw sql.js Database.
+    get raw() { return rawDb; }
+  };
+}
+
+function getDb() {
+  if (!wrapped) throw new Error('Call initDb() first');
+  return wrapped;
+}
+
+function closeDb() {
+  flushSave();
+  if (rawDb) {
+    rawDb.close();
+    rawDb = null;
+    wrapped = null;
+  }
+}
+
+/**
+ * Replace the entire database from a buffer (used by /api/system/restore).
+ * Validates that the buffer is a SQLite file (header magic), opens it as a
+ * fresh sql.js Database, persists to disk, then swaps it in. Throws on any
+ * error so the caller can surface a clean message — the existing DB is left
+ * untouched on failure.
+ */
+async function replaceFromBuffer(buf) {
+  if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
+  // SQLite files start with "SQLite format 3\0" (16 bytes).
+  const magic = buf.slice(0, 16).toString('utf8').replace(/\0+$/, '');
+  if (magic !== 'SQLite format 3') {
+    throw new Error('Uploaded file is not a valid SQLite database');
+  }
+  if (!SQL) SQL = await initSqlJs();
+  // Sanity-check: must open without throwing.
+  let test;
+  try { test = new SQL.Database(buf); } catch (e) {
+    throw new Error('SQLite file is corrupt or unreadable: ' + e.message);
+  }
+  // Quick integrity check
+  try {
+    const r = test.exec('PRAGMA integrity_check');
+    const ok = r && r[0] && r[0].values && r[0].values[0] && r[0].values[0][0] === 'ok';
+    if (!ok) throw new Error('integrity_check did not return "ok"');
+  } catch (e) {
+    test.close();
+    throw new Error('Integrity check failed: ' + e.message);
+  }
+  // Flush any pending writes from the current DB before replacing it.
+  flushSave();
+  // Close the live DB and swap.
+  if (rawDb) { try { rawDb.close(); } catch(_){} }
+  rawDb = test;
+  // Persist immediately so a crash right after restore doesn't lose it.
+  try {
+    const out = Buffer.from(rawDb.export());
+    const tmp = DB_PATH + '.tmp';
+    fs.writeFileSync(tmp, out);
+    fs.renameSync(tmp, DB_PATH);
+  } catch (e) {
+    throw new Error('Failed to persist restored DB: ' + e.message);
+  }
+  return { ok: true, size: buf.length };
+}
+
+module.exports = { initDb, getDb, closeDb, flushSave, replaceFromBuffer, DB_PATH };

@@ -1,0 +1,26 @@
+# Things that should NEVER be in the Docker build context
+node_modules/
+data/
+*.db
+*.db-wal
+*.db-shm
+.git/
+.github/
+.vscode/
+.idea/
+electron/
+build/
+dist/
+*.zip
+*.log
+*.dmg
+*.exe
+*.AppImage
+.DS_Store
+Thumbs.db
+recover-isp.js
+BUILD.md
+RELEASE.md
+MIGRATION.md
+.env
+.env.*

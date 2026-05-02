@@ -1,0 +1,363 @@
+/**
+ * company-config.js — Replaces TOOL.DBF + DEPOTS.PRG + COMPANY.PRG
+ * All company configuration stored as key-value pairs in SQLite.
+ */
+
+const DEFAULTS = [
+  // ── COMPANY (Primary - ISP) ────────────────────────────────
+  { key: 'logo',            value: 'ISP',           category: 'company',   label: 'Logo Code',                type: 'text' },
+  { key: 'trade_name',      value: 'IDEAL SPICES',  category: 'company',   label: 'Trade Name',               type: 'text' },
+  { key: 'legal_name',      value: ' PRIVATE LIMITED', category: 'company', label: 'Legal Name Suffix',        type: 'text' },
+  { key: 'short_name',      value: 'IDEAL SPICES PRIVATE LIMITED', category: 'company', label: 'Short Name', type: 'text' },
+  { key: 'pan',             value: 'AAICI5415L',    category: 'company',   label: 'PAN',                      type: 'text' },
+  { key: 'cin',             value: 'U47211TN2025PTC186657', category: 'company', label: 'CIN',                type: 'text' },
+  { key: 'fssai',           value: '',               category: 'company',   label: 'FSSAI No.',               type: 'text' },
+  { key: 'sbl',             value: '',               category: 'company',   label: 'SBL No.',                 type: 'text' },
+
+  // ── ADDRESS (Kerala) ───────────────────────────────────────
+  { key: 'kl_address1',     value: 'FLAT No.42,V.O.C.1ST STREET,MELACHOKKANATHAPURAM', category: 'address_kl', label: 'Address Line 1', type: 'text' },
+  { key: 'kl_address2',     value: 'BODINAYAKANUR, THENI-625582 TAMIL NADU CODE:33 Mobile:8610943865', category: 'address_kl', label: 'Address Line 2', type: 'text' },
+  { key: 'kl_phone',        value: '8610943865',    category: 'address_kl', label: 'Phone',                   type: 'text' },
+  { key: 'kl_email',        value: 'idealspicesbodi@gmail.com', category: 'address_kl', label: 'Email',       type: 'text' },
+  { key: 'kl_gstin',        value: '32AAICI5415L1ZX', category: 'address_kl', label: 'GSTIN',                 type: 'text' },
+  { key: 'kl_branch',       value: 'BODINAYAKANUR', category: 'address_kl', label: 'Office Branch',           type: 'text' },
+
+  // ── ADDRESS (Tamil Nadu) ───────────────────────────────────
+  { key: 'tn_address1',     value: 'DOOR No.42,V.O.C.1ST STREET,MELACHOKKANATHAPURAM', category: 'address_tn', label: 'Address Line 1', type: 'text' },
+  { key: 'tn_address2',     value: 'BODINAYAKANUR, THENI-625582 TAMIL NADU CODE:33 Mobile:8610943865', category: 'address_tn', label: 'Address Line 2', type: 'text' },
+  { key: 'tn_dispatch',     value: 'AMAZING SPICE PARK PVT LTD WARD No.6 ELLIKKANAM DOOR No.650 NEDUMKANDAM IDUKKI KERALA CODE:32', category: 'address_tn', label: 'Dispatch Address', type: 'text' },
+  { key: 'tn_phone',        value: '8610943865',    category: 'address_tn', label: 'Phone',                   type: 'text' },
+  { key: 'tn_email',        value: 'idealspicesbodi@gmail.com', category: 'address_tn', label: 'Email',       type: 'text' },
+  { key: 'tn_gstin',        value: '33AAICI5415L1ZH', category: 'address_tn', label: 'GSTIN',                 type: 'text' },
+  { key: 'tn_branch',       value: 'BODINAYAKANUR', category: 'address_tn', label: 'Office Branch',           type: 'text' },
+
+  // ── BRANCHES ───────────────────────────────────────────────
+  { key: 'br1',             value: 'NEDUMKANDAM',    category: 'branches',  label: 'Branch 1',                type: 'text' },
+  { key: 'br2',             value: 'UDUBANCHOLA',    category: 'branches',  label: 'Branch 2',                type: 'text' },
+  { key: 'br3',             value: 'MARUKKUMTOTTI',  category: 'branches',  label: 'Branch 3',                type: 'text' },
+  { key: 'br4',             value: 'ANAVILASAM',     category: 'branches',  label: 'Branch 4',                type: 'text' },
+  { key: 'br5',             value: 'VANDANMEDU',     category: 'branches',  label: 'Branch 5',                type: 'text' },
+  { key: 'br6',             value: '',               category: 'branches',  label: 'Branch 6',                type: 'text' },
+  { key: 'br7',             value: '',               category: 'branches',  label: 'Branch 7',                type: 'text' },
+  { key: 'br8',             value: '',               category: 'branches',  label: 'Branch 8',                type: 'text' },
+  { key: 'br9',             value: '',               category: 'branches',  label: 'Branch 9',                type: 'text' },
+  { key: 'br1_tel',         value: '9786069799',     category: 'branches',  label: 'Branch 1 Mobile',         type: 'text' },
+  { key: 'br2_tel',         value: '',               category: 'branches',  label: 'Branch 2 Mobile',         type: 'text' },
+  { key: 'br3_tel',         value: '9080248574',     category: 'branches',  label: 'Branch 3 Mobile',         type: 'text' },
+  { key: 'br4_tel',         value: '',               category: 'branches',  label: 'Branch 4 Mobile',         type: 'text' },
+  { key: 'br5_tel',         value: '',               category: 'branches',  label: 'Branch 5 Mobile',         type: 'text' },
+  { key: 'br6_tel',         value: '',               category: 'branches',  label: 'Branch 6 Mobile',         type: 'text' },
+  { key: 'br7_tel',         value: '',               category: 'branches',  label: 'Branch 7 Mobile',         type: 'text' },
+  { key: 'br8_tel',         value: '',               category: 'branches',  label: 'Branch 8 Mobile',         type: 'text' },
+
+  // ── RATES ──────────────────────────────────────────────────
+  { key: 'commission',      value: '1',              category: 'rates',     label: 'Commission %',             type: 'number' },
+  { key: 'hpc',             value: '10',             category: 'rates',     label: 'Handling %',               type: 'number' },
+  { key: 'deduction1',      value: '1.25',           category: 'rates',     label: 'Deduction (Pooler)',       type: 'number' },
+  { key: 'deduction2',      value: '1.25',           category: 'rates',     label: 'Deduction (Dealer)',       type: 'number' },
+  { key: 'refund',          value: '1.9',            category: 'rates',     label: 'Sample Refund (Kgs)',      type: 'number' },
+  { key: 'sb_refund',       value: '2.85',           category: 'rates',     label: 'SB Sample Refund (Kgs)',   type: 'number' },
+  { key: 'gst_goods',       value: '5',              category: 'rates',     label: 'GST Goods Rate %',         type: 'number' },
+  { key: 'gst_service',     value: '18',             category: 'rates',     label: 'GST Service Rate %',       type: 'number' },
+  { key: 'tcs_tds',         value: '0.1',            category: 'rates',     label: 'TCS / TDS Rate %',         type: 'number' },
+  { key: 'tds_purchase_rate', value: '0.1',          category: 'rates',     label: 'TDS on Purchase Rate % (Section 194Q)',  type: 'number' },
+  { key: 'tds_threshold',   value: '5000000',        category: 'rates',     label: 'TDS / TCS Annual Threshold (₹) — default ₹50 lakh per Section 194Q/206C(1H)',  type: 'number' },
+  { key: 'gunny_rate',      value: '165',            category: 'rates',     label: 'Gunny Rate (₹)',           type: 'number' },
+  { key: 'transport',       value: '2.5',            category: 'rates',     label: 'Transport (₹/kg)',         type: 'number' },
+  { key: 'insurance',       value: '0.75',           category: 'rates',     label: 'Insurance (₹/kg)',         type: 'number' },
+  { key: 'local_transport', value: '2.5',            category: 'rates',     label: 'Local Transport (₹/kg)',   type: 'number' },
+  { key: 'local_insurance', value: '0.75',           category: 'rates',     label: 'Local Insurance (₹/kg)',   type: 'number' },
+  { key: 'discount_pct',    value: '0',              category: 'rates',     label: 'Discount %',               type: 'number' },
+  { key: 'discount_days',   value: '0',              category: 'rates',     label: 'No. of Days for Discount', type: 'number' },
+
+  // ── HSN / SAC CODES ────────────────────────────────────────
+  { key: 'hsn_cardamom',    value: '09083120',       category: 'hsn',       label: 'Cardamom HSN',             type: 'text' },
+  { key: 'hsn_gunny',       value: '63051040',       category: 'hsn',       label: 'Gunny HSN',                type: 'text' },
+  { key: 'sac_transport',   value: '996791',         category: 'hsn',       label: 'Transport SAC',            type: 'text' },
+  { key: 'sac_insurance',   value: '997136',         category: 'hsn',       label: 'Insurance SAC',            type: 'text' },
+  { key: 'sac_service',     value: '996111',         category: 'hsn',       label: 'Service SAC',              type: 'text' },
+
+  // ── BANK DETAILS ───────────────────────────────────────────
+  { key: 'bank_kl_name',    value: 'FEDERAL BANK - PUTTADY', category: 'bank', label: 'Kerala Bank Name',      type: 'text' },
+  { key: 'bank_kl_acct',    value: '10735500094452', category: 'bank',      label: 'Kerala Account No.',       type: 'text' },
+  { key: 'bank_kl_ifsc',    value: 'FDRL0001073',   category: 'bank',      label: 'Kerala IFSC Code',         type: 'text' },
+  { key: 'bank_tn_name',    value: 'CITY UNION BANK-BODINAYAKANUR', category: 'bank', label: 'TN Bank Name',   type: 'text' },
+  { key: 'bank_tn_acct',    value: '510909010383556', category: 'bank',     label: 'TN Account No.',           type: 'text' },
+  { key: 'bank_tn_ifsc',    value: 'CIUB0000346',   category: 'bank',      label: 'TN IFSC Code',             type: 'text' },
+
+  // ── SEASON ─────────────────────────────────────────────────
+  { key: 'season',          value: '2026 - 27',      category: 'season',    label: 'Season Name',              type: 'text' },
+  { key: 'season_short',    value: '26-27',          category: 'season',    label: 'Season Short',             type: 'text' },
+  { key: 'season_start',    value: '2026-04-01',     category: 'season',    label: 'FY Start Date',            type: 'date' },
+  { key: 'season_end',      value: '2027-03-31',     category: 'season',    label: 'FY End Date',              type: 'date' },
+
+  // ── INVOICE SETTINGS ───────────────────────────────────────
+  { key: 'inv_prefix',      value: 'ISP',            category: 'invoice',   label: 'Invoice Prefix',           type: 'text' },
+  { key: 'separator',       value: '-',              category: 'invoice',   label: 'Separator Symbol',         type: 'text' },
+  { key: 'hsn_cardamom',    value: '09083120',       category: 'invoice',   label: 'HSN/SAC — Cardamom',       type: 'text' },
+  { key: 'hsn_gunny',       value: '63051040',       category: 'invoice',   label: 'HSN/SAC — Gunny',          type: 'text' },
+  { key: 'dispatched_through_isp', value: '',         category: 'invoice',   label: 'Dispatched Through', type: 'text' },
+  { key: 'dispatch_destination', value: 'NEDUMKANDAM', category: 'invoice', label: 'Dispatch Destination',     type: 'text' },
+  { key: 'duplicate_text',  value: 'DUMMY INVOICE',  category: 'invoice',   label: 'Dummy Invoice Text',       type: 'text' },
+  { key: 'signature_text',  value: 'Signature of the Authorised Buyer', category: 'invoice', label: 'Signature Label', type: 'text' },
+
+  // ── FEATURE FLAGS ──────────────────────────────────────────
+  { key: 'flag_pooling',    value: 'false',          category: 'flags',     label: 'Pooling (Single State)',    type: 'boolean' },
+  { key: 'flag_sample',     value: 'false',          category: 'flags',     label: 'Discount in Invoice',      type: 'boolean' },
+  { key: 'flag_dispatch',   value: 'true',           category: 'flags',     label: 'Show Dispatch Address',    type: 'boolean' },
+  { key: 'flag_ship',       value: 'true',           category: 'flags',     label: 'Show Ship To Address',     type: 'boolean' },
+  { key: 'flag_hsn',        value: 'true',           category: 'flags',     label: 'Show HSN Codes',           type: 'boolean' },
+  { key: 'flag_bank',       value: 'true',           category: 'flags',     label: 'Bank Details in Invoice',  type: 'boolean' },
+  { key: 'flag_tds_purchase', value: 'true',         category: 'flags',     label: 'TDS on Purchase Invoice',  type: 'boolean' },
+  { key: 'flag_tds_sales',  value: 'false',          category: 'flags',     label: 'TDS on Sales Invoice',     type: 'boolean' },
+  { key: 'flag_wgst',       value: 'false',          category: 'flags',     label: 'TDS on Full Invoice Amount', type: 'boolean' },
+  { key: 'flag_disc_gst',   value: 'false',          category: 'flags',     label: 'Discount includes GST',    type: 'boolean' },
+  { key: 'flag_debit_note', value: 'false',          category: 'flags',     label: 'Debit Note for Discount',  type: 'boolean' },
+  { key: 'flag_invoice_stripe', value: 'true',       category: 'flags',     label: 'Alternate Row Stripe in Invoice', type: 'boolean' },
+  { key: 'flag_dummy',      value: 'true',           category: 'flags',     label: 'Allow Dummy Invoices',     type: 'boolean' },
+  { key: 'flag_round',      value: 'true',           category: 'flags',     label: 'Round Invoice Amounts',    type: 'boolean' },
+  { key: 'flag_export',     value: 'false',          category: 'flags',     label: 'Export Invoices',          type: 'boolean' },
+
+  // ── BUSINESS MODE ──────────────────────────────────────────
+  // This build is e-Trade only. business_mode is kept in the DB so calc
+  // and exports continue to read it, but rendered as read-only in UI.
+  { key: 'business_mode',   value: 'e-Trade',        category: 'mode',      label: 'Business Mode',            type: 'readonly' },
+  { key: 'business_state',  value: 'TAMIL NADU',     category: 'mode',      label: 'Business State',           type: 'select' },
+
+  // ── INTEGRATIONS ───────────────────────────────────────────
+  { key: 'gst_api_key',     value: '',               category: 'integrations', label: 'GST Lookup API Key (gstincheck.co.in)', type: 'text' },
+
+  // ── TALLY EXPORT ──────────────────────────────────────────
+  // Settings here mirror the macro's Configration form (UserForm1) field-for-field.
+  // Identity & defaults
+  { key: 'tally_company_name',     value: 'Ideal Spices Private Limited',      category: 'tally', label: 'Tally Company Name (must match Tally company exactly)', type: 'text' },
+  { key: 'tally_season',          value: '2026-27',        category: 'tally', label: 'Season Suffix',                  type: 'text' },
+  { key: 'tally_separator',       value: '/',              category: 'tally', label: 'Voucher Separator',              type: 'text' },
+  { key: 'tally_inv_prefix',      value: 'ISP/',           category: 'tally', label: 'Voucher Prefix (legacy — Logo Code drives Tally now)', type: 'text' },
+  { key: 'tally_state_code',      value: '33',             category: 'tally', label: 'Home GSTIN State Code (intra)',  type: 'text' },
+  { key: 'tally_home_state',      value: 'Tamil Nadu',     category: 'tally', label: 'Home Place of Supply',           type: 'text' },
+  { key: 'tally_urd_state',       value: 'Kerala',         category: 'tally', label: 'URD Purchase State (agriculturist)', type: 'text' },
+
+  // Mode toggles (mirror the macro checkboxes)
+  { key: 'tally_detailed',        value: 'true',           category: 'tally', label: 'Detailed Inv (one inventory entry per lot)',type: 'boolean' },
+  { key: 'tally_round_enabled',   value: 'true',           category: 'tally', label: 'Round (Round On/Off ledger)',               type: 'boolean' },
+  { key: 'tally_tcs_enabled',     value: 'false',          category: 'tally', label: 'TCS (apply on Sales when applicable)',      type: 'boolean' },
+  { key: 'tally_tds_enabled',     value: 'false',          category: 'tally', label: 'TDS (apply 194Q on RD Purchases)',          type: 'boolean' },
+  { key: 'tally_optional',        value: 'false',          category: 'tally', label: 'Optional (mark vouchers as Optional)',      type: 'boolean' },
+  { key: 'tally_dn_exempt',       value: 'false',          category: 'tally', label: 'Exempted (Debit Note: skip GST tax ledgers)', type: 'boolean' },
+  { key: 'tally_local_transport', value: 'true',           category: 'tally', label: 'Local Transport (use local transport rate)', type: 'boolean' },
+  { key: 'tally_local_insurance', value: 'true',           category: 'tally', label: 'Local Insurance (use local insurance rate)', type: 'boolean' },
+  { key: 'tally_ship_to',         value: 'false',          category: 'tally', label: 'Ship To (override consignee with separate Ship-To party)', type: 'boolean' },
+
+  // Sales Account Ledgers (Cardamom)
+  { key: 'tally_sales_inter',     value: 'Cardamom Sales 5%',          category: 'tally', label: 'Cardamom Inter-State Sales',  type: 'text' },
+  { key: 'tally_sales_intra',     value: 'Cardamom Sales 5% - Local',  category: 'tally', label: 'Cardamom Local Sales',        type: 'text' },
+  { key: 'tally_sales_export',    value: 'Cardamom Sales - Export',    category: 'tally', label: 'Cardamom Export Sales (Deemed)', type: 'text' },
+
+  // Sales Account Ledgers (Gunny)
+  { key: 'tally_gunny_inter',     value: 'Gunny Sales 5%',             category: 'tally', label: 'Gunny Interstate Sales',      type: 'text' },
+  { key: 'tally_gunny_intra',     value: 'Gunny Sales 5% - Local',     category: 'tally', label: 'Gunny Local Sales',           type: 'text' },
+  { key: 'tally_gunny_export',    value: 'Gunny Sales - Export',       category: 'tally', label: 'Gunny Export Sales',          type: 'text' },
+
+  // Dealer-Side Sales (when ISP sells to a dealer)
+  { key: 'tally_dealer_sale_inter', value: 'Interstate Dealer-Purchase', category: 'tally', label: 'Interstate Dealer-Purch (sales-side)', type: 'text' },
+  { key: 'tally_dealer_sale_intra', value: 'Local Dealer-Purchase',      category: 'tally', label: 'Local Dealer-Purcha (sales-side)',      type: 'text' },
+
+  // RD Purchase ledgers (when ISP buys from a dealer)
+  { key: 'tally_purchase_dealer',     value: 'Trade Purchase From Dealer',category: 'tally', label: 'Trade Purchase From Dealer (base; gets -Local / -Inter_State suffix)', type: 'text' },
+  { key: 'tally_purchase_dealer_inter', value: 'Interstate Dealer',      category: 'tally', label: 'Interstate Dealer (purchase-side)',     type: 'text' },
+  { key: 'tally_purchase_dealer_intra', value: 'Local Dealer',           category: 'tally', label: 'Local Dealer (purchase-side)',          type: 'text' },
+
+  // Agriculturist & TDS-on-sales
+  { key: 'tally_purchase_auction',value: 'Purchase From Agriculturist', category: 'tally', label: 'Purchase From Agriculturist (URD ledger)', type: 'text' },
+  { key: 'tally_tds_paid_sales',  value: 'TDS Paid on Sales',           category: 'tally', label: 'TDS Paid on Sales',           type: 'text' },
+
+  // Tax Ledger Names — Sales 5% (output) and Purchase (input)
+  { key: 'tally_cgst',            value: 'OUTPUT CGST 2.5%',           category: 'tally', label: 'CGST 2.5% (output)',          type: 'text' },
+  { key: 'tally_sgst',            value: 'OUTPUT SGST 2.5%',           category: 'tally', label: 'SGST 2.5% (output)',          type: 'text' },
+  { key: 'tally_igst',            value: 'OUTPUT IGST 5%',             category: 'tally', label: 'IGST 5% (output)',            type: 'text' },
+  { key: 'tally_cgst_input',      value: 'INPUT CGST 2.5%',            category: 'tally', label: 'INPUT CGST 2.5%',             type: 'text' },
+  { key: 'tally_sgst_input',      value: 'INPUT SGST 2.5%',            category: 'tally', label: 'INPUT SGST 2.5%',             type: 'text' },
+  { key: 'tally_igst_input',      value: 'INPUT IGST 5%',              category: 'tally', label: 'INPUT IGST 5%',               type: 'text' },
+  { key: 'tally_tcs',             value: 'TCS on Sale of Goods',       category: 'tally', label: 'TCS on Sale of Goods',        type: 'text' },
+  { key: 'tally_tds_ledger',      value: 'TDS on Purchase of Goods',   category: 'tally', label: 'TDS on Purchase of Goods', type: 'text' },
+
+  // Tax Ledger Names — Debit Note 18%
+  { key: 'tally_dn_discount',     value: 'Discount on Purchase',       category: 'tally', label: 'Discount on Purch (Debit Note ledger)', type: 'text' },
+  { key: 'tally_dn_cgst',         value: 'OUTPUT CGST 9%',             category: 'tally', label: 'CGST 9% (Debit Note)',        type: 'text' },
+  { key: 'tally_dn_sgst',         value: 'OUTPUT SGST 9%',             category: 'tally', label: 'SGST 9% (Debit Note)',        type: 'text' },
+  { key: 'tally_dn_igst',         value: 'OUTPUT IGST 18%',            category: 'tally', label: 'IGST 18% (Debit Note)',       type: 'text' },
+  { key: 'tally_dn_gst_rate',     value: '18',                         category: 'tally', label: 'Debit Note GST Rate %',       type: 'number' },
+
+  // Other operational ledgers
+  { key: 'tally_sample_planter',  value: 'Sample Refund to Planter',   category: 'tally', label: 'Sample Refund to Planter',    type: 'text' },
+  { key: 'tally_sample_dealer',   value: 'Sample Refund to Dealer',    category: 'tally', label: 'Sample Refund to Dealer',     type: 'text' },
+  { key: 'tally_sample_stock',    value: 'false',                      category: 'tally', label: 'Stock (track sample refund as inventory)', type: 'boolean' },
+  { key: 'tally_round',           value: 'Round On/Off',               category: 'tally', label: 'Round On/Off Ledger',         type: 'text' },
+  { key: 'tally_transport',       value: 'Transport Charges',          category: 'tally', label: 'Transport Charges Ledger',    type: 'text' },
+  { key: 'tally_insurance',       value: 'Insurance Charges',          category: 'tally', label: 'Insurance Charges Ledger',    type: 'text' },
+
+  // Tax / commercial rates (the right-hand "Tax Rate" / "Item Rates" block)
+  { key: 'tally_gst_rate',        value: '5',                          category: 'tally', label: 'GST Goods Rate %',            type: 'number' },
+  { key: 'tally_service_rate',    value: '18',                         category: 'tally', label: 'Service Rate % (DN/Discount)', type: 'number' },
+  { key: 'tally_tcs_rate',        value: '0.1',                        category: 'tally', label: 'TCS / TDS Rate %',            type: 'number' },
+  { key: 'tally_export_rate',     value: '0',                          category: 'tally', label: 'Export GST Rate %',           type: 'number' },
+  { key: 'tally_sample_kgs',      value: '1.900',                      category: 'tally', label: 'Sample Refund (Kgs)',         type: 'number' },
+  { key: 'tally_gunny_rate',      value: '165',                        category: 'tally', label: 'Gunny Rate (₹ per bag)',      type: 'number' },
+  { key: 'tally_transport_rate',  value: '2.50',                       category: 'tally', label: 'Transport Rate (₹/Kg, inter-state)', type: 'number' },
+  { key: 'tally_local_trans_rate',value: '2.50',                       category: 'tally', label: 'Local Transport Rate (₹/Kg)', type: 'number' },
+  { key: 'tally_insurance_rate',  value: '0.75',                       category: 'tally', label: 'Insurance Rate (₹/₹1000)',    type: 'number' },
+  { key: 'tally_local_ins_rate',  value: '0.75',                       category: 'tally', label: 'Local Insurance Rate (₹/₹1000)', type: 'number' },
+
+  // Stock Item Names + HSN
+  { key: 'tally_item_cardamom',   value: 'Cardamom',                   category: 'tally', label: 'Stock Item — Cardamom',       type: 'text' },
+  { key: 'tally_item_gunny',      value: 'Gunny Bag',                  category: 'tally', label: 'Stock Item — Gunny',          type: 'text' },
+  { key: 'tally_hsn_cardamom',    value: '09083120',                   category: 'tally', label: 'HSN — Cardamom',              type: 'text' },
+  { key: 'tally_hsn_gunny',       value: '63051040',                   category: 'tally', label: 'HSN — Gunny',                 type: 'text' },
+  { key: 'tally_hsn_service',     value: '996111',                     category: 'tally', label: 'SAC — Service / Discount',    type: 'text' },
+  { key: 'tally_hsn_transport',   value: '996791',                     category: 'tally', label: 'SAC — Transport',             type: 'text' },
+  { key: 'tally_hsn_insurance',   value: '997136',                     category: 'tally', label: 'SAC — Insurance',             type: 'text' },
+
+  // ── E-way bill DISTANCE estimation ────────────────────────────
+  // Auto-fills <DISTANCE> on ISP sales vouchers using haversine ×
+  // multiplier between dispatch PIN and consignee PIN. The multiplier
+  // converts straight-line km to road km — bump it for hilly terrain
+  // (Western Ghats), lower it for plains. Per-invoice manual override
+  // is supported via the invoices.distance_km column.
+  //
+  // CAVEAT: haversine × multiplier is a rough estimate. For Western
+  // Ghats routes (Kerala↔Tamil Nadu cardamom belt) it can under-shoot
+  // real road distance by 30–50%. The auto-compute is OFF by default
+  // — turn it on only if you've tuned the multiplier for your routes
+  // or you're OK with the estimate. The recommended workflow is to
+  // populate invoices.distance_km manually (or via an external tool)
+  // and let the generator use those values verbatim.
+  { key: 'distance_auto_enabled',    value: 'false',                   category: 'tally', label: 'Auto-fill <DISTANCE> from PIN coordinates (rough estimate — manual override always wins)', type: 'check' },
+  { key: 'distance_road_multiplier', value: '1.5',                     category: 'tally', label: 'Road-distance multiplier (haversine × this = road km)', type: 'number' },
+];
+
+const CATEGORIES = {
+  mode:       { order: 0, title: 'Business Mode',        icon: '⚙' },
+  company:    { order: 1, title: 'Company Details',       icon: '🏢' },
+  address_kl: { order: 2, title: 'Address (Kerala)',      icon: '📍' },
+  address_tn: { order: 3, title: 'Address (Tamil Nadu)',  icon: '📍' },
+  branches:   { order: 5, title: 'Branches & Contacts',  icon: '🏪' },
+  rates:      { order: 6, title: 'Rates & Charges',       icon: '💰' },
+  hsn:        { order: 7, title: 'HSN / SAC Codes',       icon: '🏷' },
+  bank:       { order: 8, title: 'Bank Details',          icon: '🏦' },
+  season:     { order: 9, title: 'Season / Financial Year', icon: '📅' },
+  invoice:    { order: 10, title: 'Invoice Settings',     icon: '📄' },
+  flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
+  integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },
+  tally:      { order: 13, title: 'To Tally',             icon: '📤', description: 'Configure all settings for the Tally XML export — laid out exactly like the original Configration form. Ledger names here MUST match what exists in your Tally company; if a ledger is missing or misspelled, Tally will reject the import.' },
+};
+
+function initCompanySettings(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS company_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'company',
+      label TEXT NOT NULL DEFAULT '',
+      field_type TEXT NOT NULL DEFAULT 'text'
+    );
+  `);
+
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO company_settings (key, value, category, label, field_type) VALUES (?, ?, ?, ?, ?)'
+  );
+  const seed = db.transaction(() => {
+    for (const d of DEFAULTS) insert.run(d.key, d.value, d.category, d.label, d.type);
+  });
+  seed();
+
+  // Clean up legacy keys that the original Spice Config (ISP+ASP) build
+  // wrote. They are no longer used in this e-Trade-only build. Safe to
+  // drop on every startup — never referenced by any code path here.
+  const REMOVED_KEYS = [
+    'asp_profit', 'isp_profit',
+    'asp_profit_pooler', 'asp_profit_dealer',
+    'isp_profit_pooler', 'isp_profit_dealer',
+    'inv_prefix_sister', 'dispatched_through', 'dispatched_through_asp',
+    'commission_bill', 'memorandum_text',
+    'flag_sister', 'flag_tnpa', 'flag_rtds_inv', 'flag_eway',
+    's_logo', 's_company', 's_short_name', 's_address1', 's_address2',
+    's_phone', 's_email', 's_gstin', 's_cin', 's_pan', 's_fssai', 's_sbl',
+    'tally_asp_company_name', 'tally_ainv_prefix', 'tally_state_code_amazing',
+    'tally_amazing_mode', 'tally_dispatch_from',
+    'tally_commission', 'tally_cash_handling', 'tally_cash_handling_planter',
+    'tally_chc_planter', 'tally_unit_rate',
+    'tally_dispatch_company', 'tally_dispatch_address', 'tally_dispatch_place',
+    'tally_dispatch_pin', 'tally_dispatch_state', 'tally_dispatch_gstin',
+  ];
+  const drop = db.prepare('DELETE FROM company_settings WHERE key = ?');
+  for (const k of REMOVED_KEYS) drop.run(k);
+
+  // Drop preset tables — Logo Code is a plain textbox in this build,
+  // there is no ISP/ASP preset switching.
+  try { db.exec('DROP TABLE IF EXISTS company_presets'); } catch (e) {}
+  try { db.exec('DROP TABLE IF EXISTS company_preset_meta'); } catch (e) {}
+
+  // Force business_mode to 'e-Trade'. A stale DB row from the previous
+  // mode-switching build must not leak through to calculation paths.
+  db.prepare("UPDATE company_settings SET value = 'e-Trade' WHERE key = 'business_mode'").run();
+
+  // Reset stale Logo Code if a previous build wrote 'ASP'. Single-company
+  // build only has ISP — anything else here is leftover preset state
+  // from the old ISP/ASP-switching app.
+  db.prepare("UPDATE company_settings SET value = 'ISP' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
+
+  console.log('Company settings ready (%d defaults)', DEFAULTS.length);
+}
+
+function getSetting(db, key) {
+  const r = db.prepare('SELECT value FROM company_settings WHERE key = ?').get(key);
+  return r ? r.value : null;
+}
+
+function getSettingBool(db, key) {
+  const v = getSetting(db, key);
+  return v === 'true' || v === '1';
+}
+
+function getSettingNum(db, key) {
+  return parseFloat(getSetting(db, key)) || 0;
+}
+
+function getAllSettings(db) {
+  const rows = db.prepare('SELECT key, value, category, label, field_type FROM company_settings ORDER BY rowid').all();
+  const grouped = {};
+  for (const r of rows) {
+    if (!grouped[r.category]) grouped[r.category] = [];
+    grouped[r.category].push(r);
+  }
+  return grouped;
+}
+
+function updateSettings(db, settings) {
+  const upd = db.prepare('UPDATE company_settings SET value = ? WHERE key = ?');
+  const batch = db.transaction((items) => {
+    let n = 0;
+    for (const [k, v] of Object.entries(items)) { upd.run(String(v), k); n++; }
+    return n;
+  });
+  return batch(settings);
+}
+
+function getSettingsFlat(db) {
+  const rows = db.prepare('SELECT key, value, field_type FROM company_settings').all();
+  const flat = {};
+  for (const r of rows) {
+    if (r.field_type === 'boolean') flat[r.key] = r.value === 'true';
+    else if (r.field_type === 'number') flat[r.key] = parseFloat(r.value) || 0;
+    else flat[r.key] = r.value;
+  }
+  return flat;
+}
+
+function getGSTRates(db) {
+  const g = getSettingNum(db, 'gst_goods');
+  return { cgst: g / 2, sgst: g / 2, igst: g, service: getSettingNum(db, 'gst_service'), tcs: getSettingNum(db, 'tcs_tds') };
+}
+
+module.exports = { DEFAULTS, CATEGORIES, initCompanySettings, getSetting, getSettingBool, getSettingNum, getAllSettings, updateSettings, getSettingsFlat, getGSTRates };

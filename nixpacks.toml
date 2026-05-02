@@ -1,0 +1,11 @@
+# Railway Nixpacks build config for spice-config
+# better-sqlite3 needs python3 + gcc to compile its native bindings on first install.
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "python3", "gcc", "gnumake"]
+
+[phases.install]
+cmds = ["npm ci --omit=dev || npm install --omit=dev"]
+
+[start]
+cmd = "node server.js"

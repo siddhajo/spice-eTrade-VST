@@ -1,0 +1,16 @@
+data/
+node_modules/
+electron/
+*.log
+*.zip
+.env
+.env.local
+build/
+dist/
+*.dmg
+*.exe
+*.AppImage
+recover-isp.js
+BUILD.md
+RELEASE.md
+MIGRATION.md
