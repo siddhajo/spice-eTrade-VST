@@ -4663,10 +4663,20 @@ function getCurrentLogoCode(){
   // logo image, and any UI label reflects whatever the user typed in
   // (could be 'ISP', 'ABC', 'XYZ' — anything). Fallback to 'ISP' only
   // when settings haven't loaded yet.
-  const arr = (window._sdata && _sdata.company) || [];
-  const f = arr.find(x => x && x.key === 'logo');
-  const v = f && f.value ? String(f.value).trim() : '';
-  return v || 'ISP';
+  // Defensive lookup: try multiple categories in case of older payloads
+  // where 'logo' wandered between categories. The logo field is in
+  // 'company' but try every category as a safety net.
+  const data = window._sdata || {};
+  for (const cat of Object.keys(data)) {
+    const arr = data[cat];
+    if (!Array.isArray(arr)) continue;
+    const f = arr.find(x => x && x.key === 'logo');
+    if (f && f.value) {
+      return String(f.value).trim() || 'ISP';
+    }
+  }
+  // Last-resort: read from window._cachedLogoCode if any flow set it
+  return window._cachedLogoCode || 'ISP';
 }
 
 function isCategoryHiddenByMode(catKey){
@@ -5448,14 +5458,17 @@ async function saveSettings(){
   for(const ck of Object.keys(_sdata)){
     for(const f of _sdata[ck]||[]){s[f.key]=f.value}
   }
+  // Cache the logo value before sending so the badge can update even
+  // if the post-save refresh fails. Belt-and-suspenders approach since
+  // the badge silently failing to update has been a recurring complaint.
+  if (s.logo) window._cachedLogoCode = String(s.logo).trim() || 'ISP';
+
   await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings:s})});
   _companyDirty = false;
 
-  // Refresh _sdata from the server — defensive measure that handles
-  // edge cases where captureCurrentPanel might have missed a tab the
-  // user edited then navigated away from. The server is the canonical
-  // source of truth post-save, so this guarantees the in-memory state
-  // matches what was persisted.
+  // Refresh _sdata from the server so any tabs not currently rendered
+  // pick up their latest values. If this fails, we still have the
+  // cached logo so the badge updates correctly.
   try {
     const fresh = await j('/api/company-settings');
     if (fresh && fresh.settings && typeof fresh.settings === 'object') {
