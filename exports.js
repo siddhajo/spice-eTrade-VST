@@ -6,13 +6,45 @@
 const ExcelJS = require('exceljs');
 const { collectionXlsx: newCollectionXlsx, tradeReportXlsx } = require('./auction-reports');
 const {
-  getCompanyHeader, writeXlsxCompanyHeader, xlsxNumFmtForHeader,
+  getCompanyHeader,
+  writeXlsxCompanyHeader, xlsxNumFmtForHeader,
 } = require('./report-formatters');
+// Defensive identity resolver — see _company-identity-fallback.js.
+// Avoids "getCompanyIdentity is not a function" on partial deploys.
+const getCompanyIdentity = require('./_company-identity-fallback').resolve();
 
 // Build an XLSX buffer with a unified brand band on top and Indian-format
 // numeric columns. `opts.title` is the report title shown in the middle of
 // the band; `opts.metaLines` is an array of right-aligned meta strings
 // (e.g. ["Trade #3", "15/04/2026", "ASP"]).
+// Reusable XLSX export builder. ALL Excel exports in this app should
+// route through this function so they share:
+//   - The same three-zone brand band (logo + name | title | meta)
+//   - The same column-header look (#E8E4DD fill, thin top/bottom borders,
+//     bold 10pt, centered text)
+//   - The same Indian-format numFmts via xlsxNumFmtForHeader
+//   - The same per-column alignment defaults (right for numeric, center
+//     for short-id columns like SL/LOT, left for everything else)
+//
+// columns[i] shape:
+//   { key, header,
+//     width:   number,         // optional, default 15
+//     align:   'left'|'center'|'right',  // optional, derived from numFmt
+//     numFmt:  string,         // optional, overrides xlsxNumFmtForHeader
+//   }
+//
+// opts shape:
+//   { db, companyHeader, title, metaLines,    // existing
+//     grandTotal: { label, values, fillArgb }, // optional footer row
+//     sections:   [{ title, rows }],           // optional grouped layout
+//     spacerBetween: true,                      // blank row between groups
+//   }
+//
+// "Grand total" row mirrors the Lorry export's footer: bold 11pt, yellow
+// (`#FFF3CD`) fill, double top + bottom borders. Pass `values` keyed by
+// column key — only the listed columns get numbers, the rest are blank.
+// Set `label` to put a string in any one column (defaults to 'GRAND TOTAL'
+// in the first non-numeric column).
 async function createExcelBuffer(sheetName, columns, rows, opts) {
   opts = opts || {};
   const wb = new ExcelJS.Workbook();
@@ -41,32 +73,107 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
     cell.alignment = { horizontal: 'center' };
   });
 
-  // Apply Indian-format numFmt to each numeric column. We do this on the
-  // worksheet column object so every data row picks it up automatically.
-  columns.forEach((c, i) => {
-    const fmt = xlsxNumFmtForHeader(c.header);
-    if (fmt) {
-      const colObj = ws.getColumn(i + 1);
-      colObj.numFmt = fmt;
-      colObj.alignment = { horizontal: 'right' };
-    }
+  // Resolve per-column numFmt + alignment ONCE so we can apply them to
+  // both data rows and the grand-total row uniformly.
+  //
+  // Default alignment policy (matches Lorry export):
+  //   - explicit `align` wins
+  //   - numeric columns (have a numFmt) → right
+  //   - everything else → left (cell default; we don't set explicitly)
+  const colMeta = columns.map(c => {
+    const fmt = c.numFmt || xlsxNumFmtForHeader(c.header);
+    const align = c.align || (fmt ? 'right' : null);
+    return { fmt, align };
   });
 
-  // Data rows. addRow uses keys from ws.columns to map object → cells.
-  rows.forEach((rowObj) => {
+  // Apply numFmt at the worksheet-column level so every data row picks it
+  // up automatically. Alignment is also applied per-column for consistency.
+  colMeta.forEach((m, i) => {
+    const colObj = ws.getColumn(i + 1);
+    if (m.fmt) colObj.numFmt = m.fmt;
+    if (m.align) colObj.alignment = { horizontal: m.align };
+  });
+
+  // Helper to emit a single data row honouring numeric coercion + per-col align
+  function emitDataRow(rowObj) {
     const dataRow = ws.addRow({});
     columns.forEach((c, i) => {
       let v = rowObj[c.key];
       // Coerce string-numbers to numbers so Excel applies the numFmt.
       if (typeof v === 'string' && v !== '' && !isNaN(Number(v))) {
         const n = Number(v);
-        if (!Number.isNaN(n) && xlsxNumFmtForHeader(c.header)) v = n;
+        if (!Number.isNaN(n) && colMeta[i].fmt) v = n;
       }
-      dataRow.getCell(i + 1).value = v == null ? '' : v;
+      const cell = dataRow.getCell(i + 1);
+      cell.value = v == null ? '' : v;
+      // Per-cell alignment guard — column-level alignment doesn't always
+      // win over default cell alignment in some ExcelJS versions, so set
+      // it on the cell too when explicit.
+      if (colMeta[i].align) cell.alignment = { horizontal: colMeta[i].align };
     });
-  });
+    return dataRow;
+  }
+
+  // ── Section-grouped mode (optional) ──
+  // When `opts.sections` is provided, we ignore `rows` and emit each
+  // section as: section header (merged, light-green) → its rows. This
+  // mirrors the Lorry export's "INTER-STATE SALES" / "INTRA-STATE SALES"
+  // structure but is reusable for any grouped data.
+  if (Array.isArray(opts.sections) && opts.sections.length) {
+    opts.sections.forEach((sec, sIdx) => {
+      const titleRow = ws.addRow([sec.title || '']);
+      ws.mergeCells(`A${titleRow.number}:${colLetter(columns.length)}${titleRow.number}`);
+      titleRow.font = { bold: true, size: 11 };
+      titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } };
+      titleRow.alignment = { horizontal: 'center' };
+      (sec.rows || []).forEach(emitDataRow);
+      if (opts.spacerBetween && sIdx < opts.sections.length - 1) ws.addRow([]);
+    });
+  } else {
+    // Flat mode — original behaviour.
+    rows.forEach(emitDataRow);
+  }
+
+  // ── Grand total footer (optional) ──
+  // Lorry-export style: bold 11pt, yellow `#FFF3CD` fill, double borders.
+  // Pass values keyed by column key. Numeric columns get the same numFmt
+  // as the data rows for consistent rendering.
+  if (opts.grandTotal) {
+    const gt = opts.grandTotal;
+    const cells = columns.map(c => (gt.values && gt.values[c.key] != null) ? gt.values[c.key] : '');
+    // Place label in the first non-numeric column (or column 1 if all
+    // columns are numeric). Caller can override by including a label
+    // value directly in `gt.values`.
+    if (gt.label) {
+      const labelIdx = columns.findIndex(c => !colMeta[columns.indexOf(c)].fmt);
+      const idx = labelIdx >= 0 ? labelIdx : 0;
+      if (cells[idx] === '') cells[idx] = gt.label;
+    }
+    const gRow = ws.addRow(cells);
+    gRow.font = { bold: true, size: 11 };
+    const fill = gt.fillArgb || 'FFFFF3CD';
+    gRow.eachCell((cell, ci) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+      cell.border = { top: { style: 'double' }, bottom: { style: 'double' } };
+      const m = colMeta[ci - 1];
+      if (m && m.fmt)   cell.numFmt = m.fmt;
+      if (m && m.align) cell.alignment = { horizontal: m.align };
+    });
+  }
 
   return wb.xlsx.writeBuffer();
+}
+
+// Local helper — A1 column letter. Mirrors the one in writeXlsxCompanyHeader
+// but kept private here so we don't widen that module's exports.
+function colLetter(n) {
+  let s = '';
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
 // Build the common XLSX header meta lines for a given auction. Returns
@@ -503,32 +610,28 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
     return s;
   };
 
-  // Per business rule: every Praman row reports ASP as the planter,
-  // regardless of which trader actually supplied the lot. This is for the
-  // Praman platform's expected upload format — internal records still keep
-  // the actual trader name on `lots.name`.
-  const aspName    = (cfg && cfg.s_company) || 'AMAZING SPICE PARK PRIVATE LIMITED';
-  const aspGstin   = (cfg && cfg.s_gstin)   || '';
-  // Planter Mobile is the Kerala address phone (kl_phone), since ASP
-  // is registered at the Kerala address. Falls back to s_mobile if
-  // kl_phone is blank.
-  const aspMobile  = (cfg && (cfg.kl_phone || cfg.s_mobile)) || '';
-  const planterDealer = 2; // 2 = Dealer (always, since ASP is the legal seller)
+  // Praman planter identity — derived from the live company config, not
+  // hardcoded. The Praman portal expects a single planter (the registered
+  // legal seller) per upload; for single-company e-Trade that's THIS
+  // company, so we use the central identity resolver.
+  const identity = getCompanyIdentity(cfg);
+  const planterName   = identity.name;
+  const planterGstin  = identity.gstin;
+  const planterMobile = (cfg && (cfg.kl_phone || cfg.tn_phone || cfg.phone)) || '';
+  const planterDealer = 2; // 2 = Dealer (always — registered company is the legal seller)
+  // Lot company short code shown in the per-lot column. Matches the user's
+  // configured short_name / logo code rather than a hardcoded 'ISPL'.
+  const lotCompany = identity.shortName || 'COMPANY';
 
   const lines = [header.join(',')];
   for (const r of rows) {
-    // Per business rule: every Praman row reports ISPL as the lot company
-    // regardless of grade. Earlier rule (Grade 1 → ASP) is no longer applied
-    // since the upload flow now treats all e-Trade lots as ISPL-fronted.
-    const lotCompany = 'ISPL';
-
     lines.push([
       r.lot_no || '',
       lotCompany,
       r.branch || '',
       planterDealer,
-      aspName,
-      aspGstin,
+      planterName,
+      planterGstin,
       r.qty || '',
       r.litre || '',
       r.bags || '',
@@ -538,7 +641,7 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
       '', // Auction Start Price (blank)
       '', // Immature Seeds (blank)
       '', // Moisture Content (blank)
-      aspMobile,
+      planterMobile,
       '', // Youtube link (blank)
     ].map(csvEscape).join(','));
   }
@@ -573,6 +676,10 @@ const EXPORT_TYPES = {
 
 module.exports = {
   EXPORT_TYPES,
+  // Reusable XLSX builder — exposed so other modules (lorry-reports.js etc.)
+  // can route through the same standardized brand band + column-header
+  // styling instead of building their own ExcelJS workbook.
+  createExcelBuffer,
   exportLotSlip, exportLotSlipAfter, exportPramanCSV, exportPriceList,
   exportBankPayment, exportBankPaymentBefore,
   exportPoolerRegister, exportFullFile, exportCollection, exportTradeReport, exportDealerList,

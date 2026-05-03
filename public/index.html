@@ -2997,7 +2997,20 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
 <div class="modal-bg" id="gen-inv-modal"><div class="modal" style="max-width:580px">
   <h2>Generate Sales Invoice(s)</h2>
-  <div class="fg"><label>Sale Type — filters eligible buyers below</label><select id="gi-sale" onchange="loadInvEligibleBuyers()"><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option></select></div>
+  <div class="fg">
+    <label>Sale Type — filters eligible buyers below</label>
+    <select id="gi-sale" onchange="loadInvEligibleBuyers()">
+      <!-- Default option: "All" — shows both local and interstate buyers
+           together. Users can narrow to a single type if needed. Earlier
+           the default was 'L' (Local), which silently hid every buyer
+           whose default_sale was 'I' (interstate) and made the picker
+           appear empty in audits/reports. -->
+      <option value="">All sale types</option>
+      <option value="L">Local (L)</option>
+      <option value="I">Inter-state (I)</option>
+      <option value="E">Export (E)</option>
+    </select>
+  </div>
   <div class="fg">
     <label style="display:flex;justify-content:space-between;align-items:center">
       <span>Buyers <span style="color:var(--text3);font-weight:400">— tick one or more</span></span>

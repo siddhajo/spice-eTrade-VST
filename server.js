@@ -13,6 +13,11 @@ const { EXPORT_TYPES } = require('./exports');
 const { exportPdf: exportAnyPdf } = require('./exports-pdf');
 const { DBF_EXPORTS } = require('./dbf-exports');
 const { REPORTS: LORRY_REPORTS } = require('./lorry-reports');
+// Defensive resolution — see _company-identity-fallback.js. Uses the
+// real getCompanyIdentity from report-formatters.js when available,
+// falls through to an inline fallback otherwise. Fixes
+// "getCompanyIdentity is not a function" on partial deploys.
+const getCompanyIdentity = require('./_company-identity-fallback').resolve();
 const {
   generSalesXML, generSalesIspXML, generSalesAspXML, generIspPurchaseXML,
   generRDPurchaseXML, generURDPurchaseXML, generDebitNoteXML, generLedgerXML,
@@ -2406,11 +2411,30 @@ app.post('/api/purchases/generate/:auctionId', requireInvoiceWrite, (req, res) =
 
 // List eligible sellers for purchase invoices (with GSTIN, amount > 0)
 app.get('/api/purchases/eligible-sellers/:auctionId', requireView, (req, res) => {
+  // A lot is eligible for a Purchase Invoice when it has a GSTIN-bearing
+  // seller. The `cr` column stores GSTINs in two known formats:
+  //   1. "GSTIN.<15-char>" — legacy UI format
+  //   2. "<15-char>"        — bare format from Excel imports / API
+  // Earlier this endpoint only matched format #1 (UPPER(cr) LIKE 'GSTIN%')
+  // and silently excluded every seller whose `cr` was the bare form,
+  // producing the reported "No eligible dealer(s) found" empty state on
+  // installs where dealers were imported via XLSX rather than typed in
+  // through the UI.
+  //
+  // Fix: accept either form. The bare-GSTIN check uses GLOB '[0-9][0-9]*'
+  // (cr starts with two digits — matches the state-code prefix of every
+  // valid GSTIN) plus a length >= 15 guard. Both forms fall through the
+  // same downstream `gstinStateCode` helper so intra/inter logic is
+  // unaffected.
   res.json(getDb().all(
     `SELECT name, COUNT(*) as lot_count, SUM(qty) as total_qty, SUM(amount) as total_amount, MAX(cr) as cr
      FROM lots
      WHERE auction_id = ? AND name IS NOT NULL AND name != ''
-       AND UPPER(cr) LIKE 'GSTIN%' AND amount > 0
+       AND amount > 0
+       AND (
+         UPPER(cr) LIKE 'GSTIN%'
+         OR (cr GLOB '[0-9][0-9]*' AND LENGTH(cr) >= 15)
+       )
      GROUP BY name
      ORDER BY name`,
     [req.params.auctionId]
@@ -2433,9 +2457,18 @@ app.post('/api/purchases/generate-all/:auctionId', requireInvoiceWrite, (req, re
       [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
   }
   
+  // Same dual-format GSTIN filter as the eligible-sellers endpoint —
+  // ensures bare-GSTIN imports aren't silently skipped during batch
+  // generation.
   const sellers = db.all(
     `SELECT DISTINCT name FROM lots
-     WHERE auction_id = ? AND UPPER(cr) LIKE 'GSTIN%' AND amount > 0 AND name IS NOT NULL AND name != ''`,
+     WHERE auction_id = ?
+       AND amount > 0
+       AND name IS NOT NULL AND name != ''
+       AND (
+         UPPER(cr) LIKE 'GSTIN%'
+         OR (cr GLOB '[0-9][0-9]*' AND LENGTH(cr) >= 15)
+       )`,
     [req.params.auctionId]
   );
   
@@ -2558,27 +2591,38 @@ function enrichPurchaseForPDF(invoice, cfg, db, auctionId) {
   if (!invoice.invoiceDate) invoice.invoiceDate = new Date().toLocaleDateString('en-GB');
   if (!invoice.eTradeNo) invoice.eTradeNo = String(auctionId || '');
 
-  // Buyer block — ISPL or ASP depending on active context
+  // Buyer block — populated from the central company identity (which
+  // reads the user's CURRENT settings). Legacy `s_*` / `tn_*` fields are
+  // only used as a fallback when identity is blank, NOT as the primary
+  // source. Inverting the priority is critical: stale `s_company` left
+  // over from the dual-company migration was overriding the user's
+  // configured company name and producing "ASP address" on PDFs even
+  // after the user updated Settings.
+  //
+  // The isASP branch is structurally retained so the BILLED/SHIPPED TO
+  // address can still pick state-specific address lines (Kerala vs Tamil
+  // Nadu) when both are populated.
   const isASP = cfg.business_mode === 'e-Trade' && String(cfg.business_state || '').toUpperCase() === 'KERALA';
   if (!invoice.buyer) {
+    const _ident = getCompanyIdentity(cfg);
     invoice.buyer = isASP ? {
-      name: cfg.s_company || 'AMAZING SPICE PARK PRIVATE LIMITED',
-      address: cfg.s_address1 || '',
-      place: cfg.s_place || '',
-      pin: cfg.s_pin || '',
-      state: cfg.s_state || 'Kerala',
-      st_code: cfg.s_st_code || '32',
-      gstin: cfg.s_gstin || '',
-      pan: cfg.s_pan || cfg.pan || '',
+      name:    _ident.name    || cfg.s_company  || '',
+      address: _ident.address1 || cfg.s_address1 || cfg.kl_address1 || '',
+      place:   cfg.s_place || cfg.kl_place || '',
+      pin:     cfg.s_pin   || cfg.kl_pin   || '',
+      state:   _ident.state    || cfg.s_state || 'Kerala',
+      st_code: _ident.stateCode || cfg.s_st_code || '32',
+      gstin:   _ident.gstin    || cfg.s_gstin || '',
+      pan:     _ident.pan      || cfg.s_pan || cfg.pan || '',
     } : {
-      name: cfg.short_name || cfg.trade_name || 'IDEAL SPICES PRIVATE LIMITED',
-      address: cfg.tn_address1 || '',
-      place: cfg.tn_place || '',
-      pin: cfg.tn_pin || '',
-      state: cfg.tn_state || 'Tamil Nadu',
-      st_code: cfg.tn_st_code || '33',
-      gstin: cfg.tn_gstin || '',
-      pan: cfg.pan || '',
+      name:    _ident.name    || cfg.short_name || cfg.trade_name || '',
+      address: _ident.address1 || cfg.tn_address1 || '',
+      place:   cfg.tn_place || '',
+      pin:     cfg.tn_pin   || '',
+      state:   _ident.state    || cfg.tn_state || 'Tamil Nadu',
+      st_code: _ident.stateCode || cfg.tn_st_code || '33',
+      gstin:   _ident.gstin    || cfg.tn_gstin || '',
+      pan:     _ident.pan      || cfg.pan || '',
     };
   }
   return invoice;

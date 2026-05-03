@@ -61,61 +61,109 @@ function fmtPrice(n) { return fmtIndian(n, 2); }
 // hard-coded ISP defaults if the settings table doesn't exist or returns
 // nothing — useful for export tools that run before the DB is initialized.
 function getCompanyHeader(db) {
-  // Defensive defaults so the header still renders if anything is missing
-  let name = 'IDEAL SPICES PRIVATE LIMITED';
+  // Defensive defaults so the header still renders if anything is missing.
+  // Single-company e-Trade build: we read from `company_settings` only.
+  // The legacy ISP/ASP preset switch + `s_*` sister-company fields were
+  // dropped in v3, so this function reads the canonical keys directly.
+  let name = '';
   let logoFile = 'logo-ispl.png';
   let address1 = '';
   let branch = '';
 
   if (db && typeof db.get === 'function') {
     try {
-      // Determine which preset (ISP vs ASP) is active. Default to ISP.
-      let activeCode = 'ISP';
-      try {
-        const r = db.get(
-          "SELECT value FROM company_preset_meta WHERE key = 'active_preset_code'"
-        );
-        if (r && r.value) activeCode = r.value;
-      } catch (_) {}
+      const get = (k) => {
+        try {
+          const r = db.get('SELECT value FROM company_settings WHERE key = ?', [k]);
+          return r && r.value ? String(r.value) : '';
+        } catch (_) { return ''; }
+      };
+      // Name resolution priority — first non-empty wins:
+      //   1. company_name        — full registered name (Settings → Company)
+      //   2. tally_company_name  — Tally-export name (often the same)
+      //   3. short_name          — short label (e.g. "VST")
+      //   4. hardcoded default   — only if everything's blank
+      name = get('company_name') || get('tally_company_name') || get('short_name') || 'Company';
 
-      // Read short_name + logo for whichever preset is active.
-      // The non-active preset's fields are stored under "s_" prefix (sister).
-      // When active is ISP, use logo + short_name (primary fields).
-      // When active is ASP, use s_logo + s_short_name (sister fields).
-      const isASP = activeCode === 'ASP';
-      const nameKey = isASP ? 's_short_name' : 'short_name';
-      const logoKey = isASP ? 's_logo'        : 'logo';
+      // Logo file: derived from `logo` setting (the user's short logo code,
+      // e.g. "VST", "ISPL"). Convention: lowercased + `.png` extension,
+      // located in /public. Falls back to `logo-ispl.png` only if the
+      // user's logo file is missing on disk (handled below).
+      const logoCode = get('logo').toLowerCase();
+      if (logoCode) logoFile = `logo-${logoCode}.png`;
 
-      const nameRow = db.get('SELECT value FROM company_settings WHERE key = ?', [nameKey]);
-      if (nameRow && nameRow.value) name = nameRow.value;
-
-      const logoRow = db.get('SELECT value FROM company_settings WHERE key = ?', [logoKey]);
-      const logoCode = logoRow && logoRow.value ? String(logoRow.value).toLowerCase() : (isASP ? 'asp' : 'isp');
-      // logo-ispl.png is the actual filename in /public for the ISP preset
-      logoFile = logoCode === 'asp' ? 'logo-asp.png' : 'logo-ispl.png';
-
-      // Brand block shows three lines: company name, address line 1, and
-      // office branch. For ISP we use the Tamil Nadu fields (tn_*); for
-      // ASP we use the sister/Kerala fields (s_address1 + kl_branch).
-      const addrPrefix = isASP ? 's_' : 'tn_';
-      const branchKey = isASP ? 'kl_branch' : 'tn_branch';
-      const a1Row = db.get('SELECT value FROM company_settings WHERE key = ?', [addrPrefix + 'address1']);
-      if (a1Row && a1Row.value) address1 = a1Row.value;
-      const bRow = db.get('SELECT value FROM company_settings WHERE key = ?', [branchKey]);
-      if (bRow && bRow.value) branch = bRow.value;
+      // Address: TN-prefixed in the e-Trade schema (single-state default).
+      // We also accept the bare `address1` key — some installs migrated
+      // values there during cleanup.
+      address1 = get('tn_address1') || get('address1') || '';
+      branch   = get('tn_branch')   || get('branch')   || '';
     } catch (_) {
       // Ignore — fall through to defaults
     }
   }
 
   // Resolve the logo to an absolute path on disk; null if missing.
-  const logoPath = path.join(__dirname, 'public', logoFile);
-  const logoOnDisk = fs.existsSync(logoPath) ? logoPath : null;
+  // Try the user's configured logo first, fall back to `logo-ispl.png`,
+  // then to `logo.png` (a generic fallback some deployments ship).
+  const tryPaths = [
+    logoFile,
+    'logo-ispl.png',
+    'logo.png',
+  ];
+  let logoOnDisk = null;
+  for (const f of tryPaths) {
+    const abs = path.join(__dirname, 'public', f);
+    if (fs.existsSync(abs)) { logoOnDisk = abs; break; }
+  }
 
   // The header object exposes `address1` and `address2` for backward
-  // compatibility with PDF/XLSX renderers — `address2` now carries the
-  // office branch instead of the second address line.
+  // compatibility with PDF/XLSX renderers — `address2` carries the
+  // office branch (single line in the brand band).
   return { name, logoPath: logoOnDisk, address1, address2: branch, branch };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// getCompanyIdentity — central resolver for company name + identity fields.
+//
+// Single source of truth for every export (PDF / XLSX / XML / CSV). Reads
+// from the runtime cfg object (already-flattened company_settings) and
+// returns ALL the fields any downstream renderer needs, with NO hardcoded
+// fallback names — empty strings if a field isn't configured. This way a
+// fresh install renders blank fields rather than stale "IDEAL SPICES" or
+// "AMAZING SPICE PARK" text from the legacy dual-company scaffolding.
+//
+// Field resolution priority (first non-empty wins):
+//   name      : company_name → tally_company_name → short_name
+//   shortName : short_name → logo (uppercased) → first word of name
+//   address1  : tn_address1 → address1 → address
+//   address2  : tn_address2 → address2 → tn_branch → branch
+//   gstin     : gstin → tn_gstin → business_gstin
+//   pan       : pan → tn_pan → business_pan → derived from gstin (positions 3-12)
+//   state     : tn_state → business_state → state (uppercased)
+//   stateCode : tally_state_code → derived from gstin first 2 chars → ''
+//
+// Called at the top of every export. Cheap — pure object lookups, no DB.
+function getCompanyIdentity(cfg) {
+  cfg = cfg || {};
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = cfg[k];
+      if (v != null && String(v).trim() !== '') return String(v).trim();
+    }
+    return '';
+  };
+  const name      = pick('company_name', 'tally_company_name', 'short_name');
+  const logoCode  = pick('logo');
+  const shortName = pick('short_name') || logoCode.toUpperCase() || name.split(/\s+/)[0] || '';
+  const address1  = pick('tn_address1', 'address1', 'address');
+  const address2  = pick('tn_address2', 'address2', 'tn_branch', 'branch');
+  const gstin     = pick('gstin', 'tn_gstin', 'business_gstin');
+  const pan       = pick('pan', 'tn_pan', 'business_pan')
+                  || (gstin && gstin.length >= 12 ? gstin.slice(2, 12) : '');
+  const state     = pick('tn_state', 'business_state', 'state').toUpperCase();
+  const stateCode = pick('tally_state_code')
+                  || (gstin && gstin.length >= 2 ? gstin.slice(0, 2) : '');
+  return { name, shortName, logoCode, address1, address2, gstin, pan, state, stateCode };
 }
 
 // Truncate `text` so doc.widthOfString(out) <= maxWidth, appending an ellipsis
@@ -508,12 +556,14 @@ function writeXlsxCompanyHeader(wb, ws, header, opts) {
         if (ext === '.jpg' || ext === '.jpeg') extension = 'jpeg';
       }
       const imgId = wb.addImage({ buffer: buf, extension });
-      // Anchor the logo within the leftmost portion of the merged cell:
-      // 0-based column 0 → 1, rows 0 → 3. The image overlays the merged cell
-      // but the richText below renders to the right of it (indent compensates).
+      // Anchor the logo with FIXED pixel dimensions (60×60) at the top-left
+      // of the merged brand cell. Using ext.{width,height} instead of the
+      // tl/br fractional anchors prevents the logo from being stretched
+      // when the merged cell is wide. Position uses tl-only — Excel keeps
+      // the image at its natural aspect ratio.
       ws.addImage(imgId, {
-        tl: { col: 0.05, row: 0.05 },
-        br: { col: 0.95, row: 2.95 },
+        tl: { col: 0.05, row: 0.10 },
+        ext: { width: 60, height: 60 },
         editAs: 'oneCell',
       });
     } catch (_) { /* swallow — render without logo if image lookup fails */ }
@@ -533,9 +583,13 @@ function writeXlsxCompanyHeader(wb, ws, header, opts) {
       font: { size: 8, color: { argb: 'FF555555' } },
     });
   }
-  if (header.address2) {
+  // Address line 2 / branch — accept either field name. Some installs
+  // store the office branch under header.branch; older code used
+  // header.address2. The brand band shows whichever is set.
+  const secondLine = header.address2 || header.branch || '';
+  if (secondLine) {
     runs.push({
-      text: '\n' + header.address2,
+      text: '\n' + secondLine,
       font: { size: 8, color: { argb: 'FF555555' } },
     });
   }
@@ -551,7 +605,11 @@ function writeXlsxCompanyHeader(wb, ws, header, opts) {
   };
 
   // ── Middle: report title spanning rows 1-3 of the middle column band ──
-  if (title && midStart <= midEnd) {
+  // When the middle zone is too narrow OR doesn't exist (3-col report),
+  // we instead emit the title as a separate full-width row ABOVE the brand
+  // band. That guarantees the title is always visible and centered.
+  const hasMidRoom = title && midStart <= midEnd;
+  if (hasMidRoom) {
     ws.mergeCells(range(midStart, 1, midEnd, 3));
     const titleCell = ws.getCell(colLetter(midStart) + '1');
     titleCell.value = title;
@@ -583,11 +641,29 @@ function writeXlsxCompanyHeader(wb, ws, header, opts) {
     });
   }
 
+  // ── Title fallback ──
+  // When the middle zone had no room (narrow reports with ≤ 3 columns),
+  // emit the title as a dedicated full-width row immediately below the
+  // brand band. This guarantees the title is always visible and centered.
+  // Returns the next data row, which now sits one row lower.
+  if (title && !hasMidRoom) {
+    // Row 4 is the existing 6pt spacer; we hijack it by making it a
+    // proper title row, then add a NEW spacer row at 5.
+    ws.getRow(4).height = 26;
+    ws.mergeCells(range(1, 4, lastCol, 4));
+    const tCell = ws.getCell('A4');
+    tCell.value = title;
+    tCell.font = { bold: true, size: 14 };
+    tCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(5).height = 6; // spacer
+    return 6; // first data row sits at row 6
+  }
+
   return 5;  // first row available for callers (row 4 is the spacer)
 }
 
 module.exports = {
   fmtMoney, fmtQty, fmtPrice, fmtIndian,
-  getCompanyHeader, drawCompanyHeader,
+  getCompanyHeader, getCompanyIdentity, drawCompanyHeader,
   xlsxNumFmtForHeader, writeXlsxCompanyHeader,
 };

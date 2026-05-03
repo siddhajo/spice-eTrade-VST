@@ -17,6 +17,16 @@ const {
   fmtMoney, fmtQty, fmtPrice,
   getCompanyHeader, drawCompanyHeader,
 } = require('./report-formatters');
+// Defensive identity resolver — see _company-identity-fallback.js for
+// rationale. Decoupled from the destructure above so a stale
+// report-formatters.js doesn't blank `getCompanyIdentity` to undefined.
+const getCompanyIdentity = require('./_company-identity-fallback').resolve();
+// getSettingsFlat returns the cfg object that getCompanyIdentity expects.
+// Loaded lazily inside each report so the module load order doesn't matter.
+function _loadSettings(db) {
+  try { return require('./company-config').getSettingsFlat(db); }
+  catch(_) { return {}; }
+}
 
 // ── Number formatting ────────────────────────────────────────
 // fmtMoney / fmtQty / fmtPrice come from report-formatters.js (Indian comma
@@ -341,6 +351,7 @@ async function collectionXlsx(db, auctionId) {
   const auction = getAuctionHeader(db, auctionId);
   const rows = getCollectionRows(db, auctionId);
   const groups = classifyByState(rows, auction.state);
+  const identity = getCompanyIdentity(_loadSettings(db));
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Collection');
@@ -349,7 +360,7 @@ async function collectionXlsx(db, auctionId) {
   ];
 
   ws.mergeCells('A1:E1');
-  ws.getCell('A1').value = 'IDEAL SPICES PRIVATE LIMITED';
+  ws.getCell('A1').value = identity.name;
   ws.getCell('A1').font = { bold: true, size: 14 };
   ws.getCell('A1').alignment = { horizontal: 'center' };
   ws.mergeCells('A2:E2');
@@ -706,6 +717,7 @@ function getTradeReportData(db, auctionId) {
 
 async function tradeReportXlsx(db, auctionId) {
   const { auction, sortedStates, stats } = getTradeReportData(db, auctionId);
+  const identity = getCompanyIdentity(_loadSettings(db));
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('TradeReport');
@@ -721,7 +733,7 @@ async function tradeReportXlsx(db, auctionId) {
   ];
 
   ws.mergeCells('A1:H1');
-  ws.getCell('A1').value = 'IDEAL SPICES PRIVATE LIMITED';
+  ws.getCell('A1').value = identity.name;
   ws.getCell('A1').font = { bold: true, size: 14 };
   ws.getCell('A1').alignment = { horizontal: 'center' };
 

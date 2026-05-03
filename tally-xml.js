@@ -21,6 +21,12 @@
  */
 
 // ── Indian state code → name (matches FindState in VBA) ──────────
+// Defensive resolver — see _company-identity-fallback.js. Returns a
+// working getCompanyIdentity even if report-formatters.js is missing
+// or older. Avoids "getCompanyIdentity is not a function" on partial
+// deploys when the Tally XML generators run.
+const _getCompanyIdentity = require('./_company-identity-fallback').resolve();
+
 const STATES = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab',
   '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana',
@@ -226,9 +232,13 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   // produces invalid voucher numbers in Tally.
   const _tallyPrefix = String(cfgGet(cfg, 'tally_inv_prefix', '')).trim();
   const _logoCode    = String(cfgGet(cfg, 'logo', '')).trim();
-  const _activePrefix = _tallyPrefix || _logoCode || 'ISP';
+  // Voucher prefix priority: tally_inv_prefix (Tally settings) → logo
+  // (Settings → Company) → identity.shortName (derived) → 'INV' as a
+  // generic last-resort label. Avoids leaking the legacy 'ISP' code
+  // into voucher numbers on installs where logo isn't configured.
+  const _activePrefix = _tallyPrefix || _logoCode || _getCompanyIdentity(cfg).shortName || 'INV';
   const invPrefix = /[/\-]$/.test(_activePrefix) ? _activePrefix : (_activePrefix + '/');
-  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', 'ASP/');
+  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = cfgBool(cfg, 'tally_dispatch_from', true);
   const tcs           = cfgBool(cfg, 'tally_tcs_enabled', false);
@@ -707,7 +717,7 @@ function generSalesAspXML(rows, cfg, opts = {}) {
   const company       = opts.companyName || cfgGet(cfg, 'tally_asp_company_name', 'Amazing Spice Park Private Limited');
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
-  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', 'ASP/');
+  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
 
   // ASP's home-state code (for intra/inter detection w.r.t. the buyer)
@@ -740,7 +750,12 @@ function generSalesAspXML(rows, cfg, opts = {}) {
   const own_place    = cfgGet(cfg, 'tally_dispatch_place', 'NEDUMKANDAM');
   const own_pin      = cfgGet(cfg, 'tally_dispatch_pin', '685553');
   const own_state    = cfgGet(cfg, 'tally_dispatch_state', 'Kerala');
-  const own_company  = cfgGet(cfg, 's_company', cfgGet(cfg, 's_short_name', 'AMAZING SPICE PARK PRIVATE LIMITED'));
+  // Own company name: legacy s_* fields take priority for installs that
+  // imported from the ASP build, but fall back to the central identity
+  // resolver instead of a hardcoded "AMAZING SPICE PARK" string.
+  const own_company  = cfgGet(cfg, 's_company',
+                       cfgGet(cfg, 's_short_name',
+                       _getCompanyIdentity(cfg).name || 'Company'));
 
   let xml = '\n' + startEnvelope(company, 'Vouchers');
 
@@ -995,9 +1010,12 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
   const HSN_Card     = cfgGet(cfg, 'tally_hsn_cardamom',        '09083120');
   const HSN_Gunny    = cfgGet(cfg, 'tally_hsn_gunny',           '63051040');
 
-  // Sister/ASP party identity — fetched from sister-company cfg.
+  // Sister/ASP party identity — fetched from sister-company cfg if
+  // present (legacy ASP installs), else falls back to the central
+  // identity resolver. No hardcoded "AMAZING SPICE PARK" literal.
   const aspName    = cfgGet(cfg, 's_company',
-                       cfgGet(cfg, 's_short_name', 'AMAZING SPICE PARK PRIVATE LIMITED'));
+                       cfgGet(cfg, 's_short_name',
+                       _getCompanyIdentity(cfg).name || 'Company'));
   const aspAddr1   = cfgGet(cfg, 's_address1', cfgGet(cfg, 's_dispatch_address1', ''));
   const aspAddr2   = cfgGet(cfg, 's_address2', cfgGet(cfg, 's_dispatch_address2', ''));
   const aspPlace   = cfgGet(cfg, 's_place',    cfgGet(cfg, 'tally_dispatch_place', 'NEDUMKANDAM'));
@@ -1028,7 +1046,7 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
     // cross-reference. The builder already produced the per-row data
     // including invo and sale='I' implicit; we re-derive the number here
     // exactly like generSalesAspXML does, so the two stay in lockstep.
-    const ainvPrefix  = cfgGet(cfg, 'tally_ainv_prefix', 'ASP/');
+    const ainvPrefix  = cfgGet(cfg, 'tally_ainv_prefix', '');
     const separator   = opts.separator || cfgGet(cfg, 'tally_separator', '/');
     const season      = opts.season    || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
     const sale        = 'I';  // always inter-state for ASP→ISP
@@ -1283,13 +1301,16 @@ function generSalesXML(rows, cfg, opts = {}) {
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
   // Voucher prefix from Logo Code (single source of truth — see the
-  // ISP generator above for rationale).
-  const _logoCode2 = String(cfgGet(cfg, 'logo', 'ISP')).trim() || 'ISP';
+  // ISP generator above for rationale). Falls through to the central
+  // identity resolver's shortName instead of leaking the legacy 'ISP'
+  // literal into voucher numbers.
+  const _logoCode2 = String(cfgGet(cfg, 'logo', '')).trim()
+                  || _getCompanyIdentity(cfg).shortName || 'INV';
   const invPrefix     = /[/\-]$/.test(_logoCode2) ? _logoCode2 : (_logoCode2 + '/');
   // ainvPrefix and amazing are kept as locals so the dead ASP branches
   // below still parse, but `amazing` is force-disabled in this e-Trade-only
   // build — there is no sister-company Tally export here.
-  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', 'ASP/');
+  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
   const amazing       = false;
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = false; // dispatch-from override removed in e-Trade-only build
@@ -1526,8 +1547,10 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
   // Single-company build: intra/inter test uses the configured home state
   // code (cfg.tally_state_code, default 33 = Tamil Nadu).
   const intra      = cfgGet(cfg, 'tally_state_code', '33');
-  // Voucher prefix from Logo Code (single source of truth)
-  const _rdLogoCode = String(cfgGet(cfg, 'logo', 'ISP')).trim() || 'ISP';
+  // Voucher prefix from Logo Code (single source of truth) — falls
+  // through to identity.shortName so we don't leak 'ISP' literal.
+  const _rdLogoCode = String(cfgGet(cfg, 'logo', '')).trim()
+                   || _getCompanyIdentity(cfg).shortName || 'INV';
   const ainvPrefix = /[/\-]$/.test(_rdLogoCode) ? _rdLogoCode : (_rdLogoCode + '/');
   const sStateName = cfgGet(cfg, 'tally_home_state', 'Tamil Nadu');
 
@@ -1843,10 +1866,12 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
   // amazing/ainvPrefix kept as locals so dead ASP branches below still
   // parse; `amazing` is force-disabled in this e-Trade-only build.
   const amazing   = false;
-  // Voucher prefix from Logo Code (single source of truth)
-  const _urdLogoCode = String(cfgGet(cfg, 'logo', 'ISP')).trim() || 'ISP';
+  // Voucher prefix from Logo Code (single source of truth) — falls
+  // through to identity.shortName so we don't leak 'ISP' literal.
+  const _urdLogoCode = String(cfgGet(cfg, 'logo', '')).trim()
+                    || _getCompanyIdentity(cfg).shortName || 'INV';
   const invPrefix = /[/\-]$/.test(_urdLogoCode) ? _urdLogoCode : (_urdLogoCode + '/');
-  const ainvPrefix= cfgGet(cfg, 'tally_ainv_prefix', 'ASP/');
+  const ainvPrefix= cfgGet(cfg, 'tally_ainv_prefix', '');
   const sStateName= cfgGet(cfg, 'tally_urd_state', 'Kerala');
 
   const Auction_LDR    = cfgGet(cfg, 'tally_purchase_auction', 'Auction Purchase Account');
@@ -2394,7 +2419,11 @@ function buildSalesAspRows(db, auctionId, cfg) {
   `);
 
   // ISP party identity — the ASP voucher's customer is always ISP.
-  const ispPartyName = cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'IDEAL SPICES PRIVATE LIMITED'));
+  // In single-company e-Trade, this defaults to the central identity
+  // (no hardcoded "IDEAL SPICES" fallback).
+  const ispPartyName = cfgGet(cfg, 'tally_company_name',
+                       cfgGet(cfg, 'short_name',
+                       _getCompanyIdentity(cfg).name || 'Company'));
   const ispAddr1     = cfgGet(cfg, 'tn_address1', '');
   const ispAddr2     = cfgGet(cfg, 'tn_address2', '');
   const ispBranch    = cfgGet(cfg, 'tn_branch', cfgGet(cfg, 'br1', ''));

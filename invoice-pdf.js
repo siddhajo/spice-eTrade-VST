@@ -5,6 +5,11 @@
 
 const PDFDocument = require('pdfkit');
 const { amountToWords } = require('./amount-words');
+// Defensive resolution — uses the real getCompanyIdentity from
+// report-formatters.js when available, falls through to a shared inline
+// fallback otherwise. Fixes "getCompanyIdentity is not a function" when
+// a partial deploy ships an older report-formatters.js without the export.
+const getCompanyIdentity = require('./_company-identity-fallback').resolve();
 
 // Shared flag-reader: cfg flags can be `true|false` (booleans), `'true'|'false'`
 // (strings, from JSON storage), or `undefined`/empty (treat as defaultOn).
@@ -197,15 +202,20 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
 
   // Body
   const buyerLines = [];
+  // Defensive fallback when invoiceData.buyer wasn't supplied — uses the
+  // configured company identity rather than a hardcoded sister-company
+  // name. In practice the buyer is always passed in; this branch only
+  // fires for malformed callers.
+  const _ident = getCompanyIdentity(cfg);
   const buyer = invoiceData.buyer || {
-    name: cfg.s_company || 'AMAZING SPICE PARK PRIVATE LIMITED',
-    address: cfg.s_address1 || '',
-    place: cfg.s_place || '',
-    pin: cfg.s_pin || '',
-    state: cfg.s_state || '',
-    st_code: cfg.s_st_code || '',
-    gstin: cfg.s_gstin || '',
-    pan: cfg.s_pan || cfg.pan || '',
+    name: _ident.name,
+    address: _ident.address1,
+    place: '',
+    pin: '',
+    state: _ident.state,
+    st_code: _ident.stateCode,
+    gstin: _ident.gstin,
+    pan: _ident.pan,
   };
   buyerLines.push((buyer.name || '').toUpperCase());
   const buyerAddr = [buyer.address, buyer.place ? 'DOOR No.650, ' + buyer.place : ''].filter(Boolean).join(', ').toUpperCase();
@@ -892,30 +902,35 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const blockLabel = isPurchaseView ? 'Seller (Bill from)' : 'Buyer (Bill to)';
   doc.font('Helvetica').fontSize(7).text(blockLabel, leftX + 3, by); by += 9;
 
-  // Entity displayed in this block:
-  //   Purchase view (ASP sales mirrored)  → ASP sister company (seller)
-  //   ASP sales invoice (normal)          → ISP (the buyer in ASP→ISP flow)
-  //   ISP sales invoice                   → external customer
+  // Entity displayed in this block. In single-company e-Trade the
+  // isPurchaseView / isASP branches are dead code (no sister company),
+  // so both fall through to the configured company identity. We keep
+  // the structure so a future multi-company restoration is easier.
+  //
+  // Priority is identity-first, legacy s_*/tn_* fields fallback. This
+  // ensures stale ASP/ISP values left over from migrations don't leak
+  // into BILLED TO / SHIPPED TO blocks on PDFs.
+  const _identBT = getCompanyIdentity(cfg);
   let billTo;
   if (isPurchaseView) {
     billTo = {
-      name:  cfg.s_company || 'AMAZING SPICE PARK PRIVATE LIMITED',
-      add1:  cfg.s_address1 || '',
-      add2:  cfg.s_address2 || '',
-      pla:   cfg.s_place || '',
-      gstin: cfg.s_gstin || '',
-      state: cfg.s_state || 'KERALA',
-      stCode: cfg.s_st_code || '32',
+      name:   _identBT.name      || cfg.s_company   || '',
+      add1:   _identBT.address1  || cfg.s_address1  || '',
+      add2:   _identBT.address2  || cfg.s_address2  || '',
+      pla:    cfg.s_place || '',
+      gstin:  _identBT.gstin     || cfg.s_gstin     || '',
+      state:  _identBT.state     || cfg.s_state     || 'KERALA',
+      stCode: _identBT.stateCode || cfg.s_st_code   || '32',
     };
   } else if (isASP) {
     billTo = {
-      name:  cfg.short_name || cfg.trade_name || 'IDEAL SPICES PRIVATE LIMITED',
-      add1:  cfg.tn_address1 || '',
-      add2:  cfg.tn_address2 || '',
-      pla:   cfg.tn_place || '',
-      gstin: cfg.tn_gstin || '',
-      state: cfg.tn_state || 'TAMIL NADU',
-      stCode: cfg.tn_st_code || '33',
+      name:   _identBT.name      || cfg.short_name  || cfg.trade_name || '',
+      add1:   _identBT.address1  || cfg.tn_address1 || '',
+      add2:   _identBT.address2  || cfg.tn_address2 || '',
+      pla:    cfg.tn_place || '',
+      gstin:  _identBT.gstin     || cfg.tn_gstin    || '',
+      state:  _identBT.state     || cfg.tn_state    || 'TAMIL NADU',
+      stCode: _identBT.stateCode || cfg.tn_st_code  || '33',
     };
   } else {
     billTo = {
@@ -1553,9 +1568,11 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // "for COMPANY NAME" right-aligned
   // In purchase view, the issuer header is ISPL but the signatory block
   // represents the SELLING company (ASP) — whose bank received the payment
-  // and whose authorised signatory certifies the sale.
+  // and whose authorised signatory certifies the sale. In single-company
+  // e-Trade, isPurchaseView is always false; we use the configured
+  // identity as the sole source rather than a hardcoded sister name.
   const forCompanyName = isPurchaseView
-    ? (cfg.s_company || 'AMAZING SPICE PARK PRIVATE LIMITED')
+    ? (cfg.s_company || getCompanyIdentity(cfg).name)
     : (co.name || '');
   doc.font('Helvetica-Bold').fontSize(8).text(`for ${forCompanyName}`, bkX, bky, { width: bkInnerW, align: 'right' });
   // Authorised Signatory at bottom-right of footer
@@ -1641,17 +1658,25 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
     } catch (_) { /* fall through silently */ }
   }
   doc.font('Helvetica-Bold').fontSize(11);
-  doc.text(cfg.s_company || 'AMAZING SPICE PARK PRIVATE LIMITED', x0, y, { width: W, align: 'center' });
+  // Header letterhead — single-company build always uses the configured
+  // identity. The legacy `cfg.s_*` (sister-company) fields aren't
+  // populated in fresh e-Trade installs; we keep them as primary lookups
+  // for backwards-compat with imported legacy data, but fall back to the
+  // central identity rather than hardcoded "AMAZING SPICE PARK".
+  const _idLetterhead = getCompanyIdentity(cfg);
+  doc.text(cfg.s_company || _idLetterhead.name, x0, y, { width: W, align: 'center' });
   y += 13;
 
   doc.font('Helvetica').fontSize(8);
-  const addr1 = (cfg.s_address1 || '').toUpperCase();
+  const addr1 = (cfg.s_address1 || _idLetterhead.address1 || '').toUpperCase();
   const addr2Bits = [
     (cfg.s_place || '').toUpperCase(),
     (cfg.s_pin ? '-' + cfg.s_pin : ''),
-    (cfg.s_state ? (cfg.s_state.toUpperCase() + ' CODE:' + (cfg.s_st_code || '')) : '')
+    (cfg.s_state
+      ? (cfg.s_state.toUpperCase() + ' CODE:' + (cfg.s_st_code || ''))
+      : (_idLetterhead.state ? (_idLetterhead.state + ' CODE:' + _idLetterhead.stateCode) : ''))
   ].filter(Boolean).join(' ').trim();
-  const mobile = cfg.s_mobile || cfg.mobile || '';
+  const mobile = cfg.s_mobile || cfg.mobile || cfg.tn_phone || '';
   const addr2Full = addr2Bits + (mobile ? ' MOBILE:' + mobile : '');
   doc.text(addr1, x0, y, { width: W, align: 'center' }); y += 10;
   doc.text(addr2Full, x0, y, { width: W, align: 'center' }); y += 10;
@@ -1956,7 +1981,7 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
 
   // ── "for COMPANY" right-aligned ──
   doc.fontSize(9).font('Helvetica-Bold');
-  doc.text('for ' + (cfg.s_company || 'AMAZING SPICE PARK PVT LTD'), x0, y, { width: W - 6, align: 'right' });
+  doc.text('for ' + (cfg.s_company || getCompanyIdentity(cfg).name || 'Company'), x0, y, { width: W - 6, align: 'right' });
   y += 30;
 
   // ── Signatures ──

@@ -21,6 +21,11 @@ const {
   getCompanyHeader, drawCompanyHeader,
   writeXlsxCompanyHeader,
 } = require('./report-formatters');
+// Lazy import of the shared XLSX builder — `exports.js` itself doesn't
+// pull in `lorry-reports.js`, so a top-level require is safe (no cycle).
+// We use this to migrate the flat reports (TruckList, LotSlipCode) onto
+// the same standardized template every other Excel export uses.
+const { createExcelBuffer } = require('./exports');
 
 // ── Helpers ──────────────────────────────────────────────────
 function fmtDateDMY(iso) {
@@ -142,71 +147,50 @@ async function lotSlipCodeXlsx(db, auctionId) {
   const auction = getAuctionHeader(db, auctionId);
   const rows    = getLotSlipRows(db, auctionId);
 
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('LotSlipCode');
-  ws.columns = [
-    { width: 8 },  // Lot
-    { width: 8 },  // Bags
-    { width: 12 }, // Kilos
-    { width: 12 }, // Price
-    { width: 14 }, // Bidder
-    { width: 8 },  // Lot (repeated, for matching the PDF carbon-copy layout)
-  ];
+  // Reshape rows for the helper. We duplicate `lot` into a second key
+  // (`lot2`) so the right-side mirror column matches the carbon-copy PDF
+  // layout while still going through the standard column-key pipeline.
+  const dataRows = rows.map(r => ({
+    lot:    r.lot,
+    bags:   r.bags,
+    kilos:  Number(r.kilos),
+    price:  Number(r.price),
+    bidder: r.bidder,
+    lot2:   r.lot,
+  }));
+  const totals = dataRows.reduce(
+    (acc, r) => ({
+      bags:  acc.bags  + (Number(r.bags)  || 0),
+      kilos: acc.kilos + (Number(r.kilos) || 0),
+    }),
+    { bags:0, kilos:0 }
+  );
 
-  // Three-column brand band.
-  const startRow = writeXlsxCompanyHeader(wb, ws, getCompanyHeader(db), {
-    colCount: 6,
-    title: 'LOT SLIP CODE',
-    metaLines: [
-      `e-TRADE No: ${auction.ano}`,
-      `Date: ${fmtDateDMY(auction.date)}`,
+  return createExcelBuffer(
+    'LotSlipCode',
+    [
+      { key:'lot',    header:'Lot',    width: 8,  align:'center' },
+      { key:'bags',   header:'Bags',   width: 8,  align:'right'  },
+      { key:'kilos',  header:'Kilos',  width: 12, numFmt:'#,##0.000' },
+      { key:'price',  header:'Price',  width: 12, numFmt:'#,##0.00' },
+      { key:'bidder', header:'Bidder', width: 14, align:'center' },
+      { key:'lot2',   header:'Lot',    width: 8,  align:'center' },
     ],
-  });
-
-  const head = ws.getRow(startRow);
-  ['Lot', 'Bags', 'Kilos', 'Price', 'Bidder', 'Lot'].forEach((h, i) => {
-    head.getCell(i + 1).value = h;
-  });
-  head.font = { bold: true };
-  head.eachCell((c, ci) => {
-    if (ci > 6) return;
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
-    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    c.alignment = { horizontal: 'center' };
-  });
-
-  let totBag = 0, totKilo = 0;
-  rows.forEach(r => {
-    const row = ws.addRow([
-      r.lot,
-      r.bags,
-      Number(r.kilos),
-      Number(r.price),
-      r.bidder,
-      r.lot,           // repeat the lot number on the right (matches PDF)
-    ]);
-    row.getCell(2).alignment = { horizontal: 'right' };
-    row.getCell(3).alignment = { horizontal: 'right' };
-    row.getCell(3).numFmt = '#,##0.000';
-    row.getCell(4).alignment = { horizontal: 'right' };
-    row.getCell(4).numFmt = '#,##0.00';
-    row.getCell(5).alignment = { horizontal: 'center' };
-    row.getCell(6).alignment = { horizontal: 'center' };
-    totBag  += Number(r.bags)  || 0;
-    totKilo += Number(r.kilos) || 0;
-  });
-
-  // Total row — Bags and Kilos totals, no Price/Bidder/Lot totals
-  // (matches the PDF which only sums BAG and QTY).
-  const tot = ws.addRow(['Total', totBag, totKilo, '', '', '']);
-  tot.font = { bold: true };
-  tot.getCell(3).numFmt = '#,##0.000';
-  tot.eachCell(c => {
-    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
-  });
-
-  return wb.xlsx.writeBuffer();
+    dataRows,
+    {
+      db,
+      title: 'LOT SLIP CODE',
+      metaLines: [
+        `e-TRADE No: ${auction.ano}`,
+        `Date: ${fmtDateDMY(auction.date)}`,
+      ],
+      grandTotal: {
+        // Place the literal 'Total' string in the lot column (matches the
+        // pre-refactor layout — lot column is left-most, label-friendly).
+        values: { lot: 'Total', bags: totals.bags, kilos: totals.kilos },
+      },
+    }
+  );
 }
 
 // PDF — carbon-copy layout (two identical halves side-by-side per page)
@@ -392,75 +376,51 @@ async function truckListXlsx(db, auctionId) {
   const auction = getAuctionHeader(db, auctionId);
   const rows = getTruckListRows(db, auctionId);
 
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('TruckList');
-  ws.columns = [
-    { width: 8 },  // SL.NO
-    { width: 8 },  // LOT
-    { width: 8 },  // BAG
-    { width: 12 }, // CODE
-    { width: 14 }, // QTY
-    { width: 18 }, // AMOUNT
-  ];
+  // Map raw rows to the column-key shape createExcelBuffer expects.
+  // Sequential SL.NO is added here so we don't have to extend the helper
+  // with an "auto-index" feature for one report.
+  const dataRows = rows.map((r, idx) => ({
+    sl:     idx + 1,
+    lot:    r.lot_count,
+    bag:    r.bag,
+    code:   r.code,
+    qty:    Number(r.qty),
+    amount: Number(r.amount),
+  }));
+  const totals = dataRows.reduce(
+    (acc, r) => ({
+      lot: acc.lot + (Number(r.lot) || 0),
+      bag: acc.bag + (Number(r.bag) || 0),
+      qty: acc.qty + (Number(r.qty) || 0),
+      amount: acc.amount + (Number(r.amount) || 0),
+    }),
+    { lot:0, bag:0, qty:0, amount:0 }
+  );
 
-  // Three-column brand band.
-  const startRow = writeXlsxCompanyHeader(wb, ws, getCompanyHeader(db), {
-    colCount: 6,
-    title: 'TRUCK LIST',
-    metaLines: [
-      `e-TRADE No: ${auction.ano}`,
-      `Date: ${fmtDateDMY(auction.date)}`,
+  return createExcelBuffer(
+    'TruckList',
+    [
+      { key:'sl',     header:'SL.NO',  width: 8,  align:'center' },
+      { key:'lot',    header:'LOT',    width: 8,  align:'right'  },
+      { key:'bag',    header:'BAG',    width: 8,  align:'right'  },
+      { key:'code',   header:'CODE',   width: 12, align:'center' },
+      { key:'qty',    header:'QTY',    width: 14, numFmt:'#,##0.000' },
+      { key:'amount', header:'AMOUNT', width: 18, numFmt:'#,##,##0.00' },
     ],
-  });
-
-  const head = ws.getRow(startRow);
-  ['SL.NO', 'LOT', 'BAG', 'CODE', 'QTY', 'AMOUNT'].forEach((h, i) => {
-    head.getCell(i + 1).value = h;
-  });
-  head.font = { bold: true };
-  head.eachCell((c, ci) => {
-    if (ci > 6) return;
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
-    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    c.alignment = { horizontal: 'center' };
-  });
-
-  let tLot = 0, tBag = 0, tQty = 0, tAmt = 0;
-  rows.forEach((r, idx) => {
-    const row = ws.addRow([
-      idx + 1,           // SL.NO (sequential)
-      r.lot_count,       // LOT (count of lots in this truck/code)
-      r.bag,
-      r.code,
-      Number(r.qty),
-      Number(r.amount),
-    ]);
-    row.getCell(1).alignment = { horizontal: 'center' };
-    row.getCell(2).alignment = { horizontal: 'right' };
-    row.getCell(3).alignment = { horizontal: 'right' };
-    row.getCell(4).alignment = { horizontal: 'center' };
-    row.getCell(5).alignment = { horizontal: 'right' };
-    row.getCell(5).numFmt = '#,##0.000';
-    row.getCell(6).alignment = { horizontal: 'right' };
-    row.getCell(6).numFmt = '#,##,##0.00';
-
-    tLot += Number(r.lot_count) || 0;
-    tBag += Number(r.bag) || 0;
-    tQty += Number(r.qty) || 0;
-    tAmt += Number(r.amount) || 0;
-  });
-
-  const tot = ws.addRow(['', tLot, tBag, 'TOTAL', tQty, tAmt]);
-  tot.font = { bold: true };
-  tot.getCell(5).numFmt = '#,##0.000';
-  tot.getCell(6).numFmt = '#,##,##0.00';
-  tot.getCell(4).alignment = { horizontal: 'center' };
-  tot.eachCell(c => {
-    c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
-  });
-
-  return wb.xlsx.writeBuffer();
+    dataRows,
+    {
+      db,
+      title: 'TRUCK LIST',
+      metaLines: [
+        `e-TRADE No: ${auction.ano}`,
+        `Date: ${fmtDateDMY(auction.date)}`,
+      ],
+      grandTotal: {
+        // Place "TOTAL" label in CODE column (matches the pre-refactor layout).
+        values: { lot: totals.lot, bag: totals.bag, code: 'TOTAL', qty: totals.qty, amount: totals.amount },
+      },
+    }
+  );
 }
 
 async function truckListPdf(db, auctionId) {
