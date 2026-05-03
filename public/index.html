@@ -376,8 +376,20 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 .side-group{margin-bottom:18px}
 .side-group-lbl{
   font-size:10.5px;font-weight:700;color:#7A6B58;text-transform:uppercase;
-  letter-spacing:1.2px;padding:0 12px 8px;margin-top:4px
+  letter-spacing:1.2px;padding:0 12px 8px;margin-top:4px;
+  cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;
+  transition:color .15s
 }
+.side-group-lbl:hover{color:var(--spice-saffron)}
+/* Chevron flips when group is collapsed via .side-group.section-collapsed */
+.side-group-lbl::before{
+  content:'▼';font-size:8px;display:inline-block;transition:transform .2s;
+  color:var(--spice-text-hint)
+}
+.side-group.section-collapsed .side-group-lbl::before{transform:rotate(-90deg)}
+/* Hide the items when section is collapsed — pure CSS, no JS height calc.
+   Group label stays visible as the click target. */
+.side-group.section-collapsed .side-item{display:none}
 .side-item{
   display:flex;align-items:center;gap:12px;
   padding:12px 14px;border-radius:10px;cursor:pointer;
@@ -398,20 +410,50 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
    from 244px → 60px, labels and group headers fade out, and tooltips
    appear on hover so the user can still read what each icon does.
    Visible only on desktop (the existing < 900px breakpoint already
-   uses an off-canvas drawer and doesn't need icon-only). */
-.sidebar.collapsed{width:60px;padding:20px 6px}
-.sidebar.collapsed .side-group-lbl{display:none}
-.sidebar.collapsed .side-item{justify-content:center;padding:11px 0;gap:0;position:relative}
-.sidebar.collapsed .side-item > *:not(svg){
-  /* Hide everything that isn't the icon — labels collapse without affecting flow */
+   uses an off-canvas drawer and doesn't need icon-only).
+
+   Two trigger paths to avoid flash-of-expanded-sidebar:
+     html.sidebar-collapsed .sidebar  → applied pre-paint (in <head>)
+     .sidebar.collapsed                → applied/toggled at runtime
+   Both selectors share the same rule body via comma-grouping.
+
+   Critical: text labels inside .side-item are bare TEXT NODES, not
+   wrapped in spans. The previous `> *:not(svg)` selector only hit
+   child elements, leaving the text visible. We collapse the text by
+   applying `font-size:0` directly on the button — text nodes vanish —
+   and explicitly re-set svg width/height so icons keep their size. */
+.sidebar.collapsed,
+html.sidebar-collapsed .sidebar{width:60px;padding:20px 6px}
+.sidebar.collapsed .side-group-lbl,
+html.sidebar-collapsed .sidebar .side-group-lbl{display:none}
+.sidebar.collapsed .side-item,
+html.sidebar-collapsed .sidebar .side-item{
+  justify-content:center;padding:11px 0;gap:0;position:relative;
+  /* Collapse all child text — text nodes have no element to target.
+     font-size:0 on the parent kills text rendering width and visibility. */
+  font-size:0;line-height:0
+}
+/* Re-assert SVG sizes so icons survive the parent's font-size:0 */
+.sidebar.collapsed .side-item svg,
+html.sidebar-collapsed .sidebar .side-item svg{
+  width:18px;height:18px;font-size:initial;line-height:1
+}
+/* Span/text element children — explicitly hidden as well so no stray
+   inline content escapes the font-size:0 rule (e.g. a future <span>
+   label wrapper would otherwise need its own rule). */
+.sidebar.collapsed .side-item > *:not(svg),
+html.sidebar-collapsed .sidebar .side-item > *:not(svg){
   width:0;overflow:hidden;white-space:nowrap;opacity:0;font-size:0
 }
-/* Tooltip on hover when collapsed — reveals the label as a floating chip */
-.sidebar.collapsed .side-item:hover::after{
+/* Tooltip on hover when collapsed — reveals the label as a floating chip.
+   We re-establish font-size on the ::after so the tooltip text is readable
+   despite the parent's font-size:0. */
+.sidebar.collapsed .side-item:hover::after,
+html.sidebar-collapsed .sidebar .side-item:hover::after{
   content:attr(data-tab);
   position:absolute;left:64px;top:50%;transform:translateY(-50%);
   background:var(--spice-pepper);color:#fff;padding:6px 12px;
-  border-radius:6px;font-size:13px;font-weight:500;white-space:nowrap;
+  border-radius:6px;font-size:13px;line-height:1.2;font-weight:500;white-space:nowrap;
   box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:30;
   text-transform:capitalize;letter-spacing:.2px;pointer-events:none
 }
@@ -424,7 +466,8 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 }
 .sb-collapse-btn:hover{background:rgba(255,255,255,.1);color:#fff}
 .sb-collapse-btn svg{width:18px;height:18px;transition:transform .2s}
-.sidebar.collapsed .sb-collapse-btn svg{transform:rotate(180deg)}
+.sidebar.collapsed .sb-collapse-btn svg,
+html.sidebar-collapsed .sidebar .sb-collapse-btn svg{transform:rotate(180deg)}
 /* When collapsed, give the body a CSS variable hook for content offset */
 .sidebar{transition:width .2s ease}
 .sidebar-overlay{
@@ -1321,6 +1364,24 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
      the app fully self-contained on Railway (no build step needed).
      Pinned version for stability — bump only after testing. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<!-- Pre-paint sidebar-collapse state. Runs synchronously in <head> so the
+     `sidebar-collapsed` class is on <html> BEFORE first paint — eliminates
+     the flash-of-expanded-sidebar problem that the body-level IIFE had
+     (it ran after the sidebar was visible for one frame).
+     Default: COLLAPSED. localStorage 'sidebarCollapsed':
+       null  → first visit → collapsed (default)
+       '1'   → user kept collapsed
+       '0'   → user expanded → leave open -->
+<script>
+(function () {
+  try {
+    var saved = localStorage.getItem('sidebarCollapsed');
+    if (saved !== '0') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  } catch (e) { /* localStorage may be blocked — fall through */ }
+})();
+</script>
 </head>
 <body>
 <div id="login">
@@ -1736,11 +1797,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by name, phone, GSTIN, PAN, place..." oninput="searchTraders(this.value)"></div>
           <button class="btn btn-a" onclick="document.getElementById('imp-traders').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('traders')">Download Template</button>
+          <button id="seller-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('seller')">🗑 Delete Selected <span id="seller-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           <button class="needs-delete-all btn" style="background:#c0392b;color:#fff" onclick="deleteAll('traders','Sellers')">Delete All</button>
           <input type="file" id="imp-traders" accept=".xlsx,.xls" style="display:none" onchange="importTraders(event)">
         </div>
         <div id="trader-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
-        <div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>CR/GSTIN</th><th>PAN</th><th>Phone</th><th>Place · State</th><th>Bank</th><th>Actions</th></tr></thead><tbody id="traders-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Name</th><th>CR/GSTIN</th><th>PAN</th><th>Phone</th><th>Place · State</th><th>Bank</th><th>Actions</th></tr></thead><tbody id="traders-list"></tbody></table></div>
       </div>
     </div>
 
@@ -1752,11 +1814,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by name, phone, GSTIN, PAN, TI..." oninput="searchBuyers(this.value)"></div>
           <button class="btn btn-a" onclick="document.getElementById('imp-buyers').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('buyers')">Download Template</button>
+          <button id="buyer-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('buyer')">🗑 Delete Selected <span id="buyer-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           <button class="needs-delete-all btn" style="background:#c0392b;color:#fff" onclick="deleteAll('buyers','Buyers')">Delete All</button>
           <input type="file" id="imp-buyers" accept=".xlsx,.xls" style="display:none" onchange="importBuyers(event)">
         </div>
         <div id="buyer-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
-        <div style="overflow-x:auto"><table><thead><tr><th>BUYER</th><th>Code</th><th>Trade Name</th><th>GSTIN</th><th>PAN</th><th>Phone</th><th>TI</th><th>Place · State</th><th>Sale</th><th>Actions</th></tr></thead><tbody id="buyers-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>BUYER</th><th>Code</th><th>Trade Name</th><th>GSTIN</th><th>PAN</th><th>Phone</th><th>TI</th><th>Place · State</th><th>Sale</th><th>Actions</th></tr></thead><tbody id="buyers-list"></tbody></table></div>
       </div>
     </div>
 
@@ -1764,12 +1827,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <div class="tc" id="tc-auctions">
       <div class="card">
         <h2>Auctions / Trades <button class="btn btn-g" onclick="openAuctionAdd()">+ New Auction</button></h2>
-        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-a" onclick="showModal('import-auction-modal')">Import Lots from XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('auctions')">Download Template</button>
+          <button id="trade-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('trade')">🗑 Delete Selected <span id="trade-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
         </div>
         <div id="auction-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
-        <div style="overflow-x:auto"><table><thead><tr><th>Trade No</th><th>Date</th><th>Type</th><th>Lots</th><th>Actions</th></tr></thead><tbody id="auctions-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Trade No</th><th>Date</th><th>Type</th><th>Lots</th><th>Actions</th></tr></thead><tbody id="auctions-list"></tbody></table></div>
       </div>
     </div>
 
@@ -1828,11 +1892,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
+            <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('price-import-modal')">📥 Price Import</button>
           </div>
         </div>
 
-        <div style="overflow-x:auto"><table><thead><tr><th>Lot</th><th>Name</th><th>Branch</th><th>Bags</th><th>Qty</th><th>Price</th><th>Amount</th><th>Buyer</th><th>PurAmt</th><th>Payable</th><th>Actions</th></tr></thead><tbody id="lots-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Lot</th><th>Name</th><th>Branch</th><th>Bags</th><th>Qty</th><th>Price</th><th>Amount</th><th>Buyer</th><th>PurAmt</th><th>Payable</th><th>Actions</th></tr></thead><tbody id="lots-list"></tbody></table></div>
       </div>
     </div>
 
@@ -2144,6 +2209,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <!-- Print group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedInvoices()" title="Print all ticked invoices">🖨 Print Selected</button>
+            <button id="inv-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- ASP-only: Print Selected Purchase. Hidden outside ASP context.
                  Visibility toggled by applyAspContextVisibility() at load + state switch. -->
             <button id="btn-print-asp-purchase" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="printSelectedPurchaseFromInvoices()" title="Print purchase-side mirror PDF for all ticked invoices (ASP context only)">🖨 Print Selected Purchase</button>
@@ -2218,6 +2284,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedPurchases()" title="Print all ticked purchase invoices">🖨 Print Selected</button>
+            <button id="pur-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPurchases()" title="Delete all ticked purchase invoices">🗑 Delete Selected <span id="pur-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
@@ -2479,6 +2546,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedBills()" title="Print all ticked bills">🖨 Print Selected</button>
+            <button id="bill-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedBills()" title="Delete all ticked bills">🗑 Delete Selected <span id="bill-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
@@ -2494,7 +2562,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <div class="tc" id="tc-debit">
       <div class="card">
         <h2>Debit Notes <span style="font-weight:400;font-size:12px;color:var(--text3)">For discounts/adjustments on sales invoices</span></h2>
-        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
           <!-- Generate Debit Note: prompts for ONE purchase invoice number;
                creates DNs for every sales invoice tied to that purchase's
                trade. Idempotent skip on already-DN'd invoices. -->
@@ -2503,9 +2571,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
                the system and generates DNs across ALL trades. Confirm
                required because this can create hundreds of rows. -->
           <button class="btn btn-a" onclick="showModal('gen-debit-bulk-modal')">Generate All</button>
+          <!-- Bulk actions on ticked rows. Hidden until at least one row
+               is selected; the count badge updates live as boxes toggle. -->
+          <button id="dn-bulk-print" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedDebitNotes()" title="Print all ticked debit notes as one combined PDF">🖨 Print Selected <span id="dn-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+          <button id="dn-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedDebitNotes()" title="Delete all ticked debit notes">🗑 Delete Selected</button>
           <button class="needs-delete-all btn" style="background:#c0392b;color:#fff;margin-left:auto" onclick="deleteAll('debit-notes','Debit Notes')">Delete All</button>
         </div>
-        <div style="overflow-x:auto"><table><thead><tr><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
       </div>
     </div>
 
@@ -3630,7 +3702,11 @@ const ICONS={
   revert:'<svg viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>',
   clone:'<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   // Purchase-view icon: shopping receipt with a down-arrow (outgoing to inbound flip)
-  purchase:'<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/><path d="M12 12v5M9 15l3 3 3-3"/></svg>'
+  purchase:'<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/><path d="M12 12v5M9 15l3 3 3-3"/></svg>',
+  // Printer icon — paper coming out of a printer body. Used on the
+  // Debit Note row actions and other places that produce a downloadable
+  // PDF for printing.
+  print:'<svg viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>'
 };
 function iconBtn(kind,title,onclick){
   // Map icon kinds to permission classes so per-row action buttons are
@@ -4037,6 +4113,39 @@ function go(tab){
   // Auto-close sidebar on mobile after selection
   if(window.innerWidth<=900){const sb=document.getElementById('sidebar');const ov=document.getElementById('sb-overlay');if(sb)sb.classList.remove('open');if(ov)ov.classList.remove('open')}
 }
+// Click on a side-group label toggles its "section-collapsed" class —
+// hides the items beneath, leaves the label as a clickable header. State
+// persists per group label text, so reloads remember which sections the
+// user closed. Only active when the sidebar is FULL-width: in collapsed
+// (icon-only) mode the labels are hidden anyway, so per-group collapse
+// has no meaning.
+(function wireSideGroupCollapse(){
+  // Read the persisted set of collapsed group names. Falls back to an
+  // empty set when nothing's been saved or when the JSON is malformed.
+  let collapsedGroups = new Set();
+  try {
+    const raw = localStorage.getItem('sideGroupsCollapsed');
+    if (raw) collapsedGroups = new Set(JSON.parse(raw));
+  } catch(e){}
+  const persist = () => {
+    try { localStorage.setItem('sideGroupsCollapsed', JSON.stringify([...collapsedGroups])); } catch(e){}
+  };
+  // Apply persisted state on DOM ready, then attach click handlers.
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.side-group').forEach(group => {
+      const lbl = group.querySelector('.side-group-lbl');
+      if (!lbl) return;
+      const name = (lbl.textContent || '').trim();
+      if (collapsedGroups.has(name)) group.classList.add('section-collapsed');
+      lbl.addEventListener('click', () => {
+        const nowCollapsed = group.classList.toggle('section-collapsed');
+        if (nowCollapsed) collapsedGroups.add(name);
+        else collapsedGroups.delete(name);
+        persist();
+      });
+    });
+  });
+})();
 function toggleSidebar(){
   document.getElementById('sidebar').classList.toggle('open');
   document.getElementById('sb-overlay').classList.toggle('open');
@@ -4049,20 +4158,38 @@ function toggleSidebar(){
 function toggleSidebarCollapse(){
   const sb = document.getElementById('sidebar');
   if (!sb) return;
+  // Toggle BOTH places: the sidebar's own .collapsed class (legacy
+  // behaviour many other CSS rules might depend on) AND the html-level
+  // .sidebar-collapsed class (used by the head-level pre-paint script
+  // and the new doubled-up CSS rules). Keeping them in sync means a
+  // future stylesheet edit can target either selector with confidence.
   const wasCollapsed = sb.classList.toggle('collapsed');
+  document.documentElement.classList.toggle('sidebar-collapsed', wasCollapsed);
   try { localStorage.setItem('sidebarCollapsed', wasCollapsed ? '1' : '0'); } catch(e){}
 }
-// Restore collapsed state on page load — happens before any user
-// interaction so there's no flash of expanded sidebar followed by
-// a collapse animation.
-(function restoreSidebarState(){
+
+// Sync .collapsed class on <aside> with the .sidebar-collapsed class
+// already applied to <html> by the head-level pre-paint script. This
+// keeps any legacy code that reads `sidebar.classList.contains('collapsed')`
+// working correctly without a forced reflow on first paint.
+(function syncSidebarClassOnLoad(){
   try {
-    if (localStorage.getItem('sidebarCollapsed') === '1') {
+    if (document.documentElement.classList.contains('sidebar-collapsed')) {
       const sb = document.getElementById('sidebar');
       if (sb) sb.classList.add('collapsed');
     }
   } catch(e){}
 })();
+
+// Submenu (sidebar group) collapse is wired by the IIFE above
+// (`wireSideGroupCollapse`) — it attaches a single click listener per
+// .side-group-lbl element and persists state in `sideGroupsCollapsed`.
+// An earlier attempt added a SECOND delegated handler on `document`,
+// which fired in addition to the IIFE's listener — double-toggle made
+// the section appear to do nothing on click. Removed.
+// (sidebar collapsed-state restoration now happens in the head-level
+//  pre-paint script. The syncSidebarClassOnLoad above mirrors the
+//  html-level class onto the sidebar element after it mounts.)
 
 // ── Topbar Refresh ─────────────────────────────────────────
 // Re-runs the current tab's loader without doing a full page reload —
@@ -4949,7 +5076,9 @@ const _le = {
   selectedSeller: null,    // { id, name, cr, pan, tel, ppla, pin, banks: [...] }
   selectedBankId: null,    // chosen bank account id (null if seller has no banks)
   searchTimer: null,       // debounce timer for seller search
-  recentLots: [],          // today's lots in this auction (refreshed after each save)
+  recentLots: [],          // currently-loaded window of lots (server-paginated, lot_no DESC)
+  recentTotal: 0,          // total rows in this trade (from server) — drives Load More gating
+  recentOffset: 0,         // rows already fetched from server; next Load More uses this as offset
   sampleWeight: 0,         // from settings (sample_weight key, defaults to 0)
   defaultLitre: '',        // from settings — pre-fills litre input on each new lot
   showMoisture: false,     // from settings — toggles the moisture column/input
@@ -5099,7 +5228,7 @@ async function loadLotEntry(){
 function leOnAuctionChange(){
   const aid = document.getElementById('le-auction').value;
   document.getElementById('le-form-card').style.display = aid ? 'block' : 'none';
-  if (!aid) { _le.recentLots = []; renderLeRecent(); return; }
+  if (!aid) { _le.recentLots = []; _le.recentTotal = 0; _le.recentOffset = 0; renderLeRecent(); return; }
   // Reset fields (which applies sample + litre defaults from settings),
   // then load existing lots so the user sees what's already entered.
   leResetForm();
@@ -5125,6 +5254,21 @@ document.addEventListener('DOMContentLoaded', () => {
       leAutoSuggestLotNo();
     }
   });
+});
+
+// Register BulkActions for screens that need Delete Selected. Each
+// resource's onChanged() refreshes its respective list. Print Selected
+// is NOT included for these — sellers/buyers/lots/trades have no PDF
+// representation, only Delete makes sense as a bulk action.
+document.addEventListener('DOMContentLoaded', () => {
+  BulkActions.register({ id:'seller', tbodyId:'traders-list',  resource:'traders',  label:'seller',
+                         onChanged: () => { const s=document.querySelector('#tc-traders input[type=search]'); searchTraders(s?s.value:''); } });
+  BulkActions.register({ id:'buyer',  tbodyId:'buyers-list',   resource:'buyers',   label:'buyer',
+                         onChanged: () => { const s=document.querySelector('#tc-buyers input[type=search]');  searchBuyers(s?s.value:''); } });
+  BulkActions.register({ id:'lot',    tbodyId:'lots-list',     resource:'lots',     label:'lot',
+                         onChanged: () => { if (typeof loadLots === 'function') loadLots(); } });
+  BulkActions.register({ id:'trade',  tbodyId:'auctions-list', resource:'auctions', label:'trade',
+                         onChanged: () => { if (typeof loadAuctions === 'function') loadAuctions(); } });
 });
 
 // Live seller search — debounced 200ms, hits /api/traders?search=
@@ -5589,16 +5733,59 @@ async function leSaveNewSeller(){
   }
 }
 
+// Server-side paginated load. Fetches the first PAGE rows for this trade
+// and stores total + offset on _le so "Load more" can extend the list
+// without re-fetching what's already shown.
+//
+// Why server-side instead of client-side: a busy auction can produce
+// 200-500 lots in a session. Pulling them all and sorting client-side
+// burns memory + CPU on the field-staff phones. Now the server returns
+// a 25-row window keyed on the most recent entries (lot_no DESC), and
+// "Load more" appends the next batch.
 async function loadLeRecent(){
   const aid = document.getElementById('le-auction').value;
   if (!aid) return;
   try {
-    const lots = await j(`/api/lots/${aid}`);
-    _le.recentLots = Array.isArray(lots) ? lots : [];
+    const PAGE = 25;
+    const data = await j(`/api/lots/${aid}?paginated=1&limit=${PAGE}&offset=0`);
+    // Server now returns { rows, total, limit, offset } when paginated=1.
+    // Defensive fall-through for very old servers that returned a flat
+    // array even with paginated=1 — render whatever shape we got.
+    if (Array.isArray(data)) {
+      _le.recentLots = data;
+      _le.recentTotal  = data.length;
+      _le.recentOffset = data.length;
+    } else {
+      _le.recentLots   = Array.isArray(data.rows) ? data.rows : [];
+      _le.recentTotal  = Number(data.total) || _le.recentLots.length;
+      _le.recentOffset = _le.recentLots.length;
+    }
     renderLeRecent();
     leUpdateStats();
   } catch (e) {
     console.error('Failed to load recent lots:', e);
+  }
+}
+
+// Append the next page of lots from the server. Cheap on the wire (25
+// rows of cardamom-lot data is ~3-5 KB) and avoids memory pressure on
+// long auction days.
+async function leLoadMoreRecent(){
+  const aid = document.getElementById('le-auction').value;
+  if (!aid) return;
+  const PAGE = 25;
+  const offset = _le.recentOffset || _le.recentLots.length;
+  try {
+    const data = await j(`/api/lots/${aid}?paginated=1&limit=${PAGE}&offset=${offset}`);
+    const rows = Array.isArray(data) ? data : (data.rows || []);
+    if (!rows.length) return;
+    _le.recentLots = _le.recentLots.concat(rows);
+    _le.recentOffset = (_le.recentOffset || 0) + rows.length;
+    if (!Array.isArray(data)) _le.recentTotal = Number(data.total) || _le.recentTotal;
+    renderLeRecent();
+  } catch (e) {
+    console.error('Failed to load more lots:', e);
+    toast('Failed to load more lots');
   }
 }
 
@@ -5610,40 +5797,76 @@ function renderLeRecent(){
     if (count) count.textContent = '';
     return;
   }
-  // Show the latest 25 lots (most-recent first) for the trade. Higher
-  // counts can be reviewed in the regular Lots tab. Each row is clickable
-  // (loads into the form for editing); admins/operators get a delete
-  // icon — gated by needs-delete CSS so lot_entry users don't see it.
-  const recent = [..._le.recentLots].sort((a,b) => (b.id||0) - (a.id||0)).slice(0, 25);
-  if (count) count.textContent = `Showing ${recent.length} of ${_le.recentLots.length}`;
+  // Server-side pagination: rows arrive in lot_no DESC order already, and
+  // the server tells us the true total (`_le.recentTotal`). Render every
+  // currently-loaded row; the "Load more" button appears whenever there
+  // are more rows on the server than locally cached.
+  const visible   = _le.recentLots;
+  const total     = _le.recentTotal != null ? _le.recentTotal : visible.length;
+  const remaining = Math.max(0, total - visible.length);
+  if (count) count.textContent = `Showing ${visible.length} of ${total}`;
+  // Header row + scrollable rows region. The wrapping container holds
+  // the header outside the scroll area so column titles stay visible
+  // while the user scrolls through hundreds of lots. Max-height tuned
+  // to ~9 rows visible (≈ a screenful on a typical 13" laptop) so the
+  // form stays in the viewport above.
   host.innerHTML = `
-    <div style="display:grid;grid-template-columns:80px 1fr 90px 70px 70px 80px 64px;gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border)">
+    <div style="display:grid;grid-template-columns:80px 1fr 90px 70px 70px 80px 64px;gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:1">
       <div>Lot</div><div>Seller</div><div>Branch</div><div style="text-align:right">Bags</div><div style="text-align:right">Litre</div><div style="text-align:right">Qty (kg)</div><div></div>
     </div>
-    ${recent.map(l => {
-      const safeLotNo = String(l.lot_no || '').replace(/'/g, "\\'");
-      return `
-      <div class="le-recent-row" data-lot-id="${l.id}" style="display:grid;grid-template-columns:80px 1fr 90px 70px 70px 80px 64px;gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .1s" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''" onclick="leEditLot(${l.id})" title="Click to edit">
-        <div style="font-family:monospace;font-weight:700;color:var(--green)">${esc(l.lot_no || '')}</div>
-        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.name||'')}">${esc(l.name || '—')}</div>
-        <div style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(l.branch || '')}</div>
-        <div style="text-align:right">${esc(String(l.bags ?? ''))}</div>
-        <div style="text-align:right">${esc(String(l.litre ?? l.lit ?? ''))}</div>
-        <div style="text-align:right;font-weight:600">${Number(l.qty || 0).toFixed(3)}</div>
-        <div style="text-align:right" onclick="event.stopPropagation()">
-          <button class="needs-delete" onclick="event.stopPropagation();leDeleteLot(${l.id},'${safeLotNo}')" title="Delete this lot" style="background:transparent;border:none;cursor:pointer;color:var(--spice-chili);padding:2px 6px;border-radius:4px;font-size:14px">✕</button>
-        </div>
-      </div>`;
-    }).join('')}
+    <div id="le-recent-scroll" style="max-height:360px;overflow-y:auto">
+      ${visible.map(l => {
+        const safeLotNo = String(l.lot_no || '').replace(/'/g, "\\'");
+        return `
+        <div class="le-recent-row" data-lot-id="${l.id}" style="display:grid;grid-template-columns:80px 1fr 90px 70px 70px 80px 64px;gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .1s" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''" onclick="leEditLot(${l.id})" title="Click to edit">
+          <div style="font-family:monospace;font-weight:700;color:var(--green)">${esc(l.lot_no || '')}</div>
+          <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.name||'')}">${esc(l.name || '—')}</div>
+          <div style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(l.branch || '')}</div>
+          <div style="text-align:right">${esc(String(l.bags ?? ''))}</div>
+          <div style="text-align:right">${esc(String(l.litre ?? l.lit ?? ''))}</div>
+          <div style="text-align:right;font-weight:600">${Number(l.qty || 0).toFixed(3)}</div>
+          <div style="text-align:right" onclick="event.stopPropagation()">
+            <button class="needs-delete" onclick="event.stopPropagation();leDeleteLot(${l.id},'${safeLotNo}')" title="Delete this lot" style="background:transparent;border:none;cursor:pointer;color:var(--spice-chili);padding:2px 6px;border-radius:4px;font-size:14px">✕</button>
+          </div>
+        </div>`;
+      }).join('')}
+      ${remaining > 0 ? `
+        <div style="padding:10px;text-align:center;border-bottom:1px solid var(--border)">
+          <button onclick="leLoadMoreRecent()" class="btn btn-o" style="font-size:12px;padding:6px 14px">
+            Load More (${remaining} more)
+          </button>
+        </div>` : ''}
+    </div>
   `;
 }
 
-function leUpdateStats(){
+// (leLoadMoreRecent now lives next to loadLeRecent above — server-side
+//  pagination, fetches the next 25 rows from the server.)
+
+// Recent-stats badge — fetches a tiny summary endpoint instead of summing
+// the locally-loaded window. With server-side pagination, the local
+// `_le.recentLots` only holds the latest 25 rows; summing that would
+// undercount. The summary endpoint returns { n, bags, qty } for the
+// whole auction and is dirt cheap (one indexed COUNT/SUM).
+async function leUpdateStats(){
   const stats = document.getElementById('le-stats');
   if (!stats) return;
-  const n = _le.recentLots.length;
-  const totalKg = _le.recentLots.reduce((s, l) => s + (Number(l.qty) || 0), 0);
-  stats.textContent = `${n} lots · ${totalKg.toFixed(1)} kg`;
+  const aid = document.getElementById('le-auction').value;
+  if (!aid) { stats.textContent = '0 lots · 0 bags · 0 kg'; return; }
+  try {
+    const s = await j(`/api/lots/${aid}?summary=1`);
+    const n        = Number(s && s.n)    || 0;
+    const totalBags= Number(s && s.bags) || 0;
+    const totalKg  = Number(s && s.qty)  || 0;
+    stats.textContent = `${n} lots · ${totalBags} bags · ${totalKg.toFixed(1)} kg`;
+  } catch(e) {
+    // Fall back to local-window stats if the summary endpoint fails —
+    // better to show stale numbers than nothing.
+    const n         = _le.recentLots.length;
+    const totalKg   = _le.recentLots.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+    const totalBags = _le.recentLots.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0);
+    stats.textContent = `${n}+ lots · ${totalBags}+ bags · ${totalKg.toFixed(1)}+ kg`;
+  }
 }
 
 // Press Enter in the lot-form fields to save (skip from textareas/selects).
@@ -6610,6 +6833,7 @@ const T_IDS={name:'t-name',cr:'t-cr',pan:'t-pan',tel:'t-tel',aadhar:'t-aadhar',p
 async function searchTraders(q){const d=await j(`/api/traders?search=${encodeURIComponent(q)}&limit=100`);
   DataTable.mount('traders-list', d, {
     columns: [
+      BulkActions.column('seller'),
       { key:'name', label:'Name', sort:'text', render:(t)=>
           `<a href="#" onclick="viewTraderDetails(${JSON.stringify(t).replace(/"/g,'&quot;')});return false" style="color:var(--green);font-weight:600;text-decoration:none">${esc(t.name)}</a>` },
       { key:'cr', label:'CR/GSTIN', sort:'text', tdClass:'small' },
@@ -6830,6 +7054,124 @@ async function deleteAll(resource,label){
   }catch(e){showError(e)}
 }
 
+// ─────────────────────────────────────────────────────────────
+// BulkActions — reusable selection/print/delete helper for any
+// DataTable-rendered list. Removes ~50 lines of duplicated select-all,
+// row-checkbox, count-badge, and bulk-Delete code per screen.
+//
+// Usage:
+//   BulkActions.register({
+//     id:        'lot',                          // unique short id used for CSS classes & IDs
+//     tbodyId:   'lots-list',                    // table body id
+//     resource:  'lots',                         // /api/<resource>/:id endpoint
+//     label:     'lot',                          // human label, lowercase singular
+//     onChanged: () => loadLots(currentAuctionId), // post-action refresh hook
+//   });
+//
+// In the column array, declare the select column with:
+//   BulkActions.column('lot')
+//
+// And in the toolbar HTML, drop in:
+//   <button id="lot-bulk-del" class="needs-delete btn"
+//           style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600"
+//           onclick="BulkActions.deleteSelected('lot')"
+//           title="Delete all ticked lots">🗑 Delete Selected
+//     <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span>
+//   </button>
+//
+// Each registered action gets two globals so legacy onclick="" handlers
+// in static HTML still work: window.toggleAll<Id>(state), and the
+// internal cb-class <id>-select-cb. The 'inv', 'pur', 'bill', 'dn'
+// hand-rolled implementations are left in place — this helper is
+// additive (used for screens that didn't have bulk actions yet).
+const BulkActions = (function(){
+  const registry = {};
+
+  function getCheckboxes(id){
+    const body = document.getElementById(registry[id].tbodyId);
+    if (!body) return [];
+    return Array.from(body.querySelectorAll(`.${id}-select-cb`));
+  }
+  function getVisibleCheckboxes(id){
+    return getCheckboxes(id).filter(cb => {
+      const row = cb.closest('tr');
+      return row && row.style.display !== 'none';
+    });
+  }
+  function getTickedIds(id){
+    return getCheckboxes(id).filter(cb => cb.checked)
+      .map(cb => Number(cb.value)).filter(Boolean);
+  }
+  function syncMaster(id){
+    const visible = getVisibleCheckboxes(id);
+    const ticked  = visible.filter(cb => cb.checked).length;
+    const master  = document.getElementById(`${id}-select-all`);
+    if (master) {
+      master.indeterminate = ticked > 0 && ticked < visible.length;
+      master.checked       = visible.length > 0 && ticked === visible.length;
+    }
+    // Show/hide the delete button + count badge
+    const delBtn = document.getElementById(`${id}-bulk-del`);
+    const counter = document.getElementById(`${id}-sel-count`);
+    if (delBtn)  delBtn.style.display  = ticked > 0 ? '' : 'none';
+    if (counter) counter.textContent   = ticked > 0 ? `(${ticked})` : '';
+  }
+  function toggleAll(id, state){
+    getVisibleCheckboxes(id).forEach(cb => { cb.checked = state; });
+    syncMaster(id);
+  }
+
+  return {
+    register(opts){
+      registry[opts.id] = opts;
+      // Expose a window-scoped toggleAll<Id> so static HTML onclicks work.
+      // Capitalize the first letter for camel-case naming convention.
+      const cap = opts.id.charAt(0).toUpperCase() + opts.id.slice(1);
+      window[`toggleAll${cap}Bulk`] = (state) => toggleAll(opts.id, state);
+      // Wire up a delegated change listener once per id (idempotent —
+      // re-register won't double-bind because document listeners are
+      // unique by handler reference, and we never re-create this fn).
+      document.addEventListener('change', (e) => {
+        if (e.target && e.target.classList && e.target.classList.contains(`${opts.id}-select-cb`)) {
+          syncMaster(opts.id);
+        }
+      });
+    },
+    // Column descriptor — drop into a DataTable columns array
+    column(id){
+      return {
+        key: '_select', label: '',
+        labelHTML: `<input type="checkbox" id="${id}-select-all" onclick="event.stopPropagation();BulkActions._toggleAll('${id}', this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">`,
+        sortable: false, searchable: false,
+        render: (row) => `<input type="checkbox" class="${id}-select-cb" value="${row.id}" onclick="event.stopPropagation();BulkActions._sync('${id}')" style="cursor:pointer">`
+      };
+    },
+    // Internal — exposed for the inline onclick handlers above
+    _toggleAll: toggleAll,
+    _sync:      syncMaster,
+
+    getTickedIds,
+    async deleteSelected(id){
+      const opts = registry[id];
+      if (!opts) { console.error('BulkActions: not registered:', id); return; }
+      const ids = getTickedIds(id);
+      if (!ids.length) { toast(`Tick one or more ${opts.label}s first`); return; }
+      if (!confirm(`Delete ${ids.length} ${opts.label}${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+      let ok = 0, fail = 0;
+      for (const recId of ids) {
+        try {
+          await j(`/api/${opts.resource}/${recId}`, { method: 'DELETE' });
+          ok++;
+        } catch (e) {
+          fail++;
+        }
+      }
+      toast(`${ok} deleted${fail ? ` · ${fail} failed` : ''}`);
+      if (opts.onChanged) opts.onChanged();
+    },
+  };
+})();
+
 // ── GST Portal Lookup (Item 4) ───────────────────────────
 // Reads the GSTIN field (prefix='t' for Seller, 'b' for Buyer),
 // calls /api/gst-lookup/{gstin}, auto-fills related fields.
@@ -6916,6 +7258,7 @@ async function searchBuyers(q){const d=await j(`/api/buyers?search=${encodeURICo
   DataTable.mount('buyers-list', d, {
     emptyState: { icon: 'buyers', title: "No buyers yet", body: "Register buyers to generate sales invoices. Use Add Buyer above or import from a template." }, 
     columns: [
+      BulkActions.column('buyer'),
       { key:'buyer', label:'BUYER', sort:'text', render:(b)=>
           `<a href="#" onclick="viewBuyerDetails(${JSON.stringify(b).replace(/"/g,'&quot;')});return false" style="color:var(--green);font-weight:700;text-decoration:none">${esc(b.buyer)}</a>` },
       { key:'code', label:'Code', sort:'text', render:(b)=>
@@ -7048,6 +7391,7 @@ async function loadAuctions(){const d=await j('/api/auctions');
   DataTable.mount('auctions-list', d, {
     emptyState: { icon: 'auctions', title: "No auctions yet", body: "Create your first auction (trade) from the Add Auction button to start entering lots." }, 
     columns: [
+      BulkActions.column('trade'),
       { key:'ano', label:'Trade No', sort:'text', render:(a)=>`<b>${esc(a.ano)}</b>` },
       { key:'date', label:'Date', sort:'date', render:(a)=>fmtD(a.date) },
       { key:'crop_type', label:'Type', sort:'text' },
@@ -7617,6 +7961,7 @@ async function loadLots(){const aid=document.getElementById('lot-auction').value
   const filteredTradeCols = activePreset === 'ISP' ? tradeCols : tradeCols.filter(c => c.key !== 'pqty');
   const filteredTaxCols   = discGstOn ? taxCols : taxCols.filter(c => !['cgst','sgst','igst'].includes(c.key));
   const columns = [
+    BulkActions.column('lot'),
     ...baseCols,
     ...(isAuction ? auctionCols : filteredTradeCols),
     ...filteredTaxCols,
@@ -8177,6 +8522,28 @@ function syncInvoiceMaster(){
   const ticked=visible.filter(cb=>cb.checked).length;
   master.indeterminate = ticked>0 && ticked<visible.length;
   master.checked       = visible.length>0 && ticked===visible.length;
+  // Bulk Delete Selected button + count badge (added in v4)
+  const delBtn  = document.getElementById('inv-bulk-del');
+  const counter = document.getElementById('inv-sel-count');
+  if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
+  if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+}
+// Delete Selected for Invoices — parallel DELETE per ticked row, single
+// confirm dialog up front. Re-uses the existing inv-select-cb checkbox
+// class so we don't need to touch the row-render code.
+async function deleteSelectedInvoices(){
+  const body=document.getElementById('invoices-list');
+  if(!body)return;
+  const ids=Array.from(body.querySelectorAll('.inv-select-cb:checked')).map(cb=>Number(cb.value)).filter(Boolean);
+  if(!ids.length){toast('Tick one or more invoices first');return}
+  if(!confirm(`Delete ${ids.length} invoice${ids.length===1?'':'s'}? This cannot be undone.`))return;
+  let ok=0,fail=0;
+  for (const id of ids) {
+    try { await j(`/api/invoices/${id}`, { method:'DELETE' }); ok++; }
+    catch(e) { fail++; }
+  }
+  toast(`${ok} deleted${fail?` · ${fail} failed`:''}`);
+  if (typeof loadInvoices === 'function') loadInvoices();
 }
 // Delegate: any click on a row checkbox updates the master's indeterminate state
 document.addEventListener('change', (e)=>{
@@ -8322,6 +8689,24 @@ function syncPurchaseMaster(){
   const ticked=visible.filter(cb=>cb.checked).length;
   master.indeterminate = ticked>0 && ticked<visible.length;
   master.checked       = visible.length>0 && ticked===visible.length;
+  const delBtn  = document.getElementById('pur-bulk-del');
+  const counter = document.getElementById('pur-sel-count');
+  if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
+  if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+}
+async function deleteSelectedPurchases(){
+  const body=document.getElementById('purchases-list');
+  if(!body)return;
+  const ids=Array.from(body.querySelectorAll('.pur-select-cb:checked')).map(cb=>Number(cb.value)).filter(Boolean);
+  if(!ids.length){toast('Tick one or more purchase invoices first');return}
+  if(!confirm(`Delete ${ids.length} purchase invoice${ids.length===1?'':'s'}? This cannot be undone.`))return;
+  let ok=0,fail=0;
+  for (const id of ids) {
+    try { await j(`/api/purchases/${id}`,{method:'DELETE'}); ok++; }
+    catch(e) { fail++; }
+  }
+  toast(`${ok} deleted${fail?` · ${fail} failed`:''}`);
+  if (typeof loadPurchases === 'function') loadPurchases();
 }
 async function printSelectedPurchases(){
   const body=document.getElementById('purchases-list');
@@ -8358,6 +8743,24 @@ function syncBillMaster(){
   const ticked=visible.filter(cb=>cb.checked).length;
   master.indeterminate = ticked>0 && ticked<visible.length;
   master.checked       = visible.length>0 && ticked===visible.length;
+  const delBtn  = document.getElementById('bill-bulk-del');
+  const counter = document.getElementById('bill-sel-count');
+  if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
+  if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+}
+async function deleteSelectedBills(){
+  const body=document.getElementById('bills-list');
+  if(!body)return;
+  const ids=Array.from(body.querySelectorAll('.bill-select-cb:checked')).map(cb=>Number(cb.value)).filter(Boolean);
+  if(!ids.length){toast('Tick one or more bills first');return}
+  if(!confirm(`Delete ${ids.length} bill${ids.length===1?'':'s'}? This cannot be undone.`))return;
+  let ok=0,fail=0;
+  for (const id of ids) {
+    try { await j(`/api/bills/${id}`,{method:'DELETE'}); ok++; }
+    catch(e) { fail++; }
+  }
+  toast(`${ok} deleted${fail?` · ${fail} failed`:''}`);
+  if (typeof loadBills === 'function') loadBills();
 }
 async function printSelectedBills(){
   const body=document.getElementById('bills-list');
@@ -8852,6 +9255,10 @@ async function loadDebitNotes(){
   const d=await j('/api/debit-notes');
   DataTable.mount('debit-list', d, {
     columns: [
+      { key:'_select', label:'',
+        labelHTML:'<input type="checkbox" id="dn-select-all" onclick="event.stopPropagation();toggleAllDn(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
+        sortable:false, searchable:false,
+        render:(n)=>`<input type="checkbox" class="dn-select-cb" value="${n.id}" onclick="event.stopPropagation();updateDnBulkButtons()" style="cursor:pointer">` },
       { key:'note_no', label:'Note#', sort:'text' },
       { key:'date', label:'Date', sort:'date', render:(n)=>fmtD(n.date) },
       { key:'ano', label:'Trade', sort:'text', render:(n)=>n.ano?('#'+esc(n.ano)):'—' },
@@ -8864,7 +9271,11 @@ async function loadDebitNotes(){
         fmt:(v)=>fmtI(v,2),
         render:(n)=>`<strong>${fmtI(n.total||0,2)}</strong>` },
       { key:'_actions', label:'Actions', sortable:false, searchable:false, render:(n)=>
-          iconBtn('edit','Edit debit note',`openDebitEdit(${JSON.stringify(n).replace(/"/g,'&quot;')})`)
+          // Print first — most common action; opens server-rendered DN PDF.
+          // Falls through to /api/debit-notes/:id/pdf which uses the same
+          // PDF skeleton as the Sales Invoice for visual consistency.
+          iconBtn('print','Print debit note',`printDebitNote(${n.id})`)
+          + iconBtn('edit','Edit debit note',`openDebitEdit(${JSON.stringify(n).replace(/"/g,'&quot;')})`)
           + iconBtn('del','Delete debit note',`delDebitNote(${n.id})`) }
     ]
   });
@@ -8935,6 +9346,119 @@ async function generateDebitNote(){
 }
 
 async function delDebitNote(id){if(!confirm('Delete debit note?'))return;await j(`/api/debit-notes/${id}`,{method:'DELETE'});loadDebitNotes()}
+
+// ── DN bulk-select infrastructure ─────────────────────────────
+// Mirrors the invoice/purchase/bill pattern: master checkbox toggles
+// every visible row, individual row checkboxes drive button visibility
+// and master-indeterminate state. The bulk Print/Delete buttons live in
+// the DN tab toolbar and stay hidden until at least one row is ticked.
+function toggleAllDn(state){
+  const body=document.getElementById('debit-list');
+  if(!body)return;
+  body.querySelectorAll('.dn-select-cb').forEach(cb=>{
+    const row=cb.closest('tr');
+    if(row && row.style.display !== 'none') cb.checked=state;
+  });
+  updateDnBulkButtons();
+}
+function updateDnBulkButtons(){
+  const body=document.getElementById('debit-list');
+  if(!body)return;
+  const visible=Array.from(body.querySelectorAll('.dn-select-cb')).filter(cb=>{
+    const row=cb.closest('tr');return row && row.style.display !== 'none';
+  });
+  const tickedCount=visible.filter(cb=>cb.checked).length;
+  const master=document.getElementById('dn-select-all');
+  if (master) {
+    master.indeterminate = tickedCount>0 && tickedCount<visible.length;
+    master.checked       = visible.length>0 && tickedCount===visible.length;
+  }
+  // Show/hide the bulk action buttons + count badge
+  const printBtn = document.getElementById('dn-bulk-print');
+  const delBtn   = document.getElementById('dn-bulk-del');
+  const counter  = document.getElementById('dn-sel-count');
+  if (printBtn) printBtn.style.display = tickedCount > 0 ? '' : 'none';
+  if (delBtn)   delBtn.style.display   = tickedCount > 0 ? '' : 'none';
+  if (counter)  counter.textContent    = tickedCount > 0 ? `(${tickedCount})` : '';
+}
+// Delegate: any change on a row checkbox triggers the button-state sync
+document.addEventListener('change', (e)=>{
+  if(e.target && e.target.classList && e.target.classList.contains('dn-select-cb')){
+    updateDnBulkButtons();
+  }
+});
+
+// Print Selected — fetches each ticked DN's PDF concurrently, merges in
+// the browser by opening each in a new tab. We don't bundle server-side
+// because DN PDFs are small (1-page each) and a multi-tab approach
+// matches the print-and-staple workflow auction-hall accountants use.
+async function printSelectedDebitNotes(){
+  const body=document.getElementById('debit-list');
+  if(!body)return;
+  const ids=Array.from(body.querySelectorAll('.dn-select-cb:checked')).map(cb=>Number(cb.value)).filter(Boolean);
+  if(!ids.length){toast('Tick one or more debit notes first');return}
+  if (ids.length > 20 && !confirm(`Open ${ids.length} debit note PDFs in new tabs?`)) return;
+  for (const id of ids) {
+    try {
+      const r = await fetch(B + `/api/debit-notes/${id}/pdf`, {
+        headers: { 'Authorization': 'Bearer ' + T }
+      });
+      if (!r.ok) continue;
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) {
+      console.error('Print failed for DN', id, e);
+    }
+  }
+  toast(`Opened ${ids.length} debit note PDF${ids.length === 1 ? '' : 's'}`);
+}
+
+// Delete Selected — confirms count, then DELETE each in parallel.
+// Reloads the list afterwards. Single confirmation is sufficient since
+// the count is shown plainly in the dialog.
+async function deleteSelectedDebitNotes(){
+  const body=document.getElementById('debit-list');
+  if(!body)return;
+  const ids=Array.from(body.querySelectorAll('.dn-select-cb:checked')).map(cb=>Number(cb.value)).filter(Boolean);
+  if(!ids.length){toast('Tick one or more debit notes first');return}
+  if (!confirm(`Delete ${ids.length} debit note${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+  let ok = 0, fail = 0;
+  for (const id of ids) {
+    try {
+      await j(`/api/debit-notes/${id}`, { method: 'DELETE' });
+      ok++;
+    } catch (e) {
+      fail++;
+    }
+  }
+  toast(`${ok} deleted${fail ? ` · ${fail} failed` : ''}`);
+  loadDebitNotes();
+}
+
+// Print the debit note PDF — opens server-rendered PDF in a new tab so
+// the user can print or save. Uses the same auth header pattern as the
+// sales-invoice PDF download. The endpoint streams a PDF blob.
+async function printDebitNote(id){
+  try {
+    const r = await fetch(B + `/api/debit-notes/${id}/pdf`, {
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    if (!r.ok) {
+      let msg = 'Failed to render debit note';
+      try { const e = await r.json(); if (e.error) msg = e.error; } catch(_) {}
+      toast(msg);
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } catch (e) {
+    toast(e.message || 'Print failed');
+  }
+}
 
 // "Generate All" — no input. Server iterates every distinct purchase
 // invoice in the system and generates DNs for each linked sales invoice.
@@ -9357,21 +9881,16 @@ function renderTallyPartyVoucherList(){
   const byKind={sales:[],rd_purchase:[],urd_purchase:[]};
   for(const p of filtered)(byKind[p.kind]||(byKind[p.kind]=[])).push(p);
   let html='';
-  // Current mode (ISP or ASP) — used to filter the per-row action buttons
-  // so the user only sees voucher types relevant to the active company.
-  // Rows that end up with zero buttons (e.g. an RD-purchase party in ISP
-  // mode) are skipped entirely. Kind headers with zero visible rows are
-  // also skipped.
-  const currentCo = (typeof getCurrentLogoCode === 'function')
-    ? String(getCurrentLogoCode() || 'isp').toLowerCase()
-    : 'isp';
 
   for(const kind of ['sales','rd_purchase','urd_purchase']){
     const arr=byKind[kind];if(!arr||arr.length===0)continue;
-    const allTypes=TALLY_PV_TYPES_BY_KIND[kind]||[];
-    // Filter buttons by current mode. If no buttons survive for THIS kind,
-    // skip the entire group — there's nothing actionable here.
-    const types=allTypes.filter(t => String(t.co).toLowerCase() === currentCo);
+    // Single-company e-Trade build: show all voucher types for each kind.
+    // The legacy ISP/ASP company filter (`t.co === currentCo`) was a
+    // multi-company artefact that, with `logo` now blank by default,
+    // filtered EVERY button out and made the entire list look empty.
+    // The TYPES dictionary above is already pruned to the relevant
+    // voucher set — no further filtering needed.
+    const types=TALLY_PV_TYPES_BY_KIND[kind]||[];
     if (types.length === 0) continue;
     const co=TALLY_PARTY_KIND_CO[kind]||'isp';
     html+=`<div style="padding:6px 12px;background:${TALLY_PARTY_KIND_BG[kind]};font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.5px">${TALLY_PARTY_KIND_LABEL[kind]} · ${arr.length}</div>`;
@@ -9624,39 +10143,76 @@ async function loadJournal(){
   const type=document.getElementById('jr-type').value;
   const auctionId=document.getElementById('jr-auction').value;
   if(!auctionId){alert('Select a trade');return}
-  let url,cols;
-  // Column tuple: [label, key, decimals]
-  //   decimals = 0 → integer with commas, no decimals (used for Bags)
-  //   decimals = N → N decimal places with comma grouping (Indian thousands separator)
-  //   decimals = undefined → text column, no formatting
+  let url, cols;
+  // Each col entry is the DataTable column descriptor. `sort:'date'`,
+  // `'text'`, or `'number'` enables click-to-sort. Numeric columns also
+  // get the `numeric:true` flag so the totals footer aggregates them.
+  // Bags is integer (decimals=0) — uses Math.round + Indian grouping.
+  const fmtNumWithDecimals = (decimals) => (v) => {
+    const n = Number(v) || 0;
+    if (decimals === 0) return Math.round(n).toLocaleString('en-IN');
+    return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  };
   if(type==='sales'){
     const saleType=document.getElementById('jr-sale').value;
     url=`/api/journals/sales?auctionId=${auctionId}${saleType?'&saleType='+saleType:''}`;
-    cols=[['Date','date'],['Sale','sale'],['Inv#','invo'],['Buyer','buyer'],['Trade Name','buyer1'],['GSTIN','gstin'],['Bags','bag',0],['Qty','qty',3],['Cardamom','cardamom',2],['Gunny','gunny',2],['CGST','cgst',2],['SGST','sgst',2],['IGST','igst',2],['Total','total',2]];
+    cols=[
+      { key:'date',   label:'Date',     sort:'date', render:(r)=>fmtD(r.date) },
+      { key:'sale',   label:'Sale',     sort:'text' },
+      { key:'invo',   label:'Inv#',     sort:'text' },
+      { key:'buyer',  label:'Buyer',    sort:'text' },
+      { key:'buyer1', label:'Trade Name', sort:'text' },
+      { key:'gstin',  label:'GSTIN',    sort:'text' },
+      { key:'bag',    label:'Bags',     sort:'number', numeric:true, fmt:fmtNumWithDecimals(0) },
+      { key:'qty',    label:'Qty',      sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+      { key:'cardamom', label:'Cardamom', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'gunny',  label:'Gunny',    sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'cgst',   label:'CGST',     sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'sgst',   label:'SGST',     sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'igst',   label:'IGST',     sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'total',  label:'Total',    sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    ];
   }else if(type==='dealer'){
     url=`/api/journals/purchase?auctionId=${auctionId}&type=dealer`;
-    cols=[['Date','date'],['Inv#','invoice_no'],['Name','name'],['Place','place'],['GSTIN','gstin'],['Qty','qty',3],['Amount','amount',2],['CGST','cgst',2],['SGST','sgst',2],['IGST','igst',2],['Total','total',2],['TDS','tds',2]];
+    cols=[
+      { key:'date',       label:'Date',  sort:'date', render:(r)=>fmtD(r.date) },
+      { key:'invoice_no', label:'Inv#',  sort:'text' },
+      { key:'name',       label:'Name',  sort:'text' },
+      { key:'place',      label:'Place', sort:'text' },
+      { key:'gstin',      label:'GSTIN', sort:'text' },
+      { key:'qty',    label:'Qty',    sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+      { key:'amount', label:'Amount', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'cgst',   label:'CGST',   sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'sgst',   label:'SGST',   sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'igst',   label:'IGST',   sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'total',  label:'Total',  sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'tds',    label:'TDS',    sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    ];
   }else{
     url=`/api/journals/purchase?auctionId=${auctionId}&type=agri`;
-    cols=[['Date','date'],['Bill#','bill_no'],['Name','name'],['Place','place'],['State','state'],['CR','cr'],['PAN','pan'],['Qty','qty',3],['Cost','cost',2],['Net','net',2]];
+    cols=[
+      { key:'date',    label:'Date',  sort:'date', render:(r)=>fmtD(r.date) },
+      { key:'bill_no', label:'Bill#', sort:'text' },
+      { key:'name',    label:'Name',  sort:'text' },
+      { key:'place',   label:'Place', sort:'text' },
+      { key:'state',   label:'State', sort:'text' },
+      { key:'cr',      label:'CR',    sort:'text' },
+      { key:'pan',     label:'PAN',   sort:'text' },
+      { key:'qty',     label:'Qty',   sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+      { key:'cost',    label:'Cost',  sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+      { key:'net',     label:'Net',   sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    ];
   }
   const d=await j(url);
-  // Number formatter — Indian thousands grouping (1,00,000 style). Integer
-  // columns (Bags) round to whole number; decimal columns show fixed
-  // precision with grouping.
-  const fmtNum = (v, decimals) => {
-    const n = Number(v) || 0;
-    if (decimals === 0) {
-      return Math.round(n).toLocaleString('en-IN');
-    }
-    return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  };
-  document.getElementById('jr-head').innerHTML='<tr>'+cols.map(c=>`<th${c[2]!==undefined?' class="num"':''}>${c[0]}</th>`).join('')+'</tr>';
-  document.getElementById('jr-body').innerHTML=d.map(r=>'<tr>'+cols.map(c=>{
-    const v=r[c[1]];
-    if(c[2]!==undefined)return`<td class="num">${fmtNum(v,c[2])}</td>`;
-    return`<td>${esc(v)}</td>`;
-  }).join('')+'</tr>').join('')||'<tr><td colspan="'+cols.length+'" style="text-align:center;color:var(--text3);padding:20px">No records for this trade</td></tr>';
+  // Clear the legacy thead — DataTable.mount writes its own header row,
+  // and leaving stale <th> nodes from the previous (manual) render would
+  // double-stack headers when the user switches journal types.
+  const headEl = document.getElementById('jr-head');
+  if (headEl) headEl.innerHTML = '';
+  DataTable.mount('jr-body', Array.isArray(d) ? d : [], {
+    columns: cols,
+    emptyState: { icon:'document', title:'No records', body:'No journal entries for this trade.' }
+  });
 }
 async function exportJournal(){
   const type=document.getElementById('jr-type').value;

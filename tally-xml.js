@@ -1552,7 +1552,17 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
     const place      = xe(row.place);
     const pin        = xe(row.pin);
     const fullGstin  = String(row.gstin || '');
-    const partyGstin = fullGstin.toUpperCase().startsWith('GST') ? fullGstin.slice(6, 21) : fullGstin;
+    // GSTIN extraction supporting all storage formats:
+    //   - "GSTIN.32AAAAA0000A1Z5" (legacy UI format)
+    //   - "gstin.32AAAAA0000A1Z5" (lowercase variant)
+    //   - "32AAAAA0000A1Z5"       (Excel import bare 15-char)
+    // Earlier code only matched "GST" uppercase prefix and silently
+    // produced empty partyGstin for the lowercase variant. Empty
+    // partyGstin → state code blank → isIntra always-false fallback
+    // collapsed inter-state vouchers into local mode (the reported bug).
+    const _g = fullGstin.trim();
+    const _hasGstinPrefix = /^gstin\./i.test(_g);
+    const partyGstin = _hasGstinPrefix ? _g.slice(6, 21).toUpperCase() : _g.slice(0, 15).toUpperCase();
     const state      = xe(findState(partyGstin));
     const isIntra    = String(partyGstin).slice(0, 2) === String(intra);
     const rates      = rateDetails(cfgNum(cfg, 'gst_goods', 5));
@@ -2656,13 +2666,18 @@ function buildURDPurchaseRows(db, auctionId, cfg) {
  * Pull debit notes for an auction.
  */
 function buildDebitNoteRows(db, auctionId, cfg) {
-  // debit_notes table has no auction_id; filter by date range of auction
-  const a = db.prepare('SELECT date FROM auctions WHERE id = ?').get(auctionId);
+  // The `debit_notes` table has no auction_id FK — it stores `ano`
+  // (the trade number) directly. Earlier this builder filtered DNs by
+  // `date = auction.date`, but DN dates are now set to trade.date + 1
+  // (per the new "DN date = trade date + 1" rule), so date-equality
+  // filtering returned ZERO rows and the user got "no data found".
+  // Fix: filter by `ano` instead — that's the stable join key.
+  const a = db.prepare('SELECT ano FROM auctions WHERE id = ?').get(auctionId);
   if (!a) return [];
   const stmt = db.prepare(`
-    SELECT * FROM debit_notes WHERE date = ? ORDER BY id
+    SELECT * FROM debit_notes WHERE ano = ? ORDER BY id
   `);
-  const raw = stmt.all(a.date);
+  const raw = stmt.all(a.ano);
   return raw.map((d) => ({
     ano: d.ano,
     date: d.date,

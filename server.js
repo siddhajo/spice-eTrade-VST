@@ -193,9 +193,14 @@ function requireAdmin(req, res, next) {
 // added by including the name in the appropriate role(s) below.
 const ROLE_PERMISSIONS = {
   viewer: new Set([
-    'view',         // read any list / detail
-    'export',       // download XLSX / PDF / CSV exports
-    'self_password' // change own password
+    'view',           // read any list / detail
+    'export',         // download XLSX / PDF / CSV exports
+    'self_password', // change own password
+    'lot_entry_view'  // also see the Lot Entry tab + its data (read-only)
+                      // — viewers don't get lot_write so they can't modify,
+                      //   but they can SEE the shared trade/lot data, which
+                      //   is the expected behaviour for "authorised users
+                      //   viewing shared valid data".
   ]),
   // Field-staff role for the auction-hall lot entry workflow. Sees only
   // the Lot Entry tab in the sidebar (everything else is gated by
@@ -204,7 +209,12 @@ const ROLE_PERMISSIONS = {
   // the original PWA admin exposed to non-admin users in the field.
   lot_entry: new Set([
     'self_password',
-    'lot_entry_view',  // see auctions list + own lots only (NOT general 'view')
+    'view',            // read shared trade/lot data — needed so multi-user
+                       // sessions can all see the same in-progress entries.
+                       // Without this, a second lot_entry user opening the
+                       // same trade hit "do not have permission to view"
+                       // because some shared endpoints require general view.
+    'lot_entry_view',  // Lot Entry tab + its endpoints (auctions, lots, traders)
     'lot_write',       // create/edit own lots; trader search via lot-entry views
     'auction_write'    // create new trades on the fly during an auction day
   ]),
@@ -1405,7 +1415,8 @@ app.get('/api/auctions/template', requireExport, async (req, res) => {
 // LOTS (CPA1.DBF — main data)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
-  const { branch, name, buyer } = req.query;
+  const { branch, name, buyer, limit, offset, paginated, summary } = req.query;
+  const db = getDb();
   // Correlated subquery (not LEFT JOIN) to avoid any risk of row duplication
   // if the same buyer code exists multiple times in the buyers table.
   let q = `SELECT lots.*,
@@ -1414,10 +1425,51 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
            WHERE lots.auction_id = ?`;
   const p = [req.params.auctionId];
   if (branch) { q += ' AND lots.branch = ?'; p.push(branch); }
-  if (name) { q += ' AND lots.name LIKE ?'; p.push(`%${name}%`); }
-  if (buyer) { q += ' AND lots.buyer = ?'; p.push(buyer); }
+  if (name)   { q += ' AND lots.name LIKE ?'; p.push(`%${name}%`); }
+  if (buyer)  { q += ' AND lots.buyer = ?'; p.push(buyer); }
+
+  // Summary mode — returns aggregate counts only (cheap, no row data).
+  // Used by the Lot Entry stats badge so it shows true totals even when
+  // only a 25-row window of lots is loaded client-side.
+  if (summary === '1') {
+    const aggSql =
+      `SELECT COUNT(*) AS n,
+              COALESCE(SUM(CAST(bags AS INTEGER)), 0) AS bags,
+              COALESCE(SUM(qty), 0)                  AS qty
+         FROM lots
+        WHERE lots.auction_id = ?`
+      + (branch ? ' AND lots.branch = ?' : '')
+      + (name   ? ' AND lots.name LIKE ?' : '')
+      + (buyer  ? ' AND lots.buyer = ?' : '');
+    const row = db.get(aggSql, p) || { n:0, bags:0, qty:0 };
+    return res.json({ n: row.n, bags: row.bags, qty: row.qty });
+  }
+
+  // Pagination — opt-in via `paginated=1` so the existing callers
+  // (Lots tab, exports, etc.) keep getting the full list as a flat array.
+  // The Lot Entry "Recent entries" panel passes paginated=1&limit=25&offset=N
+  // and expects { rows, total } so it can show a "Load more" / page count.
+  // ORDER BY lot_no DESC for the recent panel — newest entries first;
+  // existing flat-list callers keep ascending order.
+  if (paginated === '1') {
+    const lim = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 200);
+    const off = Math.max(parseInt(offset, 10) || 0, 0);
+    // Total count — needed so the client can show "Showing X of Y" and
+    // know when to hide "Load more". Cheap because the WHERE clause is
+    // narrow (auction_id is indexed).
+    let cq = q.replace(
+      /^SELECT[\s\S]+?FROM lots/,
+      'SELECT COUNT(*) AS n FROM lots'
+    );
+    const total = (db.get(cq, p) || {}).n || 0;
+
+    q += ' ORDER BY CAST(lots.lot_no AS INTEGER) DESC, lots.lot_no DESC LIMIT ? OFFSET ?';
+    const rows = db.all(q, [...p, lim, off]);
+    return res.json({ rows, total, limit: lim, offset: off });
+  }
+
   q += ' ORDER BY lots.lot_no';
-  res.json(getDb().all(q, p));
+  res.json(db.all(q, p));
 });
 
 app.post('/api/lots', requireLotWrite, (req, res) => {
@@ -3103,6 +3155,293 @@ app.put('/api/debit-notes/:id', requireInvoiceWrite, (req, res) => {
   vals.push(req.params.id);
   getDb().run(`UPDATE debit_notes SET ${sets.join(',')} WHERE id=?`, vals);
   res.json({ success: true });
+});
+
+// Render a Debit Note PDF for printing. Slim by design — DN is a single-
+// row instrument (one note number, one amount block, one party). We keep
+// the visual style consistent with the sales invoice (same header band,
+// same value-table conventions) without pulling in the full multi-page
+// invoice-pdf machinery.
+app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
+  try {
+    const PDFDocument = require('pdfkit');
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const dn = db.get('SELECT * FROM debit_notes WHERE id = ?', [req.params.id]);
+    if (!dn) return res.status(404).json({ error: 'Debit note not found' });
+
+    // The DN layout (per the reference PDF) is BUYER-LETTERHEAD style:
+    // the BUYER (the party benefiting from the discount, who issues the
+    // credit/debit note in their books) prints on top with their address
+    // + GSTIN, then "CREDIT NOTE/DEBIT NOTE" banner, then ISP company
+    // appears as the recipient block in the middle. So `dn.name` (which
+    // we store as the buyer name from the matched purchase/invoice) is
+    // the LETTERHEAD identity.
+    const buyerName = String(dn.name || '').trim();
+    const buyer = buyerName
+      ? db.get(`SELECT * FROM buyers WHERE UPPER(buyer1) = UPPER(?) OR UPPER(buyer) = UPPER(?) LIMIT 1`,
+               [buyerName, buyerName])
+      : null;
+    // Look up the per-lot line items: the discount is applied across
+    // every lot in this trade where the buyer's purchase rolled up. We
+    // join on auctions(ano) and filter to the buyer that owns the DN.
+    // If buyers table doesn't resolve a buyer code, we fall back to
+    // matching lot.buyer1 / lot.buyer by name string (covers older data
+    // where buyers weren't normalised yet).
+    const auction = db.get('SELECT * FROM auctions WHERE ano = ? LIMIT 1', [dn.ano]);
+    let lots = [];
+    if (auction) {
+      const candidates = db.all(
+        `SELECT lot_no, qty, prate, puramt
+           FROM lots
+          WHERE auction_id = ?
+            AND (UPPER(COALESCE(buyer1,'')) = UPPER(?) OR UPPER(COALESCE(buyer,'')) = UPPER(?))
+          ORDER BY CAST(lot_no AS INTEGER), lot_no`,
+        [auction.id, buyerName, (buyer && buyer.buyer) || buyerName]
+      );
+      lots = candidates;
+    }
+
+    // Distribute the DN amount across lots proportionally to puramt so
+    // the per-lot Discount column sums back to the DN total. If lots
+    // is empty (rare — orphan DN), we render a single synthetic row.
+    const totalPuramt = lots.reduce((s, l) => s + Number(l.puramt || 0), 0);
+    const dnAmount    = Number(dn.amount || 0);
+    if (lots.length && totalPuramt > 0) {
+      let allocated = 0;
+      lots = lots.map((l, idx) => {
+        const isLast = idx === lots.length - 1;
+        const share = isLast
+          ? Math.round((dnAmount - allocated) * 100) / 100
+          : Math.round((dnAmount * Number(l.puramt) / totalPuramt) * 100) / 100;
+        allocated += share;
+        return { ...l, discount: share, taxable: share };
+      });
+    } else {
+      lots = [{ lot_no: '—', qty: 0, prate: 0, puramt: 0, discount: dnAmount, taxable: dnAmount }];
+    }
+
+    // ── Indian number-to-words formatter (lakhs/crores style) ──
+    // Mirrors the "Rupees X Only" convention used on tax invoices.
+    const ones  = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten',
+                   'Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+    const tens  = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+    const tw = (n) => { // 0..99
+      if (n < 20) return ones[n];
+      const t = Math.floor(n / 10), o = n % 10;
+      return tens[t] + (o ? ' ' + ones[o] : '');
+    };
+    const th = (n) => { // 0..999
+      if (n === 0) return '';
+      const h = Math.floor(n / 100), r = n % 100;
+      return (h ? ones[h] + ' Hundred' + (r ? ' And ' : '') : '') + (r ? tw(r) : '');
+    };
+    const numToIndianWords = (num) => {
+      const n = Math.abs(Math.round(Number(num) || 0));
+      if (n === 0) return 'Zero';
+      const crore = Math.floor(n / 10000000);
+      const lakh  = Math.floor((n % 10000000) / 100000);
+      const thou  = Math.floor((n % 100000) / 1000);
+      const rest  = n % 1000;
+      const parts = [];
+      if (crore) parts.push(tw(crore) + ' Crore');
+      if (lakh)  parts.push(tw(lakh) + ' Lakh');
+      if (thou)  parts.push(tw(thou) + ' Thousand');
+      if (rest)  parts.push(th(rest));
+      return parts.join(' ');
+    };
+
+    const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    const fmtDate = (d) => {
+      if (!d) return '';
+      const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d);
+    };
+
+    // ── Render ────────────────────────────────────────────────
+    const doc = new PDFDocument({ size: 'A4', margin: 30 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="DebitNote_${dn.note_no || dn.id}.pdf"`);
+    doc.pipe(res);
+
+    const PAGE_L = 30, PAGE_R = 565, PAGE_W = PAGE_R - PAGE_L; // ≈535pt usable
+
+    // Top-right ORIGINAL/DUPLICATE/TRIPLICATE strip
+    doc.font('Helvetica').fontSize(8).text('ORIGINAL/DUPLICATE/TRIPLICATE', PAGE_L, 32, { width: PAGE_W, align: 'right' });
+
+    // Buyer letterhead (top): name centered bold, address + GSTIN
+    let y = 50;
+    doc.font('Helvetica-Bold').fontSize(15).text(buyerName.toUpperCase(), PAGE_L, y, { width: PAGE_W, align: 'center' });
+    y = doc.y + 2;
+    doc.font('Helvetica').fontSize(9);
+    const buyerAddr = (buyer && (buyer.add_line || buyer.address)) || '';
+    if (buyerAddr) { doc.text(buyerAddr, PAGE_L, y, { width: PAGE_W, align: 'center' }); y = doc.y; }
+    const buyerGstin = (buyer && buyer.gstin) || '';
+    if (buyerGstin) { doc.font('Helvetica-Bold').text(`GSTIN: ${buyerGstin}`, PAGE_L, y, { width: PAGE_W, align: 'center' }); y = doc.y; }
+    y += 6;
+
+    // Outer frame starts here
+    const FRAME_TOP = y;
+    doc.lineWidth(0.7).moveTo(PAGE_L, FRAME_TOP).lineTo(PAGE_R, FRAME_TOP).stroke();
+    y += 4;
+
+    // CREDIT NOTE / DEBIT NOTE banner
+    doc.font('Helvetica-Bold').fontSize(11).text('CREDIT NOTE/DEBIT NOTE', PAGE_L, y, { width: PAGE_W, align: 'center' });
+    y = doc.y + 4;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke(); y += 6;
+
+    // Recipient block: ISP company on left, Note No / Date on right
+    const company = cfg.short_name || cfg.company_name || cfg.tally_company_name || '';
+    const ispGstin = cfg.gstin || '';
+    const ispPan   = cfg.pan || (ispGstin ? ispGstin.slice(2, 12) : '');
+    const ispState = (cfg.business_state || '').toUpperCase();
+    const ispStateCode = cfg.tally_state_code || (ispState === 'KERALA' ? '32' : '33');
+    const ispAddr  = cfg.address1 || cfg.r_address1 || '';
+    const ispPlace = cfg.r_place || '';
+
+    const noteRefSuffix = (cfg.season_short || cfg.tally_season || '26-27').replace(/[^0-9-]/g,'');
+
+    doc.font('Helvetica-Bold').fontSize(10).text(company.toUpperCase(), PAGE_L + 4, y);
+    doc.font('Helvetica-Bold').fontSize(10).text(`No.: ${dn.note_no || ''}/${noteRefSuffix}`, PAGE_R - 200, y, { width: 196, align: 'right' });
+    y = doc.y + 2;
+    if (ispAddr) doc.font('Helvetica').fontSize(9).text(ispAddr, PAGE_L + 4, y);
+    doc.font('Helvetica-Bold').fontSize(9).text(`Date :${fmtDate(dn.date)}`, PAGE_R - 200, y, { width: 196, align: 'right' });
+    y = doc.y + 2;
+    if (ispPlace) { doc.font('Helvetica').fontSize(9).text(ispPlace, PAGE_L + 4, y); y = doc.y; }
+    if (ispGstin) { doc.font('Helvetica').fontSize(9).text(`GSTIN : ${ispGstin}`, PAGE_L + 4, y); y = doc.y; }
+    if (ispPan)   { doc.font('Helvetica').fontSize(9).text(`PAN   : ${ispPan}`,   PAGE_L + 4, y); y = doc.y; }
+    if (ispState) { doc.font('Helvetica').fontSize(9).text(`STATE : ${ispState}    CODE:${ispStateCode}`, PAGE_L + 4, y); y = doc.y; }
+    y += 4;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke(); y += 6;
+
+    // "Discount on Sale of Cardamom HSN CODE:..." title
+    const hsnCardamom = cfg.tally_hsn_cardamom || cfg.hsn_cardamom || '09083120';
+    doc.font('Helvetica-Bold').fontSize(10).text(`Discount on Sale of Cardamom    HSN CODE:${hsnCardamom}`, PAGE_L + 4, y);
+    y = doc.y + 4;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke(); y += 4;
+
+    // ── Line items table ──
+    // Column widths (sum ≈ 535pt usable). Match the reference layout:
+    //   Sl | Lot | Quantity (kgs) | Rate/kg (Rs) | Value (Rs) | Discount (Rs) | (gap) | Taxable (Rs)
+    const cols = [
+      { key:'sl',       w: 32,  label1:'Sl',       label2:'No',     align:'center' },
+      { key:'lot',      w: 38,  label1:'Lot',      label2:'No',     align:'center' },
+      { key:'qty',      w: 76,  label1:'Quantity', label2:'(kgs)',  align:'right'  },
+      { key:'rate',     w: 70,  label1:'Rate/kg',  label2:'(Rs)',   align:'right'  },
+      { key:'value',    w: 100, label1:'Value',    label2:'(Rs)',   align:'right'  },
+      { key:'discount', w: 80,  label1:'Discount', label2:'(Rs)',   align:'right'  },
+      { key:'gap',      w: 40,  label1:'',         label2:'',       align:'right'  },
+      { key:'taxable',  w: 99,  label1:'Taxable',  label2:'Value',  align:'right'  },
+    ];
+    // Compute x positions
+    let xs = [PAGE_L];
+    cols.forEach(c => xs.push(xs[xs.length - 1] + c.w));
+
+    // Header rows
+    const HEAD_H = 26;
+    const headTop = y;
+    // Vertical lines (header)
+    xs.forEach(x => doc.moveTo(x, headTop).lineTo(x, headTop + HEAD_H).stroke());
+    // Top + bottom of header
+    doc.moveTo(PAGE_L, headTop).lineTo(PAGE_R, headTop).stroke();
+    doc.moveTo(PAGE_L, headTop + HEAD_H).lineTo(PAGE_R, headTop + HEAD_H).stroke();
+    doc.font('Helvetica-Bold').fontSize(9);
+    cols.forEach((c, i) => {
+      doc.text(c.label1, xs[i] + 3, headTop + 4,  { width: c.w - 6, align: c.align });
+      doc.text(c.label2, xs[i] + 3, headTop + 14, { width: c.w - 6, align: c.align });
+    });
+    y = headTop + HEAD_H;
+
+    // Data rows
+    const ROW_H = 14;
+    const MAX_ROWS = 14; // matches reference pdf — page can hold ~14 line rows comfortably
+    doc.font('Helvetica').fontSize(9);
+    let totalQty = 0, totalValue = 0, totalDiscount = 0, totalTaxable = 0;
+    for (let i = 0; i < Math.max(lots.length, MAX_ROWS); i++) {
+      const lot = lots[i];
+      // Vertical lines for this row
+      xs.forEach(x => doc.moveTo(x, y).lineTo(x, y + ROW_H).stroke());
+      if (lot) {
+        const value    = Number(lot.qty || 0) * Number(lot.prate || 0);
+        const discount = Number(lot.discount || 0);
+        const taxable  = Number(lot.taxable || discount);
+        totalQty      += Number(lot.qty || 0);
+        totalValue    += value;
+        totalDiscount += discount;
+        totalTaxable  += taxable;
+        doc.text(String(i + 1),                 xs[0] + 3, y + 3, { width: cols[0].w - 6, align: cols[0].align });
+        doc.text(String(lot.lot_no || ''),      xs[1] + 3, y + 3, { width: cols[1].w - 6, align: cols[1].align });
+        doc.text(fmtQty(lot.qty),               xs[2] + 3, y + 3, { width: cols[2].w - 6, align: cols[2].align });
+        doc.text(fmtAmt(lot.prate),             xs[3] + 3, y + 3, { width: cols[3].w - 6, align: cols[3].align });
+        doc.text(fmtAmt(value),                 xs[4] + 3, y + 3, { width: cols[4].w - 6, align: cols[4].align });
+        doc.text(fmtAmt(discount),              xs[5] + 3, y + 3, { width: cols[5].w - 6, align: cols[5].align });
+        doc.text(fmtAmt(taxable),               xs[7] + 3, y + 3, { width: cols[7].w - 6, align: cols[7].align });
+      }
+      y += ROW_H;
+    }
+    // Bottom border of data area
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
+
+    // TOTAL row
+    const TOT_H = 16;
+    doc.font('Helvetica-Bold').fontSize(9);
+    // Merged "TOTAL" cell across Sl + Lot
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_L, y + TOT_H).stroke();
+    doc.moveTo(xs[2], y).lineTo(xs[2], y + TOT_H).stroke();
+    doc.text('TOTAL', PAGE_L + 3, y + 4, { width: cols[0].w + cols[1].w - 6, align: 'center' });
+    doc.text(fmtQty(totalQty), xs[2] + 3, y + 4, { width: cols[2].w - 6, align: 'right' });
+    doc.moveTo(xs[3], y).lineTo(xs[3], y + TOT_H).stroke();
+    // Skip Rate column on totals row (no average)
+    doc.moveTo(xs[4], y).lineTo(xs[4], y + TOT_H).stroke();
+    doc.text(fmtAmt(totalValue), xs[4] + 3, y + 4, { width: cols[4].w - 6, align: 'right' });
+    doc.moveTo(xs[5], y).lineTo(xs[5], y + TOT_H).stroke();
+    doc.text(fmtAmt(totalDiscount), xs[5] + 3, y + 4, { width: cols[5].w - 6, align: 'right' });
+    doc.moveTo(xs[6], y).lineTo(xs[6], y + TOT_H).stroke();
+    doc.moveTo(xs[7], y).lineTo(xs[7], y + TOT_H).stroke();
+    doc.moveTo(PAGE_R, y).lineTo(PAGE_R, y + TOT_H).stroke();
+    doc.text(fmtAmt(totalTaxable), xs[7] + 3, y + 4, { width: cols[7].w - 6, align: 'right' });
+    y += TOT_H;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
+
+    // GRAND TOTAL row
+    const GT_H = 18;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_L, y + GT_H).stroke();
+    doc.moveTo(xs[5], y).lineTo(xs[5], y + GT_H).stroke();
+    doc.moveTo(xs[7], y).lineTo(xs[7], y + GT_H).stroke();
+    doc.moveTo(PAGE_R, y).lineTo(PAGE_R, y + GT_H).stroke();
+    doc.font('Helvetica-Bold').fontSize(10).text('GRAND TOTAL', xs[5] + 3, y + 5, { width: cols[5].w + cols[6].w - 6, align: 'right' });
+    doc.text(fmtAmt(dn.total || totalTaxable), xs[7] + 3, y + 5, { width: cols[7].w - 6, align: 'right' });
+    y += GT_H;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
+    y += 14;
+
+    // Amount in words
+    const grandTotal = Math.round(Number(dn.total || totalTaxable) || 0);
+    doc.font('Helvetica').fontSize(10).text(
+      `Rupees ${numToIndianWords(grandTotal)} Only`,
+      PAGE_L + 4, y,
+      { width: PAGE_W - 8 }
+    );
+    y = doc.y + 14;
+
+    // "For BUYER" + Authorised Signatory (right-aligned)
+    doc.font('Helvetica-Bold').fontSize(10).text(`For ${buyerName.toUpperCase()}`, PAGE_L, y, { width: PAGE_W - 8, align: 'right' });
+    y += 50;
+    doc.font('Helvetica').fontSize(9).text('Authorised Signatory', PAGE_L, y, { width: PAGE_W - 8, align: 'right' });
+    y += 14;
+
+    // Bottom frame line
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
+    // Left + right outer frame from FRAME_TOP to here
+    doc.moveTo(PAGE_L, FRAME_TOP).lineTo(PAGE_L, y).stroke();
+    doc.moveTo(PAGE_R, FRAME_TOP).lineTo(PAGE_R, y).stroke();
+
+    doc.end();
+  } catch (e) {
+    console.error('[dn-pdf] failed:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
 });
 
 // ══════════════════════════════════════════════════════════════

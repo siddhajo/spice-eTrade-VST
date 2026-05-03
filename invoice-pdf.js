@@ -786,10 +786,13 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   let ry = topY;
 
   // Invoice prefix derives from the live Logo Code (cfg.logo) so the
-  // PDF identifier matches whatever the user configured. `isASP` is
-  // permanently false in this e-Trade build; the dead ternary branches
-  // never fire, so we just pull the primary prefix straight.
-  const primaryPrefix = String(cfg.logo || cfg.inv_prefix || 'ISP').trim() || 'ISP';
+  // Invoice prefix priority — Invoice Settings (`inv_prefix`) wins, since
+  // that's the field labeled "Invoice Prefix" in the Invoice settings tab
+  // and is the value the user explicitly maintains for this purpose.
+  // Falls back to Logo Code (`logo`) only when `inv_prefix` is unset, then
+  // to a literal 'ISP' as a final safety net so the PDF never renders a
+  // prefix-less identifier like "/L-123/2026-27".
+  const primaryPrefix = String(cfg.inv_prefix || cfg.logo || 'ISP').trim() || 'ISP';
   const otherPrefix   = primaryPrefix; // dead — kept for the few downstream sites that still read it
   const primaryCfg    = { ...cfg, inv_prefix: primaryPrefix };
   // ASP invoices always use the "I" segment irrespective of local/interstate
@@ -811,16 +814,13 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
 
   // Row 2 — ONLY for ISP invoices (ASP omits Reference No. / Other References)
   if (!isASP) {
-    // Other References shows the cross-referenced ASP invoice number when
-    // available. Format is fixed: ASP/I-{aspInvo}/{season} — the middle
-    // segment is hardcoded to 'I' per business convention (ASP→ISP transfer
-    // is always treated as inter-state for the cross-reference label,
-    // regardless of the actual ISP sale type to the external buyer).
-    const aspInvo = invoiceData && invoiceData.aspInvo;
-    const otherRefCfg = { ...cfg, inv_prefix: otherPrefix };
-    const otherRefs = formatInvoiceNo(otherRefCfg, 'I', aspInvo || invoiceNo);
+    // Other References — kept blank per business spec. Historically this
+    // showed the cross-referenced ASP invoice number, but the single-
+    // company e-Trade build doesn't have an ASP cross-reference, so the
+    // field stays empty rather than fabricating a value. Reference No. &
+    // Date stays blank too — neither is populated automatically.
     labeledCell(rightX,         ry, rCell, rRow, 'Reference No. & Date.', '');
-    labeledCell(rightX + rCell, ry, rCell, rRow, 'Other References', otherRefs);
+    labeledCell(rightX + rCell, ry, rCell, rRow, 'Other References', '');
   }
 
   y = topY + topHeaderH;
@@ -965,31 +965,18 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   labeledCell(rightX + rCell, ry2, rCell, rSmall, 'Destination', destination);
   ry2 += rSmall;
 
-  // Dispatch From block (sister company) — fills remaining middle height.
-  // Hidden when flag_dispatch is OFF (item 2) — draw an empty bordered cell so
-  // the right-column visual frame still matches the left column's height.
+  // Dispatch From block — kept BLANK per spec. The cell still renders
+  // so the right-column frame visually matches the left column's height,
+  // but no company/address text is populated. (Previously this read
+  // sister-company fields like cfg.s_company / cfg.s_address1, which
+  // are absent in single-company e-Trade installs and produced stale
+  // or default-filled placeholders.)
   const dispatchFromH = midH - rSmall;
+  box(rightX, ry2, rightW, dispatchFromH);
   if (showDispatch) {
-    box(rightX, ry2, rightW, dispatchFromH);
-    const dispatchY = ry2;
-    doc.font('Helvetica-Bold').fontSize(8).text('Dispatch From:', rightX + 3, dispatchY + 4, { width: rightW - 6 });
-    doc.font('Helvetica-Bold').fontSize(9).text(cfg.s_company || 'AMAZING SPICE PARK PRIVATE LIMITED', rightX + 3, dispatchY + 14, { width: rightW - 6 });
-    doc.font('Helvetica').fontSize(8);
-    // Advance dy by actual rendered height so wrapped text doesn't overlap next line.
-    let dy = dispatchY + 26;
-    const dispW = rightW - 6;
-    const writeLine = (txt) => {
-      if (!txt) return;
-      doc.text(txt, rightX + 3, dy, { width: dispW });
-      dy += doc.heightOfString(txt, { width: dispW }) + 1;
-    };
-    writeLine(cfg.s_address1);
-    writeLine(cfg.s_address2);
-    if (cfg.s_state) writeLine(`${cfg.s_state} Code:${cfg.s_st_code || '32'}`);
-    if (cfg.s_gstin) writeLine(`GSTIN.${cfg.s_gstin}`);
-  } else {
-    // Empty bordered cell to keep the frame consistent with the left column
-    box(rightX, ry2, rightW, dispatchFromH);
+    // Render only the "Dispatch From:" label so the cell is identifiable;
+    // body intentionally left empty.
+    doc.font('Helvetica-Bold').fontSize(8).text('Dispatch From:', rightX + 3, ry2 + 4, { width: rightW - 6 });
   }
 
   y = midY + midH;
@@ -1526,14 +1513,21 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const showBank = readFlag(cfg.flag_bank, true);
   if (showBank) {
     doc.font('Helvetica').fontSize(8).text("Company's Bank Details", bkX, bky); bky += 11;
-    // Bank picks:
-    //   Purchase view         → KL bank (ASP is still the selling company, so its bank receives payment)
-    //   ASP sales invoice     → KL bank
-    //   ISP invoices          → TN bank
-    const useKLBank = isASP; // same for both sales AND purchase view when isASP
-    const bankName = useKLBank ? (cfg.bank_kl_name || '') : (cfg.bank_tn_name || '');
-    const bankAcct = useKLBank ? (cfg.bank_kl_acct || '') : (cfg.bank_tn_acct || '');
-    const bankIfsc = useKLBank ? (cfg.bank_kl_ifsc || '') : (cfg.bank_tn_ifsc || '');
+    // Bank pick: driven by business_state (KERALA → KL bank, otherwise TN bank).
+    // The previous logic gated on `isASP`, which is permanently false in
+    // single-company e-Trade — so EVERY invoice fell back to TN bank
+    // regardless of which state the user was actually billing from. When
+    // the user's state was Kerala, the TN bank fields were often blank
+    // (KL-state install never populated them), producing the empty bank
+    // block reported in the bug.
+    const bizState = String(cfg.business_state || '').toUpperCase().trim();
+    const useKLBank = bizState === 'KERALA' || bizState === 'KL' || isASP;
+    const bankName = useKLBank ? (cfg.bank_kl_name || cfg.bank_tn_name || '')
+                                : (cfg.bank_tn_name || cfg.bank_kl_name || '');
+    const bankAcct = useKLBank ? (cfg.bank_kl_acct || cfg.bank_tn_acct || '')
+                                : (cfg.bank_tn_acct || cfg.bank_kl_acct || '');
+    const bankIfsc = useKLBank ? (cfg.bank_kl_ifsc || cfg.bank_tn_ifsc || '')
+                                : (cfg.bank_tn_ifsc || cfg.bank_kl_ifsc || '');
     // Align values at a fixed x so all three rows start at the same column
     const labelW = 90;
     const valX = bkX + labelW;
