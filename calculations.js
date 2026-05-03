@@ -694,39 +694,88 @@ function getPurchaseJournal(db, auctionId, type) {
 
 /**
  * Debit Note calculation
- * For discounts or adjustments against invoices
+ *
+ * IMPORTANT: Debit notes are issued AGAINST PURCHASES — they record a
+ * discount/adjustment we've negotiated with a registered dealer (the
+ * supplier). The instrument is buyer-side: the buyer (us) issues it to
+ * the seller. So the source row is always a `purchases` record, NOT a
+ * sales invoice. An earlier version queried the `invoices` table by
+ * mistake, allowing DNs to be created against sales transactions —
+ * that's wrong and is fixed here.
+ *
+ * Lookup is by purchase invoice number (`purchases.invo`). When a
+ * `saleType` arg is passed it's ignored — purchases don't carry sale
+ * type the way sales invoices do — but we accept it positionally so
+ * legacy callers (e.g. older /api/debit-notes/generate) don't break.
  */
 function buildDebitNote(db, invoiceNo, saleType, discount, cfg) {
-  const inv = db.get('SELECT * FROM invoices WHERE invo = ? AND sale = ?', [String(invoiceNo), saleType]);
+  // Resolve by purchno (`purchases.invo`). Most-recent wins if duplicates
+  // exist (legacy / re-used numbers across years) — matches /generate-bulk.
+  const inv = db.get(
+    `SELECT * FROM purchases
+      WHERE invo = ?
+      ORDER BY date DESC, id DESC
+      LIMIT 1`,
+    [String(invoiceNo)]
+  );
   if (!inv) return null;
 
-  const gstGoods = cfg.gst_goods || 5;
-  const isInter = inv.igst > 0;
+  // GST rate for the discount itself. The DN is a service charge
+  // (discount-as-credit-note), which uses the discount_gst setting
+  // (typically 18%) — NOT the goods rate (gst_goods, 5% for cardamom).
+  // Earlier code used gst_goods, producing wrong tax on every DN.
+  const gstRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
+
+  // Intra/inter mirrors the source purchase: if the purchase was inter-
+  // state (igst > 0), the DN inherits IGST; otherwise CGST + SGST.
+  const isInter = (Number(inv.igst) || 0) > 0;
 
   const amount = Math.round(discount * 100) / 100;
   let cgst = 0, sgst = 0, igst = 0;
-  
+
   if (cfg.flag_disc_gst) {
     // Discount amount includes GST — extract it
-    const factor = 100 / (100 + gstGoods);
+    const factor = 100 / (100 + gstRate);
     const taxable = amount * factor;
     if (isInter) igst = Math.round((amount - taxable) * 100) / 100;
-    else { 
+    else {
       const tax = (amount - taxable) / 2;
       cgst = Math.round(tax * 100) / 100;
       sgst = Math.round(tax * 100) / 100;
     }
   } else {
     // Discount is pre-tax — add GST on top
-    if (isInter) igst = Math.round(amount * gstGoods / 100 * 100) / 100;
+    if (isInter) igst = Math.round(amount * gstRate / 100 * 100) / 100;
     else {
-      cgst = Math.round(amount * (gstGoods / 2) / 100 * 100) / 100;
-      sgst = Math.round(amount * (gstGoods / 2) / 100 * 100) / 100;
+      cgst = Math.round(amount * (gstRate / 2) / 100 * 100) / 100;
+      sgst = Math.round(amount * (gstRate / 2) / 100 * 100) / 100;
     }
   }
-  
-  const total = amount + cgst + sgst + igst;
-  return { invoice: inv, amount, cgst, sgst, igst, total };
+
+  const total = Math.round((amount + cgst + sgst + igst) * 100) / 100;
+
+  // Return shape mirrors the original (callers read `invoice.ano`,
+  // `invoice.buyer`, etc.). Re-aliases so a purchase row works as the
+  // `invoice` field without callers needing to change.
+  // Map purchase fields → invoice-like fields:
+  //   purchases.name  → buyer / buyer1 (party = the dealer we're crediting)
+  //   purchases.state → state
+  //   purchases.ano   → ano (trade number, used for DN date lookup)
+  return {
+    invoice: {
+      ano:    inv.ano,
+      state:  inv.state,
+      buyer:  inv.name,
+      buyer1: inv.name,
+      invo:   inv.invo,
+      // Carry intra/inter state of source so downstream code that reads
+      // inv.igst > 0 still works.
+      igst:   inv.igst,
+      cgst:   inv.cgst,
+      sgst:   inv.sgst,
+    },
+    amount, cgst, sgst, igst, total,
+  };
 }
 
 module.exports = {

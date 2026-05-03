@@ -2561,16 +2561,24 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <!-- DEBIT NOTES -->
     <div class="tc" id="tc-debit">
       <div class="card">
-        <h2>Debit Notes <span style="font-weight:400;font-size:12px;color:var(--text3)">For discounts/adjustments on sales invoices</span></h2>
+        <h2>Debit Notes <span style="font-weight:400;font-size:12px;color:var(--text3)">For discounts/adjustments on purchases</span></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
-          <!-- Generate Debit Note: prompts for ONE purchase invoice number;
-               creates DNs for every sales invoice tied to that purchase's
-               trade. Idempotent skip on already-DN'd invoices. -->
-          <button class="btn btn-g" onclick="showModal('gen-debit-modal')">Generate Debit Note</button>
-          <!-- Generate All: no input — iterates every purchase invoice in
-               the system and generates DNs across ALL trades. Confirm
-               required because this can create hundreds of rows. -->
-          <button class="btn btn-a" onclick="showModal('gen-debit-bulk-modal')">Generate All</button>
+          <!-- Trade selector: shared scope for BOTH actions below. The
+               list view filters by it; both Generate buttons inherit it
+               so neither action can ever cross trade boundaries. -->
+          <select id="dn-auction" onchange="loadDebitNotes()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Generate Debit Note (single): inputs = trade (dropdown) +
+               purchase invoice number (modal). Generates ONE DN for the
+               specified purchase, validated to belong to the selected
+               trade. -->
+          <button class="needs-invoice-write btn btn-g" onclick="openGenDebitSingleModal()">+ Generate Debit Note</button>
+
+          <!-- Generate All (trade-scoped): input = trade (dropdown).
+               Generates one DN per eligible purchase IN THAT TRADE ONLY.
+               No cross-trade data. -->
+          <button class="needs-invoice-write btn btn-a" onclick="openGenDebitAllModal()">⚡ Generate All</button>
+
           <!-- Bulk actions on ticked rows. Hidden until at least one row
                is selected; the count badge updates live as boxes toggle. -->
           <button id="dn-bulk-print" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedDebitNotes()" title="Print all ticked debit notes as one combined PDF">🖨 Print Selected <span id="dn-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
@@ -3090,33 +3098,51 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   </div>
 </div></div>
 
-<!-- Generate Debit Note: takes ONE purchase invoice number, generates DNs
-     for every sales invoice in that purchase's trade. (Replaces the old
-     manual single-DN modal which required invoice no + discount + note no
-     — that flow is gone, the user no longer keys discount/note manually.) -->
-<div class="modal-bg" id="gen-debit-modal"><div class="modal">
+<!-- Trade-aware DN generation modal. Shows a live preview of every
+     purchase in the currently-selected trade that doesn't yet have a
+     debit note, lets the user review the count + total discount, and
+     submits to /api/debit-notes/generate-bulk keyed by `ano`. -->
+<!-- Generate Debit Note (SINGLE) — inputs: trade (from dropdown) + the
+     purchase invoice number entered here. Validates that the invoice
+     exists AND belongs to the selected trade before creating one DN.
+     Cross-trade attempts are rejected at both client and server. -->
+<div class="modal-bg" id="gen-debit-single-modal"><div class="modal">
   <h2>Generate Debit Note</h2>
-  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Enter a purchase invoice number — debit notes will be generated for every sales invoice connected to that purchase's trade. Already-DN'd invoices are skipped.</p>
-  <div class="fg"><label>Purchase Invoice #</label><input id="gd-purchno" autocomplete="off"></div>
-  <div id="gd-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+    Generates one debit note for the specified purchase invoice.
+    The invoice must belong to the selected trade.
+  </p>
+  <div id="gd1-trade-info" style="padding:8px 12px;background:var(--green-bg);border-radius:6px;font-size:13px;margin-bottom:14px;font-weight:600">—</div>
+  <div class="fg">
+    <label>Purchase Invoice #</label>
+    <input id="gd1-purchno" autocomplete="off" placeholder="e.g. P-100">
+  </div>
+  <div id="gd1-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
   <div class="actions">
-    <button class="btn btn-o" onclick="hideModal('gen-debit-modal')">Cancel</button>
-    <button class="btn btn-g" id="gd-save" onclick="generateDebitNote()">Generate</button>
+    <button class="btn btn-o" onclick="hideModal('gen-debit-single-modal')">Cancel</button>
+    <button class="btn btn-g" id="gd1-save" onclick="generateDebitNoteSingle()">Generate</button>
   </div>
 </div></div>
 
-<!-- Generate All: NO input — iterates every purchase invoice across every
-     trade in the system. Used for end-of-season cleanup or when bulk-DN
-     posture needs to be applied across the whole DB. Confirmation required
-     since this can insert hundreds of rows in one click. -->
-<div class="modal-bg" id="gen-debit-bulk-modal"><div class="modal">
+<!-- Generate All — input: trade (from dropdown). Generates one DN per
+     eligible purchase IN THAT TRADE ONLY. Shows a preview of what will
+     be created (eligible purchases + total amount) before commit. -->
+<div class="modal-bg" id="gen-debit-all-modal"><div class="modal" style="max-width:560px">
   <h2>Generate All Debit Notes</h2>
-  <p style="font-size:12px;color:var(--text2);margin-bottom:14px"><strong>This will scan every purchase invoice in the database</strong> and generate debit notes for every linked sales invoice. Already-DN'd invoices are skipped.</p>
-  <p style="font-size:12px;color:#92400E;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:8px 10px;margin-bottom:14px">⚠ Depending on your DB size, this can insert hundreds of debit notes.</p>
-  <div id="gd-bulk-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+    Generates one debit note per eligible purchase in the selected trade.
+    Purchases already having a debit note are skipped automatically.
+    <strong>No cross-trade data</strong> — only purchases under this trade
+    are touched.
+  </p>
+  <div id="gda-trade-info" style="padding:8px 12px;background:var(--green-bg);border-radius:6px;font-size:13px;margin-bottom:10px;font-weight:600">—</div>
+  <div id="gda-preview" style="font-size:12px;color:var(--text2);max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px;background:#fafafa">
+    <em>Loading eligible purchases…</em>
+  </div>
+  <div id="gda-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
   <div class="actions">
-    <button class="btn btn-o" onclick="hideModal('gen-debit-bulk-modal')">Cancel</button>
-    <button class="btn btn-g" id="gd-bulk-save" onclick="generateAllDebitNotes()">Generate for ALL purchases</button>
+    <button class="btn btn-o" onclick="hideModal('gen-debit-all-modal')">Cancel</button>
+    <button class="btn btn-g" id="gda-save" onclick="generateAllDebitNotesForTrade()">Generate</button>
   </div>
 </div></div>
 
@@ -4107,7 +4133,7 @@ function go(tab){
   const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
-    bills:loadBillAuctions,debit:loadDebitNotes,journals:loadJournalDefault,tally:loadTallyAuctions};
+    bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,tally:loadTallyAuctions};
   if(loaders[tab]){
     try{
       const r=loaders[tab]();
@@ -9264,8 +9290,29 @@ async function viewBillPDF(auctionId,sellerName,billNo){
 async function delBill(id){if(!confirm('Delete bill?'))return;await j(`/api/bills/${id}`,{method:'DELETE'});loadBills()}
 
 // ── Debit Notes ────────────────────────────────────────────
+// loadDnAuctions — populate the trade dropdown when the DN tab opens.
+// Mirrors loadInvAuctions / loadPurAuctions in shape; chained off the
+// nav routing so it fires on every tab activation, not just first open
+// (otherwise newly-created trades won't appear).
+function loadDnAuctions() {
+  fillAucSelect('dn-auction').then(() => loadDebitNotes());
+}
+
+// loadDebitNotes — list view. Filters by the dn-auction dropdown's
+// selected trade ID (resolved to its `ano`) so users only see DNs for
+// the trade they're currently working on. With no selection, shows all.
 async function loadDebitNotes(){
-  const d=await j('/api/debit-notes');
+  const aid = document.getElementById('dn-auction')?.value || '';
+  // Resolve trade id → ano. The DN table stores `ano` (the trade
+  // number string) rather than the auction id FK, so filtering happens
+  // client-side after fetch. Cheap because DN counts are small.
+  let filterAno = '';
+  if (aid) {
+    const opt = document.querySelector(`#dn-auction option[value="${aid}"]`);
+    if (opt) filterAno = (opt.textContent || '').split('—')[0].trim();
+  }
+  const all = await j('/api/debit-notes');
+  const d = filterAno ? all.filter(n => String(n.ano) === filterAno) : all;
   DataTable.mount('debit-list', d, {
     columns: [
       { key:'_select', label:'',
@@ -9315,46 +9362,156 @@ async function saveDebitEdit(){
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
     hideModal('dn-edit-modal');toast('Debit note updated');loadDebitNotes();
   }catch(e){showError(e)}}
-// "Generate Debit Note" — one purchase invoice number, server expands to
-// all DNs for that purchase's trade. Replaces the old manual single-DN
-// flow which required invoice no + discount + note no separately.
-async function generateDebitNote(){
-  const purchno = (document.getElementById('gd-purchno').value || '').trim();
-  const errEl   = document.getElementById('gd-err');
+
+// openGenDebitModal — opens the trade-aware DN modal. Validates that a
+// trade is selected, then loads the eligible-purchases preview before
+// the user clicks Generate. The trade is taken from the dn-auction
+// dropdown (single source of truth — same dropdown that filters the
+// list above), so the user can never generate DNs for a different
+// trade than they're viewing.
+// ── Shared trade-context resolver ─────────────────────────────────
+// Both Generate Debit Note (single) and Generate All read the trade
+// from the SAME source of truth: the dn-auction dropdown. Returns
+// { auctionId, ano, label } or null when no trade is selected. All DN
+// generation paths must go through this — keeps the trade scope
+// consistent and prevents accidental cross-trade actions.
+function _resolveDnTrade() {
+  const sel = document.getElementById('dn-auction');
+  const aid = sel ? sel.value : '';
+  if (!aid) return null;
+  const label = sel.options[sel.selectedIndex]?.textContent || '';
+  const ano = (label.split('—')[0] || '').trim();
+  return ano ? { auctionId: aid, ano, label } : null;
+}
+
+// ── Generate Debit Note (SINGLE) ─────────────────────────────────
+// Inputs: trade (dropdown) + purchase invoice number (modal field).
+// Generates ONE DN for that purchase, validated server-side to belong
+// to the selected trade.
+function openGenDebitSingleModal(){
+  const t = _resolveDnTrade();
+  if (!t) { alert('Select a trade first'); return; }
+  document.getElementById('gd1-trade-info').textContent = `Trade: ${t.label}`;
+  document.getElementById('gd1-purchno').value = '';
+  document.getElementById('gd1-err').style.display = 'none';
+  showModal('gen-debit-single-modal');
+  // Focus the input so the user can type immediately.
+  setTimeout(() => document.getElementById('gd1-purchno').focus(), 50);
+}
+
+async function generateDebitNoteSingle(){
+  const t = _resolveDnTrade();
+  if (!t) { alert('Select a trade first'); return; }
+  const purchno = (document.getElementById('gd1-purchno').value || '').trim();
+  const errEl = document.getElementById('gd1-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+  errEl.style.display = 'none';
   if (!purchno) return showErr('Enter a purchase invoice number');
-  const btn = document.getElementById('gd-save');
-  btn.disabled = true;
+  const btn = document.getElementById('gd1-save');
+  btn.disabled = true; btn.textContent = 'Generating…';
   try {
-    // Use j() wrapper — handles non-JSON responses (e.g. Railway's HTML
-    // error pages, expired-session redirect pages), surfaces a clean
-    // error message, and auto-redirects to login on 401. Raw fetch +
-    // .json() was throwing "Unexpected token '<' ..." when the server
-    // returned anything other than JSON.
-    const d = await j('/api/debit-notes/generate-bulk', {
+    // Server endpoint /api/debit-notes/generate enforces:
+    //   1. invoice exists in `purchases`
+    //   2. `purchases.ano === ano` (selected trade)
+    //   3. no duplicate DN for (ano, dealer) pair
+    // All three checks are server-side — never trust client filtering.
+    const d = await j('/api/debit-notes/generate', {
       method: 'POST',
-      body: JSON.stringify({ purchno })
+      body: JSON.stringify({ purchno, ano: t.ano })
     });
-    hideModal('gen-debit-modal');
-    document.getElementById('gd-purchno').value = '';
-    errEl.style.display = 'none';
-    const c = d.created || 0;
-    const s = d.skipped || 0;
-    window._lastSkippedDn = Array.isArray(d.skippedDetails) ? d.skippedDetails : [];
-    // When server returns nothing-to-do (0/0), surface the explanatory
-    // `note` field so the user knows WHY (e.g. "No sales invoices in
-    // this trade", "Purchase invoice not found"). Without this they'd
-    // see a confusing "0 DNs · 0 skipped" with no context.
-    if (c === 0 && s === 0 && d.note) {
+    hideModal('gen-debit-single-modal');
+    if (d.created) {
+      toast(`Debit note #${d.note_no} generated for purchase ${purchno}`);
+    } else if (d.note) {
       toast(d.note);
     } else {
-      showDnGenerateResult(c, s);
+      toast('Generated');
     }
     loadDebitNotes();
   } catch (e) {
     showErr(e.message || 'Failed');
   } finally {
-    btn.disabled = false;
+    btn.disabled = false; btn.textContent = 'Generate';
+  }
+}
+
+// ── Generate All (TRADE-SCOPED) ──────────────────────────────────
+// Input: trade (dropdown only). Generates DNs for every eligible
+// purchase IN THAT TRADE — never cross-trade.
+function openGenDebitAllModal(){
+  const t = _resolveDnTrade();
+  if (!t) { alert('Select a trade first'); return; }
+  document.getElementById('gda-trade-info').textContent = `Trade: ${t.label}`;
+  document.getElementById('gda-err').style.display = 'none';
+  document.getElementById('gda-preview').innerHTML = '<em>Loading eligible purchases…</em>';
+  showModal('gen-debit-all-modal');
+  loadGenDebitAllPreview(t.auctionId);
+}
+
+// Loads a preview of every purchase in the selected trade that doesn't
+// yet have a DN. Server endpoint /eligible-purchases/:auctionId does
+// the anti-join — purchases with no matching debit_notes row.
+async function loadGenDebitAllPreview(auctionId) {
+  const host = document.getElementById('gda-preview');
+  try {
+    const data = await j(`/api/debit-notes/eligible-purchases/${auctionId}`);
+    if (!data || !data.length) {
+      host.innerHTML = '<div style="color:var(--amber);text-align:center;padding:14px">No eligible purchases. All purchases in this trade already have a debit note, or no purchases exist for this trade.</div>';
+      document.getElementById('gda-save').disabled = true;
+      return;
+    }
+    document.getElementById('gda-save').disabled = false;
+    const totalAmt = data.reduce((s, r) => s + Number(r.amount || 0), 0);
+    host.innerHTML = `
+      <div style="font-weight:600;margin-bottom:6px;color:var(--text1)">${data.length} eligible purchase${data.length === 1 ? '' : 's'} · ₹${fmtI(totalAmt, 2)} total</div>
+      <table style="width:100%;font-size:11px;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border);text-align:left">
+          <th style="padding:4px 6px">Inv#</th><th style="padding:4px 6px">Dealer</th>
+          <th style="padding:4px 6px;text-align:right">Amount</th>
+        </tr></thead>
+        <tbody>
+        ${data.map(r => `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:4px 6px;font-family:monospace">${esc(r.invo)}</td>
+          <td style="padding:4px 6px">${esc(r.name || '—')}</td>
+          <td style="padding:4px 6px;text-align:right;font-family:monospace">${fmtI(r.amount || 0, 2)}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    host.innerHTML = `<div style="color:var(--spice-chili);text-align:center;padding:14px">Failed to load: ${esc(e.message || e)}</div>`;
+    document.getElementById('gda-save').disabled = true;
+  }
+}
+
+async function generateAllDebitNotesForTrade(){
+  const t = _resolveDnTrade();
+  if (!t) { alert('Select a trade first'); return; }
+  const errEl = document.getElementById('gda-err');
+  const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+  errEl.style.display = 'none';
+  const btn = document.getElementById('gda-save');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  try {
+    const d = await j('/api/debit-notes/generate-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ ano: t.ano })
+    });
+    hideModal('gen-debit-all-modal');
+    const c = d.created || 0;
+    const s = d.skipped || 0;
+    window._lastSkippedDn = Array.isArray(d.skippedDetails) ? d.skippedDetails : [];
+    if (c === 0 && s === 0 && d.note) {
+      toast(d.note);
+    } else if (typeof showDnGenerateResult === 'function') {
+      showDnGenerateResult(c, s);
+    } else {
+      toast(`Generated ${c}${s ? ` · ${s} skipped` : ''}`);
+    }
+    loadDebitNotes();
+  } catch (e) {
+    showErr(e.message || 'Failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate';
   }
 }
 
@@ -9473,40 +9630,11 @@ async function printDebitNote(id){
   }
 }
 
-// "Generate All" — no input. Server iterates every distinct purchase
-// invoice in the system and generates DNs for each linked sales invoice.
-async function generateAllDebitNotes(){
-  const errEl = document.getElementById('gd-bulk-err');
-  const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
-  if (!confirm('Generate debit notes for EVERY purchase invoice in the system? This may insert hundreds of rows.')) {
-    return;
-  }
-  const btn = document.getElementById('gd-bulk-save');
-  btn.disabled = true;
-  try {
-    const d = await j('/api/debit-notes/generate-all', {
-      method: 'POST',
-      body: '{}'
-    });
-    hideModal('gen-debit-bulk-modal');
-    errEl.style.display = 'none';
-    window._lastSkippedDn = Array.isArray(d.skippedDetails) ? d.skippedDetails : [];
-    const c = d.created || 0;
-    const s = d.skipped || 0;
-    const p = d.purchases_scanned || 0;
-    showDnGenerateResult(c, s, `Scanned ${p} purchase invoice${p === 1 ? '' : 's'}`);
-    loadDebitNotes();
-  } catch (e) {
-    showErr(e.message || 'Failed');
-  } finally {
-    btn.disabled = false;
-  }
-}
-
 // Result toast with optional "View skipped" affordance. Used by both
-// generateDebitNote (single purchase) and generateAllDebitNotes (full
-// sweep). When skipped > 0, the toast is rendered as an inline element
-// with a clickable link that opens the skipped-details modal.
+// generateDebitNoteSingle (single purchase) and generateAllDebitNotesForTrade
+// (per-trade sweep). When skipped > 0, the toast is rendered as an
+// inline element with a clickable link that opens the skipped-details
+// modal.
 function showDnGenerateResult(created, skipped, prefix){
   const baseMsg = `${prefix ? prefix + ' · ' : ''}${created} DN${created === 1 ? '' : 's'} created · ${skipped} skipped`;
   if (skipped > 0 && (window._lastSkippedDn || []).length) {
