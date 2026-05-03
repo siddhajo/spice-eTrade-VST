@@ -3309,32 +3309,41 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     // the BUYER (the party benefiting from the discount, who issues the
     // credit/debit note in their books) prints on top with their address
     // + GSTIN, then "CREDIT NOTE/DEBIT NOTE" banner, then ISP company
-    // appears as the recipient block in the middle. So `dn.name` (which
-    // we store as the buyer name from the matched purchase/invoice) is
-    // the LETTERHEAD identity.
-    const buyerName = String(dn.name || '').trim();
-    const buyer = buyerName
-      ? db.get(`SELECT * FROM buyers WHERE UPPER(buyer1) = UPPER(?) OR UPPER(buyer) = UPPER(?) LIMIT 1`,
-               [buyerName, buyerName])
+    // appears as the recipient block in the middle.
+    //
+    // IMPORTANT: a Debit Note is a PURCHASE-side instrument issued by US
+    // (the buyer) TO our supplier (the dealer). So `dn.name` stores the
+    // DEALER name (the seller from `purchases.name`), not a buyer code.
+    // This was the source of the qty/rate/value=0 bug: an earlier query
+    // joined to `lots` by buyer1/buyer (matching nobody, since the DN
+    // owner is on the SELLER side), so every row fell through to the
+    // synthetic zero-value placeholder.
+    const dealerName = String(dn.name || '').trim();
+    // Look up the dealer's record (used for letterhead address/GSTIN).
+    // Dealers live in `traders`, not `buyers` — buyers are the trade-
+    // winners (our customers), traders are our suppliers. Match by
+    // exact name with a UPPER() guard for case differences.
+    const buyer = dealerName
+      ? db.get(`SELECT * FROM traders WHERE UPPER(name) = UPPER(?) LIMIT 1`, [dealerName])
       : null;
-    // Look up the per-lot line items: the discount is applied across
-    // every lot in this trade where the buyer's purchase rolled up. We
-    // join on auctions(ano) and filter to the buyer that owns the DN.
-    // If buyers table doesn't resolve a buyer code, we fall back to
-    // matching lot.buyer1 / lot.buyer by name string (covers older data
-    // where buyers weren't normalised yet).
+
+    // Pull the per-lot line items from this trade for THIS dealer. The
+    // DN's discount is allocated proportionally to puramt across the
+    // dealer's lots (so the per-lot Discount column sums back to the
+    // DN total). Match on `lots.name` (seller) — same column the
+    // purchase invoice uses.
     const auction = db.get('SELECT * FROM auctions WHERE ano = ? LIMIT 1', [dn.ano]);
     let lots = [];
     if (auction) {
-      const candidates = db.all(
-        `SELECT lot_no, qty, prate, puramt
+      lots = db.all(
+        `SELECT lot_no, qty, prate, puramt, pqty
            FROM lots
           WHERE auction_id = ?
-            AND (UPPER(COALESCE(buyer1,'')) = UPPER(?) OR UPPER(COALESCE(buyer,'')) = UPPER(?))
+            AND UPPER(COALESCE(name,'')) = UPPER(?)
+            AND amount > 0
           ORDER BY CAST(lot_no AS INTEGER), lot_no`,
-        [auction.id, buyerName, (buyer && buyer.buyer) || buyerName]
+        [auction.id, dealerName]
       );
-      lots = candidates;
     }
 
     // Distribute the DN amount across lots proportionally to puramt so
@@ -3405,15 +3414,26 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     // Top-right ORIGINAL/DUPLICATE/TRIPLICATE strip
     doc.font('Helvetica').fontSize(8).text('ORIGINAL/DUPLICATE/TRIPLICATE', PAGE_L, 32, { width: PAGE_W, align: 'right' });
 
-    // Buyer letterhead (top): name centered bold, address + GSTIN
+    // Dealer letterhead (top): name centered bold, address + GSTIN.
+    // Address resolution from traders table:
+    //   padd  → place-of-business address line
+    //   ppla  → city/place
+    //   pstate + pin → state + pin code
+    // Each piece is optional; we render only what's present, comma-joined.
     let y = 50;
-    doc.font('Helvetica-Bold').fontSize(15).text(buyerName.toUpperCase(), PAGE_L, y, { width: PAGE_W, align: 'center' });
+    doc.font('Helvetica-Bold').fontSize(15).text(dealerName.toUpperCase(), PAGE_L, y, { width: PAGE_W, align: 'center' });
     y = doc.y + 2;
     doc.font('Helvetica').fontSize(9);
-    const buyerAddr = (buyer && (buyer.add_line || buyer.address)) || '';
-    if (buyerAddr) { doc.text(buyerAddr, PAGE_L, y, { width: PAGE_W, align: 'center' }); y = doc.y; }
-    const buyerGstin = (buyer && buyer.gstin) || '';
-    if (buyerGstin) { doc.font('Helvetica-Bold').text(`GSTIN: ${buyerGstin}`, PAGE_L, y, { width: PAGE_W, align: 'center' }); y = doc.y; }
+    const dealerAddrParts = buyer ? [
+      buyer.padd, buyer.ppla, buyer.pin, buyer.pstate,
+    ].filter(s => s && String(s).trim()) : [];
+    const dealerAddr = dealerAddrParts.join(', ');
+    if (dealerAddr) { doc.text(dealerAddr, PAGE_L, y, { width: PAGE_W, align: 'center' }); y = doc.y; }
+    // Dealer GSTIN: traders.cr stores it (legacy "GSTIN.<15>" or bare 15-char).
+    // Strip the 'GSTIN.' prefix for clean rendering.
+    let dealerGstin = (buyer && buyer.cr) || '';
+    if (/^GSTIN\.?/i.test(dealerGstin)) dealerGstin = dealerGstin.replace(/^GSTIN\.?/i, '');
+    if (dealerGstin) { doc.font('Helvetica-Bold').text(`GSTIN: ${dealerGstin}`, PAGE_L, y, { width: PAGE_W, align: 'center' }); y = doc.y; }
     y += 6;
 
     // Outer frame starts here
@@ -3426,24 +3446,32 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     y = doc.y + 4;
     doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke(); y += 6;
 
-    // Recipient block: ISP company on left, Note No / Date on right
-    const company = cfg.short_name || cfg.company_name || cfg.tally_company_name || '';
-    const ispGstin = cfg.gstin || '';
-    const ispPan   = cfg.pan || (ispGstin ? ispGstin.slice(2, 12) : '');
-    const ispState = (cfg.business_state || '').toUpperCase();
-    const ispStateCode = cfg.tally_state_code || (ispState === 'KERALA' ? '32' : '33');
-    const ispAddr  = cfg.address1 || cfg.r_address1 || '';
-    const ispPlace = cfg.r_place || '';
+    // Recipient block: OUR company on left, Note No / Date on right.
+    // Reads from the central company-identity resolver so the address
+    // appears below the company name reliably (the previous code looked
+    // for `cfg.address1` / `cfg.r_address1`, neither of which exist in
+    // the e-Trade single-company schema — both were always blank,
+    // dropping the address line entirely).
+    const _ident = getCompanyIdentity(cfg);
+    const company       = _ident.name || cfg.short_name || '';
+    const ispGstin      = _ident.gstin;
+    const ispPan        = _ident.pan;
+    const ispState      = _ident.state;
+    const ispStateCode  = _ident.stateCode || (ispState === 'KERALA' ? '32' : '33');
+    const ispAddrLine1  = _ident.address1;
+    const ispAddrLine2  = _ident.address2;
 
     const noteRefSuffix = (cfg.season_short || cfg.tally_season || '26-27').replace(/[^0-9-]/g,'');
 
     doc.font('Helvetica-Bold').fontSize(10).text(company.toUpperCase(), PAGE_L + 4, y);
     doc.font('Helvetica-Bold').fontSize(10).text(`No.: ${dn.note_no || ''}/${noteRefSuffix}`, PAGE_R - 200, y, { width: 196, align: 'right' });
     y = doc.y + 2;
-    if (ispAddr) doc.font('Helvetica').fontSize(9).text(ispAddr, PAGE_L + 4, y);
+    // Address line 1 sits directly under the company name. Both lines
+    // optional — render whichever are populated.
+    if (ispAddrLine1) doc.font('Helvetica').fontSize(9).text(ispAddrLine1, PAGE_L + 4, y);
     doc.font('Helvetica-Bold').fontSize(9).text(`Date :${fmtDate(dn.date)}`, PAGE_R - 200, y, { width: 196, align: 'right' });
     y = doc.y + 2;
-    if (ispPlace) { doc.font('Helvetica').fontSize(9).text(ispPlace, PAGE_L + 4, y); y = doc.y; }
+    if (ispAddrLine2) { doc.font('Helvetica').fontSize(9).text(ispAddrLine2, PAGE_L + 4, y); y = doc.y; }
     if (ispGstin) { doc.font('Helvetica').fontSize(9).text(`GSTIN : ${ispGstin}`, PAGE_L + 4, y); y = doc.y; }
     if (ispPan)   { doc.font('Helvetica').fontSize(9).text(`PAN   : ${ispPan}`,   PAGE_L + 4, y); y = doc.y; }
     if (ispState) { doc.font('Helvetica').fontSize(9).text(`STATE : ${ispState}    CODE:${ispStateCode}`, PAGE_L + 4, y); y = doc.y; }
@@ -3560,8 +3588,9 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     );
     y = doc.y + 14;
 
-    // "For BUYER" + Authorised Signatory (right-aligned)
-    doc.font('Helvetica-Bold').fontSize(10).text(`For ${buyerName.toUpperCase()}`, PAGE_L, y, { width: PAGE_W - 8, align: 'right' });
+    // "For DEALER" + Authorised Signatory (right-aligned). The DN is
+    // signed off by the dealer (the party crediting the discount).
+    doc.font('Helvetica-Bold').fontSize(10).text(`For ${dealerName.toUpperCase()}`, PAGE_L, y, { width: PAGE_W - 8, align: 'right' });
     y += 50;
     doc.font('Helvetica').fontSize(9).text('Authorised Signatory', PAGE_L, y, { width: PAGE_W - 8, align: 'right' });
     y += 14;
