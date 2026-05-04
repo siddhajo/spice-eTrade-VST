@@ -2347,6 +2347,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="loadPayments()">↻ Reload</button>
           </div>
 
+          <!-- Delete Selected: appears only when at least one row's
+               checkbox is ticked. Acts on the underlying lots — the
+               Payments table is a derived view, so deleting "rows" here
+               actually clears those sellers' lots in the selected trade. -->
+          <button id="pay-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPayments()" title="Delete the lots for the selected sellers in this trade">🗑 Delete Selected <span id="pay-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('bank_payment')" title="Export bulk RTGS/NEFT file for bank portal upload">📤 Export Bank Payment</button>
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment')" title="Per-lot detailed payment breakdown">📊 Export Payment XLSX</button>
@@ -2583,7 +2589,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
                is selected; the count badge updates live as boxes toggle. -->
           <button id="dn-bulk-print" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedDebitNotes()" title="Print all ticked debit notes as one combined PDF">🖨 Print Selected <span id="dn-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           <button id="dn-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedDebitNotes()" title="Delete all ticked debit notes">🗑 Delete Selected</button>
-          <button class="needs-delete-all btn" style="background:#c0392b;color:#fff;margin-left:auto" onclick="deleteAll('debit-notes','Debit Notes')">Delete All</button>
+          <button class="needs-delete-all btn" style="background:#c0392b;color:#fff;margin-left:auto" onclick="deleteAllDebitNotesForTrade()">Delete All (this trade)</button>
         </div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
       </div>
@@ -4029,6 +4035,15 @@ const DataTable = (function(){
       const s = state[tbodyId]; if (!s) return;
       s.visible += PAGE_SIZE;
       render(tbodyId);
+    },
+    // Force-clear the cached state for a tbody. Used by Reload-style
+    // actions where the caller wants the next mount() call to render
+    // with default sort/search/pagination instead of inheriting the
+    // previous user-driven state. Without this the table can appear
+    // unchanged after a reload because filters from the prior view
+    // mask the new rows.
+    _reset(tbodyId){
+      delete state[tbodyId];
     }
   };
 })();
@@ -8970,12 +8985,96 @@ async function viewPurchasePDF(auctionId,sellerName,invNo){
 }
 
 // ── Payments ──────────────────────────────────────────────
+// ── Payments bulk actions ────────────────────────────────────────
+// "Delete Selected" on the Payments tab acts on the underlying lots
+// (Payments is a derived view). Tick a row → its seller's lots in
+// THIS trade are queued for deletion. Buttons stay hidden until at
+// least one box is ticked.
+
+function toggleAllPayments(state) {
+  const body = document.getElementById('payments-list');
+  if (!body) return;
+  body.querySelectorAll('.pay-select-cb').forEach(cb => { cb.checked = !!state; });
+  updatePaymentBulkButtons();
+}
+
+function updatePaymentBulkButtons() {
+  const body = document.getElementById('payments-list');
+  if (!body) return;
+  const checked = body.querySelectorAll('.pay-select-cb:checked').length;
+  const total   = body.querySelectorAll('.pay-select-cb').length;
+  const btn = document.getElementById('pay-bulk-del');
+  const cnt = document.getElementById('pay-sel-count');
+  if (btn) btn.style.display = checked > 0 ? '' : 'none';
+  if (cnt) cnt.textContent = checked > 0 ? String(checked) : '';
+  // Sync master checkbox with state — checked when ALL visible are
+  // ticked, indeterminate when SOME are.
+  const master = document.getElementById('pay-select-all');
+  if (master) {
+    master.checked = checked > 0 && checked === total;
+    master.indeterminate = checked > 0 && checked < total;
+  }
+}
+
+async function deleteSelectedPayments() {
+  const body = document.getElementById('payments-list');
+  if (!body) return;
+  const aid = document.getElementById('pay-auction').value;
+  if (!aid) { alert('Select a trade first'); return; }
+  const names = Array.from(body.querySelectorAll('.pay-select-cb:checked'))
+    .map(cb => cb.value)
+    .filter(Boolean);
+  if (!names.length) { toast('Tick one or more sellers first'); return; }
+  if (!confirm(
+    `Delete the lots for ${names.length} seller${names.length === 1 ? '' : 's'} in this trade?\n\n` +
+    `This will permanently remove all lots (and any debit notes) for the selected sellers in this auction. ` +
+    `Other trades' data is not touched. This action CANNOT be undone.`
+  )) return;
+  try {
+    const d = await j(`/api/payments/${aid}/delete-sellers`, {
+      method: 'POST',
+      body: JSON.stringify({ sellerNames: names })
+    });
+    toast(`Deleted ${d.lotsDeleted || 0} lot${(d.lotsDeleted || 0) === 1 ? '' : 's'}` +
+          (d.dnsDeleted ? ` + ${d.dnsDeleted} DN${d.dnsDeleted === 1 ? '' : 's'}` : '') +
+          ` for ${d.sellers || 0} seller${(d.sellers || 0) === 1 ? '' : 's'}`);
+    loadPayments();
+  } catch (e) {
+    showError(e);
+  }
+}
+
 async function loadPayments(){
   const aid=document.getElementById('pay-auction').value;
   const body=document.getElementById('payments-list');
-  if(!aid){body.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">Select an auction above</td></tr>';return}
+  if(!aid){body.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Select an auction above</td></tr>';return}
+
+  // Visual feedback — set the body to a loading state so the user sees
+  // an obvious refresh even when the underlying data hasn't changed.
+  // Without this the click silently re-fetches and re-renders the same
+  // numbers, so the "Reload" feels broken even when it's working.
+  body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Loading…</td></tr>';
+
+  // Force a fresh DataTable state for this tbody so any retained sort
+  // direction / pagination doesn't mask the new data. Without this the
+  // table can render stale values when the underlying row count is the
+  // same as the previous load (DataTable.mount preserves sort/search
+  // state by tbodyId).
+  if (window.DataTable && DataTable._reset) DataTable._reset('payments-list');
+
+  // Destroy any existing chart so the next render starts clean rather
+  // than overlaying a new dataset on the old canvas.
+  const _chartCanvas = document.getElementById('pay-top-sellers-chart');
+  if (_chartCanvas && _chartCanvas._chart) {
+    try { _chartCanvas._chart.destroy(); } catch(_) {}
+    _chartCanvas._chart = null;
+  }
+
   try{
-    const d=await j(`/api/payments/${aid}`);
+    // Cache-bust the request so any intermediate proxy / browser cache
+    // can't return a stale response when the user just generated DNs
+    // in another tab and clicks Reload.
+    const d=await j(`/api/payments/${aid}?_=${Date.now()}`);
     const arr = Array.isArray(d) ? d : [];
 
     // Update KPI strip
@@ -9004,6 +9103,13 @@ async function loadPayments(){
     DataTable.mount('payments-list', d, {
       emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this auction to see per-seller payable amounts here." },
       columns: [
+        // Selection column for bulk actions. Click on a checkbox toggles
+        // the row's inclusion in the "Delete Selected" set; the master
+        // checkbox in the column header toggles every visible row.
+        { key:'_select', label:'',
+          labelHTML:'<input type="checkbox" id="pay-select-all" onclick="event.stopPropagation();toggleAllPayments(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
+          sortable:false, searchable:false,
+          render:(p)=>`<input type="checkbox" class="pay-select-cb" value="${esc(p.name||'')}" onclick="event.stopPropagation();updatePaymentBulkButtons()" style="cursor:pointer">` },
         { key:'name', label:'Seller', sort:'text',
           render:(p)=>`<span style="font-weight:600;color:var(--spice-text-main)">${esc(p.name||'')}</span>` },
         { key:'lot_count', label:'Lots', sort:'number', numeric:true },
@@ -9037,6 +9143,9 @@ async function loadPayments(){
           render:(p)=>`<span style="font-weight:700;color:var(--spice-cardamom-dk);font-size:14px">${fmtI(p.total_payable||0,2)}</span>` }
       ]
     });
+
+    // Reset the bulk action UI after re-render — fresh checkbox state.
+    updatePaymentBulkButtons();
 
     // Top Sellers chart — horizontal bars, top 10 by payable.
     // Hidden when fewer than 2 sellers (chart isn't meaningful).
@@ -9396,6 +9505,29 @@ function _resolveDnTrade() {
   const label = sel.options[sel.selectedIndex]?.textContent || '';
   const ano = (label.split('—')[0] || '').trim();
   return ano ? { auctionId: aid, ano, label } : null;
+}
+
+// Trade-scoped Delete All. The toolbar button labelled "Delete All
+// (this trade)" calls this — the action only ever wipes DNs in the
+// currently-selected trade, never globally. Server enforces the same
+// restriction (refuses without ?ano=).
+async function deleteAllDebitNotesForTrade() {
+  const t = _resolveDnTrade();
+  if (!t) { alert('Select a trade first'); return; }
+  const first = confirm(`Delete ALL debit notes in trade #${t.ano}?\n\nThis only affects this trade — other trades' debit notes are not touched. This action CANNOT be undone.`);
+  if (!first) return;
+  const typed = prompt(`To confirm, type DELETE in capitals:`);
+  if (typed !== 'DELETE') { alert('Cancelled.'); return; }
+  try {
+    const r = await fetch(B + `/api/debit-notes/delete-all?ano=${encodeURIComponent(t.ano)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Delete failed');
+    alert(`Deleted ${d.deleted || 0} debit note${(d.deleted || 0) === 1 ? '' : 's'} in trade #${t.ano}.`);
+    loadDebitNotes();
+  } catch (e) { showError(e); }
 }
 
 // ── Generate Debit Note (SINGLE) ─────────────────────────────────

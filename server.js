@@ -596,7 +596,33 @@ app.delete('/api/buyers/delete-all',      requireDeleteAll, makeDeleteAll('buyer
 app.delete('/api/invoices/delete-all',    requireDeleteAll, makeDeleteAll('invoices'));
 app.delete('/api/purchases/delete-all',   requireDeleteAll, makeDeleteAll('purchases'));
 app.delete('/api/bills/delete-all',       requireDeleteAll, makeDeleteAll('bills'));
-app.delete('/api/debit-notes/delete-all', requireDeleteAll, makeDeleteAll('debit_notes'));
+// Delete All Debit Notes — TRADE-SCOPED.
+// Earlier this was wired to the generic makeDeleteAll('debit_notes') which
+// wiped EVERY debit note in the database regardless of trade. Per the
+// trade-wise model (each trade owns its own DN sequence), Delete All
+// must operate within the currently-selected trade only.
+//
+// Required query param: ?ano=<trade-number>. Without it, return 400 to
+// avoid accidental cross-trade wipes.
+app.delete('/api/debit-notes/delete-all', requireDeleteAll, (req, res) => {
+  try {
+    const db = getDb();
+    const ano = String(req.query.ano || '').trim();
+    if (!ano) {
+      return res.status(400).json({
+        error: 'Trade number (ano) is required for Delete All. Refusing global wipe.',
+      });
+    }
+    const before = db.get(
+      'SELECT COUNT(*) as c FROM debit_notes WHERE ano = ?',
+      [ano]
+    ).c;
+    db.run('DELETE FROM debit_notes WHERE ano = ?', [ano]);
+    res.json({ success: true, deleted: before, ano });
+  } catch (e) {
+    res.status(500).json({ error: 'Delete All failed: ' + (e.message || e) });
+  }
+});
 
 // Trades (auctions) bulk-delete — cascades through every child table that
 // references auction_id. Order matters: clear leaf rows first so foreign-
@@ -3854,6 +3880,80 @@ app.get('/api/payments/:auctionId', requireView, (req, res) => {
   const cfg = getSettingsFlat(db);
   const summary = getPaymentSummary(db, req.params.auctionId, req.query.state, cfg);
   res.json(summary);
+});
+
+// Delete the lots + DNs for a list of sellers in one auction. Powers
+// the "Delete Selected" button on the Payments tab. Each row in the
+// payments table is a roll-up of one seller's lots in the trade, so
+// deleting a payment "row" means clearing those underlying lots.
+//
+// Body: { sellerNames: ['DealerA', 'DealerB', ...] }
+//
+// Trade-scoped — only touches data in this auction. Names are matched
+// case-insensitively to be tolerant of legacy data inconsistencies.
+app.post('/api/payments/:auctionId/delete-sellers', requireDelete, (req, res) => {
+  try {
+    const db = getDb();
+    const auctionId = req.params.auctionId;
+    const names = Array.isArray(req.body.sellerNames) ? req.body.sellerNames : [];
+    if (!names.length) {
+      return res.status(400).json({ error: 'sellerNames array is required' });
+    }
+    const auction = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
+    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+
+    // Build a parameterised IN clause. SQLite max parameters is 999;
+    // we cap chunks at 500 names per query to stay well within limits.
+    const CHUNK = 500;
+    let lotsDeleted = 0, dnsDeleted = 0;
+    for (let i = 0; i < names.length; i += CHUNK) {
+      const batch = names.slice(i, i + CHUNK).map(s => String(s).trim()).filter(Boolean);
+      if (!batch.length) continue;
+      const placeholders = batch.map(() => '?').join(',');
+      // Lots — case-insensitive match. UPPER() on both sides handles
+      // legacy case mismatches (data sometimes imported as title case,
+      // sometimes uppercased).
+      const upperBatch = batch.map(n => n.toUpperCase());
+      const lotsBefore = db.get(
+        `SELECT COUNT(*) AS c FROM lots
+          WHERE auction_id = ?
+            AND UPPER(COALESCE(name,'')) IN (${placeholders})`,
+        [auctionId, ...upperBatch]
+      ).c;
+      db.run(
+        `DELETE FROM lots
+          WHERE auction_id = ?
+            AND UPPER(COALESCE(name,'')) IN (${placeholders})`,
+        [auctionId, ...upperBatch]
+      );
+      lotsDeleted += lotsBefore;
+
+      // Cascading DN cleanup — debit_notes for these sellers in this
+      // trade are now orphaned references, so delete them too.
+      const dnsBefore = db.get(
+        `SELECT COUNT(*) AS c FROM debit_notes
+          WHERE ano = ?
+            AND UPPER(COALESCE(name,'')) IN (${placeholders})`,
+        [auction.ano, ...upperBatch]
+      ).c;
+      db.run(
+        `DELETE FROM debit_notes
+          WHERE ano = ?
+            AND UPPER(COALESCE(name,'')) IN (${placeholders})`,
+        [auction.ano, ...upperBatch]
+      );
+      dnsDeleted += dnsBefore;
+    }
+
+    res.json({
+      success: true,
+      sellers: names.length,
+      lotsDeleted,
+      dnsDeleted,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Delete failed: ' + (e.message || e) });
+  }
 });
 
 // ── Bank payment data (BANKPAY.PRG) ──────────────────────────
