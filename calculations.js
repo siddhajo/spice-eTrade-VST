@@ -439,22 +439,44 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
-  // Merge: total_discount = lot-policy discount + any manual debit notes;
-  // total_tax = sum of CGST + SGST + IGST per seller (Payments tab column).
+  // Merge: total_discount per seller = ONE of two sources (never both):
+  //
+  //   - When debit notes exist for this seller in this trade → DN total
+  //     IS the authoritative discount. The DN was generated using the
+  //     same `discount_pct × days × puramt` formula as `lots.refund`,
+  //     so summing both was double-counting the same money. Furthermore,
+  //     the user may have manually edited the DN amount after generation
+  //     (via the Edit Debit Note flow), in which case the DN value is
+  //     the current source of truth — `lots.refund` is stale.
+  //
+  //   - When no DN exists yet → fall back to the per-lot computed
+  //     `lots.refund` so the Payments tab shows what the seller WILL
+  //     be discounted once DNs are generated.
+  //
+  // Earlier code did `lotDisc + manualDisc` unconditionally — every
+  // trade with DNs generated showed double the actual discount, and
+  // payable was off by that amount.
   return sellers.map(s => {
     const lotDisc = Number(s.lot_discount) || 0;
     const manualDisc = Number(debitMap[s.name]) || 0;
     const cgst = Number(s.total_cgst) || 0;
     const sgst = Number(s.total_sgst) || 0;
     const igst = Number(s.total_igst) || 0;
+    // Authoritative discount: DN total when present, otherwise lot total.
+    const totalDiscount = manualDisc > 0 ? manualDisc : lotDisc;
     return {
       ...s,
-      total_discount: lotDisc + manualDisc,
+      total_discount: totalDiscount,
       total_tax: cgst + sgst + igst,
-      // Subtract the manual debit_notes from payable since balance was
-      // computed before debit_notes were added. Lot-policy discount is
-      // already factored into balance via puramt - cgst - sgst - igst.
-      total_payable: (Number(s.total_payable) || 0) - manualDisc,
+      // Payable: lots.balance was computed BEFORE DNs existed, using
+      // lots.refund as the discount. So:
+      //   - When DNs exist and equal lot refunds → balance is correct
+      //   - When DNs exist and DIFFER from lot refunds (user edited) →
+      //     adjust by the delta so payable reflects the current DN
+      //   - When no DNs → balance is already correct
+      total_payable: manualDisc > 0
+        ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
+        : (Number(s.total_payable) || 0),
     };
   });
 }

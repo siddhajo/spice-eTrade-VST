@@ -3042,10 +3042,50 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
     ? addDays(trade.date, 1)
     : new Date().toISOString().slice(0, 10);
 
-  // Note number: explicit override > MAX+1
-  let noteNo = String(req.body.noteNo || '').trim();
-  if (!noteNo) {
-    const row = db.get('SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes');
+  // Note number: client-supplied `startNoteNo` (preferred) or legacy
+  // `noteNo` (back-compat). When neither is provided, fall back to
+  // MAX(note_no)+1. The user-supplied value is validated as a positive
+  // integer and checked for uniqueness against debit_notes — a clean
+  // 409 is returned if the number is already taken so the user can pick
+  // a different start.
+  //
+  // TRADE-WISE numbering: every uniqueness/MAX check is scoped to the
+  // current trade `ano`. Each trade has its own independent 1..N
+  // sequence — DN #5 in trade 7 is unrelated to DN #5 in trade 8.
+  const rawStart = req.body.startNoteNo != null ? req.body.startNoteNo : req.body.noteNo;
+  let noteNo;
+  if (rawStart != null && String(rawStart).trim() !== '') {
+    const n = parseInt(String(rawStart).trim(), 10);
+    if (!Number.isFinite(n) || n < 1) {
+      return res.status(400).json({ error: 'Starting Number must be a positive integer' });
+    }
+    noteNo = String(n);
+    // Uniqueness check — scoped to the SELECTED TRADE only. Note_no is
+    // stored as TEXT but we compare as integer to handle rare cases
+    // where one side has leading zeroes.
+    const taken = db.get(
+      `SELECT id FROM debit_notes WHERE ano = ? AND CAST(note_no AS INTEGER) = ? LIMIT 1`,
+      [ano, n]
+    );
+    if (taken) {
+      return res.status(409).json({
+        error: `Debit note #${n} is already used in trade #${ano}. Choose a different number.`,
+        suggested: (() => {
+          const row = db.get(
+            'SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes WHERE ano = ?',
+            [ano]
+          );
+          const mx = parseInt(row && row.mx, 10);
+          return Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
+        })(),
+      });
+    }
+  } else {
+    // No explicit start → bump the trade's own MAX.
+    const row = db.get(
+      'SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes WHERE ano = ?',
+      [ano]
+    );
     const mx = parseInt(row && row.mx, 10);
     noteNo = String(Number.isFinite(mx) && mx > 0 ? mx + 1 : 1);
   }
@@ -3157,13 +3197,73 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
     return res.status(400).json({ error: 'Discount % not configured in settings' });
   }
 
-  // Resolve next note number. Increment locally per insert to avoid
-  // racing the DB on rapid back-to-back INSERTs in the same loop.
-  let nextNoteNo = (() => {
-    const row = db.get('SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes');
+  // Resolve next note number. The user can supply `startNoteNo` to
+  // explicitly anchor the sequence (each generated DN gets startNoteNo,
+  // startNoteNo+1, +2, ...). When omitted, fall back to MAX+1.
+  //
+  // Concurrency: SQLite (sql.js / better-sqlite3) serializes writes, so
+  // there's no within-request race. The only real risk is two SEPARATE
+  // bulk requests overlapping their ranges. We mitigate that by claiming
+  // the range up-front: count eligible purchases, then verify no number
+  // in [start, start+eligibleCount) is already in `debit_notes`. If a
+  // collision exists → 409 with the next safe start so the user can
+  // retry. The check + INSERTs all run inside the same JS turn (no
+  // await), so a competing bulk can't slip in between.
+  const eligibleCount = purchases.filter(
+    p => !existingKeys.has(p.name || '') && Number(p.amount || 0) > 0
+  ).length;
+
+  let nextNoteNo;
+  const rawStart = req.body.startNoteNo != null ? req.body.startNoteNo : req.body.startInvoiceNo;
+  if (rawStart != null && String(rawStart).trim() !== '') {
+    const n = parseInt(String(rawStart).trim(), 10);
+    if (!Number.isFinite(n) || n < 1) {
+      return res.status(400).json({ error: 'Starting Number must be a positive integer' });
+    }
+    nextNoteNo = n;
+    if (eligibleCount > 0) {
+      // Range claim — scoped to THIS TRADE only. Numbering is per-trade
+      // (trade #1's #5 doesn't conflict with trade #2's #5), so collision
+      // check has `WHERE ano = ?`. Without this filter, starting trade 2
+      // at #1 would falsely fail when trade 1 already has #1..N.
+      const upper = nextNoteNo + eligibleCount - 1;
+      const collisions = db.all(
+        `SELECT CAST(note_no AS INTEGER) AS n
+           FROM debit_notes
+          WHERE ano = ?
+            AND CAST(note_no AS INTEGER) BETWEEN ? AND ?
+          ORDER BY n`,
+        [ano, nextNoteNo, upper]
+      );
+      if (collisions.length) {
+        const safe = (() => {
+          const row = db.get(
+            'SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes WHERE ano = ?',
+            [ano]
+          );
+          const mx = parseInt(row && row.mx, 10);
+          return Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
+        })();
+        return res.status(409).json({
+          error: `Starting Number ${nextNoteNo} would overlap existing debit note(s) in trade #${ano} ` +
+                 `(${collisions.slice(0, 5).map(c => '#' + c.n).join(', ')}` +
+                 `${collisions.length > 5 ? `, +${collisions.length - 5} more` : ''}). ` +
+                 `Try ${safe} or higher.`,
+          collisions: collisions.map(c => c.n),
+          suggested: safe,
+        });
+      }
+    }
+  } else {
+    // No explicit start → bump THIS TRADE's MAX. Each trade has its
+    // own independent sequence.
+    const row = db.get(
+      'SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes WHERE ano = ?',
+      [ano]
+    );
     const mx = parseInt(row && row.mx, 10);
-    return Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
-  })();
+    nextNoteNo = Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
+  }
 
   const generated = [];
   const skipped   = [];
@@ -3255,6 +3355,32 @@ app.get('/api/debit-notes/eligible-purchases/:auctionId', requireView, (req, res
     [ano]
   );
   res.json(rows);
+});
+
+// Return the next-available debit note number for a given trade.
+// Numbering is TRADE-WISE: each trade has its own 1..N sequence.
+// `ano` (trade number) is required — without it we can't know which
+// trade's max to bump. The UI passes the currently-selected trade.
+//
+// Trade-wise reason: business reality + user expectation.
+//   Trade 1 has DN #1..17 → starting trade 2 at #1 must work.
+//   Earlier code did `MAX(note_no) FROM debit_notes` (global), so a
+//   user entering #1 for trade 2 hit the "already in use" check
+//   because trade 1 owned that number. The fix is to scope every
+//   uniqueness check (single, range, MAX) to `WHERE ano = ?`.
+app.get('/api/debit-notes/next-note-no', requireView, (req, res) => {
+  const db = getDb();
+  const ano = String(req.query.ano || '').trim();
+  if (!ano) {
+    return res.status(400).json({ error: 'ano (trade number) is required for trade-wise numbering' });
+  }
+  const row = db.get(
+    'SELECT MAX(CAST(note_no AS INTEGER)) AS mx FROM debit_notes WHERE ano = ?',
+    [ano]
+  );
+  const mx = parseInt(row && row.mx, 10);
+  const next = Number.isFinite(mx) && mx > 0 ? mx + 1 : 1;
+  res.json({ next, ano });
 });
 
 // /api/debit-notes/generate-all — DEPRECATED.
@@ -3486,7 +3612,18 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
 
     // ── Line items table ──
     // Column widths (sum ≈ 535pt usable). Match the reference layout:
-    //   Sl | Lot | Quantity (kgs) | Rate/kg (Rs) | Value (Rs) | Discount (Rs) | (gap) | Taxable (Rs)
+    // Column layout:
+    //   Sl | Lot | Quantity (kgs) | Rate/kg (Rs) | Value (Rs) | Discount (Rs) | [GST (Rs)?] | Taxable (Rs)
+    //
+    // The 7th column was previously a 40pt empty visual gap. It now shows
+    // GST on the discount (taken from cfg.discount_gst, e.g. 18%) WHEN the
+    // "Discount includes GST" feature flag (`flag_disc_gst`) is enabled.
+    // When the flag is off, we DROP the column entirely (not just blank it)
+    // so the surrounding columns redistribute the freed width — no visible
+    // empty band on the PDF. The Taxable Value column also widens to keep
+    // the table flush to PAGE_W.
+    const showGstCol = !!cfg.flag_disc_gst;
+    const gstHeaderRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
     const cols = [
       { key:'sl',       w: 32,  label1:'Sl',       label2:'No',     align:'center' },
       { key:'lot',      w: 38,  label1:'Lot',      label2:'No',     align:'center' },
@@ -3494,9 +3631,17 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
       { key:'rate',     w: 70,  label1:'Rate/kg',  label2:'(Rs)',   align:'right'  },
       { key:'value',    w: 100, label1:'Value',    label2:'(Rs)',   align:'right'  },
       { key:'discount', w: 80,  label1:'Discount', label2:'(Rs)',   align:'right'  },
-      { key:'gap',      w: 40,  label1:'',         label2:'',       align:'right'  },
-      { key:'taxable',  w: 99,  label1:'Taxable',  label2:'Value',  align:'right'  },
     ];
+    if (showGstCol) {
+      // GST column header shows the active rate (e.g. "GST 18%") so the
+      // user can immediately see what discount_gst is set to without
+      // cross-checking Settings.
+      cols.push({ key:'gst', w: 70,  label1:`GST ${gstHeaderRate}%`, label2:'(Rs)', align:'right' });
+      cols.push({ key:'taxable', w: 69, label1:'Taxable', label2:'Value', align:'right' });
+    } else {
+      // Flag off — taxable column absorbs the entire 109pt slot.
+      cols.push({ key:'taxable', w: 139, label1:'Taxable', label2:'Value', align:'right' });
+    }
     // Compute x positions
     let xs = [PAGE_L];
     cols.forEach(c => xs.push(xs[xs.length - 1] + c.w));
@@ -3516,11 +3661,22 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     });
     y = headTop + HEAD_H;
 
+    // Resolve column indices by key — the layout is conditional on the
+    // GST column flag, so we can't hardcode positions. `colIdx` returns
+    // the array index of the named column or -1 if not present.
+    const colIdx = (key) => cols.findIndex(c => c.key === key);
+    const taxIdx = colIdx('taxable');
+    const gstIdx = colIdx('gst');  // -1 when flag is off
+
     // Data rows
     const ROW_H = 14;
     const MAX_ROWS = 14; // matches reference pdf — page can hold ~14 line rows comfortably
     doc.font('Helvetica').fontSize(9);
-    let totalQty = 0, totalValue = 0, totalDiscount = 0, totalTaxable = 0;
+    let totalQty = 0, totalValue = 0, totalDiscount = 0, totalTaxable = 0, totalGst = 0;
+    // Per-row GST = discount × discount_gst%. discount_gst is the rate
+    // (e.g. 18). Computed per-lot so the column sums back to the DN's
+    // total GST when the flag is on.
+    const gstRateFraction = gstHeaderRate / 100;
     for (let i = 0; i < Math.max(lots.length, MAX_ROWS); i++) {
       const lot = lots[i];
       // Vertical lines for this row
@@ -3528,10 +3684,18 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
       if (lot) {
         const value    = Number(lot.qty || 0) * Number(lot.prate || 0);
         const discount = Number(lot.discount || 0);
+        // GST on discount — only meaningful when the column is shown.
+        const gstOnDiscount = showGstCol
+          ? Math.round(discount * gstRateFraction * 100) / 100
+          : 0;
+        // Taxable Value historically equals the discount; with the GST
+        // column visible we keep the same semantic so the existing
+        // GRAND TOTAL math is unchanged.
         const taxable  = Number(lot.taxable || discount);
         totalQty      += Number(lot.qty || 0);
         totalValue    += value;
         totalDiscount += discount;
+        totalGst      += gstOnDiscount;
         totalTaxable  += taxable;
         doc.text(String(i + 1),                 xs[0] + 3, y + 3, { width: cols[0].w - 6, align: cols[0].align });
         doc.text(String(lot.lot_no || ''),      xs[1] + 3, y + 3, { width: cols[1].w - 6, align: cols[1].align });
@@ -3539,7 +3703,10 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
         doc.text(fmtAmt(lot.prate),             xs[3] + 3, y + 3, { width: cols[3].w - 6, align: cols[3].align });
         doc.text(fmtAmt(value),                 xs[4] + 3, y + 3, { width: cols[4].w - 6, align: cols[4].align });
         doc.text(fmtAmt(discount),              xs[5] + 3, y + 3, { width: cols[5].w - 6, align: cols[5].align });
-        doc.text(fmtAmt(taxable),               xs[7] + 3, y + 3, { width: cols[7].w - 6, align: cols[7].align });
+        if (gstIdx >= 0) {
+          doc.text(fmtAmt(gstOnDiscount),       xs[gstIdx] + 3, y + 3, { width: cols[gstIdx].w - 6, align: cols[gstIdx].align });
+        }
+        doc.text(fmtAmt(taxable),               xs[taxIdx] + 3, y + 3, { width: cols[taxIdx].w - 6, align: cols[taxIdx].align });
       }
       y += ROW_H;
     }
@@ -3560,10 +3727,13 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     doc.text(fmtAmt(totalValue), xs[4] + 3, y + 4, { width: cols[4].w - 6, align: 'right' });
     doc.moveTo(xs[5], y).lineTo(xs[5], y + TOT_H).stroke();
     doc.text(fmtAmt(totalDiscount), xs[5] + 3, y + 4, { width: cols[5].w - 6, align: 'right' });
-    doc.moveTo(xs[6], y).lineTo(xs[6], y + TOT_H).stroke();
-    doc.moveTo(xs[7], y).lineTo(xs[7], y + TOT_H).stroke();
+    if (gstIdx >= 0) {
+      doc.moveTo(xs[gstIdx], y).lineTo(xs[gstIdx], y + TOT_H).stroke();
+      doc.text(fmtAmt(totalGst), xs[gstIdx] + 3, y + 4, { width: cols[gstIdx].w - 6, align: 'right' });
+    }
+    doc.moveTo(xs[taxIdx], y).lineTo(xs[taxIdx], y + TOT_H).stroke();
     doc.moveTo(PAGE_R, y).lineTo(PAGE_R, y + TOT_H).stroke();
-    doc.text(fmtAmt(totalTaxable), xs[7] + 3, y + 4, { width: cols[7].w - 6, align: 'right' });
+    doc.text(fmtAmt(totalTaxable), xs[taxIdx] + 3, y + 4, { width: cols[taxIdx].w - 6, align: 'right' });
     y += TOT_H;
     doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
 

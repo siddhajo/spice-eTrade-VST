@@ -3117,6 +3117,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <label>Purchase Invoice #</label>
     <input id="gd1-purchno" autocomplete="off" placeholder="e.g. P-100">
   </div>
+  <div class="fg">
+    <!-- Starting Number: the note_no to assign to this DN. Reused as
+         the user's chosen counter — defaults to MAX(note_no)+1 from
+         the server when the modal opens, but the user can override. -->
+    <label>Debit Note # <span style="color:var(--text3);font-weight:400">(numeric)</span></label>
+    <input id="gd1-startno" type="number" min="1" autocomplete="off" placeholder="e.g. 100">
+  </div>
   <div id="gd1-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-debit-single-modal')">Cancel</button>
@@ -3136,6 +3143,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     are touched.
   </p>
   <div id="gda-trade-info" style="padding:8px 12px;background:var(--green-bg);border-radius:6px;font-size:13px;margin-bottom:10px;font-weight:600">—</div>
+  <div class="fg">
+    <!-- Starting Number: each generated DN gets numbers in sequence
+         (start, start+1, start+2, …). Defaults to the next-available
+         note_no fetched from the server; the user can override. -->
+    <label>Starting Debit Note # <span style="color:var(--text3);font-weight:400">(numeric — increments by 1 per DN)</span></label>
+    <input id="gda-startno" type="number" min="1" autocomplete="off" placeholder="e.g. 100">
+  </div>
   <div id="gda-preview" style="font-size:12px;color:var(--text2);max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px;background:#fafafa">
     <em>Loading eligible purchases…</em>
   </div>
@@ -9388,14 +9402,23 @@ function _resolveDnTrade() {
 // Inputs: trade (dropdown) + purchase invoice number (modal field).
 // Generates ONE DN for that purchase, validated server-side to belong
 // to the selected trade.
-function openGenDebitSingleModal(){
+async function openGenDebitSingleModal(){
   const t = _resolveDnTrade();
   if (!t) { alert('Select a trade first'); return; }
   document.getElementById('gd1-trade-info').textContent = `Trade: ${t.label}`;
   document.getElementById('gd1-purchno').value = '';
+  document.getElementById('gd1-startno').value = '';
   document.getElementById('gd1-err').style.display = 'none';
   showModal('gen-debit-single-modal');
-  // Focus the input so the user can type immediately.
+  // Pre-fill startno with the next-available number FOR THIS TRADE.
+  // Numbering is trade-wise, so we pass `ano` — server returns
+  // MAX(note_no)+1 within that trade only (defaults to 1 for an
+  // unused trade even if other trades have higher numbers).
+  try {
+    const r = await j(`/api/debit-notes/next-note-no?ano=${encodeURIComponent(t.ano)}`);
+    document.getElementById('gd1-startno').value = r && r.next ? r.next : '';
+  } catch (_) { /* ignore — leave blank, server will fall back to MAX+1 */ }
+  // Focus the purchno input so the user can type immediately.
   setTimeout(() => document.getElementById('gd1-purchno').focus(), 50);
 }
 
@@ -9403,21 +9426,23 @@ async function generateDebitNoteSingle(){
   const t = _resolveDnTrade();
   if (!t) { alert('Select a trade first'); return; }
   const purchno = (document.getElementById('gd1-purchno').value || '').trim();
+  const startNoVal = (document.getElementById('gd1-startno').value || '').trim();
   const errEl = document.getElementById('gd1-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
   errEl.style.display = 'none';
   if (!purchno) return showErr('Enter a purchase invoice number');
+  // Client-side validation — required + numeric. Server re-validates.
+  if (!startNoVal) return showErr('Enter the debit note number');
+  const startNo = parseInt(startNoVal, 10);
+  if (!Number.isFinite(startNo) || startNo < 1) {
+    return showErr('Debit note number must be a positive integer');
+  }
   const btn = document.getElementById('gd1-save');
   btn.disabled = true; btn.textContent = 'Generating…';
   try {
-    // Server endpoint /api/debit-notes/generate enforces:
-    //   1. invoice exists in `purchases`
-    //   2. `purchases.ano === ano` (selected trade)
-    //   3. no duplicate DN for (ano, dealer) pair
-    // All three checks are server-side — never trust client filtering.
     const d = await j('/api/debit-notes/generate', {
       method: 'POST',
-      body: JSON.stringify({ purchno, ano: t.ano })
+      body: JSON.stringify({ purchno, ano: t.ano, startNoteNo: startNo })
     });
     hideModal('gen-debit-single-modal');
     if (d.created) {
@@ -9438,13 +9463,21 @@ async function generateDebitNoteSingle(){
 // ── Generate All (TRADE-SCOPED) ──────────────────────────────────
 // Input: trade (dropdown only). Generates DNs for every eligible
 // purchase IN THAT TRADE — never cross-trade.
-function openGenDebitAllModal(){
+async function openGenDebitAllModal(){
   const t = _resolveDnTrade();
   if (!t) { alert('Select a trade first'); return; }
   document.getElementById('gda-trade-info').textContent = `Trade: ${t.label}`;
   document.getElementById('gda-err').style.display = 'none';
+  document.getElementById('gda-startno').value = '';
   document.getElementById('gda-preview').innerHTML = '<em>Loading eligible purchases…</em>';
   showModal('gen-debit-all-modal');
+  // Pre-fill startno = next-available number FOR THIS TRADE.
+  // Numbering is trade-wise — passing `ano` ensures a fresh trade
+  // starts at #1 even when other trades have higher numbers.
+  try {
+    const r = await j(`/api/debit-notes/next-note-no?ano=${encodeURIComponent(t.ano)}`);
+    document.getElementById('gda-startno').value = r && r.next ? r.next : '';
+  } catch (_) { /* leave blank */ }
   loadGenDebitAllPreview(t.auctionId);
 }
 
@@ -9489,12 +9522,19 @@ async function generateAllDebitNotesForTrade(){
   const errEl = document.getElementById('gda-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
   errEl.style.display = 'none';
+  // Validate startno — required, positive integer.
+  const startNoVal = (document.getElementById('gda-startno').value || '').trim();
+  if (!startNoVal) return showErr('Enter the starting debit note number');
+  const startNo = parseInt(startNoVal, 10);
+  if (!Number.isFinite(startNo) || startNo < 1) {
+    return showErr('Starting Number must be a positive integer');
+  }
   const btn = document.getElementById('gda-save');
   btn.disabled = true; btn.textContent = 'Generating…';
   try {
     const d = await j('/api/debit-notes/generate-bulk', {
       method: 'POST',
-      body: JSON.stringify({ ano: t.ano })
+      body: JSON.stringify({ ano: t.ano, startNoteNo: startNo })
     });
     hideModal('gen-debit-all-modal');
     const c = d.created || 0;
