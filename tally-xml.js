@@ -2074,12 +2074,19 @@ function generDebitNoteXML(rows, cfg, opts = {}) {
   const sStateName = cfgGet(cfg, 'tally_home_state', 'Tamil Nadu');
 
   const Discount_LDR  = cfgGet(cfg, 'tally_dn_discount', 'Discount Received');
-  const Tax_CGST      = cfgGet(cfg, 'tally_dn_cgst', 'OUTPUT CGST 9%');
-  const Tax_SGST      = cfgGet(cfg, 'tally_dn_sgst', 'OUTPUT SGST 9%');
-  const Tax_IGST      = cfgGet(cfg, 'tally_dn_igst', 'OUTPUT IGST 18%');
+  // Resolve the DN GST rate FIRST so the default ledger names below can
+  // be composed from it (no hardcoded 18 literal anywhere). Default rate
+  // is 5% — matches the cardamom-export business profile. Legacy
+  // installs that explicitly set 18 will still work via cfgNum().
+  const dnGstRate     = cfgNum(cfg, 'tally_dn_gst_rate', 5);
+  const halfRate      = dnGstRate / 2;
+  // Format helper — drops trailing ".0" so 2.5 stays 2.5 but 9 stays 9.
+  const fmtRate = (r) => (Number.isInteger(r) ? String(r) : String(r));
+  const Tax_CGST      = cfgGet(cfg, 'tally_dn_cgst', `OUTPUT CGST ${fmtRate(halfRate)}%`);
+  const Tax_SGST      = cfgGet(cfg, 'tally_dn_sgst', `OUTPUT SGST ${fmtRate(halfRate)}%`);
+  const Tax_IGST      = cfgGet(cfg, 'tally_dn_igst', `OUTPUT IGST ${fmtRate(dnGstRate)}%`);
   const Round_LDR     = cfgGet(cfg, 'tally_round', 'Round Off');
   const HSN_Service   = cfgGet(cfg, 'tally_hsn_service', '996111');
-  const dnGstRate     = cfgNum(cfg, 'tally_dn_gst_rate', 18);
 
   const rates = rateDetails(dnGstRate);
 
@@ -2707,19 +2714,43 @@ function buildDebitNoteRows(db, auctionId, cfg) {
     SELECT * FROM debit_notes WHERE ano = ? ORDER BY id
   `);
   const raw = stmt.all(a.ano);
-  return raw.map((d) => ({
-    ano: d.ano,
-    date: d.date,
-    name: d.name,
-    address: '',
-    place: '',
-    pin: '',
-    gstin: '',
-    refundtot: d.amount,
-    cgsttot: d.cgst, sgsttot: d.sgst, igsttot: d.igst,
-    total: d.total,
-    voucherNum: d.note_no || String(d.id),
-  }));
+
+  // Pull dealer details (GSTIN + address) for every distinct dealer
+  // appearing in this DN batch. Without these the Tally voucher emits
+  // an empty <PARTYGSTIN> and the IGST output ledger sits at zero in
+  // the intra/inter classification check at line ~2099 (isIntra falls
+  // back to false for empty GSTINs, but PARTYGSTIN itself reaches
+  // Tally blank — Tally then can't compute its own GST ledger linkage
+  // and shows the OUTPUT IGST ledger as 0).
+  const dealerNames = [...new Set(raw.map(d => String(d.name || '').trim()).filter(Boolean))];
+  const dealers = {};
+  for (const name of dealerNames) {
+    const t = db.prepare(
+      `SELECT name, cr, padd, ppla, pin, pstate FROM traders WHERE UPPER(name) = UPPER(?) LIMIT 1`
+    ).get(name);
+    if (t) dealers[name] = t;
+  }
+
+  return raw.map((d) => {
+    const dealer = dealers[String(d.name || '').trim()] || {};
+    // Strip 'GSTIN.' / 'gstin.' prefix from `cr` — Tally expects the
+    // bare 15-char GSTIN.
+    let gstin = String(dealer.cr || '').trim();
+    if (/^GSTIN\.?/i.test(gstin)) gstin = gstin.replace(/^GSTIN\.?/i, '');
+    return {
+      ano: d.ano,
+      date: d.date,
+      name: d.name,
+      address: dealer.padd || '',
+      place:   dealer.ppla || '',
+      pin:     dealer.pin  || '',
+      gstin,
+      refundtot: d.amount,
+      cgsttot: d.cgst, sgsttot: d.sgst, igsttot: d.igst,
+      total: d.total,
+      voucherNum: d.note_no || String(d.id),
+    };
+  });
 }
 
 // =====================================================================
@@ -3112,7 +3143,11 @@ function buildLedgerRows(db, auctionId, cfg) {
 
   // ── Master ledgers from cfg (sales / purchase / tax / service) ─
   const gstRate = cfgNum(cfg, 'tally_gst_rate', 5);
-  const dnRate  = cfgNum(cfg, 'tally_dn_gst_rate', 18);
+  // Debit Note GST rate default mirrors the goods rate (5%) — the DN
+  // service-charge rate matches the underlying goods rate for cardamom
+  // exports. Was hardcoded to 18 in earlier builds; the migration in
+  // company-config.js auto-corrects existing installs.
+  const dnRate  = cfgNum(cfg, 'tally_dn_gst_rate', 5);
   const hsnCard = cfgGet(cfg, 'tally_hsn_cardamom', '09083120');
   const hsnService = cfgGet(cfg, 'tally_hsn_service', '996111');
 

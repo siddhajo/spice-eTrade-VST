@@ -9979,7 +9979,16 @@ async function tallyPreview(type){
       }else if(data.voucherCount===0){
         target.innerHTML=`<span style="color:#C62828">No data found for this auction</span>`;
       }else{
-        target.innerHTML=`<strong style="color:var(--green)">${data.voucherCount}</strong> voucher${data.voucherCount===1?'':'s'} · <strong>${data.lotCount}</strong> lot${data.lotCount===1?'':'s'}` + coBadge;
+        // For voucher types that don't carry per-row lots (debit notes,
+        // journal entries), show the number of distinct dealers instead
+        // of "0 lots" — same information density, less confusing.
+        const trailing = data.hasLots
+          ? `<strong>${data.lotCount}</strong> lot${data.lotCount===1?'':'s'}`
+          : (data.partyCount != null
+              ? `<strong>${data.partyCount}</strong> dealer${data.partyCount===1?'':'s'}`
+              : '');
+        target.innerHTML = `<strong style="color:var(--green)">${data.voucherCount}</strong> voucher${data.voucherCount===1?'':'s'}` +
+                           (trailing ? ` · ${trailing}` : '') + coBadge;
       }
     }
   }catch(e){

@@ -3047,9 +3047,21 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
     return res.status(400).json({ error: 'Computed discount is zero — check settings or invoice amount' });
   }
 
-  // GST split mirrors the source purchase: intra → CGST+SGST, inter → IGST.
-  // URD/agri purchases (zero source GST) → DN is exempt.
-  const isInter = (Number(purchase.igst) || 0) > 0;
+  // GST split — intra/inter classification by the DEALER's GSTIN
+  // state code (NOT by purchase.igst, which can be stale or
+  // misclassified). See the equivalent block in /generate-bulk for
+  // detailed rationale.
+  let dealerStateCode = '';
+  {
+    let cr = String(purchase.cr || '').trim().toUpperCase();
+    if (cr.startsWith('GSTIN.')) cr = cr.slice(6);
+    else if (cr.startsWith('GSTIN')) cr = cr.slice(5);
+    if (/^\d{2}/.test(cr)) dealerStateCode = cr.slice(0, 2);
+  }
+  const companyStateCode = String(cfg.tally_state_code
+      || (String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33'));
+  const isInter = !!dealerStateCode && dealerStateCode !== companyStateCode;
+
   const dnGstRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
   let cgst = 0, sgst = 0, igst = 0;
   if (Number(purchase.cgst) || Number(purchase.sgst) || Number(purchase.igst)) {
@@ -3316,9 +3328,32 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
       continue;
     }
 
-    // GST split: only emit GST when source purchase had GST. URD/agri
-    // sources (zero CGST/SGST/IGST) get DN as exempt.
-    const isInter = (Number(p.igst) || 0) > 0;
+    // Intra/inter classification — determined by the DEALER's GSTIN
+    // state code, not by `purchases.igst > 0`. The earlier heuristic
+    // failed for two real cases:
+    //   1. The source purchase was booked as intra-state (igst=0) but
+    //      we're issuing the DN to a registered dealer whose GSTIN
+    //      starts with a different state code → DN must use IGST.
+    //   2. Settings were updated after the purchase was created — the
+    //      stale igst value lingers and misleads classification.
+    //
+    // Resolution: pull the dealer's `cr` (GSTIN field on purchases),
+    // strip any "GSTIN."/"gstin." prefix, take the first two digits as
+    // the state code, compare to the company's state code (intra).
+    // Any non-match → inter-state → IGST applies.
+    let dealerStateCode = '';
+    {
+      let cr = String(p.cr || '').trim().toUpperCase();
+      if (cr.startsWith('GSTIN.')) cr = cr.slice(6);
+      else if (cr.startsWith('GSTIN')) cr = cr.slice(5);
+      if (/^\d{2}/.test(cr)) dealerStateCode = cr.slice(0, 2);
+    }
+    const companyStateCode = String(cfg.tally_state_code
+        || (String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33'));
+    const isInter = !!dealerStateCode && dealerStateCode !== companyStateCode;
+
+    // GST is only emitted when the source purchase carried GST
+    // (registered dealer); URD/agri purchases produce exempt DNs.
     let cgst = 0, sgst = 0, igst = 0;
     if (Number(p.cgst) || Number(p.sgst) || Number(p.igst)) {
       if (isInter) {
@@ -4221,10 +4256,27 @@ app.get('/api/tally/preview/:type/:auctionId', requireExport, (req, res) => {
       });
     }
     const totalLots = rows.reduce((s, r) => s + (Array.isArray(r.lots) ? r.lots.length : 0), 0);
+    // For voucher types that have NO per-row lot list (debit notes,
+    // journal entries, agri bills with single-line items), lotCount is
+    // always 0 — that's a real-world correct value but it confused
+    // users who saw "0 lots" and assumed the export was empty.
+    // Also surface a `partyCount` (distinct dealer/buyer names) so the
+    // preview can show that instead of the meaningless lot count for
+    // these types. Caller (UI) decides which to display.
+    const distinctParties = new Set();
+    for (const r of rows) {
+      const n = String(r.partyName || r.name || '').trim();
+      if (n) distinctParties.add(n.toUpperCase());
+    }
     res.json({
       type, auctionId,
       voucherCount: rows.length,
       lotCount: totalLots,
+      partyCount: distinctParties.size,
+      // Flag whether this voucher type carries a per-row lots array.
+      // Lets the UI suppress "0 lots" for DN/journal/etc. without
+      // hardcoding type names client-side.
+      hasLots: rows.some(r => Array.isArray(r.lots) && r.lots.length > 0),
       targetCompany,
       sample: rows.slice(0, 3).map(r => ({
         ano: r.ano, date: r.date, name: r.partyName || r.name,

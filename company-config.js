@@ -199,10 +199,10 @@ const DEFAULTS = [
 
   // Tax Ledger Names — Debit Note 18%
   { key: 'tally_dn_discount',     value: 'Discount on Purchase',       category: 'tally', label: 'Discount on Purch (Debit Note ledger)', type: 'text' },
-  { key: 'tally_dn_cgst',         value: 'OUTPUT CGST 9%',             category: 'tally', label: 'CGST 9% (Debit Note)',        type: 'text' },
-  { key: 'tally_dn_sgst',         value: 'OUTPUT SGST 9%',             category: 'tally', label: 'SGST 9% (Debit Note)',        type: 'text' },
-  { key: 'tally_dn_igst',         value: 'OUTPUT IGST 18%',            category: 'tally', label: 'IGST 18% (Debit Note)',       type: 'text' },
-  { key: 'tally_dn_gst_rate',     value: '18',                         category: 'tally', label: 'Debit Note GST Rate %',       type: 'number' },
+  { key: 'tally_dn_cgst',         value: 'OUTPUT CGST 2.5%',           category: 'tally', label: 'CGST 2.5% (Debit Note)',      type: 'text' },
+  { key: 'tally_dn_sgst',         value: 'OUTPUT SGST 2.5%',           category: 'tally', label: 'SGST 2.5% (Debit Note)',      type: 'text' },
+  { key: 'tally_dn_igst',         value: 'OUTPUT IGST 5%',             category: 'tally', label: 'IGST 5% (Debit Note)',        type: 'text' },
+  { key: 'tally_dn_gst_rate',     value: '5',                          category: 'tally', label: 'Debit Note GST Rate %',       type: 'number' },
 
   // Other operational ledgers
   { key: 'tally_sample_planter',  value: 'Sample Refund to Planter',   category: 'tally', label: 'Sample Refund to Planter',    type: 'text' },
@@ -323,6 +323,23 @@ function initCompanySettings(db) {
   // explicitly fills in their identifier — no "ISP" appearing where the
   // user never typed it.
   db.prepare("UPDATE company_settings SET value = '' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
+
+  // ── DN GST rate / ledger migration ──
+  // Earlier builds seeded the Debit Note ledgers at 18% (`OUTPUT IGST 18%`,
+  // `OUTPUT CGST 9%`, `OUTPUT SGST 9%`, rate=18). The correct values for
+  // the cardamom-export business are 5% (IGST) / 2.5% each (CGST/SGST).
+  // Existing installs would still hold the 18% strings in their DB until
+  // a manual edit. We auto-correct ONLY when the values match the legacy
+  // un-customized defaults exactly — any user-edited string is preserved.
+  const fixIfLegacy = (key, legacyVal, newVal) => {
+    db.prepare(
+      `UPDATE company_settings SET value = ? WHERE key = ? AND value = ?`
+    ).run(newVal, key, legacyVal);
+  };
+  fixIfLegacy('tally_dn_cgst',     'OUTPUT CGST 9%',  'OUTPUT CGST 2.5%');
+  fixIfLegacy('tally_dn_sgst',     'OUTPUT SGST 9%',  'OUTPUT SGST 2.5%');
+  fixIfLegacy('tally_dn_igst',     'OUTPUT IGST 18%', 'OUTPUT IGST 5%');
+  fixIfLegacy('tally_dn_gst_rate', '18',              '5');
 
   console.log('Company settings ready (%d defaults)', DEFAULTS.length);
 }
