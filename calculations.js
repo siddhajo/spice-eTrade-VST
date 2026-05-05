@@ -308,14 +308,39 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
   // Taxable value = cardamom + gunny + transport + insurance
   const taxableValue = subtotalGoods + transportCost + insuranceCost;
 
-  // All four components get the SAME gstGoods rate (per user confirmation).
+  // Per-line GST: tax each component independently and round at the line
+  // level, then sum into the invoice totals. This matches the GSTN /
+  // E-invoice convention (each HSN line carries its own tax) and how the
+  // dad's worksheet runs the math — a single bundled round on the whole
+  // taxable can drift by 1 paisa vs the line-by-line sum at certain
+  // values, and Tally rejects vouchers when the line tax sum != invoice
+  // tax total. All components share the SAME gstGoods rate (per the
+  // existing rule); split is intra (CGST + SGST) vs inter (IGST).
+  const halfRate = gstGoods / 2;
+  const taxLine = (base) => isInterState
+    ? { cgst: 0, sgst: 0, igst: round2(base * gstGoods / 100) }
+    : { cgst: round2(base * halfRate / 100), sgst: round2(base * halfRate / 100), igst: 0 };
+
   let cgst = 0, sgst = 0, igst = 0;
-  if (isInterState) {
-    igst = round2(taxableValue * gstGoods / 100);
-  } else {
-    cgst = round2(taxableValue * (gstGoods / 2) / 100);
-    sgst = round2(taxableValue * (gstGoods / 2) / 100);
+  // 1) Cardamom — one line per lot.
+  for (const li of lineItems) {
+    const t = taxLine(li.amount || 0);
+    li.cgst = t.cgst; li.sgst = t.sgst; li.igst = t.igst;
+    cgst += t.cgst; sgst += t.sgst; igst += t.igst;
   }
+  // 2) Gunny.
+  const gunnyTax = taxLine(gunnyCost);
+  cgst += gunnyTax.cgst; sgst += gunnyTax.sgst; igst += gunnyTax.igst;
+  // 3) Transport.
+  const transportTax = taxLine(transportCost);
+  cgst += transportTax.cgst; sgst += transportTax.sgst; igst += transportTax.igst;
+  // 4) Insurance.
+  const insuranceTax = taxLine(insuranceCost);
+  cgst += insuranceTax.cgst; sgst += insuranceTax.sgst; igst += insuranceTax.igst;
+  // Final 2dp clean-up on the summed line taxes (sum of round2'd values is
+  // already at paisa precision, but rebind through round2 to neutralize any
+  // residual binary tail before downstream Math).
+  cgst = round2(cgst); sgst = round2(sgst); igst = round2(igst);
 
   const totalBeforeRound = taxableValue + cgst + sgst + igst;
   const subtotalRounded = round0(totalBeforeRound);
