@@ -2405,7 +2405,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <button id="inv-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- ASP-only: Print Selected Purchase. Hidden outside ASP context.
                  Visibility toggled by applyAspContextVisibility() at load + state switch. -->
-            <button id="btn-print-asp-purchase" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="printSelectedPurchaseFromInvoices()" title="Print purchase-side mirror PDF for all ticked invoices (ASP context only)">🖨 Print Selected Purchase</button>
+            <button id="btn-print-asp-purchase" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="printSelectedPurchaseFromInvoices()" title="Print purchase-side mirror PDF for all ticked invoices (available when business state is Kerala)">🖨 Print Selected Purchase</button>
             <!-- Lorry no: bulk-set vehicle number on ticked invoices.
                  Stored in invoices.lorry_no, picked up by the Tally
                  sales voucher generator as e-way bill VehicleNo. -->
@@ -2806,10 +2806,10 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="margin-top:12px;padding:10px 14px;background:var(--green-bg);border-radius:8px;border:1px solid var(--green);font-size:12px;color:var(--text2);line-height:1.5">
-          <strong style="color:var(--green)">Two Tally companies for ledgers:</strong>
+          <strong style="color:var(--green)">Tally import workflow:</strong>
           <strong>Sales Party Ledgers</strong> import buyer-side parties into the Tally company.
-          <strong>RD &amp; URD Purchase Party Ledgers</strong> import into the Tally company (since suppliers are ASP's).
-          All vouchers currently import into ISP — open the matching company in Tally before importing.
+          <strong>RD &amp; URD Purchase Party Ledgers</strong> import suppliers into the Tally company.
+          All vouchers import into the configured Tally company — open it in Tally before importing.
           <br><strong style="color:var(--green)">Workflow:</strong> Import party ledgers first, then matching vouchers — Tally rejects imports if any referenced ledger is missing.
         </div>
 
@@ -3013,7 +3013,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <!-- E-way bill <DISTANCE> — Per-invoice manual override.
              The user looks up the actual distance on the NIC portal's free
              Pin-to-Pin Distance Search page (or Google Maps for a sanity
-             check) and types it in here. The value lands on the next ISP
+             check) and types it in here. The value lands on the next
              sales voucher's <DISTANCE> field verbatim. -->
         <div class="tally-section is-collapsed" id="tally-sec-distance">
         <h3 class="tally-section-head" onclick="toggleTallySection('tally-sec-distance')">
@@ -3024,7 +3024,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <div class="tally-section-body">
         <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
           <div style="font-size:11px;color:var(--text3);margin-bottom:10px;line-height:1.5">
-            ISP sales vouchers carry a <code style="background:var(--bg);padding:1px 4px;border-radius:3px">&lt;DISTANCE&gt;</code> field used by the e-way bill portal. Click <strong>NIC</strong> to look up the distance on the official portal (captcha-gated; one route at a time), paste the result, click <strong>Save</strong>. <strong>The value is saved per route</strong>, so every other invoice between the same two PINs — this auction and all future ones — picks it up automatically. The <span style="font-size:9px;padding:1px 5px;background:var(--green-bg);color:var(--green);border-radius:8px;font-weight:700">auto</span> badge marks rows that resolved via the saved route table.
+            Sales vouchers carry a <code style="background:var(--bg);padding:1px 4px;border-radius:3px">&lt;DISTANCE&gt;</code> field used by the e-way bill portal. Click <strong>NIC</strong> to look up the distance on the official portal (captcha-gated; one route at a time), paste the result, click <strong>Save</strong>. <strong>The value is saved per route</strong>, so every other invoice between the same two PINs — this auction and all future ones — picks it up automatically. The <span style="font-size:9px;padding:1px 5px;background:var(--green-bg);color:var(--green);border-radius:8px;font-weight:700">auto</span> badge marks rows that resolved via the saved route table.
           </div>
 
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -3032,7 +3032,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <label style="font-size:11px;color:var(--text2);font-weight:600">Trade:</label>
             <select id="dist-inv-auction" style="padding:5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></select>
             <span id="dist-inv-count" style="font-size:11px;color:var(--text3)"></span>
-            <button class="btn" onclick="clearAllDistanceOverrides()" title="Wipe all per-invoice manual distances so every ISP invoice resolves via the route table" style="padding:6px 12px;font-size:11px;background:#FEF3C7;color:#B45309;border:1px solid #F59E0B;margin-left:auto">Clear all overrides</button>
+            <button class="btn" onclick="clearAllDistanceOverrides()" title="Wipe all per-invoice manual distances so every sales invoice resolves via the route table" style="padding:6px 12px;font-size:11px;background:#FEF3C7;color:#B45309;border:1px solid #F59E0B;margin-left:auto">Clear all overrides</button>
           </div>
           <div id="dist-inv-list" style="max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
             <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh</strong>.</div>
@@ -8005,7 +8005,7 @@ const FIELD_HELP = {
   discount_days:   'Number of days the trade credit is extended. Multiplied with Discount % to compute the Discount amount.',
   flag_disc_gst:   'When ON, GST is charged on top of the Discount amount (using the service rate) and subtracted from the Payable.',
   business_mode:   'e-Trade: grade-based deduction + discount workflow. e-Auction: commission + handling + sample refund workflow.',
-  business_state:  'Tamil Nadu uses ISP logo + TN office details. Kerala uses ASP logo + KL office details. Invoices adapt automatically.',
+  business_state:  'Tamil Nadu uses the TN office details (address, GSTIN, bank). Kerala uses the KL details. Invoices adapt automatically.',
   tcs_tds:         'TDS / TCS percentage applied on eligible invoices for tax compliance.',
 };
 function fld(f){
@@ -8016,7 +8016,7 @@ function fld(f){
   // payload still contains it, fall through to the generic renderer.
   if (f.key === 'logo') {
     const tip = FIELD_HELP[f.key] ? helpTip(FIELD_HELP[f.key]) : '';
-    return `<div class="fg"><label>${esc(f.label)}${tip}</label><input type="text" data-key="${f.key}" value="${esc(f.value || '')}" placeholder="e.g. ISP, ABC, MYCO"></div>`;
+    return `<div class="fg"><label>${esc(f.label)}${tip}</label><input type="text" data-key="${f.key}" value="${esc(f.value || '')}" placeholder="e.g. ABC, MYCO"></div>`;
   }
   // Boolean → toggle switch. Same markup as the Tally Classic view so
   // the captureCurrentPanel() data-key reader picks it up via the
@@ -8117,19 +8117,24 @@ function renderTallyPanel(fields){
   const cp = readGlobalSettings();
   const ce = (k, ph, opts={}) => `<input type="text" value="${esc(cp[k]||'')}" placeholder="${esc(ph)}" disabled class="tally-in tally-ro" title="From Settings → ${opts.from||'Company'} (read-only here)" style="${opts.style||''}">`;
 
+  // Company Profile mirror — single-company build, so the panel just
+  // shows the live values from Settings → Company / Address (TN + KL),
+  // grouped by state. The legacy sister-company "ASP" / "ISP" labels
+  // were removed along with the s_* keys; nothing to surface from a
+  // sister company any more.
   const companyProfile = box('Company Profile',
     row(`<input type="text" data-key="tally_company_name" value="${esc(v('tally_company_name'))}" placeholder="Tally Company Name" title="${esc(lab('tally_company_name'))}" class="tally-in" style="flex:1">`) +
     row(
-      ce('short_name','ISP — Trade Name',{from:'Company'}),
-      ce('s_short_name','ASP — Trade Name',{from:'Sister Company'})
+      ce('trade_name','Trade Name',{from:'Company'}),
+      ce('short_name','Short Name',{from:'Company'})
     ) +
     row(
       ce('tn_address1','TN — Address Line 1',{from:'Address (Tamil Nadu)'}),
-      ce('s_address1','ASP — Address Line 1',{from:'Sister Company'})
+      ce('kl_address1','KL — Address Line 1',{from:'Address (Kerala)'})
     ) +
     row(
       ce('tn_address2','TN — Address Line 2',{from:'Address (Tamil Nadu)'}),
-      ce('s_address2','ASP — Address Line 2',{from:'Sister Company'})
+      ce('kl_address2','KL — Address Line 2',{from:'Address (Kerala)'})
     ) +
     row(
       ce('tn_branch','TN — Branch',{from:'Address (Tamil Nadu)'}),
@@ -8138,20 +8143,19 @@ function renderTallyPanel(fields){
     row(
       `<input type="text" value="Tamil Nadu" disabled class="tally-in tally-ro">`,
       `<input type="text" data-key="tally_state_code" value="${esc(v('tally_state_code'))}" placeholder="Code (e.g. 33)" title="${esc(lab('tally_state_code'))}" class="tally-in">`,
-      `<input type="text" value="Kerala" disabled class="tally-in tally-ro">`,
-      `<input type="text" data-key="tally_state_code_amazing" value="${esc(v('tally_state_code_amazing'))}" placeholder="Code (e.g. 32)" title="${esc(lab('tally_state_code_amazing'))}" class="tally-in">`
+      `<input type="text" value="Kerala" disabled class="tally-in tally-ro">`
     ) +
     row(
       ce('tn_gstin','TN GSTIN',{from:'Address (Tamil Nadu)'}),
-      ce('s_gstin','ASP GSTIN',{from:'Sister Company'})
+      ce('kl_gstin','KL GSTIN',{from:'Address (Kerala)'})
     ) +
     row(
       ce('tn_phone','TN — Phone',{from:'Address (Tamil Nadu)'}),
-      ce('s_phone','ASP — Phone',{from:'Sister Company'})
+      ce('kl_phone','KL — Phone',{from:'Address (Kerala)'})
     ) +
     row(
       ce('tn_email','TN — Email',{from:'Address (Tamil Nadu)'}),
-      ce('s_email','ASP — Email',{from:'Sister Company'})
+      ce('kl_email','KL — Email',{from:'Address (Kerala)'})
     )
   );
 
@@ -12233,7 +12237,7 @@ async function loadInvoiceDistances(){
     const r=await fetch(B+`/api/invoices/distances/${aid}`,{headers:{'Authorization':'Bearer '+T}});
     if(!r.ok){list.innerHTML='<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">Failed to load</div>';return}
     const data=await r.json();
-    if(cnt)cnt.textContent=`${data.count} ISP invoice${data.count===1?'':'s'}`;
+    if(cnt)cnt.textContent=`${data.count} sales invoice${data.count===1?'':'s'}`;
     if(data.count===0){list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">No invoices in this auction.</div>';return}
 
     // Dispatch PIN comes from the server response — same fallback chain
@@ -12370,7 +12374,7 @@ async function saveRouteDistance(fromPin, toPin, invoiceId){
 // saved for its PIN pair. Confirmed before firing because the action
 // touches potentially every ISP invoice in the system.
 async function clearAllDistanceOverrides(){
-  if(!confirm('Wipe ALL per-invoice distance overrides?\n\nEvery ISP invoice will revert to its route value (or blank if no route is saved for its buyer PIN).\n\nThis cannot be undone.'))return;
+  if(!confirm('Wipe ALL per-invoice distance overrides?\n\nEvery sales invoice will revert to its route value (or blank if no route is saved for its buyer PIN).\n\nThis cannot be undone.'))return;
   try{
     const r=await fetch(B+'/api/distance-overrides',{
       method:'DELETE',

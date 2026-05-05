@@ -7,7 +7,7 @@ const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
-const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, buildDebitNote, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal } = require('./calculations');
+const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, buildDebitNote, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0 } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
 const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
 const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
@@ -2690,7 +2690,7 @@ app.get('/api/invoices/purchase-pdf/:id', requireView, async (req, res) => {
                       && (String(cfg.business_state || '').toUpperCase() === 'KERALA');
     if (!isASPContext) {
       return res.status(400).json({
-        error: 'Purchase view is only available for ASP invoices. Switch business state to KERALA + e-Trade mode.'
+        error: 'Purchase view is only available when business state is Kerala (e-Trade mode).'
       });
     }
     const stored = db.get('SELECT * FROM invoices WHERE id=?', [req.params.id]);
@@ -2867,7 +2867,7 @@ app.post('/api/invoices/purchase-pdf-bulk', requireView, async (req, res) => {
                       && (String(cfg.business_state || '').toUpperCase() === 'KERALA');
     if (!isASPContext) {
       return res.status(400).json({
-        error: 'Purchase view is only available for ASP invoices. Switch business state to KERALA + e-Trade mode.'
+        error: 'Purchase view is only available when business state is Kerala (e-Trade mode).'
       });
     }
 
@@ -3598,13 +3598,13 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   let cgst = 0, sgst = 0, igst = 0;
   if (Number(purchase.cgst) || Number(purchase.sgst) || Number(purchase.igst)) {
     if (isInter) {
-      igst = Math.round(discountAmt * dnGstRate / 100 * 100) / 100;
+      igst = round2(discountAmt * dnGstRate / 100);
     } else {
-      const half = Math.round(discountAmt * (dnGstRate / 2) / 100 * 100) / 100;
+      const half = round2(discountAmt * (dnGstRate / 2) / 100);
       cgst = half; sgst = half;
     }
   }
-  const total = Math.round((discountAmt + cgst + sgst + igst) * 100) / 100;
+  const total = round2(discountAmt + cgst + sgst + igst);
 
   // DN date = trade.date + 1
   const trade = db.get('SELECT date FROM auctions WHERE ano = ? LIMIT 1', [ano]);
@@ -3889,13 +3889,13 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
     let cgst = 0, sgst = 0, igst = 0;
     if (Number(p.cgst) || Number(p.sgst) || Number(p.igst)) {
       if (isInter) {
-        igst = Math.round(discountAmt * dnGstRate / 100 * 100) / 100;
+        igst = round2(discountAmt * dnGstRate / 100);
       } else {
-        const half = Math.round(discountAmt * (dnGstRate / 2) / 100 * 100) / 100;
+        const half = round2(discountAmt * (dnGstRate / 2) / 100);
         cgst = half; sgst = half;
       }
     }
-    const total = Math.round((discountAmt + cgst + sgst + igst) * 100) / 100;
+    const total = round2(discountAmt + cgst + sgst + igst);
 
     db.run(
       `INSERT INTO debit_notes (ano,date,state,name,note_no,amount,cgst,sgst,igst,total)
@@ -4279,7 +4279,7 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
         const discount = Number(lot.discount || 0);
         // GST on discount — only meaningful when the column is shown.
         const gstOnDiscount = showGstCol
-          ? Math.round(discount * gstRateFraction * 100) / 100
+          ? round2(discount * gstRateFraction)
           : 0;
         // Taxable Value historically equals the discount; with the GST
         // column visible we keep the same semantic so the existing
@@ -4842,14 +4842,14 @@ const TALLY_EXPORTS = {
   //   bill, customer is always ISP, lot rates from asp_prate/asp_puramt).
   // The legacy `sales` key is kept as an alias for sales_isp so any old
   // bookmarks / API callers don't break; new UI buttons use the split keys.
-  sales_isp:           { label: 'Sales Vouchers — ISP',                             name: 'SalesISP',           builder: buildSalesIspRows,         generator: generSalesIspXML,     company: 'isp' },
-  sales_asp:           { label: 'Sales Vouchers — ASP',                             name: 'SalesASP',           builder: buildSalesAspRows,         generator: generSalesAspXML,     company: 'isp' },
-  sales:               { label: 'Sales Vouchers (legacy alias for ISP)',            name: 'Sales',              builder: buildSalesIspRows,         generator: generSalesIspXML,     company: 'isp' },
+  sales_isp:           { label: 'Sales Vouchers',                                   name: 'Sales',              builder: buildSalesIspRows,         generator: generSalesIspXML,     company: 'isp' },
+  sales_asp:           { label: 'Sales Vouchers (Kerala / Intra-Company)',          name: 'SalesIntra',         builder: buildSalesAspRows,         generator: generSalesAspXML,     company: 'isp' },
+  sales:               { label: 'Sales Vouchers (legacy alias)',                    name: 'Sales',              builder: buildSalesIspRows,         generator: generSalesIspXML,     company: 'isp' },
   // ISP Purchase = the buyer-side mirror of an ASP→ISP transfer. Each
   // sales_asp row produces one isp_purchase voucher into ISP's books with
   // the same VOUCHERNUMBER (e.g. ASP/I-61/26-27) for cross-reference. We
   // re-use buildSalesAspRows directly since the row shape is identical.
-  isp_purchase:        { label: 'ISP Purchase Vouchers (mirror of ASP→ISP)',        name: 'ISPPurchase',        builder: buildSalesAspRows,         generator: generIspPurchaseXML,  company: 'isp' },
+  isp_purchase:        { label: 'Intra-Company Purchase Vouchers',                  name: 'IntraPurchase',      builder: buildSalesAspRows,         generator: generIspPurchaseXML,  company: 'isp' },
   rd_purchase:         { label: 'RD Purchase Vouchers',                             name: 'RDPurchase',         builder: buildRDPurchaseRows,       generator: generRDPurchaseXML,   company: 'isp' },
   urd_purchase:        { label: 'URD Purchase Vouchers (Agriculturist)',            name: 'URDPurchase',        builder: buildURDPurchaseRows,      generator: generURDPurchaseXML,  company: 'isp' },
   debit_note:          { label: 'Debit Notes (Discount)',                           name: 'DebitNote',          builder: buildDebitNoteRows,        generator: generDebitNoteXML,    company: 'isp' },

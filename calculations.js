@@ -5,6 +5,39 @@
 
 const { getSettingsFlat, getGSTRates } = require('./company-config');
 
+// ── Excel-compatible rounding ───────────────────────────────────────────
+// Plain JS `Math.round(x * 100) / 100` drifts on values whose binary
+// representation falls just short of the half mark — e.g.
+//     1.005 * 100  → 100.49999999999999  → rounds to 100 → 1.00 (not 1.01)
+//     2.675 * 100  → 267.49999999999994  → rounds to 267 → 2.67 (not 2.68)
+// Excel / Google Sheets ROUND() avoid this because their decimal pipeline
+// doesn't go through IEEE-754 binary multiplication. We use the same
+// trick: serialize the number to a decimal string, append "e2" / "e-2"
+// to shift the decimal point via the parser (which is decimal-exact for
+// finite doubles per ECMA-262), then Math.round the integerized value.
+// This makes round2(1.005) === 1.01, round2(2.675) === 2.68 — i.e.,
+// matches Excel ROUND() byte-for-byte on every realistic finance input.
+//
+// `round2` = round to 2 decimal places (paisa-precision money values).
+// `round0` = round to integer (whole rupee — used by the Round on/off line).
+// Both are sign-aware (Excel's "round half away from zero").
+const round2 = (n) => {
+  const x = Number(n);
+  if (!isFinite(x)) return 0;
+  if (x === 0) return 0;
+  const sign = x < 0 ? -1 : 1;
+  // Shift two decimal places right via string ('1.005' → '1.005e2' → 100.5),
+  // round, then shift back left.
+  const shifted = Number(Math.abs(x) + 'e2');
+  return sign * Number(Math.round(shifted) + 'e-2');
+};
+const round0 = (n) => {
+  const x = Number(n);
+  if (!isFinite(x)) return 0;
+  if (x === 0) return 0;
+  return (x < 0 ? -1 : 1) * Math.round(Math.abs(x));
+};
+
 /**
  * Extract the 2-digit state code from a seller's `cr` field.
  *
@@ -65,9 +98,9 @@ function calculateLot(lot, cfg) {
     ? Number(cfg.deduction2 || 0)
     : Number(cfg.deduction1 || 0);
   const rawRate = (lot.price || 0) * (1 - deduction / 100);
-  result.prate = Math.round(rawRate);
+  result.prate = round0(rawRate);
   // PurAmt = P_Qty × P_Rate (sample refund INCLUDED — direct purchase)
-  result.puramt = Math.round(result.pqty * result.prate * 100) / 100;
+  result.puramt = round2(result.pqty * result.prate);
   result.com = 0;
   result.sertax = 0;
 
@@ -109,15 +142,15 @@ function calculateLot(lot, cfg) {
     ? (Number(cfg.dealer_days) || 0)
     : (Number(cfg.discount_days) || 0);
   const discPct = Number(cfg.discount_pct)  || 0;
-  result.refund = Math.round((result.puramt / 1000) * days * discPct);
+  result.refund = round0((result.puramt / 1000) * days * discPct);
 
   // GST on the Discount only when flag_disc_gst is ON.
   if (cfg.flag_disc_gst && result.refund > 0) {
     if (isIntra) {
-      result.cgst = Math.round(result.refund * halfRate / 100 * 100) / 100;
-      result.sgst = Math.round(result.refund * halfRate / 100 * 100) / 100;
+      result.cgst = round2(result.refund * halfRate / 100);
+      result.sgst = round2(result.refund * halfRate / 100);
     } else {
-      result.igst = Math.round(result.refund * discRate / 100 * 100) / 100;
+      result.igst = round2(result.refund * discRate / 100);
     }
   }
 
@@ -126,7 +159,7 @@ function calculateLot(lot, cfg) {
 
   // Payable = PurAmt − Discount − GST-on-Discount
   const totalDeductions = result.refund + result.cgst + result.sgst + result.igst;
-  result.balance = Math.round((result.puramt - totalDeductions) * 100) / 100;
+  result.balance = round2(result.puramt - totalDeductions);
 
   // Bill amount (for agriculturist bills) — always equals PurAmt
   result.bilamt = result.puramt;
@@ -264,13 +297,13 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
     : pickRate(cfg.local_insurance, cfg.insurance, 0.75));
 
   // Transport: ₹/kg (qty × rate)
-  const transportCost = Math.round(totalQty * transportRate * 100) / 100;
+  const transportCost = round2(totalQty * transportRate);
 
   // Insurance: per ₹1000 of (cardamom + gunny + GST on those)
   //   insurance = ((cardamom_amount + gunny_cost) × (1 + gstGoods/100)) / 1000 × rate
   const subtotalGoods = totalAmount + gunnyCost;
   const gstOnGoods = subtotalGoods * gstGoods / 100;
-  const insuranceCost = Math.round((subtotalGoods + gstOnGoods) / 1000 * insuranceRate * 100) / 100;
+  const insuranceCost = round2((subtotalGoods + gstOnGoods) / 1000 * insuranceRate);
 
   // Taxable value = cardamom + gunny + transport + insurance
   const taxableValue = subtotalGoods + transportCost + insuranceCost;
@@ -278,15 +311,15 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
   // All four components get the SAME gstGoods rate (per user confirmation).
   let cgst = 0, sgst = 0, igst = 0;
   if (isInterState) {
-    igst = Math.round(taxableValue * gstGoods / 100 * 100) / 100;
+    igst = round2(taxableValue * gstGoods / 100);
   } else {
-    cgst = Math.round(taxableValue * (gstGoods / 2) / 100 * 100) / 100;
-    sgst = Math.round(taxableValue * (gstGoods / 2) / 100 * 100) / 100;
+    cgst = round2(taxableValue * (gstGoods / 2) / 100);
+    sgst = round2(taxableValue * (gstGoods / 2) / 100);
   }
 
   const totalBeforeRound = taxableValue + cgst + sgst + igst;
-  const roundDiff = Math.round(totalBeforeRound) - totalBeforeRound;
-  const subtotalRounded = Math.round(totalBeforeRound);
+  const subtotalRounded = round0(totalBeforeRound);
+  const roundDiff = subtotalRounded - totalBeforeRound;
 
   // Additional Charge — sum(cardamom) × cfg.addl_charge_value % .
   // The configured value is a PERCENTAGE (e.g. 2 means 2%). Sits BELOW the
@@ -295,11 +328,11 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
   // is fully skipped (no row, no XML ledger, no effect on grand total).
   const addlChargePct = Number(cfg.addl_charge_value) || 0;
   const addlCharge = addlChargePct > 0
-    ? Math.round(totalAmount * addlChargePct) / 100
+    ? round2(totalAmount * addlChargePct / 100)
     : 0;
   const addlChargeName = addlCharge > 0 ? String(cfg.addl_charge_name || '').trim() : '';
   const grandTotal = addlCharge > 0
-    ? Math.round((subtotalRounded + addlCharge) * 100) / 100
+    ? round2(subtotalRounded + addlCharge)
     : subtotalRounded;
 
   return {
@@ -347,9 +380,9 @@ function buildPurchaseInvoice(db, auctionId, sellerName, cfg) {
     const isInter = sellerState !== companyState;
     const puramt = lot.puramt || 0;
 
-    const rcgst = isInter ? 0 : Math.round(puramt * (gstGoods / 2) / 100 * 100) / 100;
-    const rsgst = isInter ? 0 : Math.round(puramt * (gstGoods / 2) / 100 * 100) / 100;
-    const rigst = isInter ? Math.round(puramt * gstGoods / 100 * 100) / 100 : 0;
+    const rcgst = isInter ? 0 : round2(puramt * (gstGoods / 2) / 100);
+    const rsgst = isInter ? 0 : round2(puramt * (gstGoods / 2) / 100);
+    const rigst = isInter ? round2(puramt * gstGoods / 100) : 0;
 
     totalQty += lot.pqty || lot.qty;
     totalPuramt += puramt;
@@ -373,8 +406,8 @@ function buildPurchaseInvoice(db, auctionId, sellerName, cfg) {
   lineItems.forEach(li => { totalCgst += li.cgst; totalSgst += li.sgst; totalIgst += li.igst; });
 
   const totalBeforeRound = totalPuramt + totalCgst + totalSgst + totalIgst;
-  const roundDiff = Math.round(totalBeforeRound) - totalBeforeRound;
-  const grandTotal = Math.round(totalBeforeRound);
+  const grandTotal = round0(totalBeforeRound);
+  const roundDiff = grandTotal - totalBeforeRound;
 
   // ── TDS calculation (Section 194Q) ──
   //
@@ -567,7 +600,7 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     // before the deduction policy is applied. 'after' (default) uses
     // payable = puramt − discount − GST.
     const rawAmount = useBefore ? (p.puramt || 0) : (p.payable || 0);
-    const amount = roundAmounts ? Math.round(rawAmount) : rawAmount;
+    const amount = roundAmounts ? round0(rawAmount) : rawAmount;
     const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;
     const ifsc      = (tb && tb.ifsc)        || p.t_ifsc    || '';
     const acctnum   = (tb && tb.acctnum)     || p.t_acctnum || '';
@@ -668,8 +701,8 @@ function buildAgriBill(db, auctionId, sellerName, cfg) {
   }
 
   const firstLot = lots[0];
-  const roundDiff = cfg.flag_round ? Math.round(totalPuramt) - totalPuramt : 0;
-  const netAmount = Math.round(totalPuramt);
+  const netAmount = round0(totalPuramt);
+  const roundDiff = cfg.flag_round ? netAmount - totalPuramt : 0;
 
   return {
     seller: {
@@ -811,29 +844,29 @@ function buildDebitNote(db, invoiceNo, saleType, discount, cfg) {
   // state (igst > 0), the DN inherits IGST; otherwise CGST + SGST.
   const isInter = (Number(inv.igst) || 0) > 0;
 
-  const amount = Math.round(discount * 100) / 100;
+  const amount = round2(discount);
   let cgst = 0, sgst = 0, igst = 0;
 
   if (cfg.flag_disc_gst) {
     // Discount amount includes GST — extract it
     const factor = 100 / (100 + gstRate);
     const taxable = amount * factor;
-    if (isInter) igst = Math.round((amount - taxable) * 100) / 100;
+    if (isInter) igst = round2(amount - taxable);
     else {
       const tax = (amount - taxable) / 2;
-      cgst = Math.round(tax * 100) / 100;
-      sgst = Math.round(tax * 100) / 100;
+      cgst = round2(tax);
+      sgst = round2(tax);
     }
   } else {
     // Discount is pre-tax — add GST on top
-    if (isInter) igst = Math.round(amount * gstRate / 100 * 100) / 100;
+    if (isInter) igst = round2(amount * gstRate / 100);
     else {
-      cgst = Math.round(amount * (gstRate / 2) / 100 * 100) / 100;
-      sgst = Math.round(amount * (gstRate / 2) / 100 * 100) / 100;
+      cgst = round2(amount * (gstRate / 2) / 100);
+      sgst = round2(amount * (gstRate / 2) / 100);
     }
   }
 
-  const total = Math.round((amount + cgst + sgst + igst) * 100) / 100;
+  const total = round2(amount + cgst + sgst + igst);
 
   // Return shape mirrors the original (callers read `invoice.ano`,
   // `invoice.buyer`, etc.). Re-aliases so a purchase row works as the
@@ -874,4 +907,6 @@ module.exports = {
   getSalesJournal,
   getPurchaseJournal,
   gstinStateCode,
+  round2,
+  round0,
 };

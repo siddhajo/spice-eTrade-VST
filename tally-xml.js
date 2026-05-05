@@ -61,8 +61,26 @@ const xe = (v) => {
     .replace(/'/g, '&apos;');
 };
 
-const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
-const r0 = (n) => Math.round(Number(n || 0));
+// Excel-compatible rounding (matches the dad's worksheet):
+//   r2(1.005) → 1.01    (plain JS Math.round(1.005 * 100) / 100 → 1)
+//   r2(2.675) → 2.68    (plain JS → 2.67)
+// String-shift trick: convert to decimal string, append "e2" so the
+// parser produces an exact integer-half (e.g. 100.5), then Math.round.
+// Decimal parsing in ECMA-262 is exact for finite doubles, so this
+// avoids the IEEE-754 binary multiplication error that Math.round*100
+// hits at .x05 values. Sign-aware ("round half away from zero").
+const r2 = (n) => {
+  const x = Number(n || 0);
+  if (!isFinite(x) || x === 0) return 0;
+  const sign = x < 0 ? -1 : 1;
+  const shifted = Number(Math.abs(x) + 'e2');
+  return sign * Number(Math.round(shifted) + 'e-2');
+};
+const r0 = (n) => {
+  const x = Number(n || 0);
+  if (!isFinite(x) || x === 0) return 0;
+  return (x < 0 ? -1 : 1) * Math.round(Math.abs(x));
+};
 
 // yyyymmdd from any date-ish string ("2026-04-28", "28/04/2026", or Date)
 const toTallyDate = (d) => {
