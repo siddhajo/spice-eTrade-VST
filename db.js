@@ -195,8 +195,8 @@ async function initDb() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ano TEXT NOT NULL,
     date TEXT NOT NULL,
-    crop_type TEXT DEFAULT 'ASP',
-    state TEXT DEFAULT 'TAMIL NADU',
+    crop_type TEXT DEFAULT '',
+    state TEXT DEFAULT '',
     start_time TEXT,
     end_time TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime'))

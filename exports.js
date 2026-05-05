@@ -53,45 +53,48 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
   // Apply column widths up front (the brand band uses these widths too).
   ws.columns = columns.map(c => ({ key: c.key, width: c.width || 15 }));
 
-  // Brand band: logo + name + address (left), title (middle), meta (right).
+  // Resolve per-column numFmt + alignment ONCE so we can apply them to
+  // data rows and the grand-total row uniformly.
+  //
+  // Default alignment policy:
+  //   - explicit `align` wins
+  //   - numeric columns (have a numFmt) → right
+  //   - everything else → left
+  const colMeta = columns.map(c => {
+    const fmt = c.numFmt || xlsxNumFmtForHeader(c.header);
+    const align = c.align || (fmt ? 'right' : 'left');
+    return { fmt, align };
+  });
+
+  // Apply column-level numFmt + alignment FIRST, so any cells we write
+  // afterwards (brand band, header row, data rows) can override it via
+  // explicit per-cell alignment without being clobbered by a later
+  // column.alignment cascade.
+  colMeta.forEach((m, i) => {
+    const colObj = ws.getColumn(i + 1);
+    if (m.fmt) colObj.numFmt = m.fmt;
+    colObj.alignment = { horizontal: m.align, vertical: 'middle' };
+  });
+
+  // Brand band: company name (row 1) + meta (row 2) + spacer (row 3).
   const header = opts.companyHeader || getCompanyHeader(opts.db);
   const startRow = writeXlsxCompanyHeader(wb, ws, header, {
     colCount: columns.length,
-    title: opts.title || sheetName,
     metaLines: opts.metaLines || [],
   });
 
-  // Column-header row (right after the brand band, with the spacer row).
+  // Column-header row — explicit per-cell alignment 'center' overrides
+  // the column-level left/right cascade.
   const headerRow = ws.getRow(startRow);
   columns.forEach((c, i) => {
     headerRow.getCell(i + 1).value = c.header;
   });
   headerRow.font = { bold: true, size: 10 };
   headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
+  headerRow.height = 20;
   headerRow.eachCell((cell) => {
     cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    cell.alignment = { horizontal: 'center' };
-  });
-
-  // Resolve per-column numFmt + alignment ONCE so we can apply them to
-  // both data rows and the grand-total row uniformly.
-  //
-  // Default alignment policy (matches Lorry export):
-  //   - explicit `align` wins
-  //   - numeric columns (have a numFmt) → right
-  //   - everything else → left (cell default; we don't set explicitly)
-  const colMeta = columns.map(c => {
-    const fmt = c.numFmt || xlsxNumFmtForHeader(c.header);
-    const align = c.align || (fmt ? 'right' : null);
-    return { fmt, align };
-  });
-
-  // Apply numFmt at the worksheet-column level so every data row picks it
-  // up automatically. Alignment is also applied per-column for consistency.
-  colMeta.forEach((m, i) => {
-    const colObj = ws.getColumn(i + 1);
-    if (m.fmt) colObj.numFmt = m.fmt;
-    if (m.align) colObj.alignment = { horizontal: m.align };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   });
 
   // Helper to emit a single data row honouring numeric coercion + per-col align
@@ -106,10 +109,9 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
       }
       const cell = dataRow.getCell(i + 1);
       cell.value = v == null ? '' : v;
-      // Per-cell alignment guard — column-level alignment doesn't always
-      // win over default cell alignment in some ExcelJS versions, so set
-      // it on the cell too when explicit.
-      if (colMeta[i].align) cell.alignment = { horizontal: colMeta[i].align };
+      // Per-cell alignment guard — vertical:'middle' centers text vertically
+      // so rows align consistently regardless of font size differences.
+      cell.alignment = { horizontal: colMeta[i].align, vertical: 'middle' };
     });
     return dataRow;
   }
@@ -123,9 +125,9 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
     opts.sections.forEach((sec, sIdx) => {
       const titleRow = ws.addRow([sec.title || '']);
       ws.mergeCells(`A${titleRow.number}:${colLetter(columns.length)}${titleRow.number}`);
-      titleRow.font = { bold: true, size: 11 };
-      titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } };
-      titleRow.alignment = { horizontal: 'center' };
+      titleRow.font = { bold: true, size: 10 };
+      titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
+      titleRow.alignment = { horizontal: 'left', vertical: 'middle' };
       (sec.rows || []).forEach(emitDataRow);
       if (opts.spacerBetween && sIdx < opts.sections.length - 1) ws.addRow([]);
     });
@@ -151,13 +153,14 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
     }
     const gRow = ws.addRow(cells);
     gRow.font = { bold: true, size: 11 };
+    gRow.height = 22;
     const fill = gt.fillArgb || 'FFFFF3CD';
     gRow.eachCell((cell, ci) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
-      cell.border = { top: { style: 'double' }, bottom: { style: 'double' } };
+      cell.border = { top: { style: 'thin' }, bottom: { style: 'double' } };
       const m = colMeta[ci - 1];
       if (m && m.fmt)   cell.numFmt = m.fmt;
-      if (m && m.align) cell.alignment = { horizontal: m.align };
+      cell.alignment = { horizontal: (m && m.align) || 'left', vertical: 'middle' };
     });
   }
 
@@ -254,6 +257,32 @@ async function exportPriceList(db, auctionId) {
   ];
   return createExcelBuffer('PriceList', cols, rows, {
     db, title: 'Price List', metaLines: auctionMeta(db, auctionId),
+  });
+}
+
+// ── Export Type 3b: Price List (Before Trade) ─────────────────
+// Same shape as Price List but trade-result columns (PRICE, CODE,
+// BIDDER) are dropped — meaningful only AFTER buyers bid on lots.
+// Useful pre-trade for handing buyers a printable lot inventory.
+async function exportPriceListBefore(db, auctionId) {
+  const rows = db.all(
+    `SELECT lot_no as lot, bags as bag, qty
+     FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
+  );
+  const cols = [
+    { header: 'LOT', key: 'lot', width: 10 },
+    { header: 'BAG', key: 'bag', width: 8 },
+    { header: 'QTY', key: 'qty', width: 14 },
+  ];
+  return createExcelBuffer('PriceListBefore', cols, rows, {
+    db, title: 'Price List (Before)', metaLines: auctionMeta(db, auctionId),
+    grandTotal: {
+      label: 'TOTAL',
+      values: {
+        bag: rows.reduce((s, r) => s + (Number(r.bag) || 0), 0),
+        qty: rows.reduce((s, r) => s + (Number(r.qty) || 0), 0),
+      },
+    },
   });
 }
 
@@ -354,12 +383,35 @@ async function exportCollection(db, auctionId) {
 }
 
 // ── Export Type 8: Dealer List ────────────────────────────────
+// Dealers are sellers whose `cr` field stores a GSTIN. Storage is
+// inconsistent across imports — values appear as "GSTIN.<15>", "gstin <15>",
+// "gstin<15>", or bare 15-char alphanumeric. The earlier query
+// `WHERE cr LIKE '%GST%'` skipped the bare-15 case (silently returning
+// an empty XLSX) and SUBSTR(cr,7,15) hard-coded a 6-char prefix.
+//
+// Fix: compute a clean GSTIN inline (strip any 'gstin' prefix +
+// punctuation/whitespace, uppercase) and filter on its length being
+// exactly 15. Works for every storage form.
 async function exportDealerList(db, auctionId) {
   const rows = db.all(
-    `SELECT state, name, SUBSTR(cr, 7, 15) as gstin, 
-      COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty
-     FROM lots WHERE auction_id = ? AND cr LIKE '%GST%' AND amount > 0
-     GROUP BY state, name, cr ORDER BY state, name`, [auctionId]
+    `WITH cleaned AS (
+       SELECT state, name, lot_no, bags, qty, amount,
+              UPPER(TRIM(
+                CASE
+                  WHEN LOWER(SUBSTR(TRIM(cr),1,5)) = 'gstin'
+                    THEN LTRIM(SUBSTR(TRIM(cr),6), '. :-')
+                  ELSE TRIM(cr)
+                END
+              )) AS gstin
+         FROM lots
+        WHERE auction_id = ? AND amount > 0
+     )
+     SELECT state, name, gstin,
+            COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty
+       FROM cleaned
+      WHERE LENGTH(gstin) = 15
+      GROUP BY state, name, gstin
+      ORDER BY state, name`, [auctionId]
   );
   const cols = [
     { header: 'STATE', key: 'state', width: 12 },
@@ -452,8 +504,27 @@ async function exportPaymentSummary(db, auctionId, cfg) {
     { header: 'DISCOUNT', key: 'discount', width: 14 },
     { header: 'PAYABLE', key: 'payable', width: 14 },
   ];
+  // Footer totals — sum every numeric column. The earlier export had no
+  // totals row, so users had to compute payable/discount sums manually
+  // in Excel before reconciling with bank transfers. PRICE/PRATE are
+  // omitted from the sum (averaging rates makes no business sense; a
+  // sum would mislead readers).
+  const sum = (key) => enriched.reduce((s, r) => s + (Number(r[key]) || 0), 0);
+  const grandTotal = {
+    label: 'GRAND TOTAL',
+    values: {
+      bag:     sum('bag'),
+      qty:     sum('qty'),
+      amount:  sum('amount'),
+      pqty:    sum('pqty'),
+      puramt:  sum('puramt'),
+      discount:sum('discount'),
+      payable: sum('payable'),
+    },
+  };
   return createExcelBuffer('Payment', cols, enriched, {
     db, title: 'Payment Summary', metaLines: auctionMeta(db, auctionId),
+    grandTotal,
   });
 }
 
@@ -581,15 +652,30 @@ async function exportPurchaseJournal(db, auctionId, type) {
 // Produces a CSV (NOT xlsx) matching the column layout required by Praman's
 // lot-upload interface. Returns a Buffer of CSV text.
 //
-// Special rule (item #9): Grade 1 lots → Lot Company = 'ASP' on the CSV
-// output only (doesn't change stored data). All other grades → 'ISPL'.
-// Rationale: Grade 1 (pooler) lots are routed to ASP for tax/accounting
-// reasons, but they still appear as ISPL lots in the local DB.
+// "Lot Company" column (col 2) is the registered Praman uploader identity —
+// resolved from company_settings (`short_name` → `logo` short code). NO
+// hardcoded fallback: if neither is configured the cell is left blank,
+// surfacing the misconfiguration rather than leaking a stale literal.
 async function exportPramanCSV(db, auctionId, cfg, state) {
+  // Praman expects PER-LOT planter info — the seller (and their GSTIN)
+  // for each individual lot, not a single legal-entity stamp on every
+  // row. The earlier export used `getCompanyIdentity(cfg)` and wrote
+  // the company's own name + GSTIN on every row, which surfaced as
+  // "VANDANMEDU SPICES" (or whatever trade_name was set) repeated for
+  // every lot — wrong for the Praman upload, which uses these fields
+  // to identify each lot's actual seller.
+  //
+  // Fix: pull lots.name (seller per lot) and the trader's `cr`
+  // (stored as the GSTIN). Falls back to the company identity ONLY if
+  // a lot has no associated seller record (legacy data, partial
+  // imports).
   const rows = db.all(
-    `SELECT lot_no, branch, grade, name, cr, qty, litre, bags, tel
-     FROM lots WHERE auction_id = ? ${state ? 'AND state = ?' : ''}
-     ORDER BY CAST(lot_no AS INTEGER), lot_no`,
+    `SELECT l.lot_no, l.branch, l.grade, l.name, l.cr, l.qty, l.litre, l.bags, l.tel,
+            t.cr AS trader_cr, t.tel AS trader_tel
+       FROM lots l
+       LEFT JOIN traders t ON UPPER(TRIM(t.name)) = UPPER(TRIM(l.name))
+      WHERE l.auction_id = ? ${state ? 'AND l.state = ?' : ''}
+      ORDER BY CAST(l.lot_no AS INTEGER), l.lot_no`,
     state ? [auctionId, state] : [auctionId]
   );
 
@@ -610,21 +696,39 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
     return s;
   };
 
-  // Praman planter identity — derived from the live company config, not
-  // hardcoded. The Praman portal expects a single planter (the registered
-  // legal seller) per upload; for single-company e-Trade that's THIS
-  // company, so we use the central identity resolver.
+  // GSTIN extractor — `cr` may be stored as "GSTIN.<15>", "gstin.<15>",
+  // bare 15-char, or empty. Strip the prefix if present.
+  const stripGstinPrefix = (raw) => {
+    let s = String(raw || '').trim();
+    if (/^gstin\.?/i.test(s)) s = s.replace(/^gstin\.?/i, '');
+    return s;
+  };
+
+  // Lot company short code — first check for a dedicated Praman value
+  // (Settings → Integrations → Praman Lot Company Code). If unset,
+  // fall back to the company-wide `short_name` (Settings → Company →
+  // Short Name) via the identity resolver. This split lets the user
+  // register a different short code with Praman than what they use
+  // elsewhere (e.g. invoice prefixes, logo derivation) without
+  // touching every other code path.
   const identity = getCompanyIdentity(cfg);
-  const planterName   = identity.name;
-  const planterGstin  = identity.gstin;
-  const planterMobile = (cfg && (cfg.kl_phone || cfg.tn_phone || cfg.phone)) || '';
-  const planterDealer = 2; // 2 = Dealer (always — registered company is the legal seller)
-  // Lot company short code shown in the per-lot column. Matches the user's
-  // configured short_name / logo code rather than a hardcoded 'ISPL'.
-  const lotCompany = identity.shortName || 'COMPANY';
+  const lotCompany = String(cfg.praman_company || '').trim() || identity.shortName || '';
+
+  // Praman classifies sellers as 1=Planter (URD/agriculturist) or
+  // 2=Dealer (registered, with GSTIN). Per-lot decision based on
+  // whether the seller has a GSTIN attached.
+  const classify = (gstin) => (gstin && gstin.length >= 15) ? 2 : 1;
 
   const lines = [header.join(',')];
   for (const r of rows) {
+    // Per-lot planter: name from lots.name, GSTIN from trader's `cr`
+    // (preferred — master data) with the lot's own `cr` as a fallback
+    // when traders join misses.
+    const planterName   = (r.name || '').trim();
+    const planterGstin  = stripGstinPrefix(r.trader_cr || r.cr);
+    const planterMobile = (r.trader_tel || r.tel || '').trim();
+    const planterDealer = classify(planterGstin);
+
     lines.push([
       r.lot_no || '',
       lotCompany,
@@ -662,6 +766,7 @@ const EXPORT_TYPES = {
   lot_slip_after:     { fn: exportLotSlipAfter,      name: 'LotSlipAfter' },
   praman_csv:         { fn: exportPramanCSV,         name: 'eTrade_Praman', ext: 'csv', mime: 'text/csv', needsCfg: true },
   price_list:         { fn: exportPriceList,         name: 'PriceList' },
+  price_list_before:  { fn: exportPriceListBefore,   name: 'PriceListBefore' },
   bank_payment_before:{ fn: exportBankPaymentBefore, name: 'BankPaymentBefore', needsCfg: true },
   bank_payment:       { fn: exportBankPayment,       name: 'BankPayment',       needsCfg: true },
   pooler_register:    { fn: exportPoolerRegister,    name: 'PoolerRegister' },
@@ -680,7 +785,7 @@ module.exports = {
   // can route through the same standardized brand band + column-header
   // styling instead of building their own ExcelJS workbook.
   createExcelBuffer,
-  exportLotSlip, exportLotSlipAfter, exportPramanCSV, exportPriceList,
+  exportLotSlip, exportLotSlipAfter, exportPramanCSV, exportPriceList, exportPriceListBefore,
   exportBankPayment, exportBankPaymentBefore,
   exportPoolerRegister, exportFullFile, exportCollection, exportTradeReport, exportDealerList,
   exportSalesTaxes, exportPaymentSummary, exportTDSReturn, exportTallyPurchase,

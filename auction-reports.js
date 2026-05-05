@@ -16,6 +16,7 @@ const PDFDocument = require('pdfkit');
 const {
   fmtMoney, fmtQty, fmtPrice,
   getCompanyHeader, drawCompanyHeader,
+  writeXlsxCompanyHeader,
 } = require('./report-formatters');
 // Defensive identity resolver — see _company-identity-fallback.js for
 // rationale. Decoupled from the destructure above so a stale
@@ -294,38 +295,65 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
 // We pull from the `invoices` table (one row per invoice, sale='L'/'I').
 
 function getCollectionRows(db, auctionId) {
-  // Each invoice header row aggregates across its lots, but in the FoxPro
-  // collection report we show one row per buyer/firm. The invoices table
-  // already stores one row per invoice with totals, so we group by the
-  // (sale, invo, buyer1, place, code) tuple.
+  // Each row in this report is ONE sales invoice. Earlier the SQL used
+  // a LEFT JOIN buyers ... ON OR ... which fanned out duplicate output
+  // rows whenever the buyers master held multiple rows matching one
+  // invoice. We then tried a correlated subquery, but sql.js (the
+  // SQLite WASM build used in production) raises "no such column:
+  // i.buyer" on outer-alias references inside nested expressions —
+  // engine limitation, not our SQL.
   //
-  // Column mapping (matches user's data convention):
-  //   TRADE NAME ← i.buyer1   (firm/trade name on the invoice itself —
-  //                              "EMPEROR SPICES PRIVATE LIMITED",
-  //                              "MAR TRADERS", "VARDHAN TRADING COMPANY")
-  //   NAME       ← b.buyer    (the full buyer name from the buyers master).
-  //                              Falls back to b.sbl, then i.buyer if the
-  //                              master record is missing.
-  return db.all(`
-    SELECT
-      i.sale                                                AS sale,
-      i.invo                                                AS invo,
-      COALESCE(i.buyer1, '')                                AS trade_name,
-      COALESCE(NULLIF(b.buyer, ''),
-               NULLIF(b.sbl,   ''),
-               i.buyer,
-               '')                                          AS buyer_name,
-      SUM(i.qty)                                            AS qty,
-      SUM(i.tot)                                            AS value,
-      COALESCE(b.state,'')                                  AS buyer_state
-    FROM invoices i
-    LEFT JOIN buyers b
-      ON UPPER(TRIM(b.buyer))  = UPPER(TRIM(i.buyer))
-      OR UPPER(TRIM(b.buyer1)) = UPPER(TRIM(i.buyer1))
-    WHERE i.auction_id = ?
-    GROUP BY i.sale, i.invo, i.buyer1, b.buyer, b.sbl, i.buyer, b.state
-    ORDER BY i.sale, CAST(i.invo AS INTEGER), i.invo
-  `, [auctionId]);
+  // Final fix: pull two flat result sets and join in JavaScript:
+  //   1. all invoices for this auction (one row each — no fanout)
+  //   2. all buyers (small master table — pulled once)
+  // Then for each invoice pick the single best-matching buyer
+  // (preferring code-match `buyers.buyer = invoices.buyer` over
+  // name-match `buyers.buyer1 = invoices.buyer1`). Deterministic via
+  // buyers.id ASC tiebreak.
+  const invoices = db.all(
+    `SELECT id, sale, invo, buyer, buyer1, qty, tot
+       FROM invoices
+      WHERE auction_id = ?
+      ORDER BY sale, CAST(invo AS INTEGER), invo`,
+    [auctionId]
+  );
+  if (!invoices.length) return [];
+
+  // Pull every buyer in the master table once. The buyers master is
+  // typically <500 rows for a working set, so this is cheap.
+  const buyers = db.all(`SELECT id, buyer, buyer1, sbl, state FROM buyers ORDER BY id`);
+
+  // Index buyers by uppercase-trimmed `buyer` (code) and `buyer1`
+  // (trade name) for O(1) lookup. First write wins (lowest id),
+  // matching the ORDER BY id ASC tiebreak we'd want from a SQL
+  // correlated subquery.
+  const byCode = {}, byName = {};
+  for (const b of buyers) {
+    const code = String(b.buyer  || '').trim().toUpperCase();
+    const name = String(b.buyer1 || '').trim().toUpperCase();
+    if (code && byCode[code] == null) byCode[code] = b;
+    if (name && byName[name] == null) byName[name] = b;
+  }
+
+  return invoices.map(i => {
+    const iCode = String(i.buyer  || '').trim().toUpperCase();
+    const iName = String(i.buyer1 || '').trim().toUpperCase();
+    // Code match wins; fall back to name match for legacy invoices
+    // that pre-date code stamping.
+    const b = (iCode && byCode[iCode]) || (iName && byName[iName]) || null;
+    const buyerName = b
+      ? (b.buyer || b.sbl || i.buyer || '')
+      : (i.buyer || '');
+    return {
+      sale:        i.sale,
+      invo:        i.invo,
+      trade_name:  i.buyer1 || '',
+      buyer_name:  buyerName,
+      qty:         i.qty,
+      value:       i.tot,
+      buyer_state: (b && b.state) || '',
+    };
+  });
 }
 
 function classifyByState(rows, auctionState) {
@@ -351,7 +379,6 @@ async function collectionXlsx(db, auctionId) {
   const auction = getAuctionHeader(db, auctionId);
   const rows = getCollectionRows(db, auctionId);
   const groups = classifyByState(rows, auction.state);
-  const identity = getCompanyIdentity(_loadSettings(db));
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Collection');
@@ -359,22 +386,31 @@ async function collectionXlsx(db, auctionId) {
     { width: 12 }, { width: 30 }, { width: 24 }, { width: 14 }, { width: 18 },
   ];
 
-  ws.mergeCells('A1:E1');
-  ws.getCell('A1').value = identity.name;
-  ws.getCell('A1').font = { bold: true, size: 14 };
-  ws.getCell('A1').alignment = { horizontal: 'center' };
-  ws.mergeCells('A2:E2');
-  ws.getCell('A2').value = `e-TRADE No: ${auction.ano}    Date: ${fmtDateDMY(auction.date)}`;
-  ws.getCell('A2').font = { bold: true, size: 11 };
-  ws.getCell('A2').alignment = { horizontal: 'center' };
-  ws.addRow([]);
+  // Brand band: logo (60×60) + company name + address (left), title
+  // centered, trade meta right. Was a hand-rolled 2-row text merge with
+  // no logo and inconsistent alignment vs other exports — replaced with
+  // the same writer every other XLSX uses, so all exports look the
+  // same and the Trade Name set in Settings flows through correctly.
+  const companyHeader = getCompanyHeader(db);
+  const headerStartRow = writeXlsxCompanyHeader(wb, ws, companyHeader, {
+    colCount: 5,
+    title: 'COLLECTION',
+    metaLines: [
+      `e-TRADE No: ${auction.ano}`,
+      `Date: ${fmtDateDMY(auction.date)}`,
+    ],
+  });
 
-  const head = ws.addRow(['INVO', 'TRADE NAME', 'NAME', 'QUANTITY', 'VALUE']);
+  // Column-header row sits where the brand band reserved space.
+  const head = ws.getRow(headerStartRow);
+  ['INVO', 'TRADE NAME', 'NAME', 'QUANTITY', 'VALUE']
+    .forEach((label, i) => { head.getCell(i + 1).value = label; });
   head.font = { bold: true };
+  head.height = 20;
   head.eachCell(c => {
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
     c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    c.alignment = { horizontal: 'center' };
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   });
 
   let gQty = 0, gValue = 0;
@@ -717,7 +753,6 @@ function getTradeReportData(db, auctionId) {
 
 async function tradeReportXlsx(db, auctionId) {
   const { auction, sortedStates, stats } = getTradeReportData(db, auctionId);
-  const identity = getCompanyIdentity(_loadSettings(db));
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('TradeReport');
@@ -732,29 +767,30 @@ async function tradeReportXlsx(db, auctionId) {
     { width: 8 },   // CODE
   ];
 
-  ws.mergeCells('A1:H1');
-  ws.getCell('A1').value = identity.name;
-  ws.getCell('A1').font = { bold: true, size: 14 };
-  ws.getCell('A1').alignment = { horizontal: 'center' };
+  // Brand band: logo + company on left, "BUYERS LIST FOR VERIFICATION"
+  // centered, trade meta on right. Replaces the previous text-only
+  // 3-row merge that had no logo and showed `identity.name` only when
+  // `company_name` was set (now reads `trade_name` via getCompanyHeader).
+  const companyHeader = getCompanyHeader(db);
+  const headerStartRow = writeXlsxCompanyHeader(wb, ws, companyHeader, {
+    colCount: 8,
+    title: 'BUYERS LIST FOR VERIFICATION',
+    metaLines: [
+      `e-TRADE No: ${auction.ano}`,
+      `DATE: ${fmtDateDMY(auction.date)}`,
+    ],
+  });
 
-  ws.mergeCells('A2:H2');
-  ws.getCell('A2').value = 'BUYERS LIST FOR VERIFICATION';
-  ws.getCell('A2').font = { bold: true, size: 12 };
-  ws.getCell('A2').alignment = { horizontal: 'center' };
-
-  ws.mergeCells('A3:H3');
-  ws.getCell('A3').value = `e-TRADE No: ${auction.ano}    DATE: ${fmtDateDMY(auction.date)}`;
-  ws.getCell('A3').font = { bold: true, size: 11 };
-  ws.getCell('A3').alignment = { horizontal: 'center' };
-
-  ws.addRow([]);
-
-  const head = ws.addRow(['SALE', 'BIDDER', 'TRADE NAME', 'BAG', 'QUANTITY', 'AMOUNT', 'INV.AMOUNT', 'CODE']);
+  // Column-header row sits where the brand band reserved space.
+  const head = ws.getRow(headerStartRow);
+  ['SALE', 'BIDDER', 'TRADE NAME', 'BAG', 'QUANTITY', 'AMOUNT', 'INV.AMOUNT', 'CODE']
+    .forEach((label, i) => { head.getCell(i + 1).value = label; });
   head.font = { bold: true };
+  head.height = 20;
   head.eachCell(c => {
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
     c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-    c.alignment = { horizontal: 'center' };
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   });
 
   function emitRow(r) {
@@ -788,7 +824,7 @@ async function tradeReportXlsx(db, auctionId) {
     tot.getCell(5).numFmt = '#,##0.000';
     tot.getCell(6).numFmt = '#,##,##0.00';
     tot.eachCell((c) => {
-      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F4EA' } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
       c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
     });
     return { bag: sumKey('bag'), qty: sumKey('qty'), amount: sumKey('amount') };
@@ -837,35 +873,72 @@ async function tradeReportXlsx(db, auctionId) {
     c.border = { top: { style: 'double' }, bottom: { style: 'double' } };
   });
 
-  // Footer stats block
+  // ── Stats footer — two clean tabular blocks ──
+  // Replaces the previous single-line prose rows ("TOTAL ARRIVALS Kgs. xxx
+  // Bags. xxx Lot. xxx" packed into one merged cell) with proper tables
+  // so values land in their own columns and align with the numeric data
+  // above. The 8-column worksheet is partitioned:
+  //   Block A (cols A–D): Quantity stats  | LABEL | Kgs | Bags | Lot |
+  //   Block B (cols F–H): Price stats           | METRIC | Rs. |
+  // A blank gutter column (E) separates the two blocks.
   ws.addRow([]);
-  const addFootRow = (lhs, rhs) => {
-    const r = ws.addRow([lhs, '', '', '', '', rhs, '', '']);
-    ws.mergeCells(`A${r.number}:E${r.number}`);
-    ws.mergeCells(`F${r.number}:H${r.number}`);
-    r.font = { size: 10 };
-    return r;
+
+  // Helper to set a cell — minimal repetition.
+  const setCell = (rowNum, col, value, opts = {}) => {
+    const c = ws.getCell(`${col}${rowNum}`);
+    c.value = value;
+    if (opts.font)      c.font = opts.font;
+    if (opts.fill)      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: opts.fill } };
+    if (opts.align)     c.alignment = opts.align;
+    if (opts.numFmt)    c.numFmt = opts.numFmt;
+    if (opts.border)    c.border = opts.border;
   };
-  addFootRow(
-    `TOTAL ARRIVALS  Kgs. ${fmtQty(stats.arrivals_qty)}  Bags. ${stats.arrivals_bags}  Lot. ${stats.arrivals_lots}`,
-    `MAXIMUM Rs. ${fmtMoney(stats.max_price)}`,
-  );
-  addFootRow(
-    `WITH DRAWN     Kgs. ${fmtQty(stats.withdrawn_qty)}  Bags. ${stats.withdrawn_bags}  Lot. ${stats.withdrawn_lots}`,
-    `MINIMUM Rs. ${fmtMoney(stats.min_price)}`,
-  );
-  addFootRow(
-    `SOLD           Kgs. ${fmtQty(stats.sold_qty)}  Bags. ${stats.sold_bags}  Lot. ${stats.sold_lots}`,
-    `AVERAGE Rs. ${fmtMoney(stats.avg_price)}`,
-  );
-  addFootRow(
-    `NOT eTRADED    Kgs. ${fmtQty(stats.not_qty)}  Bags. ${stats.not_bags}  Lot. ${stats.not_lots}`,
-    '',
-  );
-  addFootRow(
-    `COST OF CARDAMOM   Rs. ${fmtMoney(stats.cost)}`,
-    '',
-  );
+  const HDR_FILL = 'FFE8E4DD';     // same as column-header strip above
+  const HDR_FONT = { bold: true, size: 10 };
+  const HDR_ALIGN = { horizontal: 'center', vertical: 'middle' };
+  const HDR_BORDER = { top: { style: 'thin' }, bottom: { style: 'thin' } };
+  const CELL_BORDER = { top: { style: 'hair' }, bottom: { style: 'hair' },
+                        left: { style: 'hair' }, right: { style: 'hair' } };
+  const NUM_ALIGN  = { horizontal: 'right', vertical: 'middle' };
+  const TEXT_ALIGN = { horizontal: 'left',  vertical: 'middle' };
+
+  // Block-A header row
+  const aHdr = ws.addRow([]);
+  setCell(aHdr.number, 'A', '',     { font: HDR_FONT, fill: HDR_FILL, align: HDR_ALIGN, border: HDR_BORDER });
+  setCell(aHdr.number, 'B', 'Kgs',  { font: HDR_FONT, fill: HDR_FILL, align: HDR_ALIGN, border: HDR_BORDER });
+  setCell(aHdr.number, 'C', 'Bags', { font: HDR_FONT, fill: HDR_FILL, align: HDR_ALIGN, border: HDR_BORDER });
+  setCell(aHdr.number, 'D', 'Lot',  { font: HDR_FONT, fill: HDR_FILL, align: HDR_ALIGN, border: HDR_BORDER });
+  // Block-B header (same row): price metrics
+  setCell(aHdr.number, 'F', 'Metric', { font: HDR_FONT, fill: HDR_FILL, align: HDR_ALIGN, border: HDR_BORDER });
+  setCell(aHdr.number, 'G', 'Rs.',    { font: HDR_FONT, fill: HDR_FILL, align: HDR_ALIGN, border: HDR_BORDER });
+  ws.mergeCells(`G${aHdr.number}:H${aHdr.number}`);
+
+  // Pair the four quantity rows with the four price rows side-by-side.
+  const qtyStats = [
+    ['TOTAL ARRIVALS', stats.arrivals_qty,  stats.arrivals_bags,  stats.arrivals_lots],
+    ['WITHDRAWN',      stats.withdrawn_qty, stats.withdrawn_bags, stats.withdrawn_lots],
+    ['SOLD',           stats.sold_qty,      stats.sold_bags,      stats.sold_lots],
+    ['NOT eTRADED',    stats.not_qty,       stats.not_bags,       stats.not_lots],
+  ];
+  const priceStats = [
+    ['MAXIMUM',          stats.max_price],
+    ['MINIMUM',          stats.min_price],
+    ['AVERAGE',          stats.avg_price],
+    ['COST OF CARDAMOM', stats.cost],
+  ];
+  for (let i = 0; i < 4; i++) {
+    const r = ws.addRow([]);
+    const [lbl, kg, bg, lt] = qtyStats[i];
+    setCell(r.number, 'A', lbl, { font: { bold: true }, align: TEXT_ALIGN, border: CELL_BORDER });
+    setCell(r.number, 'B', Number(kg) || 0, { align: NUM_ALIGN, numFmt: '#,##0.000', border: CELL_BORDER });
+    setCell(r.number, 'C', Number(bg) || 0, { align: NUM_ALIGN, numFmt: '#,##0',     border: CELL_BORDER });
+    setCell(r.number, 'D', Number(lt) || 0, { align: NUM_ALIGN, numFmt: '#,##0',     border: CELL_BORDER });
+
+    const [pLbl, pVal] = priceStats[i];
+    setCell(r.number, 'F', pLbl, { font: { bold: true }, align: TEXT_ALIGN, border: CELL_BORDER });
+    setCell(r.number, 'G', Number(pVal) || 0, { align: NUM_ALIGN, numFmt: '#,##,##0.00', border: CELL_BORDER });
+    ws.mergeCells(`G${r.number}:H${r.number}`);
+  }
 
   return wb.xlsx.writeBuffer();
 }

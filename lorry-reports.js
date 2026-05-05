@@ -658,9 +658,9 @@ async function buyerLotLorryXlsx(db, auctionId) {
     if (!groups.length) return;
     const sec = ws.addRow([title]);
     ws.mergeCells(`A${sec.number}:F${sec.number}`);
-    sec.font = { bold: true, size: 11 };
-    sec.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } };
-    sec.alignment = { horizontal: 'center' };
+    sec.font = { bold: true, size: 10 };
+    sec.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
+    sec.alignment = { horizontal: 'left', vertical: 'middle' };
 
     groups.forEach(g => {
       buyerSeq += 1;
@@ -680,10 +680,11 @@ async function buyerLotLorryXlsx(db, auctionId) {
       // Column header — 6 columns matching PDF
       const ch = ws.addRow(['SL.NO', 'LOT', 'BAG', 'QTY', 'RATE', 'AMOUNT']);
       ch.font = { bold: true, size: 9 };
+      ch.height = 18;
       ch.eachCell(c => {
         c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
         c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-        c.alignment = { horizontal: 'center' };
+        c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       });
 
       // Lot rows (sorted by lot number)
@@ -743,7 +744,7 @@ async function buyerLotLorryXlsx(db, auctionId) {
     intraTot.getCell(6).numFmt = '#,##,##0.00';
     intraTot.eachCell((c, ci) => {
       c.border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
-      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F4EA' } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
       if (ci === 5) c.value = 'INTRA-STATE TOTAL';
     });
   }

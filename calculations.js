@@ -489,20 +489,53 @@ function getPaymentSummary(db, auctionId, state, cfg) {
 function getBankPaymentData(db, auctionId, cfg, opts) {
   opts = opts || {};
   const useBefore = !!opts.before;
+  // Bank Payment lists every seller in the trade with a non-zero
+  // payable (or non-zero pre-discount amount in 'before' mode) — both
+  // registered dealers AND unregistered (URD/agriculturist) farmers.
+  // The earlier WHERE clause filtered to URD-only by excluding rows
+  // whose `cr` looked like a GSTIN. That came from the legacy FoxPro
+  // BANKPAY.PRG which only handled farmers — but the e-Trade flow pays
+  // every seller via RTGS/NEFT, so all sellers must be included.
+  // Result was: registered dealers had IFSC + acctnum on file, but the
+  // SQL excluded them and returned empty rows, so the export was blank.
+  //
+  // Bank details come from `traders` (single-bank legacy) or
+  // `trader_banks` (multi-bank). The LEFT JOIN to traders pulls
+  // address/IFSC; we then COALESCE with trader_banks default for
+  // sellers who maintain multiple bank accounts.
   const payments = db.all(
     `SELECT l.state, l.name, l.cr,
       SUM(l.puramt) as puramt, SUM(l.refund) as advance, SUM(l.balance) as payable,
-      t.ifsc, t.acctnum, t.padd, t.ppla, t.pin, t.holder_name
+      t.id AS trader_id,
+      t.ifsc AS t_ifsc, t.acctnum AS t_acctnum, t.holder_name AS t_holder,
+      t.padd, t.ppla, t.pin
     FROM lots l
-    LEFT JOIN traders t ON t.name = l.name AND t.cr = l.cr
+    LEFT JOIN traders t ON UPPER(TRIM(t.name)) = UPPER(TRIM(l.name))
     WHERE l.auction_id = ? AND l.amount > 0
-      AND UPPER(COALESCE(l.cr,'')) NOT LIKE 'GSTIN%'
-      AND l.cr NOT GLOB '[0-9][0-9]*'
       AND (l.paid IS NULL OR l.paid = '')
     GROUP BY l.name, l.cr
     ORDER BY l.state, l.name`,
     [auctionId]
   );
+
+  // Per-seller bank-details fallback chain:
+  //   1. trader_banks default (is_default=1) — picks the explicitly
+  //      flagged primary account when the seller has multiple banks
+  //   2. trader_banks first row — when no default flagged
+  //   3. traders.ifsc/acctnum — legacy single-bank
+  // Pre-fetch all default banks once (cheaper than per-seller query).
+  const bankByTraderId = {};
+  try {
+    const banks = db.all(`
+      SELECT trader_id, ifsc, acctnum, holder_name, is_default, id
+        FROM trader_banks
+       ORDER BY trader_id, is_default DESC, id ASC
+    `);
+    for (const b of banks) {
+      // First row per trader_id wins (already sorted by is_default DESC).
+      if (bankByTraderId[b.trader_id] == null) bankByTraderId[b.trader_id] = b;
+    }
+  } catch (_) { /* trader_banks may not exist on partial migrations */ }
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
   const roundAmounts = cfg.flag_round;
@@ -513,17 +546,21 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     // payable = puramt − discount − GST.
     const rawAmount = useBefore ? (p.puramt || 0) : (p.payable || 0);
     const amount = roundAmounts ? Math.round(rawAmount) : rawAmount;
+    const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;
+    const ifsc      = (tb && tb.ifsc)        || p.t_ifsc    || '';
+    const acctnum   = (tb && tb.acctnum)     || p.t_acctnum || '';
+    const holderNm  = (tb && tb.holder_name) || p.t_holder  || p.name;
     return {
       transactionType: rawAmount >= 200000 ? 'RTGS' : 'NEFT',
-      ifsc: p.ifsc || '',
-      accountNo: p.acctnum || '',
-      beneficiaryName: p.name,
+      ifsc,
+      accountNo: acctnum,
+      beneficiaryName: holderNm,
       address1: p.padd || '',
       address2: p.ppla || '',
       pin: p.pin || '',
       amount,
       remarks: `${auction ? auction.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited`,
-      holderName: p.holder_name || p.name
+      holderName: holderNm,
     };
   });
 }

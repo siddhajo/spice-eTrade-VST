@@ -2143,7 +2143,7 @@ function generDebitNoteXML(rows, cfg, opts = {}) {
 
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${name}</LEDGERNAME>
-${TAGS.DEEMNO}
+${TAGS.DEEMYES}
 <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
 <AMOUNT>${-totalRound}</AMOUNT>
 <BILLALLOCATIONS.LIST>
@@ -2249,8 +2249,16 @@ const ASP_STATE_SQL = `UPPER(COALESCE(i.state,'')) = 'KERALA'`;
  * `aspInvo` is the matching ASP invoice number (for BASICORDERREF).
  */
 function buildSalesIspRows(db, auctionId, cfg) {
+  // `buyer_pin` is the SOURCE PINCODE for distance/route lookup.
+  // Resolution: ship-to (cpin) wins, bill-to (pin) is the fallback.
+  // Ship-to is where the goods are physically delivered — the correct
+  // origin for e-way bill distance calculation when a buyer maintains
+  // a separate consignee address. The address columns (add1/add2/pla)
+  // remain bill-to since `<BUYERPINCODE>` and `<BASICBUYERADDRESS>`
+  // in Tally are always the bill-to (buyer) block.
   const stmt = db.prepare(`
-    SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla, b.pin AS buyer_pin
+    SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla,
+           COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin
     FROM invoices i
     LEFT JOIN buyers b ON b.buyer = i.buyer
     WHERE i.auction_id = ? AND ${ISP_STATE_SQL}
@@ -2502,8 +2510,11 @@ function buildSalesAspRows(db, auctionId, cfg) {
  * Used by Sales export.
  */
 function buildSalesRows(db, auctionId, cfg) {
+  // Ship-to first, bill-to fallback for distance/route lookup. See
+  // buildSalesIspRows for full rationale.
   const stmt = db.prepare(`
-    SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla, b.pin AS buyer_pin
+    SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla,
+           COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin
     FROM invoices i
     LEFT JOIN buyers b ON b.buyer = i.buyer
     WHERE i.auction_id = ?

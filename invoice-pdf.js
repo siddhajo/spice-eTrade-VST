@@ -63,12 +63,24 @@ function formatINR(n, decimals = 2) {
 function effectiveCompany(cfg) {
   const state = (cfg.business_state || '').toUpperCase();
   const isStateKL = (state === 'KERALA');
+  // Partnership toggle: when enabled, the CIN line on the letterhead
+  // is replaced by "Partnership: <partnership_name>". Resolved here so
+  // every header-renderer that pulls from `co` gets the right pair
+  // without each having to re-check the flag.
+  const isPartnership = String(cfg.is_partnership || '').toLowerCase() === 'true';
+  const idLabel = isPartnership ? 'Partnership' : 'CIN';
+  const idValue = isPartnership
+    ? (cfg.partnership_name || '')
+    : (cfg.cin || '');
   return {
-    logo:    cfg.logo        || 'ISP',
+    logo:    cfg.logo        || '',
     name:    cfg.short_name  || cfg.trade_name || '',
     short:   cfg.short_name  || cfg.trade_name || '',
     pan:     cfg.pan         || '',
     cin:     cfg.cin         || '',
+    isPartnership,
+    idLabel,
+    idValue,
     fssai:   cfg.fssai       || '',
     sbl:     cfg.sbl         || '',
     address1: isStateKL ? (cfg.kl_address1 || cfg.tn_address1 || '') : (cfg.tn_address1 || ''),
@@ -784,7 +796,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   ty += doc.heightOfString(addrLine, { width: textW });
   if (co.gstin) { doc.text(`GSTIN/UIN: ${co.gstin}`, textX, ty, { width: textW }); ty += 10; }
   if (co.stateName) { doc.text(`State Name : ${co.stateName}, Code : ${co.stateCode}`, textX, ty, { width: textW }); ty += 10; }
-  if (co.cin) { doc.text(`CIN: ${co.cin}`, textX, ty, { width: textW }); ty += 10; }
+  if (co.idValue) { doc.text(`${co.idLabel}: ${co.idValue}`, textX, ty, { width: textW }); ty += 10; }
   if (co.fssai) { doc.text(`FSSAI No.: ${co.fssai}`, textX, ty, { width: textW }); ty += 10; }
   if (co.sbl)   { doc.text(`SBL No.: ${co.sbl}`,     textX, ty, { width: textW }); ty += 10; }
 
@@ -800,9 +812,11 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // that's the field labeled "Invoice Prefix" in the Invoice settings tab
   // and is the value the user explicitly maintains for this purpose.
   // Falls back to Logo Code (`logo`) only when `inv_prefix` is unset, then
-  // to a literal 'ISP' as a final safety net so the PDF never renders a
-  // prefix-less identifier like "/L-123/2026-27".
-  const primaryPrefix = String(cfg.inv_prefix || cfg.logo || 'ISP').trim() || 'ISP';
+  // to the user's short_name / trade_name first word. NO hardcoded 'ISP'
+  // literal — a fresh install with no Invoice Prefix configured renders
+  // a prefix-less identifier rather than leaking the legacy ISP code.
+  const _idShort = (cfg.short_name || String(cfg.trade_name || '').split(/\s+/)[0] || '').toUpperCase();
+  const primaryPrefix = String(cfg.inv_prefix || cfg.logo || _idShort || '').trim();
   const otherPrefix   = primaryPrefix; // dead — kept for the few downstream sites that still read it
   const primaryCfg    = { ...cfg, inv_prefix: primaryPrefix };
   // ASP invoices always use the "I" segment irrespective of local/interstate
@@ -824,12 +838,14 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
 
   // Row 2 — ONLY for ISP invoices (ASP omits Reference No. / Other References)
   if (!isASP) {
-    // Other References — kept blank per business spec. Historically this
-    // showed the cross-referenced ASP invoice number, but the single-
-    // company e-Trade build doesn't have an ASP cross-reference, so the
-    // field stays empty rather than fabricating a value. Reference No. &
-    // Date stays blank too — neither is populated automatically.
-    labeledCell(rightX,         ry, rCell, rRow, 'Reference No. & Date.', '');
+    // Reference No. & Date — populated with the formatted invoice number
+    // so the field carries the document's own self-reference. Older
+    // builds left this blank; per the new spec the buyer's accounts team
+    // expects this to mirror Invoice No. as the canonical reference key.
+    // Other References stays blank — historically the cross-ASP number,
+    // but the single-company e-Trade build has no cross-reference.
+    const refNoText = formatInvoiceNo(primaryCfg, displaySaleType, invoiceNo);
+    labeledCell(rightX,         ry, rCell, rRow, 'Reference No. & Date.', refNoText);
     labeledCell(rightX + rCell, ry, rCell, rRow, 'Other References', '');
   }
 
@@ -1680,7 +1696,12 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
   const addr2Full = addr2Bits + (mobile ? ' MOBILE:' + mobile : '');
   doc.text(addr1, x0, y, { width: W, align: 'center' }); y += 10;
   doc.text(addr2Full, x0, y, { width: W, align: 'center' }); y += 10;
-  doc.text(`CIN:${cfg.s_cin || ''}  PAN:${cfg.s_pan || cfg.pan || ''}`, x0, y, { width: W, align: 'center' }); y += 10;
+  // Identity line: Partnership or CIN, driven by the cfg.is_partnership
+  // toggle. Falls back gracefully when the toggle isn't set or the
+  // active value is blank — uses the central identity resolver so the
+  // rule is consistent with sales invoice + every other PDF.
+  const _idP = getCompanyIdentity(cfg).idLine || { label: 'CIN', value: cfg.cin || '' };
+  doc.text(`${_idP.label}:${_idP.value}  PAN:${cfg.s_pan || cfg.pan || ''}`, x0, y, { width: W, align: 'center' }); y += 10;
   doc.text(`GSTIN:${cfg.s_gstin || ''}  SBL:${cfg.s_sbl || cfg.sbl || ''}`, x0, y, { width: W, align: 'center' }); y += 10;
   if (cfg.s_email || cfg.email) {
     doc.text('e-Mail ID:' + (cfg.s_email || cfg.email), x0, y, { width: W, align: 'center' });

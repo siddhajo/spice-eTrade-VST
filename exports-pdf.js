@@ -177,14 +177,18 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
 
   function fmtCell(val, col) {
     if (val === null || val === undefined || val === '') return '';
+    const h = (col.header || '').toUpperCase();
+    // LOT must always render as text — values like '001' or '12A' lose
+    // meaning if coerced through Number formatting. Stringify and bail
+    // before any numeric branch can rewrite the value.
+    if (h === 'LOT') return String(val);
     if (typeof val === 'number') {
-      const h = (col.header || '').toUpperCase();
       // Kilos / pure quantities: 3 decimals, Indian commas (1,100.000)
       if (h === 'QTY' || h === 'PQTY' || h === 'LITRE' || h === 'KILOS' || h === 'QUANTITY') {
         return fmtQty(val);
       }
       // Bag counts and other non-decimal integers stay plain
-      if (Number.isInteger(val) && (h === 'BAG' || h === 'BAGS' || h === 'LOTS' || h === 'LOT')) {
+      if (Number.isInteger(val) && (h === 'BAG' || h === 'BAGS' || h === 'LOTS')) {
         return String(val);
       }
       // Everything else numeric is treated as rupees: 2 decimals, Indian commas.
@@ -262,6 +266,13 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
 
     pageTableTop = y;  // remember where this page's column-strip starts
     doc.rect(m, y, usableW, headH).fillAndStroke('#E8E4DD', '#999');
+    // Vertical dividers between header cells — without these the header
+    // strip looks like one big banner instead of distinct columns,
+    // making it hard to tell where one column ends and the next begins.
+    for (let ci = 1; ci < colX.length; ci++) {
+      doc.moveTo(colX[ci], y).lineTo(colX[ci], y + headH)
+         .lineWidth(0.5).strokeColor('#999').stroke();
+    }
     doc.fillColor('#000').font('Helvetica-Bold').fontSize(8);
     columns.forEach((c, i) => {
       const lines = headerWrapped[i];
@@ -468,6 +479,11 @@ const COLS = {
     { header: 'CODE', key: 'code', width: 8 },
     { header: 'BIDDER', key: 'bidder', width: 20 },
   ],
+  price_list_before: [
+    { header: 'LOT', key: 'lot', width: 10 },
+    { header: 'BAG', key: 'bag', width: 8 },
+    { header: 'QTY', key: 'qty', width: 14 },
+  ],
   bank_payment: [
     // PDF-only display columns — restructured for portrait so all data fits
     // without wrapping single-token values like "HDFC0001234" or 6-digit
@@ -585,6 +601,7 @@ const TOTAL_KEYS = {
   lot_slip:        ['bag', 'qty'],
   lot_slip_after:  ['bag', 'qty', 'amount'],
   price_list:      ['bag', 'qty'],
+  price_list_before: ['bag', 'qty'],
   bank_payment:    ['amount'],
   pooler_register: ['qty', 'amount', 'pqty', 'puramt'],
   full_file:       ['bags', 'qty', 'amount', 'pqty', 'puramt', 'cgst', 'sgst', 'igst', 'advance', 'balance'],
@@ -600,6 +617,7 @@ const TITLES = {
   lot_slip:        'Lot Slip',
   lot_slip_after:  'Lot Slip (After Trade)',
   price_list:      'Price List',
+  price_list_before: 'Price List (Before)',
   bank_payment:    'Bank Payment (RTGS/NEFT)',
   pooler_register: 'Pooler Register',
   full_file:       'Full File',
@@ -670,6 +688,11 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
     case 'price_list':
       return db.all(
         `SELECT lot_no as lot, bags as bag, qty, price, code, buyer as bidder
+         FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
+
+    case 'price_list_before':
+      return db.all(
+        `SELECT lot_no as lot, bags as bag, qty
          FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
 
     case 'bank_payment': {

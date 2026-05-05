@@ -10,6 +10,15 @@ const DEFAULTS = [
   { key: 'legal_name',      value: '', category: 'company', label: 'Legal Name Suffix',        type: 'text' },
   { key: 'short_name',      value: '', category: 'company', label: 'Short Name', type: 'text' },
   { key: 'pan',             value: '',    category: 'company',   label: 'PAN',                      type: 'text' },
+  // Partnership toggle: when true, every PDF that previously rendered
+  // a "CIN" line switches to "Partnership" with the value from
+  // `partnership_name` (typically the firm's registered partnership
+  // deed number or partnership name). When false (default), the
+  // existing CIN field continues to render as "CIN: <value>".
+  // Stored as text "true"/"false" — same convention used by every
+  // other boolean setting in the system.
+  { key: 'is_partnership',  value: 'false', category: 'company', label: 'Partnership Firm',         type: 'boolean' },
+  { key: 'partnership_name', value: '',    category: 'company', label: 'Partnership Name / No.',   type: 'text' },
   { key: 'cin',             value: '', category: 'company', label: 'CIN',                type: 'text' },
   { key: 'fssai',           value: '',               category: 'company',   label: 'FSSAI No.',               type: 'text' },
   { key: 'sbl',             value: '',               category: 'company',   label: 'SBL No.',                 type: 'text' },
@@ -25,7 +34,7 @@ const DEFAULTS = [
   // ── ADDRESS (Tamil Nadu) ───────────────────────────────────
   { key: 'tn_address1',     value: '', category: 'address_tn', label: 'Address Line 1', type: 'text' },
   { key: 'tn_address2',     value: '', category: 'address_tn', label: 'Address Line 2', type: 'text' },
-  { key: 'tn_dispatch',     value: 'AMAZING SPICE PARK PVT LTD WARD No.6 ELLIKKANAM DOOR No.650 NEDUMKANDAM IDUKKI KERALA CODE:32', category: 'address_tn', label: 'Dispatch Address', type: 'text' },
+  { key: 'tn_dispatch',     value: '', category: 'address_tn', label: 'Dispatch Address', type: 'text' },
   { key: 'tn_phone',        value: '',    category: 'address_tn', label: 'Phone',                   type: 'text' },
   { key: 'tn_email',        value: '', category: 'address_tn', label: 'Email',       type: 'text' },
   { key: 'tn_gstin',        value: '', category: 'address_tn', label: 'GSTIN',                 type: 'text' },
@@ -140,6 +149,7 @@ const DEFAULTS = [
 
   // ── INTEGRATIONS ───────────────────────────────────────────
   { key: 'gst_api_key',     value: '',               category: 'integrations', label: 'GST Lookup API Key (gstincheck.co.in)', type: 'text' },
+  { key: 'praman_company',  value: '',               category: 'integrations', label: 'Praman Lot Company Code (e.g. VSTL) — used in Praman CSV column 2; falls back to Short Name when blank', type: 'text' },
 
   // ── TALLY EXPORT ──────────────────────────────────────────
   // Settings here mirror the macro's Configration form (UserForm1) field-for-field.
@@ -323,6 +333,14 @@ function initCompanySettings(db) {
   // explicitly fills in their identifier — no "ISP" appearing where the
   // user never typed it.
   db.prepare("UPDATE company_settings SET value = '' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
+
+  // Clear the legacy AMAZING SPICE PARK default that was seeded into
+  // `tn_dispatch` by earlier builds. We only clear when the value
+  // matches the legacy literal exactly — any user-edited dispatch
+  // address is preserved.
+  db.prepare(
+    "UPDATE company_settings SET value = '' WHERE key = 'tn_dispatch' AND value = ?"
+  ).run('AMAZING SPICE PARK PVT LTD WARD No.6 ELLIKKANAM DOOR No.650 NEDUMKANDAM IDUKKI KERALA CODE:32');
 
   // ── DN GST rate / ledger migration ──
   // Earlier builds seeded the Debit Note ledgers at 18% (`OUTPUT IGST 18%`,

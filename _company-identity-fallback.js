@@ -28,7 +28,7 @@ function inlineResolver(cfg) {
     }
     return '';
   };
-  const name      = pick('company_name', 'tally_company_name', 'short_name');
+  const name      = pick('trade_name', 'company_name', 'tally_company_name', 'short_name');
   const logoCode  = pick('logo');
   const gstin     = pick('gstin', 'tn_gstin', 'business_gstin');
   return {
@@ -42,6 +42,13 @@ function inlineResolver(cfg) {
       || (gstin && gstin.length >= 12 ? gstin.slice(2, 12) : ''),
     state: pick('tn_state', 'business_state', 'state').toUpperCase(),
     stateCode: pick('tally_state_code') || (gstin && gstin.length >= 2 ? gstin.slice(0, 2) : ''),
+    cin: pick('cin'),
+    idLine: (() => {
+      const isPart = String(cfg.is_partnership || '').toLowerCase() === 'true';
+      return isPart
+        ? { label: 'Partnership', value: pick('partnership_name'), isPartnership: true }
+        : { label: 'CIN',         value: pick('cin'),               isPartnership: false };
+    })(),
   };
 }
 

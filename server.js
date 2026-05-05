@@ -9,7 +9,8 @@ const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
 const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, buildDebitNote, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
-const { EXPORT_TYPES } = require('./exports');
+const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
+const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
 const { exportPdf: exportAnyPdf } = require('./exports-pdf');
 const { DBF_EXPORTS } = require('./dbf-exports');
 const { REPORTS: LORRY_REPORTS } = require('./lorry-reports');
@@ -496,12 +497,20 @@ app.get('/api/company-settings/flat', requireViewOrLotEntry, (req, res) => res.j
 // The original Spice Config app had ISP/ASP preset switching tied to the
 // Logo Code dropdown. This build is a single-company app, so the endpoints
 // return harmless empty payloads to keep older clients from erroring out
-// while they're still cached.
+// while they're still cached. The `active` field reflects the user's
+// configured short name (Logo Code) rather than a hardcoded literal.
+function _activeLabel() {
+  try {
+    const id = getCompanyIdentity(getSettingsFlat(getDb()));
+    return id.shortName || id.logoCode || '';
+  } catch (_) { return ''; }
+}
 app.get('/api/company-presets', requireView, (_req, res) => {
-  res.json({ ISP: {}, active: 'ISP' });
+  const a = _activeLabel();
+  res.json({ [a || 'default']: {}, active: a });
 });
 app.put('/api/company-presets/active', requireStateToggle, (_req, res) => {
-  res.json({ success: true, active: 'ISP' });
+  res.json({ success: true, active: _activeLabel() });
 });
 app.put('/api/company-presets/:code', requireSettingsWrite, (_req, res) => {
   res.json({ success: true });
@@ -757,6 +766,83 @@ app.get('/api/traders', requireViewOrLotEntry, (req, res) => {
   }
   res.json(hydrateBanks(db.all('SELECT * FROM traders ORDER BY name LIMIT 500')));
 });
+// Lookup a trader (seller) by exact name — used by the WhatsApp "send"
+// flow on Purchase / Payments rows where we have the seller name and
+// need their phone number. Case-insensitive match. Returns the first hit.
+app.get('/api/traders/by-name/:name', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const nm = String(req.params.name || '').trim();
+  if (!nm) return res.status(400).json({ error: 'name required' });
+  const row = db.get('SELECT id, name, tel FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [nm]);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
+});
+
+// ── WhatsApp Cloud API (Meta) ─────────────────────────────────
+// Optional automation: when WHATSAPP_TOKEN + WHATSAPP_PHONE_ID env vars
+// are set, these endpoints push messages directly via Meta's Graph API.
+// When env is unset, return 501 so the client falls back to its manual
+// (web.whatsapp.com link / Web Share API) flow without erroring.
+//
+// Setup: https://developers.facebook.com/docs/whatsapp/cloud-api
+//   1. Create a Meta Business account → add a WhatsApp Business phone.
+//   2. Generate a permanent access token, capture the phone-number-id.
+//   3. Set env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID
+//   4. (Outbound to non-customers needs an approved message template;
+//      conversation-initiated messages within 24h work without templates.)
+function _waConfigured() {
+  return Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
+}
+async function _waPost(path, body) {
+  const url = `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_ID}${path}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + process.env.WHATSAPP_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error && j.error.message ? j.error.message : `Cloud API error ${r.status}`);
+  return j;
+}
+function _waNormalizePhone(tel) {
+  const d = String(tel || '').replace(/\D/g, '');
+  if (!d) return '';
+  return d.length === 10 ? '91' + d : d;
+}
+
+// Send a plain text message. Body: { phone, message }
+app.post('/api/whatsapp/send-text', requireView, async (req, res) => {
+  if (!_waConfigured()) return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
+  try {
+    const phone = _waNormalizePhone(req.body.phone);
+    const message = String(req.body.message || '');
+    if (!phone || !message) return res.status(400).json({ error: 'phone and message required' });
+    const out = await _waPost('/messages', {
+      messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: message },
+    });
+    res.json({ ok: true, id: out.messages && out.messages[0] && out.messages[0].id });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// Send a document. Body: { phone, caption, doc_url } where doc_url is a
+// publicly reachable URL Meta will fetch the PDF from. (For locally
+// generated PDFs you'd first POST /media to upload and use the returned
+// id — left as a TODO when you wire this up to the actual hosted URLs.)
+app.post('/api/whatsapp/send-document', requireView, async (req, res) => {
+  if (!_waConfigured()) return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
+  try {
+    const phone = _waNormalizePhone(req.body.phone);
+    const caption = String(req.body.caption || '');
+    const docUrl = String(req.body.doc_url || '');
+    if (!phone || !docUrl) return res.status(400).json({ error: 'phone and doc_url required' });
+    const out = await _waPost('/messages', {
+      messaging_product: 'whatsapp', to: phone, type: 'document',
+      document: { link: docUrl, caption, filename: req.body.filename || 'document.pdf' },
+    });
+    res.json({ ok: true, id: out.messages && out.messages[0] && out.messages[0].id });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 app.get('/api/traders/:id', requireViewOrLotEntry, (req, res) => {
   const db = getDb();
   const row = db.get('SELECT * FROM traders WHERE id = ?', [req.params.id]);
@@ -967,17 +1053,36 @@ app.post('/api/traders/import', requireTraderWrite, upload.single('file'), async
 
 // ── Download Seller template XLSX ────────────────────────────
 app.get('/api/traders/template', requireExport, async (req, res) => {
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Sellers');
-  ws.columns = ['NAME','CR','PAN','TEL','AADHAR','PADD','PPLA','PIN','PSTATE','PST_CODE','IFSC','ACCTNUM','HOLDER_NAME']
-    .map(h => ({ header: h, key: h.toLowerCase(), width: 18 }));
-  ws.getRow(1).font = { bold: true };
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
-  // Add one sample row
-  ws.addRow({ name: 'SAMPLE SELLER', cr: 'CR.12345', pan: 'ABCDE1234F', tel: '9876543210',
-    aadhar: '', padd: '123 MAIN STREET', ppla: 'BODINAYAKANUR', pin: '625582',
-    pstate: 'TAMIL NADU', pst_code: '33', ifsc: 'FDRL0001073', acctnum: '1234567890', holder_name: 'SAMPLE SELLER' });
-  const buf = await wb.xlsx.writeBuffer();
+  // Use the central createExcelBuffer so the template gets the same brand
+  // band, header alignment, and Indian numFmts as every other XLSX export.
+  const db = getDb();
+  const cols = [
+    { header: 'NAME',         key: 'name',         width: 30 },
+    { header: 'CR',           key: 'cr',           width: 28 },
+    { header: 'PAN',          key: 'pan',          width: 14 },
+    { header: 'TEL',          key: 'tel',          width: 16 },
+    { header: 'AADHAR',       key: 'aadhar',       width: 16 },
+    { header: 'PADD',         key: 'padd',         width: 50 },
+    { header: 'PPLA',         key: 'ppla',         width: 20 },
+    { header: 'PIN',          key: 'pin',          width: 10 },
+    { header: 'PSTATE',       key: 'pstate',       width: 14 },
+    { header: 'PST_CODE',     key: 'pst_code',     width: 10, align: 'left' },
+    { header: 'IFSC',         key: 'ifsc',         width: 18 },
+    { header: 'ACCTNUM',      key: 'acctnum',      width: 24, align: 'left' },
+    { header: 'HOLDER_NAME',  key: 'holder_name',  width: 22 },
+  ];
+  // Sample row uses the configured business state — no hardcoded 'TAMIL NADU'
+  const bizState = (getSetting(db, 'business_state') || 'TAMIL NADU').toUpperCase();
+  const stCode = bizState === 'KERALA' ? '32' : '33';
+  const sample = [{
+    name: 'SAMPLE SELLER', cr: 'CR.12345', pan: 'ABCDE1234F', tel: '9876543210',
+    aadhar: '', padd: '123 MAIN STREET', ppla: '', pin: '',
+    pstate: bizState, pst_code: stCode, ifsc: '', acctnum: '', holder_name: 'SAMPLE SELLER',
+  }];
+  const buf = await createExcelBuffer('Sellers', cols, sample, {
+    db, title: 'SELLERS TEMPLATE',
+    metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
+  });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="sellers-template.xlsx"');
   res.send(Buffer.from(buf));
@@ -1114,15 +1219,32 @@ app.post('/api/buyers/import', requireBuyerWrite, upload.single('file'), async (
 
 // ── Download Buyer template XLSX ─────────────────────────────
 app.get('/api/buyers/template', requireExport, async (req, res) => {
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Buyers');
-  ws.columns = ['BUYER','BUYER1','ADD1','ADD2','PLA','PIN','STATE','ST_CODE','GSTIN','PAN','TEL','TI','SALE']
-    .map(h => ({ header: h, key: h.toLowerCase(), width: 18 }));
-  ws.getRow(1).font = { bold: true };
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
-  ws.addRow({ buyer: 'ABC', buyer1: 'ABC TRADERS', add1: '10 MARKET ROAD', add2: '', pla: 'KUMILY',
-    pin: '685509', state: 'KERALA', st_code: '32', gstin: '32AABCT1234L1ZP', pan: 'AABCT1234L', tel: '9876543210', ti: '', sale: 'L' });
-  const buf = await wb.xlsx.writeBuffer();
+  const db = getDb();
+  const cols = [
+    { header: 'BUYER',    key: 'buyer',    width: 14 },
+    { header: 'BUYER1',   key: 'buyer1',   width: 30 },
+    { header: 'ADD1',     key: 'add1',     width: 30 },
+    { header: 'ADD2',     key: 'add2',     width: 30 },
+    { header: 'PLA',      key: 'pla',      width: 18 },
+    { header: 'PIN',      key: 'pin',      width: 10, align: 'left' },
+    { header: 'STATE',    key: 'state',    width: 16 },
+    { header: 'ST_CODE',  key: 'st_code',  width: 10, align: 'left' },
+    { header: 'GSTIN',    key: 'gstin',    width: 18 },
+    { header: 'PAN',      key: 'pan',      width: 14 },
+    { header: 'TEL',      key: 'tel',      width: 14 },
+    { header: 'TI',       key: 'ti',       width: 10 },
+    { header: 'SALE',     key: 'sale',     width: 8  },
+  ];
+  const bizState = (getSetting(db, 'business_state') || 'TAMIL NADU').toUpperCase();
+  const stCode = bizState === 'KERALA' ? '32' : '33';
+  const sample = [{
+    buyer: 'ABC', buyer1: 'ABC TRADERS', add1: '10 MARKET ROAD', add2: '', pla: '',
+    pin: '', state: bizState, st_code: stCode, gstin: '', pan: '', tel: '', ti: '', sale: 'L',
+  }];
+  const buf = await createExcelBuffer('Buyers', cols, sample, {
+    db, title: 'BUYERS TEMPLATE',
+    metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
+  });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="buyers-template.xlsx"');
   res.send(Buffer.from(buf));
@@ -1139,15 +1261,19 @@ app.post('/api/auctions', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
   const db = getDb();
   const d = normalizeDate(date);
-  const defaultCrop = getSetting(db, 'default_crop_type') || 'VST';
-  db.run('INSERT INTO auctions (ano,date,crop_type,state) VALUES (?,?,?,?)', [ano, d, crop_type||defaultCrop, state||'TAMIL NADU']);
+  const defaultCrop  = getSetting(db, 'default_crop_type') || 'VST';
+  const defaultState = getSetting(db, 'business_state')    || 'TAMIL NADU';
+  db.run('INSERT INTO auctions (ano,date,crop_type,state) VALUES (?,?,?,?)', [ano, d, crop_type||defaultCrop, state||defaultState]);
   const created = db.get('SELECT id FROM auctions WHERE ano = ? AND date = ? ORDER BY id DESC LIMIT 1', [ano, d]);
   res.json({ success: true, id: created ? created.id : null });
 });
 app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
-  getDb().run('UPDATE auctions SET ano=?, date=?, crop_type=?, state=? WHERE id=?',
-    [ano, normalizeDate(date), crop_type||(getSetting(getDb(), 'default_crop_type')||'VST'), state||'TAMIL NADU', req.params.id]);
+  const db = getDb();
+  const defaultCrop  = getSetting(db, 'default_crop_type') || 'VST';
+  const defaultState = getSetting(db, 'business_state')    || 'TAMIL NADU';
+  db.run('UPDATE auctions SET ano=?, date=?, crop_type=?, state=? WHERE id=?',
+    [ano, normalizeDate(date), crop_type||defaultCrop, state||defaultState, req.params.id]);
   res.json({ success: true });
 });
 app.delete('/api/auctions/:id', requireDelete, (req, res) => {
@@ -1423,20 +1549,27 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
 
 // ── Download Auction/Lots template XLSX ──────────────────────
 app.get('/api/auctions/template', requireExport, async (req, res) => {
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Lots');
-  ws.columns = ['ANO','DATE','LOT','CROP','GRADE','CRPT','BR','STATE','NAME','PADD','PPLA','PPIN','PSTATE','PST_CODE',
+  const db = getDb();
+  const headers = ['ANO','DATE','LOT','CROP','GRADE','CRPT','BR','STATE','NAME','PADD','PPLA','PPIN','PSTATE','PST_CODE',
     'CR','PAN','TEL','AADHAR','BAG','LITRE','QTY','PRICE','AMOUNT','CODE','BUYER','BUYER1','SALE','INVO',
-    'PQTY','PRATE','PURAMT','CGST','SGST','IGST','ADVANCE','BALANCE']
-    .map(h => ({ header: h, key: h.toLowerCase(), width: h.length < 5 ? 8 : 14 }));
-  ws.getRow(1).font = { bold: true };
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E4DD' } };
-  ws.addRow({ ano: '1', date: '2026-04-15', lot: '001', crop: '', grade: '1', crpt: 'ASP', br: 'VANDANMEDU',
-    state: 'TAMIL NADU', name: 'SAMPLE SELLER', padd: '123 MAIN ST', ppla: 'KUMILY', ppin: '685509',
-    pstate: 'KERALA', pst_code: '32', cr: 'CR.001', pan: 'ABCDE1234F', tel: '9876543210', aadhar: '',
+    'PQTY','PRATE','PURAMT','CGST','SGST','IGST','ADVANCE','BALANCE'];
+  const cols = headers.map(h => ({ header: h, key: h.toLowerCase(), width: h.length < 5 ? 9 : 14 }));
+  // Pull dynamic defaults from settings — no hardcoded 'ASP' / 'TAMIL NADU'
+  const defaultCrop  = getSetting(db, 'default_crop_type') || '';
+  const bizState     = (getSetting(db, 'business_state') || 'TAMIL NADU').toUpperCase();
+  const stCode       = bizState === 'KERALA' ? '32' : '33';
+  const sample = [{
+    ano: '1', date: '2026-04-15', lot: '001', crop: '', grade: '1',
+    crpt: defaultCrop, br: '', state: bizState,
+    name: 'SAMPLE SELLER', padd: '123 MAIN ST', ppla: '', ppin: '',
+    pstate: bizState, pst_code: stCode, cr: 'CR.001', pan: 'ABCDE1234F', tel: '9876543210', aadhar: '',
     bag: 5, litre: '380', qty: 100.567, price: 0, amount: 0, code: '', buyer: '', buyer1: '', sale: '', invo: '',
-    pqty: 0, prate: 0, puramt: 0, cgst: 0, sgst: 0, igst: 0, advance: 0, balance: 0 });
-  const buf = await wb.xlsx.writeBuffer();
+    pqty: 0, prate: 0, puramt: 0, cgst: 0, sgst: 0, igst: 0, advance: 0, balance: 0,
+  }];
+  const buf = await createExcelBuffer('Lots', cols, sample, {
+    db, title: 'AUCTION / LOTS TEMPLATE',
+    metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
+  });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="auction-lots-template.xlsx"');
   res.send(Buffer.from(buf));
@@ -1640,7 +1773,16 @@ app.get('/api/invoices', requireView, (req, res) => {
           OR (from_pin = ? AND to_pin = ?)
        LIMIT 1`
     );
-    const buyerPinStmt = db.prepare('SELECT pin FROM buyers WHERE buyer = ? LIMIT 1');
+    // Per spec: SOURCE PINCODE PRIORITY
+    //   1. ship-to (consignee) PIN — buyers.cpin
+    //   2. bill-to (buyer) PIN     — buyers.pin
+    // The ship-to address is where the goods physically arrive (and
+    // therefore the correct e-way bill destination); bill-to is the
+    // legal billing address, which can differ for buyers with multiple
+    // delivery sites. Distance must be computed to the actual ship-to
+    // when one is registered. Falls back to bill-to so legacy buyers
+    // without a separate consignee block still resolve.
+    const buyerPinStmt = db.prepare('SELECT pin, cpin FROM buyers WHERE buyer = ? LIMIT 1');
     for (const r of rows) {
       // Per-invoice override always wins
       if (r.distance_km != null && r.distance_km !== '') {
@@ -1649,7 +1791,9 @@ app.get('/api/invoices', requireView, (req, res) => {
       }
       // Route table lookup: need the buyer's PIN
       const b = buyerPinStmt.get(r.buyer);
-      const buyerPin = b && b.pin ? String(b.pin).trim() : '';
+      const shipPin = b && b.cpin ? String(b.cpin).trim() : '';
+      const billPin = b && b.pin  ? String(b.pin ).trim() : '';
+      const buyerPin = shipPin || billPin;
       if (!buyerPin || !dispatchPin) { r.resolved_distance_km = null; continue; }
       const hit = routeStmt.get(dispatchPin, buyerPin, buyerPin, dispatchPin);
       r.resolved_distance_km = hit && hit.km != null ? Number(hit.km) : null;
@@ -3998,6 +4142,134 @@ app.get('/api/payments/bank/:auctionId', requireView, (req, res) => {
   res.json(data);
 });
 
+// ── Payment Statement PDF (per-seller) ────────────────────────
+// Lightweight A4 PDF showing the payment due to one seller for one
+// auction: header, seller block, lots breakdown, totals. Powers both
+// "Print" and "WhatsApp" actions on the Payments tab.
+function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
+  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]) || { ano:'', date:'' };
+  const lots = db.all(
+    `SELECT lot_no, qty, rate, amount, puramt, refund, balance, cgst, sgst, igst
+       FROM lots WHERE auction_id = ? AND name = ? AND amount > 0
+       ORDER BY lot_no`,
+    [auctionId, sellerName]
+  ) || [];
+  const trader = db.get('SELECT * FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [sellerName]);
+  const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  const fmtDate = (d) => { if (!d) return ''; const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d); };
+  const company = (cfg.trade_name || cfg.short_name || cfg.tally_company_name || cfg.legal_name || 'Company').toString();
+
+  const PAGE_L = 30, PAGE_R = 565, PAGE_W = PAGE_R - PAGE_L;
+  let y = 40;
+  doc.font('Helvetica-Bold').fontSize(16).text(company.toUpperCase(), PAGE_L, y, { width: PAGE_W, align: 'center' });
+  y = doc.y + 4;
+  doc.font('Helvetica-Bold').fontSize(13).text('PAYMENT STATEMENT', PAGE_L, y, { width: PAGE_W, align: 'center' });
+  y = doc.y + 10;
+  doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).lineWidth(1).stroke();
+  y += 10;
+
+  doc.font('Helvetica').fontSize(10);
+  doc.text(`Seller: ${sellerName}`, PAGE_L, y); doc.text(`Auction: ${auction.ano}`, PAGE_L + 280, y);
+  y += 14;
+  doc.text(`Phone: ${trader && trader.tel ? trader.tel : '-'}`, PAGE_L, y);
+  doc.text(`Date: ${fmtDate(auction.date)}`, PAGE_L + 280, y);
+  y += 18;
+
+  const cols = [
+    { k: 'lot_no', label: 'Lot#',     x: PAGE_L,        w: 60,  align: 'left' },
+    { k: 'qty',    label: 'Qty',      x: PAGE_L + 60,   w: 70,  align: 'right', fmt: fmtQty },
+    { k: 'rate',   label: 'Rate',     x: PAGE_L + 130,  w: 60,  align: 'right', fmt: fmtAmt },
+    { k: 'amount', label: 'Amount',   x: PAGE_L + 190,  w: 80,  align: 'right', fmt: fmtAmt },
+    { k: 'refund', label: 'Discount', x: PAGE_L + 270,  w: 75,  align: 'right', fmt: fmtAmt },
+    { k: 'tax',    label: 'GST',      x: PAGE_L + 345,  w: 70,  align: 'right', fmt: fmtAmt },
+    { k: 'balance',label: 'Payable',  x: PAGE_L + 415,  w: 120, align: 'right', fmt: fmtAmt },
+  ];
+  doc.font('Helvetica-Bold').fontSize(9);
+  doc.rect(PAGE_L, y, PAGE_W, 18).fillAndStroke('#f3f4f6', '#999').fillColor('#000');
+  for (const c of cols) doc.text(c.label, c.x + 2, y + 5, { width: c.w - 4, align: c.align });
+  y += 18;
+  doc.font('Helvetica').fontSize(9).fillColor('#000');
+  let tQty=0,tAmt=0,tDisc=0,tTax=0,tPay=0;
+  for (const l of lots) {
+    const tax = (Number(l.cgst)||0)+(Number(l.sgst)||0)+(Number(l.igst)||0);
+    const row = { ...l, tax };
+    tQty+=Number(l.qty)||0; tAmt+=Number(l.amount)||0; tDisc+=Number(l.refund)||0; tTax+=tax; tPay+=Number(l.balance)||0;
+    if (y > 770) { doc.addPage(); y = 40; }
+    for (const c of cols) {
+      const v = c.fmt ? c.fmt(row[c.k]) : String(row[c.k] ?? '');
+      doc.text(v, c.x + 2, y + 4, { width: c.w - 4, align: c.align });
+    }
+    y += 14;
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).strokeColor('#e5e7eb').lineWidth(0.5).stroke().strokeColor('#000');
+  }
+  doc.font('Helvetica-Bold').fontSize(10);
+  doc.rect(PAGE_L, y, PAGE_W, 20).fillAndStroke('#f3f4f6', '#666').fillColor('#000');
+  doc.text('TOTAL', PAGE_L + 2, y + 6);
+  doc.text(fmtQty(tQty), PAGE_L + 62, y + 6, { width: 66, align: 'right' });
+  doc.text(fmtAmt(tAmt), PAGE_L + 192, y + 6, { width: 76, align: 'right' });
+  doc.text(fmtAmt(tDisc),PAGE_L + 272, y + 6, { width: 71, align: 'right' });
+  doc.text(fmtAmt(tTax), PAGE_L + 347, y + 6, { width: 66, align: 'right' });
+  doc.text(fmtAmt(tPay), PAGE_L + 417, y + 6, { width: 116,align: 'right' });
+  y += 30;
+  doc.font('Helvetica').fontSize(9).text(`Generated: ${new Date().toLocaleString('en-IN')}`, PAGE_L, y, { width: PAGE_W, align: 'right' });
+  return tPay;
+}
+
+app.get('/api/payments/pdf/:auctionId/:sellerName', requireView, (req, res) => {
+  let doc, piped = false;
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const auctionId = req.params.auctionId;
+    const sellerName = decodeURIComponent(req.params.sellerName);
+    // Validate BEFORE piping — once we pipe, any subsequent throw can't
+    // be turned into a JSON response (headers + body already going out).
+    const auction = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+    const PDFDocument = require('pdfkit');
+    doc = new PDFDocument({ size: 'A4', margin: 30 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="Payment_${req.params.sellerName}_${auctionId}.pdf"`);
+    doc.pipe(res); piped = true;
+    res.on('close', () => { try { doc.destroy(); } catch(_){} });
+    _renderPaymentStatement(doc, db, auctionId, sellerName, cfg);
+    doc.end();
+  } catch (e) {
+    if (piped && doc) { try { doc.end(); } catch(_){} }
+    else if (!res.headersSent) res.status(500).json({ error: e.message || 'PDF failed' });
+  }
+});
+
+// Bulk: Body { auction_id, names: [...] } → one merged PDF, page-break per seller.
+app.post('/api/payments/pdf-bulk', requireView, (req, res) => {
+  let doc, piped = false;
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const auctionId = Number(req.body.auction_id);
+    const names = Array.isArray(req.body.names) ? req.body.names : [];
+    if (!auctionId || !names.length) return res.status(400).json({ error: 'auction_id and names[] required' });
+    const auction = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+    const PDFDocument = require('pdfkit');
+    doc = new PDFDocument({ size: 'A4', margin: 30 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="Payments_Batch_${names.length}.pdf"`);
+    doc.pipe(res); piped = true;
+    res.on('close', () => { try { doc.destroy(); } catch(_){} });
+    names.forEach((nm, i) => {
+      if (i > 0) doc.addPage();
+      try { _renderPaymentStatement(doc, db, auctionId, nm, cfg); }
+      catch (e) { try { doc.font('Helvetica').fontSize(10).text(`Error rendering ${nm}: ${e.message}`); } catch(_){} }
+    });
+    doc.end();
+  } catch (e) {
+    if (piped && doc) { try { doc.end(); } catch(_){} }
+    else if (!res.headersSent) res.status(500).json({ error: e.message || 'PDF failed' });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════
 // TDS RETURNS (TDSRETU.PRG)
 // ══════════════════════════════════════════════════════════════
@@ -4427,6 +4699,11 @@ app.put('/api/route-distances', requireExport, (req, res) => {
     // would shadow the route forever. (Per-invoice overrides have higher
     // priority by design; if we ever add a UI to set a true per-invoice
     // override, this clearing step would need to be opt-in.)
+    //
+    // PIN-resolution mirrors the read path: ship-to (cpin) wins, with
+    // bill-to (pin) as fallback. Otherwise routes saved against a
+    // ship-to PIN wouldn't apply to invoices whose buyer has a
+    // separate consignee address.
     const dispatchPin = getDispatchPin(db);
     const otherPin = k1 === dispatchPin ? k2 : (k2 === dispatchPin ? k1 : null);
     let clearedOverrides = 0;
@@ -4436,7 +4713,7 @@ app.put('/api/route-distances', requireExport, (req, res) => {
          WHERE id IN (
            SELECT i.id FROM invoices i
            LEFT JOIN buyers b ON b.buyer = i.buyer
-           WHERE b.pin = ?
+           WHERE COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) = ?
              AND i.distance_km IS NOT NULL
          )`,
         [otherPin]
@@ -4445,14 +4722,14 @@ app.put('/api/route-distances', requireExport, (req, res) => {
     }
 
     // How many invoices now resolve via this route? Now that we cleared
-    // the legacy overrides, every invoice with the matching buyer PIN
-    // counts (not just the ones that were already NULL).
+    // the legacy overrides, every invoice with the matching destination
+    // PIN counts (ship-to first, bill-to fallback).
     let appliedCount = 0;
     if (otherPin) {
       const r = db.get(
         `SELECT COUNT(*) AS n FROM invoices i
          LEFT JOIN buyers b ON b.buyer = i.buyer
-         WHERE b.pin = ?`,
+         WHERE COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) = ?`,
         [otherPin]
       );
       appliedCount = r ? r.n : 0;
@@ -4664,6 +4941,13 @@ app.get('/api/receipt/:lotId', requireView, async (req, res) => {
 // SUMMARY STATS
 // ══════════════════════════════════════════════════════════════
 app.get('/api/stats', requireView, (req, res) => {
+  // Branch tiles + per-trade breakdown depend on data the user can edit
+  // (Settings → Branches, lots, invoices). Disable HTTP caching outright
+  // so the dashboard always reflects the current DB state — without
+  // this header, browsers can serve a stale /api/stats response after
+  // the user edits Settings → Branches & Contacts and the tiles
+  // continue to show the previous list.
+  res.set('Cache-Control', 'no-store');
   const db = getDb();
 
   // Counts
@@ -4789,10 +5073,76 @@ app.get('/api/stats', requireView, (req, res) => {
     ) || {}).c || 0;
   }
 
+  // ── Per-branch breakdown ──
+  // The branch list is anchored to the user's configured Settings →
+  // Branches & Contacts (br1..br9), so the dashboard tiles are stable
+  // and reflect the user's organizational structure — not whatever
+  // string appeared in `lots.branch` for a given auction.
+  //
+  // Lots are aggregated per configured branch (case-insensitive match)
+  // across either ALL trades (cumulative mode) or just the currently-
+  // selected trade. Configured branches with zero matching lots still
+  // appear as 0-tiles so the user sees their full org laid out.
+  // Lots whose `branch` value doesn't match any configured branch get
+  // bucketed under "(unspecified)" — surfaced only when present, so it
+  // doesn't clutter the dashboard for clean datasets.
+  const cfgBranches = [];
+  for (let i = 1; i <= 9; i++) {
+    const r = db.get('SELECT value FROM company_settings WHERE key = ?', [`br${i}`]);
+    const v = r && r.value ? String(r.value).trim() : '';
+    if (v) cfgBranches.push(v);
+  }
+  const aggSql = currentAuction
+    ? `SELECT COALESCE(TRIM(branch), '') AS branch,
+              COUNT(*) AS lots,
+              COALESCE(SUM(qty), 0) AS qty,
+              COALESCE(SUM(amount), 0) AS amount
+         FROM lots
+        WHERE auction_id = ?
+        GROUP BY UPPER(COALESCE(TRIM(branch), ''))`
+    : `SELECT COALESCE(TRIM(branch), '') AS branch,
+              COUNT(*) AS lots,
+              COALESCE(SUM(qty), 0) AS qty,
+              COALESCE(SUM(amount), 0) AS amount
+         FROM lots
+        GROUP BY UPPER(COALESCE(TRIM(branch), ''))`;
+  const rawAgg = currentAuction ? db.all(aggSql, [currentAuction.id]) : db.all(aggSql);
+  // Index aggregates by uppercased branch name for case-insensitive match.
+  const aggIdx = {};
+  for (const a of rawAgg) {
+    const k = String(a.branch || '').toUpperCase();
+    aggIdx[k] = a;
+  }
+  // Walk configured branches first (preserves Settings order so tiles
+  // line up with how the user thinks about their business). Each config
+  // branch always emits a tile, even when 0 lots — empty tiles signal
+  // "no activity here" which is itself useful information for the user.
+  const branchTotals = cfgBranches.map(name => {
+    const hit = aggIdx[name.toUpperCase()];
+    return {
+      branch: name,
+      lots:   Number((hit && hit.lots)   || 0),
+      qty:    Number((hit && hit.qty)    || 0),
+      amount: Number((hit && hit.amount) || 0),
+      configured: true,
+    };
+  });
+  // Strays — lots whose `branch` value doesn't match any configured
+  // branch from Settings — are intentionally NOT surfaced on the
+  // dashboard per spec. The dashboard reflects ONLY the configured
+  // organization (Settings → Branches & Contacts). Stray lots still
+  // exist in the DB and remain visible in the Lots tab; users clean
+  // them up by editing those lots or by adding the missing branch to
+  // Settings, which then makes the lots count toward that tile.
+  // (Earlier we surfaced strays as orange "stray" tiles + an
+  // "(unspecified)" bucket — that confused users into thinking the
+  // dashboard was broken when really their lot data had typos.)
+
   res.json({
     counts,
     cumulative,
     perTradeBreakdown,
+    branchTotals,
     currentAuction: auctionStats,
     allAuctions,
     topSellers,
