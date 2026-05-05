@@ -101,7 +101,13 @@ function calculateLot(lot, cfg) {
 
   // e-Trade discount: round(PurAmt / 1000 × days × discount%) — nearest
   // rupee, half-up. result.refund holds the Discount amount.
-  const days    = Number(cfg.discount_days) || 0;
+  // Days source depends on seller type:
+  //   GSTIN present (registered dealer) → cfg.dealer_days
+  //   no GSTIN (CR / agriculturist)     → cfg.discount_days
+  const sellerHasGstin = sellerGstState !== '';
+  const days    = sellerHasGstin
+    ? (Number(cfg.dealer_days) || 0)
+    : (Number(cfg.discount_days) || 0);
   const discPct = Number(cfg.discount_pct)  || 0;
   result.refund = Math.round((result.puramt / 1000) * days * discPct);
 
@@ -280,7 +286,21 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
 
   const totalBeforeRound = taxableValue + cgst + sgst + igst;
   const roundDiff = Math.round(totalBeforeRound) - totalBeforeRound;
-  const grandTotal = Math.round(totalBeforeRound);
+  const subtotalRounded = Math.round(totalBeforeRound);
+
+  // Additional Charge — sum(cardamom) × cfg.addl_charge_value % .
+  // The configured value is a PERCENTAGE (e.g. 2 means 2%). Sits BELOW the
+  // Round on/off line and adds straight onto the grand total — does not
+  // feed into GST or round-off math. When the percentage is 0 the charge
+  // is fully skipped (no row, no XML ledger, no effect on grand total).
+  const addlChargePct = Number(cfg.addl_charge_value) || 0;
+  const addlCharge = addlChargePct > 0
+    ? Math.round(totalAmount * addlChargePct) / 100
+    : 0;
+  const addlChargeName = addlCharge > 0 ? String(cfg.addl_charge_name || '').trim() : '';
+  const grandTotal = addlCharge > 0
+    ? Math.round((subtotalRounded + addlCharge) * 100) / 100
+    : subtotalRounded;
 
   return {
     buyer: buyer || {},
@@ -290,7 +310,9 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
       totalQty, totalBags, totalAmount,
       gunnyCost, transportCost, insuranceCost,
       taxableValue, cgst, sgst, igst,
-      roundDiff, grandTotal,
+      roundDiff, subtotalRounded,
+      addlCharge, addlChargeName,
+      grandTotal,
       isInterState
     }
   };

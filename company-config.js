@@ -79,6 +79,9 @@ const DEFAULTS = [
   { key: 'local_insurance', value: '0.75',           category: 'rates',     label: 'Local Insurance (₹/kg)',   type: 'number' },
   { key: 'discount_pct',    value: '0',              category: 'rates',     label: 'Discount %',               type: 'number' },
   { key: 'discount_days',   value: '0',              category: 'rates',     label: 'No. of Days for Discount', type: 'number' },
+  { key: 'dealer_days',     value: '0',              category: 'rates',     label: 'No. of Days for Dealer',   type: 'number' },
+  { key: 'addl_charge_name',  value: '',             category: 'rates',     label: 'Additional Charge — Name', type: 'text' },
+  { key: 'addl_charge_value', value: '0',            category: 'rates',     label: 'Additional Charge — % of cardamom amount (0 to disable)', type: 'number' },
 
   // ── HSN / SAC CODES ────────────────────────────────────────
   { key: 'hsn_cardamom',    value: '09083120',       category: 'hsn',       label: 'Cardamom HSN',             type: 'text' },
@@ -149,7 +152,9 @@ const DEFAULTS = [
 
   // ── INTEGRATIONS ───────────────────────────────────────────
   { key: 'gst_api_key',     value: '',               category: 'integrations', label: 'GST Lookup API Key (gstincheck.co.in)', type: 'text' },
-  { key: 'praman_company',  value: '',               category: 'integrations', label: 'Praman Lot Company Code (e.g. VSTL) — used in Praman CSV column 2; falls back to Short Name when blank', type: 'text' },
+  // Praman Lot Code — lives under To Tally now (was under Integrations).
+  // Falls back to Short Name when blank.
+  { key: 'praman_company',  value: '',               category: 'tally',        label: 'Praman Lot Code (fallback: Short Name)', type: 'text' },
 
   // ── TALLY EXPORT ──────────────────────────────────────────
   // Settings here mirror the macro's Configration form (UserForm1) field-for-field.
@@ -358,6 +363,12 @@ function initCompanySettings(db) {
   fixIfLegacy('tally_dn_sgst',     'OUTPUT SGST 9%',  'OUTPUT SGST 2.5%');
   fixIfLegacy('tally_dn_igst',     'OUTPUT IGST 18%', 'OUTPUT IGST 5%');
   fixIfLegacy('tally_dn_gst_rate', '18',              '5');
+
+  // praman_company moved from 'integrations' to 'tally' — relocate any
+  // existing row and refresh its (shorter) label.
+  db.prepare(
+    "UPDATE company_settings SET category = 'tally', label = ? WHERE key = 'praman_company'"
+  ).run('Praman Lot Code (fallback: Short Name)');
 
   console.log('Company settings ready (%d defaults)', DEFAULTS.length);
 }

@@ -451,21 +451,28 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
 </EWAYBILLDETAILS.LIST>`;
     }
 
-    // Party (debtor) ledger — negative amount (party owes us)
-    const totalRound = r0(row.totalRounded || row.total);
-    const totalAmt   = r2(row.total);
-    const rnd        = r2(totalRound - totalAmt);
+    // Party (debtor) ledger — negative amount (party owes us).
+    // Additional Charge (sum(cardamom) × cfg.addl_charge_value) is emitted
+    // as its own ledger entry below; it must be added on top of the rounded
+    // GST-inclusive subtotal so the party AMOUNT matches the invoice grand
+    // total the buyer sees on the PDF.
+    const totalRound   = r0(row.totalRounded || row.total);
+    const totalAmt     = r2(row.total);
+    const rnd          = r2(totalRound - totalAmt);
+    const addlChargeXml = r2(row.addlCharge || 0);
+    const addlLedger    = (row.addlChargeName || cfgGet(cfg, 'addl_charge_name', '') || 'Additional Charge').toString();
+    const partyTotal    = r2(totalRound + addlChargeXml);
 
     xml += `
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${partyName}</LEDGERNAME>
 <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
 ${TAGS.DEEMYES}
-<AMOUNT>${-totalRound}</AMOUNT>
+<AMOUNT>${-partyTotal}</AMOUNT>
 <BILLALLOCATIONS.LIST>
 <NAME>${xe(voucherNum)}</NAME>
 <BILLTYPE>New Ref</BILLTYPE>
-<AMOUNT>${-totalRound}</AMOUNT>
+<AMOUNT>${-partyTotal}</AMOUNT>
 </BILLALLOCATIONS.LIST>
 </LEDGERENTRIES.LIST>`;
 
@@ -565,6 +572,18 @@ ${TAGS.DEEMNO}
 ${TAGS.DEEMNO}
 <AMOUNT>${r2(rnd)}</AMOUNT>
 <VATEXPAMOUNT>${r2(rnd)}</VATEXPAMOUNT>
+</LEDGERENTRIES.LIST>`;
+    }
+
+    // Additional Charge — separate ledger after round-off, named per the
+    // Settings → Rates & Charges entry (or 'Additional Charge' fallback).
+    if (Math.abs(addlChargeXml) > 0.001) {
+      xml += `
+<LEDGERENTRIES.LIST>
+<LEDGERNAME>${xe(addlLedger)}</LEDGERNAME>
+${TAGS.DEEMNO}
+<AMOUNT>${addlChargeXml}</AMOUNT>
+<VATEXPAMOUNT>${addlChargeXml}</VATEXPAMOUNT>
 </LEDGERENTRIES.LIST>`;
     }
 
@@ -2333,11 +2352,13 @@ function buildSalesIspRows(db, auctionId, cfg) {
       ? lotRows.reduce((s, l) => s + Number(l.bag || 0), 0)
       : Number(r.bag || 0);
 
-    // total = the PRE-round grand total (= rounded total minus the
-    // stored round-off adjustment). This is what the generator needs
-    // so the round-off ledger amount comes out to the right delta.
-    const totalRounded = r0(r.tot || 0);
-    const total = r2((r.tot || 0) - (r.rund || 0));
+    // total = the PRE-round, pre-addl-charge grand total.
+    // totalRounded = rounded GST-inclusive subtotal (no addl charge).
+    // The Additional Charge is emitted as its own ledger entry, so the
+    // round-off math here must NOT include it.
+    const addlChg = r2(r.addl_chg || 0);
+    const totalRounded = r0((r.tot || 0) - addlChg);
+    const total = r2((r.tot || 0) - addlChg - (r.rund || 0));
 
     // Resolve the e-way bill distance: per-invoice override, then
     // route table lookup, then blank.
@@ -2385,6 +2406,11 @@ function buildSalesIspRows(db, auctionId, cfg) {
       sgst: r2(r.sgst || 0),
       igst: r2(r.igst || 0),
       tcsamt: r2(r.tcs || 0),
+      // Additional Charge — sum(cardamom) × cfg.addl_charge_value, stored
+      // on the invoice row. addlChargeName carries the user-defined ledger
+      // label so the XML can name the ledger correctly.
+      addlCharge: r2(r.addl_chg || 0),
+      addlChargeName: String(r.addl_name || '').trim(),
       total,
       totalRounded,
     });

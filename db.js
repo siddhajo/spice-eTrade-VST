@@ -286,6 +286,8 @@ async function initDb() {
     tcs REAL DEFAULT 0,
     rund REAL DEFAULT 0,
     tot REAL DEFAULT 0,
+    addl_chg REAL DEFAULT 0,
+    addl_name TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
@@ -442,6 +444,11 @@ async function initDb() {
     // Search page (or Google Maps), pastes it here, clicks Save. Value
     // is then emitted verbatim on the next voucher regen.
     'ALTER TABLE invoices ADD COLUMN distance_km INTEGER',
+    // Additional Charge — sum(cardamom) × cfg.addl_charge_value, sits
+    // below the Round on/off line. addl_name carries the user-defined
+    // ledger label (also used as the Tally ledger name in XML).
+    "ALTER TABLE invoices ADD COLUMN addl_chg REAL DEFAULT 0",
+    "ALTER TABLE invoices ADD COLUMN addl_name TEXT DEFAULT ''",
     // Per-invoice lorry / truck number. Set from the Invoices tab via a
     // bulk-action button; emitted into the e-way bill <VEHICLENUMBER>
     // (and BASICSHIPVESSELNO) fields when generating sales vouchers

@@ -1832,11 +1832,11 @@ app.post('/api/invoices/generate/:auctionId', requireInvoiceWrite, (req, res) =>
   // from ISP invoices in the same auction, which matters for the sales
   // list cross-reference (ASP Inv# column).
   const invoiceState = cfg.business_state || auction.state || '';
-  db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [req.params.auctionId,auction.ano,auction.date,invoiceState,saleType,String(invoiceNo),buyerCode,invoice.buyer.buyer1||'',
      invoice.buyer.gstin||'',invoice.buyer.pla||'',s.totalBags,s.totalQty,s.totalAmount,s.gunnyCost,s.transportCost,s.insuranceCost,
-     s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal]);
+     s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'']);
   
   // Update lots with sale type and invoice number.
   // Workflow trace:
@@ -2048,11 +2048,11 @@ app.post('/api/invoices/generate-all/:auctionId', requireInvoiceWrite, (req, res
       const invoNo = String(nextNo);
       // Store BUSINESS context state — see single-invoice handler for rationale
       const invoiceState = cfg.business_state || auction.state || '';
-      db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [req.params.auctionId,auction.ano,auction.date,invoiceState,useSaleType,invoNo,row.buyer,invoice.buyer.buyer1||'',
          invoice.buyer.gstin||'',invoice.buyer.pla||'',s.totalBags,s.totalQty,s.totalAmount,s.gunnyCost,s.transportCost,s.insuranceCost,
-         s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal]);
+         s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'']);
       // ASP-aware lot update: see single-invoice handler above for rationale.
       const isASPStateBulk = String(cfg.business_state || '').toUpperCase() === 'KERALA';
       for (const li of invoice.lineItems) {
@@ -2264,6 +2264,9 @@ app.get('/api/invoices/pdf/:id', requireView, async (req, res) => {
           igst: stored.igst || 0,
           tcs: stored.tcs || 0,
           roundDiff: stored.rund || 0,
+          subtotalRounded: (stored.tot || 0) - (stored.addl_chg || 0),
+          addlCharge: stored.addl_chg || 0,
+          addlChargeName: stored.addl_name || '',
           grandTotal: stored.tot || 0,
           isInterState: stored.sale === 'I',
         }
@@ -2360,6 +2363,9 @@ app.get('/api/invoices/purchase-pdf/:id', requireView, async (req, res) => {
           igst: stored.igst || 0,
           tcs: stored.tcs || 0,
           roundDiff: stored.rund || 0,
+          subtotalRounded: (stored.tot || 0) - (stored.addl_chg || 0),
+          addlCharge: stored.addl_chg || 0,
+          addlChargeName: stored.addl_name || '',
           grandTotal: stored.tot || 0,
           isInterState: stored.sale === 'I',
         }
@@ -2430,7 +2436,11 @@ app.post('/api/invoices/pdf-bulk', requireView, async (req, res) => {
             transportCost: stored.pava_hc || 0, insuranceCost: stored.ins || 0,
             taxableValue: (stored.amount || 0) + (stored.gunny || 0) + (stored.pava_hc || 0) + (stored.ins || 0),
             cgst: stored.cgst || 0, sgst: stored.sgst || 0, igst: stored.igst || 0,
-            roundDiff: stored.rund || 0, grandTotal: stored.tot || 0,
+            roundDiff: stored.rund || 0,
+            subtotalRounded: (stored.tot || 0) - (stored.addl_chg || 0),
+            addlCharge: stored.addl_chg || 0,
+            addlChargeName: stored.addl_name || '',
+            grandTotal: stored.tot || 0,
             isInterState: stored.sale === 'I',
           }
         };
@@ -2525,7 +2535,11 @@ app.post('/api/invoices/purchase-pdf-bulk', requireView, async (req, res) => {
             transportCost: stored.pava_hc || 0, insuranceCost: stored.ins || 0,
             taxableValue: (stored.amount || 0) + (stored.gunny || 0) + (stored.pava_hc || 0) + (stored.ins || 0),
             cgst: stored.cgst || 0, sgst: stored.sgst || 0, igst: stored.igst || 0,
-            roundDiff: stored.rund || 0, grandTotal: stored.tot || 0,
+            roundDiff: stored.rund || 0,
+            subtotalRounded: (stored.tot || 0) - (stored.addl_chg || 0),
+            addlCharge: stored.addl_chg || 0,
+            addlChargeName: stored.addl_name || '',
+            grandTotal: stored.tot || 0,
             isInterState: stored.sale === 'I',
           }
         };
