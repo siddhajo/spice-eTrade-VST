@@ -1658,25 +1658,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           To Tally
         </button>
       </div>
-      <!-- External apps — open in new tab, hosted as separate Railway
-           deployments. The lot-entry PWA has its own DB; lot data still
-           flows into e-Trade via the existing Import (DBF/Excel) workflow.
-           Using <a target="_blank"> instead of a button so the browser
-           handles the new-tab open natively (middle-click / Cmd-click
-           behavior works as expected). -->
-      <div class="side-group">
-        <div class="side-group-lbl">External</div>
-        <a class="side-item"
-           href="https://spice-auction-lot-entry-production.up.railway.app/app.html"
-           target="_blank" rel="noopener noreferrer"
-           style="text-decoration:none">
-          <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-          <span style="display:flex;align-items:center;gap:6px;flex:1">
-            Lot Entry
-            <svg viewBox="0 0 24 24" style="width:11px;height:11px;opacity:.6;flex-shrink:0"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
-          </span>
-        </a>
-      </div>
     </aside>
 
     <div class="content">
