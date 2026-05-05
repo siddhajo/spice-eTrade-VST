@@ -90,7 +90,7 @@ function getCompanyHeader(db) {
       //   3. tally_company_name  — Tally-export name
       //   4. short_name          — short label (e.g. "VST")
       //   5. hardcoded default   — only if everything's blank
-      name = get('trade_name') || get('company_name') || get('tally_company_name') || get('short_name') || 'Company';
+      name = get('trade_name') || get('company_name') || get('tally_company_name') || get('short_name') || '';
 
       // Logo file: derived from `logo` setting (the user's short logo code,
       // e.g. "VST", "ISPL"). Convention: lowercased + `.png` extension,

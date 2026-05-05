@@ -130,6 +130,11 @@ const DEFAULTS = [
   { key: 'flag_dummy',      value: 'true',           category: 'flags',     label: 'Allow Dummy Invoices',     type: 'boolean' },
   { key: 'flag_round',      value: 'true',           category: 'flags',     label: 'Round Invoice Amounts',    type: 'boolean' },
   { key: 'flag_export',     value: 'false',          category: 'flags',     label: 'Export Invoices',          type: 'boolean' },
+  // WhatsApp share/send buttons across the app (Purchases, Payments,
+  // Debit Notes, single-row icons). When false, the buttons are hidden
+  // entirely so users on installs without WhatsApp Business / Web
+  // access don't see dead controls.
+  { key: 'flag_whatsapp',   value: 'false',          category: 'flags',     label: 'WhatsApp Share Buttons',   type: 'boolean' },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
@@ -143,6 +148,14 @@ const DEFAULTS = [
   { key: 'default_crop_type', value: 'VST',          category: 'lot_entry', label: 'Default Crop Type',        type: 'text' },
   { key: 'edit_enabled',    value: 'true',           category: 'lot_entry', label: 'Allow Lot Edits (non-admin)', type: 'boolean' },
   { key: 'edit_timeout_sec', value: '0',             category: 'lot_entry', label: 'Edit Timeout (sec; 0 = no limit)', type: 'number' },
+  // Default lot receipt format. The Lot Entry print modal lets the
+  // user override this per-print, but this setting decides which
+  // option is pre-selected. "compact" matches the legacy thermal-
+  // printer slip (~80mm wide, monospace, just lot/bags/qty/gross);
+  // "detailed" is the modern A4-style ASPPL header with seller bank
+  // details. Field staff on thermal hardware should set this to
+  // "compact" once and forget it.
+  { key: 'lot_receipt_format', value: 'detailed',     category: 'lot_entry', label: 'Lot Receipt Format (compact|detailed)', type: 'text' },
 
   // ── BUSINESS MODE ──────────────────────────────────────────
   // This build is e-Trade only. business_mode is kept in the DB so calc
@@ -178,6 +191,11 @@ const DEFAULTS = [
   { key: 'tally_local_insurance', value: 'true',           category: 'tally', label: 'Local Insurance (use local insurance rate)', type: 'boolean' },
   { key: 'tally_ship_to',         value: 'false',          category: 'tally', label: 'Ship To (override consignee with separate Ship-To party)', type: 'boolean' },
   { key: 'tally_dispatch_from',   value: 'true',           category: 'tally', label: 'Dispatch From Address (emit DISPATCHFROMADDRESS in Sales XML)', type: 'boolean' },
+  // E-way bill block in Sales XML — independent of the dispatch-from
+  // address. Default ON; user can disable per install if they don't
+  // want EWAYBILLDETAILS.LIST emitted (e.g. small intra-state supplies
+  // below the e-way bill threshold where the buyer doesn't want it).
+  { key: 'tally_eway_enabled',    value: 'true',           category: 'tally', label: 'E-way Bill (emit EWAYBILLDETAILS in Sales XML)', type: 'boolean' },
 
   // Sales Account Ledgers (Cardamom)
   { key: 'tally_sales_inter',     value: 'Cardamom Sales 5%',          category: 'tally', label: 'Cardamom Inter-State Sales',  type: 'text' },

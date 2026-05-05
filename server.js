@@ -326,6 +326,29 @@ const requireExport        = requirePermission('export');
 // ══════════════════════════════════════════════════════════════
 // AUTH
 // ══════════════════════════════════════════════════════════════
+
+// Public branding (no auth) — login screen / topbar pulls company
+// name + logo from settings. Returns only the safe-to-expose subset:
+// trade name, short name, branch, GSTIN, and a logo URL when present.
+app.get('/api/branding', (req, res) => {
+  try {
+    const cfg = getSettingsFlat(getDb());
+    const isKL = String(cfg.business_state || '').toUpperCase().includes('KERALA');
+    const branch = (isKL ? cfg.kl_branch : cfg.tn_branch) || cfg.tn_branch || cfg.kl_branch || '';
+    const gstin  = (isKL ? cfg.kl_gstin  : cfg.tn_gstin)  || cfg.tn_gstin  || cfg.kl_gstin  || '';
+    const logoFile = path.join(__dirname, 'public', 'logo-ispl.png');
+    res.json({
+      tradeName: cfg.trade_name || cfg.short_name || '',
+      shortName: cfg.short_name || cfg.trade_name || '',
+      branch,
+      gstin,
+      logoUrl: fs.existsSync(logoFile) ? '/logo-ispl.png' : null,
+    });
+  } catch (e) {
+    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null });
+  }
+});
+
 app.post('/api/login', (req, res) => {
   const { username, password, device_label } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
@@ -1278,9 +1301,290 @@ app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
 });
 app.delete('/api/auctions/:id', requireDelete, (req, res) => {
   const db = getDb();
+  db.run('DELETE FROM lot_allocations WHERE auction_id = ?', [req.params.id]);
   db.run('DELETE FROM lots WHERE auction_id = ?', [req.params.id]);
   db.run('DELETE FROM auctions WHERE id = ?', [req.params.id]);
   res.json({ success: true });
+});
+
+// ══════════════════════════════════════════════════════════════
+// LOT ALLOCATIONS — per-trade, per-branch lot-number ranges
+// ══════════════════════════════════════════════════════════════
+// Ported from spice-auction-pwa. Each allocation row reserves a
+// contiguous range of lot numbers (e.g. "001"–"080" or "A001"–"A080")
+// for one branch within one trade. Lot Entry uses these ranges to:
+//   1. validate every saved lot's lot_no falls inside its branch's range
+//   2. suggest the next free lot_no when picking a seller
+//   3. show used/free progress per branch on the entry screen
+//
+// Lot numbers are parsed as `[A-Za-z]*\d+` so both pure-numeric and
+// prefixed schemes work. Padding length is preserved when generating
+// candidate lot numbers from a range.
+// ──────────────────────────────────────────────────────────────
+
+function parseLotNo(lot) {
+  const match = String(lot).match(/^([A-Za-z]*)(\d+)$/);
+  if (!match) return null;
+  return { prefix: match[1].toUpperCase(), num: parseInt(match[2], 10), padLen: match[2].length };
+}
+
+function buildLotNo(prefix, num, padLen) {
+  return prefix + String(num).padStart(padLen, '0');
+}
+
+function isLotInRange(lotNo, startLot, endLot) {
+  const lot = parseLotNo(lotNo);
+  const s = parseLotNo(startLot);
+  const e = parseLotNo(endLot);
+  if (!lot || !s || !e) return false;
+  if (lot.prefix !== s.prefix || s.prefix !== e.prefix) return false;
+  return lot.num >= s.num && lot.num <= e.num;
+}
+
+function rangeSize(startLot, endLot) {
+  const s = parseLotNo(startLot);
+  const e = parseLotNo(endLot);
+  if (!s || !e) return 0;
+  return e.num - s.num + 1;
+}
+
+// Get allocations for a trade
+app.get('/api/auctions/:id/allocations', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const allocations = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot',
+    [auctionId]
+  );
+  res.json({ allocations });
+});
+
+// Save allocations for a trade (bulk replace)
+// Validates: required fields, parseable formats, matching prefixes, no
+// overlapping ranges, and refuses to drop an existing allocation whose
+// lot range still has lots in the lots table.
+app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const { allocations } = req.body;
+  if (!allocations || !Array.isArray(allocations) || !allocations.length) {
+    return res.status(400).json({ error: 'At least one allocation is required' });
+  }
+
+  for (const a of allocations) {
+    if (!a.branch || !a.start_lot || !a.end_lot) {
+      return res.status(400).json({ error: 'Branch, start_lot, end_lot required for each allocation' });
+    }
+    const s = parseLotNo(a.start_lot);
+    const e = parseLotNo(a.end_lot);
+    if (!s || !e) return res.status(400).json({ error: `Invalid lot format: ${a.start_lot} or ${a.end_lot}. Use format like 001, A001` });
+    if (s.prefix !== e.prefix) return res.status(400).json({ error: `Prefix mismatch: ${a.start_lot} vs ${a.end_lot}` });
+    if (s.num > e.num) return res.status(400).json({ error: `Start (${a.start_lot}) must be <= End (${a.end_lot})` });
+  }
+
+  for (let i = 0; i < allocations.length; i++) {
+    for (let j = i + 1; j < allocations.length; j++) {
+      const a = allocations[i], b = allocations[j];
+      const ap = parseLotNo(a.start_lot), ae = parseLotNo(a.end_lot);
+      const bp = parseLotNo(b.start_lot), be = parseLotNo(b.end_lot);
+      if (ap.prefix === bp.prefix && ap.num <= be.num && bp.num <= ae.num) {
+        return res.status(400).json({ error: `Ranges overlap: ${a.branch} (${a.start_lot}-${a.end_lot}) and ${b.branch} (${b.start_lot}-${b.end_lot})` });
+      }
+    }
+  }
+
+  // Refuse to remove an allocation that still has saved lots in its range
+  const existing = db.all('SELECT * FROM lot_allocations WHERE auction_id = ?', [auctionId]);
+  for (const ex of existing) {
+    const kept = allocations.find(a => a.id === ex.id);
+    if (!kept) {
+      const lots = db.all('SELECT lot_no FROM lots WHERE auction_id = ?', [auctionId]);
+      const lotsInRange = lots.filter(l => isLotInRange(l.lot_no, ex.start_lot, ex.end_lot));
+      if (lotsInRange.length > 0) {
+        return res.status(400).json({ error: `Cannot remove ${ex.branch} (${ex.start_lot}-${ex.end_lot}): ${lotsInRange.length} lots already entered` });
+      }
+    }
+  }
+
+  db.run('DELETE FROM lot_allocations WHERE auction_id = ?', [auctionId]);
+  for (const a of allocations) {
+    db.run(
+      'INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+      [auctionId, a.branch, String(a.start_lot).trim(), String(a.end_lot).trim()]
+    );
+  }
+
+  const saved = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot',
+    [auctionId]
+  );
+  res.json({ allocations: saved });
+});
+
+// Allocation stats (used/total per branch + per-lot grid)
+// Drives both the admin Allocations modal and the Lot Entry status bar.
+app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const allocations = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot',
+    [auctionId]
+  );
+  const lots = db.all('SELECT lot_no, branch FROM lots WHERE auction_id = ?', [auctionId]);
+  const usedSet = new Set(lots.map(l => l.lot_no));
+
+  const stats = {};
+  for (const a of allocations) {
+    if (!stats[a.branch]) stats[a.branch] = { branch: a.branch, total: 0, used: 0, ranges: [] };
+    const total = rangeSize(a.start_lot, a.end_lot);
+    const usedInRange = lots.filter(l => isLotInRange(l.lot_no, a.start_lot, a.end_lot));
+    stats[a.branch].total += total;
+    stats[a.branch].used += usedInRange.length;
+
+    const s = parseLotNo(a.start_lot);
+    const e = parseLotNo(a.end_lot);
+    const lotGrid = [];
+    if (s && e) {
+      for (let n = s.num; n <= e.num; n++) {
+        const lotNo = buildLotNo(s.prefix, n, s.padLen);
+        lotGrid.push({ lot: lotNo, used: usedSet.has(lotNo) });
+      }
+    }
+    stats[a.branch].ranges.push({
+      start: a.start_lot, end: a.end_lot, total,
+      used: usedInRange.length, lots: lotGrid
+    });
+  }
+
+  res.json({ stats: Object.values(stats), allocations });
+});
+
+// Reassign an unused range from one branch to another
+// Splits the source allocations around the reassigned range, then
+// inserts a single allocation covering the same range under the
+// destination branch. Refuses to act if any lot in the range is already
+// saved (lots can only be reassigned by deleting + re-entering).
+app.post('/api/auctions/:id/reassign-lots', requireAuctionWrite, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const { from_branch, to_branch, start_lot, end_lot } = req.body;
+
+  if (!from_branch || !to_branch || !start_lot || !end_lot) {
+    return res.status(400).json({ error: 'All fields required: from_branch, to_branch, start_lot, end_lot' });
+  }
+  if (from_branch === to_branch) return res.status(400).json({ error: 'FROM and TO branch must be different' });
+
+  const s = parseLotNo(start_lot);
+  const e = parseLotNo(end_lot);
+  if (!s || !e) return res.status(400).json({ error: 'Invalid lot number format' });
+  if (s.prefix !== e.prefix) return res.status(400).json({ error: 'Start and end must have same prefix' });
+  if (s.num > e.num) return res.status(400).json({ error: 'Start must be <= End' });
+
+  // Every lot in the range must currently belong to from_branch
+  const fromAllocs = db.all('SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ?', [auctionId, from_branch]);
+  for (let n = s.num; n <= e.num; n++) {
+    const lotNo = buildLotNo(s.prefix, n, s.padLen);
+    const inRange = fromAllocs.some(a => isLotInRange(lotNo, a.start_lot, a.end_lot));
+    if (!inRange) return res.status(400).json({ error: `Lot ${lotNo} is not allocated to ${from_branch}` });
+  }
+
+  // None of the lots may already be saved
+  const usedLots = db.all('SELECT lot_no FROM lots WHERE auction_id = ?', [auctionId]).map(l => l.lot_no);
+  const usedSet = new Set(usedLots);
+  const usedInRange = [];
+  for (let n = s.num; n <= e.num; n++) {
+    const lotNo = buildLotNo(s.prefix, n, s.padLen);
+    if (usedSet.has(lotNo)) usedInRange.push(lotNo);
+  }
+  if (usedInRange.length > 0) {
+    return res.status(400).json({
+      error: `Cannot reassign — ${usedInRange.length} lot(s) already used: ${usedInRange.slice(0, 5).join(', ')}${usedInRange.length > 5 ? '...' : ''}`
+    });
+  }
+
+  // Rebuild from_branch allocations excluding the reassigned range
+  const fromAllocsAll = db.all('SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ?', [auctionId, from_branch]);
+  db.run('DELETE FROM lot_allocations WHERE auction_id = ? AND branch = ?', [auctionId, from_branch]);
+
+  for (const alloc of fromAllocsAll) {
+    const as = parseLotNo(alloc.start_lot);
+    const ae = parseLotNo(alloc.end_lot);
+    if (!as || !ae) continue;
+    const overlapStart = Math.max(as.num, s.num);
+    const overlapEnd = Math.min(ae.num, e.num);
+
+    if (overlapStart > overlapEnd) {
+      // No overlap — keep entire allocation
+      db.run('INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+        [auctionId, from_branch, alloc.start_lot, alloc.end_lot]);
+    } else {
+      // Has overlap — keep slices before/after the reassigned range
+      if (as.num < overlapStart) {
+        db.run('INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+          [auctionId, from_branch, buildLotNo(as.prefix, as.num, as.padLen), buildLotNo(as.prefix, overlapStart - 1, as.padLen)]);
+      }
+      if (ae.num > overlapEnd) {
+        db.run('INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+          [auctionId, from_branch, buildLotNo(ae.prefix, overlapEnd + 1, ae.padLen), buildLotNo(ae.prefix, ae.num, ae.padLen)]);
+      }
+    }
+  }
+
+  db.run('INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+    [auctionId, to_branch, String(start_lot).trim(), String(end_lot).trim()]);
+
+  const allocs = db.all('SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot', [auctionId]);
+  res.json({ success: true, allocations: allocs, message: `Lots ${start_lot}-${end_lot} reassigned from ${from_branch} to ${to_branch}` });
+});
+
+// Validate a single lot number against (a) duplicates and (b) the
+// branch's allocation. Returns { valid: bool, error?: string }.
+app.get('/api/auctions/:id/validate-lot', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const lotNo = String(req.query.lot_no || '').trim();
+  const branch = String(req.query.branch || '').trim();
+  if (!lotNo) return res.json({ valid: false, error: 'Enter lot number' });
+
+  const dup = db.get('SELECT id FROM lots WHERE auction_id = ? AND lot_no = ?', [auctionId, lotNo]);
+  if (dup) return res.json({ valid: false, error: 'Lot #' + lotNo + ' already exists' });
+
+  const allocs = db.all('SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ?', [auctionId, branch]);
+  if (allocs.length > 0) {
+    const inRange = allocs.some(a => isLotInRange(lotNo, a.start_lot, a.end_lot));
+    if (!inRange) {
+      const ranges = allocs.map(a => a.start_lot + '-' + a.end_lot).join(', ');
+      return res.json({ valid: false, error: 'Outside allocation (' + ranges + ')' });
+    }
+  }
+  res.json({ valid: true });
+});
+
+// Next available lot number for a branch — used by Lot Entry to
+// auto-suggest after every save and after a seller is picked.
+app.get('/api/auctions/:id/next-lot/:branch', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const branch = req.params.branch;
+  const allocations = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ? ORDER BY start_lot',
+    [auctionId, branch]
+  );
+  if (!allocations.length) return res.json({ next_lot: null, error: 'No allocation for this branch' });
+
+  const usedLots = db.all('SELECT lot_no FROM lots WHERE auction_id = ?', [auctionId]).map(l => l.lot_no);
+  const usedSet = new Set(usedLots);
+
+  for (const a of allocations) {
+    const s = parseLotNo(a.start_lot);
+    const e = parseLotNo(a.end_lot);
+    if (!s || !e) continue;
+    for (let n = s.num; n <= e.num; n++) {
+      const lotNo = buildLotNo(s.prefix, n, s.padLen);
+      if (!usedSet.has(lotNo)) return res.json({ next_lot: lotNo });
+    }
+  }
+  res.json({ next_lot: null, error: 'All lots in this branch are used' });
 });
 
 // ── Import Auction + Lots from XLS/XLSX (replaces APPA.PRG) ──
@@ -1638,19 +1942,89 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
 
 app.post('/api/lots', requireLotWrite, (req, res) => {
   const l = req.body;
-  getDb().run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,moisture,user_id)
+  const db = getDb();
+  const auctionId = parseInt(l.auction_id, 10);
+  const lotNoStr  = String(l.lot_no || '').trim();
+  const branch    = String(l.branch || '').trim();
+
+  if (!auctionId || !lotNoStr) {
+    return res.status(400).json({ error: 'auction_id and lot_no are required' });
+  }
+
+  // Reject duplicates within the same trade so two field-staff users
+  // can't end up with the same lot number on different rows.
+  const existing = db.get(
+    'SELECT id FROM lots WHERE auction_id = ? AND lot_no = ?',
+    [auctionId, lotNoStr]
+  );
+  if (existing) {
+    return res.status(409).json({ error: `Lot #${lotNoStr} already exists in this auction` });
+  }
+
+  // Allocation enforcement — only kicks in when the trade has explicit
+  // allocations for this branch. Trades created before allocations were
+  // configured (or branches without one) skip the check, preserving
+  // backward compatibility with existing data.
+  if (branch) {
+    const allocs = db.all(
+      'SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ?',
+      [auctionId, branch]
+    );
+    if (allocs.length > 0) {
+      const inRange = allocs.some(a => isLotInRange(lotNoStr, a.start_lot, a.end_lot));
+      if (!inRange) {
+        const ranges = allocs.map(a => a.start_lot + '-' + a.end_lot).join(', ');
+        return res.status(400).json({ error: `Lot #${lotNoStr} is outside ${branch} allocation (${ranges})` });
+      }
+    }
+  }
+
+  db.run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,moisture,user_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [l.auction_id,l.lot_no,l.crop||'',l.grade||'',l.crpt||'',l.branch||'',l.state||'TAMIL NADU',l.trader_id||null,l.name||'',l.padd||'',l.ppla||'',l.ppin||'',l.pstate||'',l.pst_code||'',l.cr||'',l.pan||'',l.tel||'',l.aadhar||'',l.bags||0,l.litre||'',l.qty||0,l.gross_wt||0,l.sample_wt||0,l.moisture||'',l.user_id||'']);
+    [auctionId,lotNoStr,l.crop||'',l.grade||'',l.crpt||'',branch,l.state||'TAMIL NADU',l.trader_id||null,l.name||'',l.padd||'',l.ppla||'',l.ppin||'',l.pstate||'',l.pst_code||'',l.cr||'',l.pan||'',l.tel||'',l.aadhar||'',l.bags||0,l.litre||'',l.qty||0,l.gross_wt||0,l.sample_wt||0,l.moisture||'',l.user_id||'']);
   res.json({ success: true });
 });
 
 app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   const l = req.body; const sets = []; const vals = [];
+  const db = getDb();
+  const lotId = parseInt(req.params.id, 10);
+
+  // If lot_no or branch is being changed, re-run the allocation +
+  // duplicate validation that POST /api/lots applies. Skipping these
+  // on edit was a previous gap that let users move a lot outside its
+  // branch's range or collide with another lot's number.
+  const current = db.get('SELECT auction_id, lot_no, branch FROM lots WHERE id = ?', [lotId]);
+  if (current) {
+    const newLotNo = (l.lot_no != null) ? String(l.lot_no).trim() : current.lot_no;
+    const newBranch = (l.branch != null) ? String(l.branch).trim() : current.branch;
+    if (newLotNo !== current.lot_no) {
+      const dup = db.get(
+        'SELECT id FROM lots WHERE auction_id = ? AND lot_no = ? AND id != ?',
+        [current.auction_id, newLotNo, lotId]
+      );
+      if (dup) return res.status(409).json({ error: `Lot #${newLotNo} already exists in this auction` });
+    }
+    if (newBranch && (newLotNo !== current.lot_no || newBranch !== current.branch)) {
+      const allocs = db.all(
+        'SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ?',
+        [current.auction_id, newBranch]
+      );
+      if (allocs.length > 0) {
+        const inRange = allocs.some(a => isLotInRange(newLotNo, a.start_lot, a.end_lot));
+        if (!inRange) {
+          const ranges = allocs.map(a => a.start_lot + '-' + a.end_lot).join(', ');
+          return res.status(400).json({ error: `Lot #${newLotNo} is outside ${newBranch} allocation (${ranges})` });
+        }
+      }
+    }
+  }
+
   for (const [k,v] of Object.entries(l)) {
     if (k !== 'id' && k !== 'auction_id' && k !== 'created_at') { sets.push(`${k}=?`); vals.push(v); }
   }
-  vals.push(req.params.id);
-  getDb().run(`UPDATE lots SET ${sets.join(',')} WHERE id=?`, vals);
+  vals.push(lotId);
+  db.run(`UPDATE lots SET ${sets.join(',')} WHERE id=?`, vals);
   res.json({ success: true });
 });
 
@@ -5313,6 +5687,6 @@ const PORT = process.env.PORT || 3001;
   repairBadDates(db);
   assertSchemaSanity(db);
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  Spice Config running at http://localhost:${PORT}\n`);
+    console.log(`\n  Admin Console running at http://localhost:${PORT}\n`);
   });
 })();

@@ -522,14 +522,19 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
 
 
 /**
- * Generate a crop receipt PDF (CROASP.PRG equivalent)
+ * Generate a crop receipt PDF (CROASP.PRG equivalent).
+ *
+ * Logo + company identity (name, address block, GSTIN, PAN, CIN/Partnership,
+ * FSSAI, SBL, phone, email) all come from `cfg` via effectiveCompany() — no
+ * hardcoded values. Logo file is the same one the sales invoice picks up
+ * (public/logo-ispl.png; falls back to logo-asp.png if only that exists).
  */
 function generateCropReceiptPDF(lot, cfg) {
   const co = effectiveCompany(cfg);
   const doc = new PDFDocument({ size: [595, 420], margin: 25 }); // half-page
   const buffers = [];
   doc.on('data', b => buffers.push(b));
-  
+
   const w = 545; const x = 25; let y = 25;
 
   doc.rect(x, y, w, 370).stroke();
@@ -537,15 +542,47 @@ function generateCropReceiptPDF(lot, cfg) {
   doc.fontSize(16).font('Helvetica-Bold').text('RECEIPT', x, y, { align: 'center', width: w });
   y += 20;
   doc.fontSize(8).font('Helvetica').text(`Sl.No: ${lot.crop || ''}`, x + w - 100, y - 10, { width: 90, align: 'right' });
-  
-  const companyName = co.name;
-  doc.fontSize(11).font('Helvetica-Bold').text(companyName, x, y, { align: 'center', width: w });
+
+  // ── Logo (settings-driven; same file the sales invoice uses) ──
+  const fsMod = require('fs');
+  const pathMod = require('path');
+  const candidates = ['logo-ispl.png', 'logo-asp.png'];
+  let logoDrawn = false;
+  for (const f of candidates) {
+    const p = pathMod.join(__dirname, 'public', f);
+    if (fsMod.existsSync(p)) {
+      try { doc.image(p, x + 6, y - 2, { fit: [44, 44] }); logoDrawn = true; break; }
+      catch (_) { /* fall through */ }
+    }
+  }
+
+  // ── Company block (centered, all fields from settings) ──
+  const headerX = x + (logoDrawn ? 54 : 0);
+  const headerW = w - (logoDrawn ? 54 : 0);
+  doc.fontSize(11).font('Helvetica-Bold').text((co.name || '').toUpperCase(), headerX, y, { align: 'center', width: headerW });
   y += 14;
   doc.fontSize(7).font('Helvetica');
-  doc.text(co.address1, x, y, { align: 'center', width: w }); y += 10;
-  doc.text(`GST No. ${co.gstin}`, x, y, { align: 'center', width: w }); y += 16;
+  const addrLine = [co.address1, co.address2, co.place, co.stateName, co.pin].filter(Boolean).join(', ');
+  if (addrLine) { doc.text(addrLine, headerX, y, { align: 'center', width: headerW }); y += 10; }
+  const contactLine = [co.phone && `Ph: ${co.phone}`, co.email && `Email: ${co.email}`].filter(Boolean).join('  |  ');
+  if (contactLine) { doc.text(contactLine, headerX, y, { align: 'center', width: headerW }); y += 10; }
+  const idBits = [
+    co.gstin && `GSTIN: ${co.gstin}`,
+    co.pan   && `PAN: ${co.pan}`,
+    co.idValue && `${co.idLabel}: ${co.idValue}`,
+    co.fssai && `FSSAI: ${co.fssai}`,
+    co.sbl   && `SBL: ${co.sbl}`,
+  ].filter(Boolean).join('  |  ');
+  if (idBits) { doc.text(idBits, headerX, y, { align: 'center', width: headerW }); y += 10; }
+  y += 6;
+  // Horizontal rule separating header from the details grid.
+  doc.lineWidth(0.5).moveTo(x + 10, y).lineTo(x + w - 10, y).stroke();
+  y += 6;
 
-  // Details grid
+  // Details grid — drawn as a 3×2 ruled table so each cell has its own
+  // box. Vertical lines between columns + a horizontal line between rows
+  // make the slip readable from a distance and match the look of the
+  // sales/purchase invoices.
   const details = [
     ['Trade No', lot.ano || ''],
     ['Lot No', lot.lot_no || ''],
@@ -554,30 +591,60 @@ function generateCropReceiptPDF(lot, cfg) {
     ['Nett Weight', String(lot.qty || '')],
     ['Depot', lot.branch || ''],
   ];
-
+  const gridX = x + 10;
+  const gridW = w - 20;
+  const gridCols = 3;
+  const gridRows = Math.ceil(details.length / gridCols);
+  const cellW = gridW / gridCols;
+  const cellH = 20;
+  const gridTop = y;
+  const gridBot = gridTop + gridRows * cellH;
   doc.fontSize(8);
-  let col = 0;
-  for (const [label, val] of details) {
-    const cx = x + 10 + (col % 3) * 180;
-    const cy = y + Math.floor(col / 3) * 16;
-    doc.font('Helvetica').text(`${label}: `, cx, cy, { continued: true });
-    doc.font('Helvetica-Bold').text(val);
-    col++;
+  for (let i = 0; i < details.length; i++) {
+    const c = i % gridCols, r = Math.floor(i / gridCols);
+    const cx = gridX + c * cellW + 4;
+    const cy = gridTop + r * cellH + 4;
+    doc.font('Helvetica').fillColor('#555').fontSize(7).text(details[i][0], cx, cy, { width: cellW - 8 });
+    doc.font('Helvetica-Bold').fillColor('#000').fontSize(9).text(details[i][1], cx, cy + 8, { width: cellW - 8 });
   }
-  y += 40;
+  // Outer + inner grid lines.
+  doc.fontSize(8).fillColor('#000').lineWidth(0.5);
+  doc.rect(gridX, gridTop, gridW, gridBot - gridTop).stroke();
+  for (let r = 1; r < gridRows; r++) {
+    const ly = gridTop + r * cellH;
+    doc.moveTo(gridX, ly).lineTo(gridX + gridW, ly).stroke();
+  }
+  for (let c = 1; c < gridCols; c++) {
+    const lx = gridX + c * cellW;
+    doc.moveTo(lx, gridTop).lineTo(lx, gridBot).stroke();
+  }
+  y = gridBot + 8;
 
-  // Declaration text
+  // Declaration text — light horizontal rules above + below for emphasis.
+  doc.lineWidth(0.5).moveTo(x + 10, y).lineTo(x + w - 10, y).stroke();
+  y += 6;
   doc.font('Helvetica').fontSize(7);
   doc.text(`We acknowledge the receipt of Cardamom as per the description above, from`, x + 10, y, { width: w - 20 });
   y += 11;
   doc.text(`M/s. ${lot.name || ''}`, x + 10, y, { width: w - 20 }); y += 11;
-  doc.text(`GSTIN/CR No. ${lot.cr || ''}`, x + 10, y, { width: w - 20 }); y += 18;
+  doc.text(`GSTIN/CR No. ${lot.cr || ''}`, x + 10, y, { width: w - 20 }); y += 14;
+  doc.lineWidth(0.5).moveTo(x + 10, y).lineTo(x + w - 10, y).stroke();
+  y += 18;
 
-  // Signatures
-  y += 30;
-  doc.text('Pooler Signature', x + 10, y);
-  doc.text('[ Contact Number ]', x + w/2 - 50, y, { width: 100, align: 'center' });
-  doc.text('Depot in Charge', x + w - 120, y);
+  // Signatures — small underline below each label so the slip has a
+  // signing line rather than free-floating text.
+  y += 24;
+  const sigY = y + 12;
+  const sigW = 130;
+  const slots = [
+    { label: 'Pooler Signature',   cx: x + 10 },
+    { label: '[ Contact Number ]', cx: x + w/2 - sigW/2 },
+    { label: 'Depot in Charge',    cx: x + w - 10 - sigW },
+  ];
+  for (const s of slots) {
+    doc.lineWidth(0.5).moveTo(s.cx, sigY).lineTo(s.cx + sigW, sigY).stroke();
+    doc.text(s.label, s.cx, sigY + 3, { width: sigW, align: 'center' });
+  }
 
   return new Promise((resolve) => {
     doc.on('end', () => resolve(Buffer.concat(buffers)));
@@ -1288,6 +1355,11 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   doc.lineWidth(0.5).moveTo(colX('amount'), y).lineTo(colX('amount') + colW.amount, y).stroke();
 
   // Subtotal row = taxable value (cardamom + gunny + transport + insurance)
+  // Capture the y at which the summary band starts so we can drop a single
+  // vertical separator down its full height between the description column
+  // and the amount column. Same trick used for the right-side totals
+  // block in the purchase invoice.
+  const summaryBandTopY = y;
   const subtotal = summary.taxableValue;
   rowVerticals(y, rowH);
   doc.font('Helvetica-Bold').text(formatINR(subtotal), colX('amount') + 2, y + 3, { width: colW.amount - 4, align: 'right' });
@@ -1333,6 +1405,13 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
     doc.font('Helvetica');
     y += rowH;
   }
+
+  // Vertical rule down the description-column edge of the summary band —
+  // gives every footer row (subtotal, GST, round-off, addl charge) a
+  // clean break between the label and the amount. Drawn from the start
+  // of the band down to here.
+  const _amountColX = colX('amount');
+  doc.lineWidth(0.5).moveTo(_amountColX, summaryBandTopY).lineTo(_amountColX, y).stroke();
 
   // Total row (bold) — shipped|billed divider skipped so total qty spans both
   // Draw a horizontal line above Total to visually separate it from the summary rows.

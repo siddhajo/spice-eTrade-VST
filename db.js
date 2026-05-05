@@ -369,6 +369,23 @@ async function initDb() {
     PRIMARY KEY (from_pin, to_pin)
   )`);
 
+  // ── LOT ALLOCATIONS (per-trade per-branch lot-number ranges) ──
+  // Each row reserves a contiguous range of lot numbers (e.g. 001-080)
+  // for one branch within one trade. The Lot Entry workflow validates
+  // every saved lot's lot_no against these ranges so two field-staff
+  // users in different branches can't collide on the same lot number.
+  // Ranges are inclusive on both ends and may have an optional alpha
+  // prefix (e.g. A001-A080) — see parseLotNo() in server.js.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS lot_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    auction_id INTEGER NOT NULL,
+    branch TEXT NOT NULL,
+    start_lot TEXT NOT NULL,
+    end_lot TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (auction_id) REFERENCES auctions(id)
+  )`);
+
   // ── AUDIT LOG ──────────────────────────────────────────────
   wrapped.exec(`CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -396,6 +413,7 @@ async function initDb() {
     'CREATE INDEX IF NOT EXISTS idx_bills_name ON bills(name)',
     'CREATE INDEX IF NOT EXISTS idx_buyers_buyer ON buyers(buyer)',
     'CREATE INDEX IF NOT EXISTS idx_buyers_buyer1 ON buyers(buyer1)',
+    'CREATE INDEX IF NOT EXISTS idx_lot_alloc_auction ON lot_allocations(auction_id)',
   ];
   for (const idx of indexes) { try { wrapped.exec(idx); } catch (e) {} }
 

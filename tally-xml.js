@@ -241,6 +241,9 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = cfgBool(cfg, 'tally_dispatch_from', true);
+  // E-way bill emission gate — user-controlled, defaults ON, independent
+  // of the dispatch-from-address toggle so they can be flipped separately.
+  const ewayEnabled    = cfgBool(cfg, 'tally_eway_enabled', true);
   const tcs           = cfgBool(cfg, 'tally_tcs_enabled', false);
   const shipToOverride = cfgBool(cfg, 'tally_ship_to', false);
   const intra         = cfgGet(cfg, 'tally_state_code', '33');
@@ -420,8 +423,12 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
 <ISINVOICE>Yes</ISINVOICE>
 <ISVATDUTYPAID>Yes</ISVATDUTYPAID>`;
 
-    // E-way bill block — only when dispatch is enabled (matches reference)
-    if (dispatchEnabled) {
+    // E-way bill block — controlled by its own `tally_eway_enabled`
+    // setting (defaults ON). Decoupled from `tally_dispatch_from`,
+    // sale type, and any other gate so the user can flip it directly
+    // from Settings → To Tally without affecting the dispatch-from
+    // address block or other unrelated voucher fields.
+    if (ewayEnabled) {
       const consignorAddrFlat = `${d_company} ${d_add} GSTIN:${d_gstin}`.replace(/\s+/g, ' ').trim();
       xml += `
 <EWAYBILLDETAILS.LIST>
@@ -2275,13 +2282,17 @@ function buildSalesIspRows(db, auctionId, cfg) {
   // a separate consignee address. The address columns (add1/add2/pla)
   // remain bill-to since `<BUYERPINCODE>` and `<BASICBUYERADDRESS>`
   // in Tally are always the bill-to (buyer) block.
+  // Sort vouchers by sale type FIRST so the generated XML groups all
+  // 'L' (Local), 'I' (Inter-state), and 'E' (Export) vouchers together;
+  // within each sale-type group, sort by numeric invoice number ascending.
+  // `i.id` is a final tiebreaker for safety against duplicate invo values.
   const stmt = db.prepare(`
     SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla,
            COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin
     FROM invoices i
     LEFT JOIN buyers b ON b.buyer = i.buyer
     WHERE i.auction_id = ? AND ${ISP_STATE_SQL}
-    ORDER BY i.buyer, i.sale, CAST(i.invo AS INTEGER), i.id
+    ORDER BY i.sale, CAST(i.invo AS INTEGER), i.id
   `);
   const raw = stmt.all(auctionId);
 
