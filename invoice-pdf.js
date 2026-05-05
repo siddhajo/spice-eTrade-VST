@@ -1446,24 +1446,28 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   //   OR: HSN/SAC | Taxable Value | CGST Rate | CGST Amt | SGST Rate | SGST Amt | Total Tax Amount
   const isInter = summary.isInterState;
   const hsnRows = [];
-  // Helper: build one HSN summary row for a taxable amount at gstGoods rate.
-  // `desc` is the human-readable label (Cardamom / Gunny / Transport /
-  // Insurance) — used as the row label when flag_hsn is OFF (since we
-  // don't show the HSN code, we want to know WHAT each row is).
-  function hsnRow(hsn, desc, taxable) {
+  // Helper: build one HSN summary row by consuming the pre-rounded
+  // per-component GST values that buildSalesInvoice already computed.
+  // Re-deriving from `taxable * gstGoods / 100` here would drift by one
+  // paisa at .x05 boundaries (e.g. 17,11,811.50 × 5% = 85,590.575 →
+  // toFixed(2) returns 85590.57, but the OUTPUT line shows 85,590.58
+  // because cardamom is taxed per-lot and summed). Reading directly
+  // from the summary objects keeps both rows in lockstep.
+  function hsnRow(hsn, desc, taxable, taxObj) {
+    const t = taxObj || { cgst: 0, sgst: 0, igst: 0 };
     return {
       hsn, desc, taxable,
       rate: gstGoods,
-      cgst: isInter ? 0 : +(taxable * gstGoods / 2 / 100).toFixed(2),
-      sgst: isInter ? 0 : +(taxable * gstGoods / 2 / 100).toFixed(2),
-      igst: isInter ? +(taxable * gstGoods / 100).toFixed(2) : 0,
+      cgst: isInter ? 0 : (t.cgst || 0),
+      sgst: isInter ? 0 : (t.sgst || 0),
+      igst: isInter ? (t.igst || 0) : 0,
     };
   }
-  hsnRows.push(hsnRow(hsnCardamom, 'Cardamom', summary.totalAmount));
-  if (summary.gunnyCost > 0)     hsnRows.push(hsnRow(hsnGunny, 'Gunny', summary.gunnyCost));
+  hsnRows.push(hsnRow(hsnCardamom, 'Cardamom', summary.totalAmount, summary.cardamomTax));
+  if (summary.gunnyCost > 0)     hsnRows.push(hsnRow(hsnGunny, 'Gunny', summary.gunnyCost, summary.gunnyTax));
   // ASP invoices: Transport/Insurance are not billed, so skip them from HSN summary too
-  if (summary.transportCost > 0 && !hideTransportInsurance) hsnRows.push(hsnRow(sacTransport, 'Transport', summary.transportCost));
-  if (summary.insuranceCost > 0 && !hideTransportInsurance) hsnRows.push(hsnRow(sacInsurance, 'Insurance', summary.insuranceCost));
+  if (summary.transportCost > 0 && !hideTransportInsurance) hsnRows.push(hsnRow(sacTransport, 'Transport', summary.transportCost, summary.transportTax));
+  if (summary.insuranceCost > 0 && !hideTransportInsurance) hsnRows.push(hsnRow(sacInsurance, 'Insurance', summary.insuranceCost, summary.insuranceTax));
 
   const hsnHdrH = 20;
   const hsnRowH = 12;

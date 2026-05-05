@@ -322,25 +322,29 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
     : { cgst: round2(base * halfRate / 100), sgst: round2(base * halfRate / 100), igst: 0 };
 
   let cgst = 0, sgst = 0, igst = 0;
-  // 1) Cardamom — one line per lot.
+  // 1) Cardamom — one line per lot. Tax stored on the lineItem AND
+  //    accumulated into a per-HSN bucket (`cardamomTax`) so the HSN
+  //    summary table on the PDF reads the SAME numbers we used for the
+  //    OUTPUT GST line — no re-rounding on the bundled total (which
+  //    drifts by 1 paisa at .x05 boundaries).
+  const cardamomTax = { cgst: 0, sgst: 0, igst: 0 };
   for (const li of lineItems) {
     const t = taxLine(li.amount || 0);
     li.cgst = t.cgst; li.sgst = t.sgst; li.igst = t.igst;
-    cgst += t.cgst; sgst += t.sgst; igst += t.igst;
+    cardamomTax.cgst += t.cgst; cardamomTax.sgst += t.sgst; cardamomTax.igst += t.igst;
   }
-  // 2) Gunny.
-  const gunnyTax = taxLine(gunnyCost);
-  cgst += gunnyTax.cgst; sgst += gunnyTax.sgst; igst += gunnyTax.igst;
-  // 3) Transport.
+  cardamomTax.cgst = round2(cardamomTax.cgst);
+  cardamomTax.sgst = round2(cardamomTax.sgst);
+  cardamomTax.igst = round2(cardamomTax.igst);
+  // 2) Gunny / 3) Transport / 4) Insurance — one row each. Same rule:
+  //    PDF / XML must consume these objects directly, never re-derive.
+  const gunnyTax     = taxLine(gunnyCost);
   const transportTax = taxLine(transportCost);
-  cgst += transportTax.cgst; sgst += transportTax.sgst; igst += transportTax.igst;
-  // 4) Insurance.
   const insuranceTax = taxLine(insuranceCost);
-  cgst += insuranceTax.cgst; sgst += insuranceTax.sgst; igst += insuranceTax.igst;
-  // Final 2dp clean-up on the summed line taxes (sum of round2'd values is
-  // already at paisa precision, but rebind through round2 to neutralize any
-  // residual binary tail before downstream Math).
-  cgst = round2(cgst); sgst = round2(sgst); igst = round2(igst);
+
+  cgst = round2(cardamomTax.cgst + gunnyTax.cgst + transportTax.cgst + insuranceTax.cgst);
+  sgst = round2(cardamomTax.sgst + gunnyTax.sgst + transportTax.sgst + insuranceTax.sgst);
+  igst = round2(cardamomTax.igst + gunnyTax.igst + transportTax.igst + insuranceTax.igst);
 
   const totalBeforeRound = taxableValue + cgst + sgst + igst;
   const subtotalRounded = round0(totalBeforeRound);
@@ -368,6 +372,10 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
       totalQty, totalBags, totalAmount,
       gunnyCost, transportCost, insuranceCost,
       taxableValue, cgst, sgst, igst,
+      // Per-component pre-rounded GST — consumed by the HSN summary
+      // block on the PDF so it can render the exact same numbers the
+      // OUTPUT line shows (no re-derivation on a bundled total).
+      cardamomTax, gunnyTax, transportTax, insuranceTax,
       roundDiff, subtotalRounded,
       addlCharge, addlChargeName,
       grandTotal,
