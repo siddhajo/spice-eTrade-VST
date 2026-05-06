@@ -572,18 +572,54 @@ function getPaymentSummary(db, auctionId, state, cfg) {
   // Earlier code did `lotDisc + manualDisc` unconditionally — every
   // trade with DNs generated showed double the actual discount, and
   // payable was off by that amount.
+  // GST rate to apply when "Discount includes GST" is on. Falls back to
+  // gst_service for older DBs that didn't have the dedicated key. We
+  // compute the Payments-tab tax live from the authoritative discount
+  // instead of summing whatever's stamped in lots.cgst/sgst/igst —
+  // those stamps go stale if the user edited discount_gst /
+  // flag_disc_gst after lots were calculated, which manifested on
+  // screen as a doubled (or otherwise wrong) GST column even though
+  // the Discount value was current. Live derivation keeps tax in
+  // lockstep with discount and the DN totals.
+  const flagDiscGst = String(cfg.flag_disc_gst || '').toLowerCase() === 'true' || cfg.flag_disc_gst === true;
+  const discGstRate = Number(cfg.discount_gst);
+  const discRate = Number.isFinite(discGstRate) && discGstRate >= 0
+    ? discGstRate
+    : (Number(cfg.gst_service) || 18);
+  const halfDiscRate = discRate / 2;
+  const companyStateCode = String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33';
+  // r2 helper — same Excel-compatible rounding the rest of the calc uses.
+  const r2live = (n) => round2(n);
+
   return sellers.map(s => {
     const lotDisc = Number(s.lot_discount) || 0;
     const manualDisc = Number(debitMap[s.name]) || 0;
-    const cgst = Number(s.total_cgst) || 0;
-    const sgst = Number(s.total_sgst) || 0;
-    const igst = Number(s.total_igst) || 0;
     // Authoritative discount: DN total when present, otherwise lot total.
     const totalDiscount = manualDisc > 0 ? manualDisc : lotDisc;
+    // Live GST on the discount. Intra/inter classification mirrors the
+    // seller's own GSTIN state (cr) — same rule the DN generator uses.
+    let cgst = 0, sgst = 0, igst = 0;
+    if (flagDiscGst && totalDiscount > 0) {
+      let stateCode = '';
+      let cr = String(s.cr || '').trim().toUpperCase();
+      if (cr.startsWith('GSTIN.')) cr = cr.slice(6);
+      else if (cr.startsWith('GSTIN')) cr = cr.slice(5);
+      if (/^\d{2}/.test(cr)) stateCode = cr.slice(0, 2);
+      const isInter = !!stateCode && stateCode !== companyStateCode;
+      if (isInter) {
+        igst = r2live(totalDiscount * discRate / 100);
+      } else {
+        cgst = r2live(totalDiscount * halfDiscRate / 100);
+        sgst = r2live(totalDiscount * halfDiscRate / 100);
+      }
+    }
     return {
       ...s,
       total_discount: totalDiscount,
-      total_tax: cgst + sgst + igst,
+      total_cgst: cgst,
+      total_sgst: sgst,
+      total_igst: igst,
+      total_tax: r2live(cgst + sgst + igst),
       // Payable: lots.balance was computed BEFORE DNs existed, using
       // lots.refund as the discount. So:
       //   - When DNs exist and equal lot refunds → balance is correct

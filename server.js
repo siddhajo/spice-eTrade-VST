@@ -3882,7 +3882,19 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   let discountAmt = req.body.discount != null ? parseFloat(req.body.discount) : NaN;
   if (!Number.isFinite(discountAmt) || discountAmt <= 0) {
     const discountPct  = Number(cfg.discount_pct)  || 0;
-    const discountDays = Number(cfg.discount_days) || 0;
+    // Days source depends on the seller type — same rule the per-lot
+    // refund calc uses ([calculations.js calculateLot]):
+    //   • Has GSTIN (registered dealer) → cfg.dealer_days
+    //   • No GSTIN (CR / agriculturist)  → cfg.discount_days
+    // Read the dealer's GSTIN from the purchase row's `gstin` column
+    // (same source the intra/inter classification uses below).
+    let _g = String(purchase.gstin || '').trim().toUpperCase();
+    if (_g.startsWith('GSTIN.')) _g = _g.slice(6);
+    else if (_g.startsWith('GSTIN')) _g = _g.slice(5);
+    const sellerHasGstin = /^\d{2}/.test(_g);
+    const discountDays = sellerHasGstin
+      ? (Number(cfg.dealer_days)   || 0)
+      : (Number(cfg.discount_days) || 0);
     if (discountPct <= 0) {
       return res.status(400).json({ error: 'Discount % not configured in settings' });
     }
@@ -4079,9 +4091,13 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
     : new Date().toISOString().slice(0, 10);
 
   // Discount math constants — read once, applied per-purchase.
-  const discountPct  = Number(cfg.discount_pct)  || 0;
-  const discountDays = Number(cfg.discount_days) || 0;
-  const dnGstRate    = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
+  // Days source is per-purchase: GSTIN sellers use `dealer_days`,
+  // non-GSTIN (CR / agriculturist) sellers use `discount_days`. Same
+  // rule the per-lot refund calc applies.
+  const discountPct = Number(cfg.discount_pct) || 0;
+  const dealerDays  = Number(cfg.dealer_days)  || 0;
+  const crDays      = Number(cfg.discount_days) || 0;
+  const dnGstRate   = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
   if (discountPct <= 0) {
     return res.status(400).json({ error: 'Discount % not configured in settings' });
   }
@@ -4171,8 +4187,16 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
       skipped.push({ invo: p.invo, ano, buyer: dealerName, reason: 'zero amount' });
       continue;
     }
-    const discountAmt = discountDays > 0
-      ? Math.round((baseAmt / 1000) * discountDays * discountPct)
+    // Pick the right "days" config based on whether THIS purchase's
+    // dealer carries a GSTIN. Mirrors calculateLot() so DN amount and
+    // sum(lots.refund) stay in lockstep.
+    let _dg = String(p.gstin || '').trim().toUpperCase();
+    if (_dg.startsWith('GSTIN.')) _dg = _dg.slice(6);
+    else if (_dg.startsWith('GSTIN')) _dg = _dg.slice(5);
+    const sellerHasGstin = /^\d{2}/.test(_dg);
+    const days = sellerHasGstin ? dealerDays : crDays;
+    const discountAmt = days > 0
+      ? Math.round((baseAmt / 1000) * days * discountPct)
       : Math.round(baseAmt * discountPct / 100);
     if (discountAmt <= 0) {
       skipped.push({ invo: p.invo, ano, buyer: dealerName, reason: 'computed discount is zero' });
