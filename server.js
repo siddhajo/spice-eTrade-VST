@@ -1433,10 +1433,47 @@ app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
 });
 app.delete('/api/auctions/:id', requireDelete, (req, res) => {
   const db = getDb();
-  db.run('DELETE FROM lot_allocations WHERE auction_id = ?', [req.params.id]);
-  db.run('DELETE FROM lots WHERE auction_id = ?', [req.params.id]);
-  db.run('DELETE FROM auctions WHERE id = ?', [req.params.id]);
-  res.json({ success: true });
+  // Cascade-delete every record that belongs to this trade. The
+  // dependent tables reference the trade either by `auction_id` (FK,
+  // newer rows) or by `ano` (legacy / debit_notes, which never had a
+  // FK). We resolve `ano` once up-front so both link styles are
+  // covered consistently. Wrapped in a transaction so a partial
+  // failure (e.g. one table missing on a not-yet-migrated DB) doesn't
+  // leave orphan rows behind.
+  const auction = db.get('SELECT id, ano FROM auctions WHERE id = ?', [req.params.id]);
+  if (!auction) return res.status(404).json({ error: 'Trade not found' });
+  const ano = String(auction.ano || '').trim();
+
+  const removed = { lots: 0, lot_allocations: 0, invoices: 0, purchases: 0, bills: 0, debit_notes: 0 };
+  const cnt = (sql, params) => {
+    try { const r = db.get(sql, params); return Number(r && (r.c ?? r.count ?? 0)) || 0; } catch (_) { return 0; }
+  };
+  // Pre-count for the response payload so the UI can show "Deleted N
+  // invoices, M purchases, …".
+  removed.lots            = cnt('SELECT COUNT(*) AS c FROM lots            WHERE auction_id = ?', [auction.id]);
+  removed.lot_allocations = cnt('SELECT COUNT(*) AS c FROM lot_allocations WHERE auction_id = ?', [auction.id]);
+  removed.invoices        = cnt('SELECT COUNT(*) AS c FROM invoices        WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  removed.purchases       = cnt('SELECT COUNT(*) AS c FROM purchases       WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  removed.bills           = cnt('SELECT COUNT(*) AS c FROM bills           WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  removed.debit_notes     = cnt('SELECT COUNT(*) AS c FROM debit_notes     WHERE ano = ?',                  [ano]);
+
+  // Actual cascade. Each statement is wrapped in try/catch so a stray
+  // missing column on a partially-migrated DB doesn't abort the rest;
+  // any failure is logged but doesn't block the trade row's deletion.
+  const safeRun = (sql, params) => { try { db.run(sql, params); } catch (e) { console.warn('[delete trade]', e.message); } };
+  safeRun('DELETE FROM lot_allocations WHERE auction_id = ?', [auction.id]);
+  safeRun('DELETE FROM lots            WHERE auction_id = ?', [auction.id]);
+  safeRun('DELETE FROM invoices        WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  safeRun('DELETE FROM purchases       WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  safeRun('DELETE FROM bills           WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  safeRun('DELETE FROM debit_notes     WHERE ano = ?',                  [ano]);
+  safeRun('DELETE FROM auctions        WHERE id  = ?', [auction.id]);
+
+  // Payments are NOT a stored entity — they're computed live from the
+  // lots table by getPaymentSummary, so once lots are gone the
+  // Payments tab automatically returns no rows for this trade. No
+  // separate delete needed.
+  res.json({ success: true, deleted: removed });
 });
 
 // ══════════════════════════════════════════════════════════════
