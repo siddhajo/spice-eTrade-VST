@@ -155,6 +155,10 @@ function withFmtDate(rows, field = 'date') {
 // Auth middleware: verify a valid session, attach req.user/req.session.
 // DOES NOT check role — use this for endpoints that any logged-in user
 // (admin OR regular user) should be able to hit (GET list endpoints mostly).
+// Endpoints reachable while a user is in the forced-password-change state.
+// Anything outside this set returns 403 until they rotate their password.
+const FORCED_CHANGE_ALLOWED = new Set(['/api/me', '/api/me/password']);
+
 function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token' });
@@ -163,6 +167,14 @@ function requireAuth(req, res, next) {
   if (!session) return res.status(403).json({ error: 'Session expired — please sign in again' });
   const user = db.get('SELECT * FROM users WHERE id = ?', [session.user_id]);
   if (!user) return res.status(403).json({ error: 'Unauthorized' });
+  // Block every other endpoint until the seeded/reset password is rotated —
+  // closes the default-creds attack window even if rate-limiting is missed.
+  if (user.must_change_password && !FORCED_CHANGE_ALLOWED.has(req.path)) {
+    return res.status(403).json({
+      error: 'Password change required before continuing',
+      must_change_password: true
+    });
+  }
   // Touch last_used_at for cleanup / activity display
   db.run(`UPDATE sessions SET last_used_at = datetime('now','localtime') WHERE token = ?`, [token]);
   req.user = user;
@@ -364,7 +376,10 @@ app.post('/api/login', (req, res) => {
   // Return the user's capabilities array so the client can hide buttons
   // they're not allowed to use. Server still validates every request.
   const permissions = Array.from(ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS.viewer);
-  res.json({ token, role: user.role, username: user.username, permissions });
+  res.json({
+    token, role: user.role, username: user.username, permissions,
+    must_change_password: !!user.must_change_password
+  });
 });
 app.post('/api/logout', (req, res) => {
   const t = (req.headers.authorization||'').replace('Bearer ','');
@@ -373,7 +388,12 @@ app.post('/api/logout', (req, res) => {
 });
 app.get('/api/me', requireAnyPermission('view', 'lot_entry_view', 'self_password'), (req, res) => {
   const permissions = Array.from(ROLE_PERMISSIONS[req.user.role] || ROLE_PERMISSIONS.viewer);
-  res.json({ username: req.user.username, role: req.user.role, permissions });
+  res.json({
+    username: req.user.username,
+    role: req.user.role,
+    permissions,
+    must_change_password: !!req.user.must_change_password
+  });
 });
 
 // ══════════════════════════════════════════════════════════════
@@ -444,7 +464,12 @@ app.put('/api/users/:id/password', requireUserManage, (req, res) => {
   const db = getDb();
   const user = db.get('SELECT id, username FROM users WHERE id = ?', [req.params.id]);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash(password), user.id]);
+  // Force the target to pick a new password on next login — the admin-set
+  // value is a one-time hand-off, not the user's chosen credential.
+  db.run(
+    'UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?',
+    [hash(password), user.id]
+  );
   // Invalidate all sessions of that user (force re-login after password change)
   db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
   res.json({ success: true, username: user.username });
@@ -472,7 +497,15 @@ app.put('/api/me/password', requirePermission('self_password'), (req, res) => {
   const db = getDb();
   const user = db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
   if (!user || user.password_hash !== hash(current_password)) return res.status(401).json({ error: 'Current password is incorrect' });
-  db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash(new_password), user.id]);
+  if (hash(new_password) === user.password_hash) {
+    return res.status(400).json({ error: 'New password must be different from current password' });
+  }
+  // Clear must_change_password — this is the gate exit for the seeded
+  // admin (and any user the admin force-resets, see PUT /api/users/:id/password).
+  db.run(
+    'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+    [hash(new_password), user.id]
+  );
   // Kill all OTHER sessions (keep current one)
   db.run('DELETE FROM sessions WHERE user_id = ? AND token != ?', [user.id, req.session.token]);
   res.json({ success: true });
@@ -1985,6 +2018,23 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
   res.json({ success: true });
 });
 
+// Whitelist of columns that PUT /api/lots/:id is allowed to update.
+// Anything outside this set is silently dropped — keeps untrusted keys out
+// of the dynamically-built UPDATE statement (was an SQL-injection vector
+// when the request-body keys were spliced raw into SQL) and stops clients
+// from rewriting attribution / server-calculated fields they shouldn't
+// touch (id, auction_id, created_at are excluded by construction).
+const LOT_UPDATE_COLUMNS = new Set([
+  'lot_no','crop','grade','crpt','branch','state','trader_id',
+  'name','padd','ppla','ppin','pstate','pst_code','cr','pan','tel','aadhar',
+  'bags','litre','qty','gross_wt','sample_wt','moisture',
+  'price','amount','code','buyer','buyer1','sale','invo',
+  'pqty','prate','puramt','com','sertax','cgst','sgst','igst',
+  'dcgst','dsgst','digst','refud','refund','advance','balance','bilamt','paid',
+  'user_id','asp_invo',
+  'isp_pqty','isp_prate','isp_puramt','asp_pqty','asp_prate','asp_puramt'
+]);
+
 app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   const l = req.body; const sets = []; const vals = [];
   const db = getDb();
@@ -2021,8 +2071,10 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   }
 
   for (const [k,v] of Object.entries(l)) {
-    if (k !== 'id' && k !== 'auction_id' && k !== 'created_at') { sets.push(`${k}=?`); vals.push(v); }
+    if (!LOT_UPDATE_COLUMNS.has(k)) continue;
+    sets.push(`${k}=?`); vals.push(v);
   }
+  if (sets.length === 0) return res.json({ success: true });
   vals.push(lotId);
   db.run(`UPDATE lots SET ${sets.join(',')} WHERE id=?`, vals);
   res.json({ success: true });

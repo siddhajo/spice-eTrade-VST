@@ -281,20 +281,38 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
     return 0;
   };
   // Sale-type-driven rate selection:
-  //   L (Local)       → local_transport / local_insurance config keys
-  //   I (Inter-state) → transport / insurance config keys
+  //   L (Local)       → local_transport / local_insurance, gated by
+  //                     flag_local_transport / flag_local_insurance
+  //   I (Inter-state) → transport / insurance, gated by
+  //                     flag_inter_transport / flag_inter_insurance
   //   E (Export)      → zero (buyer covers freight; matches the
   //                      hideTransportInsurance render rule in invoice-pdf.js)
-  // Anything else (legacy / blank) is treated as 'L' for safety.
+  // When the matching flag is OFF the rate is forced to 0, so the
+  // component drops out of the taxable value, GST, ledger emission, and
+  // PDF entirely. Anything else (legacy / blank) is treated as 'L' for
+  // safety.
   const st = String(saleType || '').toUpperCase();
   const isExport = (st === 'E');
   const isInter  = (st === 'I');
-  const transportRate = isExport ? 0 : (isInter
-    ? pickRate(cfg.transport, 2.5)
-    : pickRate(cfg.local_transport, cfg.transport, 2.5));
-  const insuranceRate = isExport ? 0 : (isInter
-    ? pickRate(cfg.insurance, 0.75)
-    : pickRate(cfg.local_insurance, cfg.insurance, 0.75));
+  const flagOn = (k, defaultOn) => {
+    const v = cfg[k];
+    if (v === undefined || v === null || v === '') return defaultOn;
+    return v === true || String(v).toLowerCase() === 'true';
+  };
+  const useLocalTransport = flagOn('flag_local_transport', true);
+  const useLocalInsurance = flagOn('flag_local_insurance', true);
+  const useInterTransport = flagOn('flag_inter_transport', true);
+  const useInterInsurance = flagOn('flag_inter_insurance', true);
+  const transportRate = isExport
+    ? 0
+    : (isInter
+        ? (useInterTransport ? pickRate(cfg.transport, 2.5) : 0)
+        : (useLocalTransport ? pickRate(cfg.local_transport, cfg.transport, 2.5) : 0));
+  const insuranceRate = isExport
+    ? 0
+    : (isInter
+        ? (useInterInsurance ? pickRate(cfg.insurance, 0.75) : 0)
+        : (useLocalInsurance ? pickRate(cfg.local_insurance, cfg.insurance, 0.75) : 0));
 
   // Transport: ₹/kg (qty × rate)
   const transportCost = round2(totalQty * transportRate);

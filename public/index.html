@@ -7683,6 +7683,49 @@ function isFieldHiddenByMode(fieldKey){
   return (_MODE_HIDE_KEYS[m] || []).includes(fieldKey);
 }
 
+// Rate fields whose visibility is gated by a sibling boolean flag.
+// When the flag is OFF, the rate input is hidden (and the calculation
+// uses 0). Re-render of the Settings panel respects this filter; a
+// live click on the flag toggle re-runs the visibility sweep so the
+// rate input appears/disappears immediately.
+const _FLAG_GATED_RATES = {
+  local_transport: 'flag_local_transport',
+  local_insurance: 'flag_local_insurance',
+  transport:       'flag_inter_transport',
+  insurance:       'flag_inter_insurance',
+};
+function isFieldHiddenByFlag(fieldKey){
+  const flagKey = _FLAG_GATED_RATES[fieldKey];
+  if (!flagKey) return false;
+  // Read live from the rendered DOM first (so toggling without saving
+  // still gates immediately); fall back to the in-memory _sdata.
+  const live = document.querySelector(`input[data-key="${flagKey}"]`);
+  if (live) return !live.checked;
+  for (const cat of Object.keys(_sdata || {})) {
+    const f = (_sdata[cat] || []).find(x => x && x.key === flagKey);
+    if (f) return String(f.value).toLowerCase() !== 'true';
+  }
+  return false;
+}
+function applyRateVisibility(){
+  for (const [rateKey, flagKey] of Object.entries(_FLAG_GATED_RATES)) {
+    const input = document.querySelector(`input[data-key="${rateKey}"]`);
+    if (!input) continue;
+    const wrap = input.closest('.fg') || input.parentElement;
+    if (wrap) wrap.style.display = isFieldHiddenByFlag(rateKey) ? 'none' : '';
+  }
+}
+// Live re-sync — wired in renderSettingsPanel after the rates panel renders.
+function _bindRateFlagListeners(){
+  for (const flagKey of Object.values(_FLAG_GATED_RATES)) {
+    const cb = document.querySelector(`input[data-key="${flagKey}"]`);
+    if (cb && !cb.dataset._rateBound) {
+      cb.addEventListener('change', applyRateVisibility);
+      cb.dataset._rateBound = '1';
+    }
+  }
+}
+
 // ── Business state → Logo/Company auto-switch ─────────────
 // TN  → ISP (primary company.*  + address_tn.*)
 // KL  → ASP (sister.* values copied to company.* fields, address_kl becomes active)
@@ -7834,6 +7877,13 @@ function renderSettingsPanel(){
     html+='</div>';
   }
   document.getElementById('settings-root').innerHTML=html;
+  // Rates panel — apply flag-driven visibility (hide local_transport
+  // input when flag_local_transport is off, etc.) and bind live
+  // listeners so toggling a flag updates the row immediately.
+  if (ck === 'rates') {
+    applyRateVisibility();
+    _bindRateFlagListeners();
+  }
   // Reset dirty flag on panel render so stale dirty state doesn't trigger
   // a false "unsaved changes" warning when switching presets.
   if (ck === 'company') {
@@ -8247,19 +8297,17 @@ function renderTallyPanel(fields){
       bi('tally_round_enabled','Round'),
       ti('tally_chc_planter','CHC From Planter')
     ) +
-    // ── Transport row: ledger + rate + HSN + Local toggle ──
+    // ── Transport row: ledger + rate + HSN ──
     row(
       ti('tally_transport','Transport (e.g. Transport Rs.2.50/per Kg)',{style:'flex:2'}),
       ni('tally_transport_rate','Rate ₹/Kg',{style:'max-width:90px'}),
-      ti('tally_hsn_transport','HSN/SAC (e.g. 996791)',{style:'max-width:140px'}),
-      bi('tally_local_transport','Local Transport')
+      ti('tally_hsn_transport','HSN/SAC (e.g. 996791)',{style:'max-width:140px'})
     ) +
-    // ── Insurance row: ledger + rate + HSN + Local toggle ──
+    // ── Insurance row: ledger + rate + HSN ──
     row(
       ti('tally_insurance','Insurance (e.g. Insurance Rs.0.75/per Thousand)',{style:'flex:2'}),
       ni('tally_insurance_rate','Rate ₹/₹1000',{style:'max-width:90px'}),
-      ti('tally_hsn_insurance','HSN/SAC (e.g. 997136)',{style:'max-width:140px'}),
-      bi('tally_local_insurance','Local Insurance')
+      ti('tally_hsn_insurance','HSN/SAC (e.g. 997136)',{style:'max-width:140px'})
     )
   );
 

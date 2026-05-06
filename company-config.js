@@ -73,9 +73,19 @@ const DEFAULTS = [
   { key: 'tds_purchase_rate', value: '0.1',          category: 'rates',     label: 'TDS on Purchase Rate % (Section 194Q)',  type: 'number' },
   { key: 'tds_threshold',   value: '5000000',        category: 'rates',     label: 'TDS / TCS Annual Threshold (₹) — default ₹50 lakh per Section 194Q/206C(1H)',  type: 'number' },
   { key: 'gunny_rate',      value: '165',            category: 'rates',     label: 'Gunny Rate (₹)',           type: 'number' },
+  // Inter-state transport / insurance — visible & applied only when
+  // flag_inter_transport / flag_inter_insurance is ON.
+  { key: 'flag_inter_transport', value: 'true',      category: 'rates',     label: 'Inter-State Transport (use inter-state transport rate)', type: 'boolean' },
   { key: 'transport',       value: '2.5',            category: 'rates',     label: 'Transport (₹/kg)',         type: 'number' },
+  { key: 'flag_inter_insurance', value: 'true',      category: 'rates',     label: 'Inter-State Insurance (use inter-state insurance rate)', type: 'boolean' },
   { key: 'insurance',       value: '0.75',           category: 'rates',     label: 'Insurance (₹/kg)',         type: 'number' },
+  // Local transport / insurance — visible & applied only when their
+  // flag is ON. Migrated from the legacy `tally_local_transport` /
+  // `tally_local_insurance` toggles that lived under To Tally and were
+  // never wired to anything.
+  { key: 'flag_local_transport', value: 'true',      category: 'rates',     label: 'Local Transport (use local transport rate)', type: 'boolean' },
   { key: 'local_transport', value: '2.5',            category: 'rates',     label: 'Local Transport (₹/kg)',   type: 'number' },
+  { key: 'flag_local_insurance', value: 'true',      category: 'rates',     label: 'Local Insurance (use local insurance rate)', type: 'boolean' },
   { key: 'local_insurance', value: '0.75',           category: 'rates',     label: 'Local Insurance (₹/kg)',   type: 'number' },
   { key: 'discount_pct',    value: '0',              category: 'rates',     label: 'Discount %',               type: 'number' },
   { key: 'discount_days',   value: '0',              category: 'rates',     label: 'No. of Days for Discount', type: 'number' },
@@ -195,8 +205,6 @@ const DEFAULTS = [
   { key: 'tally_tds_enabled',     value: 'false',          category: 'tally', label: 'TDS (apply 194Q on RD Purchases)',          type: 'boolean' },
   { key: 'tally_optional',        value: 'false',          category: 'tally', label: 'Optional (mark vouchers as Optional)',      type: 'boolean' },
   { key: 'tally_dn_exempt',       value: 'false',          category: 'tally', label: 'Exempted (Debit Note: skip GST tax ledgers)', type: 'boolean' },
-  { key: 'tally_local_transport', value: 'true',           category: 'tally', label: 'Local Transport (use local transport rate)', type: 'boolean' },
-  { key: 'tally_local_insurance', value: 'true',           category: 'tally', label: 'Local Insurance (use local insurance rate)', type: 'boolean' },
   { key: 'tally_ship_to',         value: 'false',          category: 'tally', label: 'Ship To (override consignee with separate Ship-To party)', type: 'boolean' },
   { key: 'tally_dispatch_from',   value: 'true',           category: 'tally', label: 'Dispatch From Address (emit DISPATCHFROMADDRESS in Sales XML)', type: 'boolean' },
   // E-way bill block in Sales XML — independent of the dispatch-from
@@ -333,6 +341,8 @@ function initCompanySettings(db) {
     'tally_dispatch_pin', 'tally_dispatch_state', 'tally_dispatch_gstin',
     // Distance auto-fill removed — workflow is manual per-invoice now.
     'distance_auto_enabled', 'distance_road_multiplier',
+    // Local transport / insurance toggles moved out of Tally to Rates.
+    'tally_local_transport', 'tally_local_insurance',
   ];
   const drop = db.prepare('DELETE FROM company_settings WHERE key = ?');
   for (const k of REMOVED_KEYS) drop.run(k);
@@ -382,6 +392,18 @@ function initCompanySettings(db) {
   db.prepare(
     "UPDATE company_settings SET category = 'tally', label = ? WHERE key = 'praman_company'"
   ).run('Praman Lot Code (fallback: Short Name)');
+
+  // Local transport / insurance toggles moved from To Tally → Rates &
+  // Charges and renamed flag_local_*. Carry over any existing user value
+  // before the legacy keys get dropped via REMOVED_KEYS.
+  const copyOldFlag = (oldKey, newKey) => {
+    const r = db.prepare('SELECT value FROM company_settings WHERE key = ?').get(oldKey);
+    if (r && (r.value === 'true' || r.value === 'false')) {
+      db.prepare('UPDATE company_settings SET value = ? WHERE key = ?').run(r.value, newKey);
+    }
+  };
+  copyOldFlag('tally_local_transport', 'flag_local_transport');
+  copyOldFlag('tally_local_insurance', 'flag_local_insurance');
 
   console.log('Company settings ready (%d defaults)', DEFAULTS.length);
 }
