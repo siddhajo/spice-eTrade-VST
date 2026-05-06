@@ -669,11 +669,25 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
   // (stored as the GSTIN). Falls back to the company identity ONLY if
   // a lot has no associated seller record (legacy data, partial
   // imports).
+  // Join the trader row PER LOT by trader_id (the FK each lot stores
+  // when it's created from the seller picker). Joining by name —
+  // which the older query did — multiplies rows whenever a seller
+  // has more than one row in `traders` (legitimate multi-branch
+  // sellers, or accidental dupes), producing duplicate lots in the
+  // Praman CSV. The name-based fallback subquery only kicks in for
+  // legacy rows that pre-date the trader_id column.
   const rows = db.all(
     `SELECT l.lot_no, l.branch, l.grade, l.name, l.cr, l.qty, l.litre, l.bags, l.tel,
-            t.cr AS trader_cr, t.tel AS trader_tel
+            COALESCE(
+              t.cr,
+              (SELECT cr  FROM traders WHERE UPPER(TRIM(name)) = UPPER(TRIM(l.name)) LIMIT 1)
+            ) AS trader_cr,
+            COALESCE(
+              t.tel,
+              (SELECT tel FROM traders WHERE UPPER(TRIM(name)) = UPPER(TRIM(l.name)) LIMIT 1)
+            ) AS trader_tel
        FROM lots l
-       LEFT JOIN traders t ON UPPER(TRIM(t.name)) = UPPER(TRIM(l.name))
+       LEFT JOIN traders t ON t.id = l.trader_id
       WHERE l.auction_id = ? ${state ? 'AND l.state = ?' : ''}
       ORDER BY CAST(l.lot_no AS INTEGER), l.lot_no`,
     state ? [auctionId, state] : [auctionId]

@@ -660,13 +660,18 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     // by `cr` produced duplicate bank-payment rows whenever a seller's
     // lots held inconsistent GSTIN values, leading to NEFT files with
     // the dealer listed twice for partial amounts.
+    // JOIN trader by lots.trader_id (FK), not by name. Joining by name
+    // multiplied each lot row by the number of traders sharing that
+    // name (multi-branch sellers / accidental dupes), then SUM(puramt)
+    // etc. summed those duplicates → inflated payable. GROUP BY name
+    // alone wasn't enough; the fan-out happened BEFORE the aggregate.
     `SELECT MAX(l.state) AS state, l.name, MAX(l.cr) AS cr,
       SUM(l.puramt) as puramt, SUM(l.refund) as advance, SUM(l.balance) as payable,
       MAX(t.id) AS trader_id,
       MAX(t.ifsc) AS t_ifsc, MAX(t.acctnum) AS t_acctnum, MAX(t.holder_name) AS t_holder,
       MAX(t.padd) AS padd, MAX(t.ppla) AS ppla, MAX(t.pin) AS pin
     FROM lots l
-    LEFT JOIN traders t ON UPPER(TRIM(t.name)) = UPPER(TRIM(l.name))
+    LEFT JOIN traders t ON t.id = l.trader_id
     WHERE l.auction_id = ? AND l.amount > 0
       AND (l.paid IS NULL OR l.paid = '')
     GROUP BY l.name
