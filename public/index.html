@@ -9309,7 +9309,36 @@ async function saveAuction(){
     hideModal('auction-modal');toast(id?'Auction updated':'Auction created');loadAuctions();
   }catch(e){showError(e)}
 }
-async function delAuction(id){if(!confirm('Delete auction and ALL its lots?'))return;await j(`/api/auctions/${id}`,{method:'DELETE'});loadAuctions()}
+async function delAuction(id){
+  // Server cascades the delete across every related record. Spell that
+  // out in the prompt so the user understands what's about to vanish
+  // — "all its lots" alone hid the fact that invoices, purchases,
+  // bills, and debit notes go with it. Optional preflight via
+  // /api/auctions/:id/preview-delete could fetch counts up-front, but
+  // a static warning is good enough for a one-trade delete.
+  const ok = confirm(
+    'Delete this trade and ALL records linked to it?\n\n' +
+    '  • Lots & lot allocations\n' +
+    '  • Sales invoices\n' +
+    '  • Purchase invoices\n' +
+    '  • Bills of supply\n' +
+    '  • Debit notes\n\n' +
+    'This cannot be undone.'
+  );
+  if (!ok) return;
+  try {
+    const r = await j(`/api/auctions/${id}`, { method: 'DELETE' });
+    const d = (r && r.deleted) || {};
+    const parts = [];
+    if (d.lots)        parts.push(`${d.lots} lot${d.lots===1?'':'s'}`);
+    if (d.invoices)    parts.push(`${d.invoices} invoice${d.invoices===1?'':'s'}`);
+    if (d.purchases)   parts.push(`${d.purchases} purchase${d.purchases===1?'':'s'}`);
+    if (d.bills)       parts.push(`${d.bills} bill${d.bills===1?'':'s'}`);
+    if (d.debit_notes) parts.push(`${d.debit_notes} DN${d.debit_notes===1?'':'s'}`);
+    toast(parts.length ? `Trade deleted (${parts.join(', ')})` : 'Trade deleted');
+  } catch (e) { showError(e); return; }
+  loadAuctions();
+}
 
 function openImportAuctionModal(){
   // Seed dynamic defaults each time the modal opens — same source as
