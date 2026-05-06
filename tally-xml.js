@@ -447,7 +447,7 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
     // from Settings → To Tally without affecting the dispatch-from
     // address block or other unrelated voucher fields.
     if (ewayEnabled) {
-      const consignorAddrFlat = `${d_company} ${d_add} GSTIN:${d_gstin}`.replace(/\s+/g, ' ').trim();
+      const consignorAddrFlat = `${d_add} GSTIN:${d_gstin}`.replace(/\s+/g, ' ').trim();
       xml += `
 <EWAYBILLDETAILS.LIST>
 <CONSIGNORADDRESSTYPE>${xe(consignorType)}</CONSIGNORADDRESSTYPE>
@@ -476,14 +476,51 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
 </EWAYBILLDETAILS.LIST>`;
     }
 
-    // Party (debtor) ledger — negative amount (party owes us).
-    // Additional Charge (sum(cardamom) × cfg.addl_charge_value) is emitted
-    // as its own ledger entry below; it must be added on top of the rounded
-    // GST-inclusive subtotal so the party AMOUNT matches the invoice grand
-    // total the buyer sees on the PDF.
-    const totalRound   = r0(row.totalRounded || row.total);
-    const totalAmt     = r2(row.total);
-    const rnd          = r2(totalRound - totalAmt);
+    // ── Tax values for the voucher ──────────────────────────────
+    // When `tally_detailed` is ON we trust the per-line GST math saved
+    // on the invoice row (cardamom taxed per-lot, then summed).
+    // When `tally_detailed` is OFF the cardamom is collapsed into a
+    // single aggregate inventory line in this voucher, so the matching
+    // tax must be a SINGLE round on the bundled cardamom value (no
+    // per-lot rounding). Gunny / Transport / Insurance keep their own
+    // single-line tax — they're already aggregated in the row data.
+    // We then re-derive the round-off + party total from the new GST
+    // sum so the voucher self-balances.
+    const gstRate = cfgNum(cfg, 'tally_gst_rate', 5);
+    const halfGst = gstRate / 2;
+    const cardAggAmt = Array.isArray(row.lots) && row.lots.length
+      ? row.lots.reduce((s, l) => s + (Number(l.amount) || 0), 0)
+      : Number(row.amounttot || 0);
+    const gunnyAmtAgg = Number(row.gunnyAmt || 0);
+    const transportAmtAgg = Number(row.transportAmt || 0);
+    const insuranceAmtAgg = Number(row.insuranceAmt || 0);
+
+    let cgstAmt, sgstAmt, igstAmt;
+    if (detailed) {
+      cgstAmt = r2(row.cgst || 0);
+      sgstAmt = r2(row.sgst || 0);
+      igstAmt = r2(row.igst || 0);
+    } else if (isExport) {
+      cgstAmt = sgstAmt = igstAmt = 0;
+    } else if (isIntra) {
+      const halfTax = (base) => r2(base * halfGst / 100);
+      cgstAmt = r2(halfTax(cardAggAmt) + halfTax(gunnyAmtAgg) + halfTax(transportAmtAgg) + halfTax(insuranceAmtAgg));
+      sgstAmt = cgstAmt;
+      igstAmt = 0;
+    } else {
+      const fullTax = (base) => r2(base * gstRate / 100);
+      igstAmt = r2(fullTax(cardAggAmt) + fullTax(gunnyAmtAgg) + fullTax(transportAmtAgg) + fullTax(insuranceAmtAgg));
+      cgstAmt = sgstAmt = 0;
+    }
+
+    // Re-derive the rounded total + round-off when we overrode the tax,
+    // otherwise honor the values already saved on the invoice row.
+    const taxableXml = cardAggAmt + gunnyAmtAgg + transportAmtAgg + insuranceAmtAgg;
+    const preRound   = detailed ? r2(row.total) : r2(taxableXml + cgstAmt + sgstAmt + igstAmt);
+    const totalRound = detailed ? r0(row.totalRounded || row.total) : r0(preRound);
+    const totalAmt   = preRound;
+    const rnd        = r2(totalRound - totalAmt);
+
     const addlChargeXml = r2(row.addlCharge || 0);
     const addlLedger    = (row.addlChargeName || cfgGet(cfg, 'addl_charge_name', '') || 'Additional Charge').toString();
     const partyTotal    = r2(totalRound + addlChargeXml);
@@ -549,7 +586,8 @@ ${rates.cess}
 </LEDGERENTRIES.LIST>`;
     }
 
-    // Tax ledgers
+    // Tax ledgers — use the cgstAmt/sgstAmt/igstAmt resolved above so
+    // the values track the detailed/aggregate mode chosen.
     if (isExport) {
       // Export — no tax ledger (rate 0)
     } else if (isIntra) {
@@ -557,22 +595,22 @@ ${rates.cess}
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${xe(Tax_CGST)}</LEDGERNAME>
 ${TAGS.DEEMNO}
-<AMOUNT>${r2(row.cgst || 0)}</AMOUNT>
-<VATEXPAMOUNT>${r2(row.cgst || 0)}</VATEXPAMOUNT>
+<AMOUNT>${cgstAmt}</AMOUNT>
+<VATEXPAMOUNT>${cgstAmt}</VATEXPAMOUNT>
 </LEDGERENTRIES.LIST>
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${xe(Tax_SGST)}</LEDGERNAME>
 ${TAGS.DEEMNO}
-<AMOUNT>${r2(row.sgst || 0)}</AMOUNT>
-<VATEXPAMOUNT>${r2(row.sgst || 0)}</VATEXPAMOUNT>
+<AMOUNT>${sgstAmt}</AMOUNT>
+<VATEXPAMOUNT>${sgstAmt}</VATEXPAMOUNT>
 </LEDGERENTRIES.LIST>`;
     } else {
       xml += `
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${xe(Tax_IGST)}</LEDGERNAME>
 ${TAGS.DEEMNO}
-<AMOUNT>${r2(row.igst || 0)}</AMOUNT>
-<VATEXPAMOUNT>${r2(row.igst || 0)}</VATEXPAMOUNT>
+<AMOUNT>${igstAmt}</AMOUNT>
+<VATEXPAMOUNT>${igstAmt}</VATEXPAMOUNT>
 </LEDGERENTRIES.LIST>`;
     }
 
@@ -848,7 +886,7 @@ ${ispAddrLines.map(l => `<ADDRESS>${xe(l)}</ADDRESS>`).join('\n')}
 <DISPATCHFROMADDRESS> </DISPATCHFROMADDRESS>
 </DISPATCHFROMADDRESS.LIST>
 <DATE>${dateval}</DATE>
-<REFERENCEDATE></REFERENCEDATE>
+<REFERENCEDATE>${dateval}</REFERENCEDATE>
 <VCHSTATUSDATE>${dateval}</VCHSTATUSDATE>
 <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
 <STATENAME>${ispState}</STATENAME>
@@ -1481,7 +1519,7 @@ ${rates.cess}
 
     xml += `
 <DATE>${dateval}</DATE>
-<REFERENCEDATE></REFERENCEDATE>
+<REFERENCEDATE>${dateval}</REFERENCEDATE>
 <VCHSTATUSDATE>${dateval}</VCHSTATUSDATE>
 <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
 <STATENAME>${state}</STATENAME>
