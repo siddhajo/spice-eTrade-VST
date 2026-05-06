@@ -5582,6 +5582,39 @@ function repairBadDates(db) {
 // Backup: streams the live config.db file as a download. We force a
 // flush first so any pending in-memory writes (sql.js debounces saves
 // 200ms) are on disk before we read the file.
+// List the on-disk auto-backup snapshots (admin-only). Returns name +
+// size + mtime so the Settings UI can show "Last backup: …" and a
+// rolling list. Empty array when auto-backup has never fired.
+app.get('/api/system/backups', requireAdmin, (req, res) => {
+  try {
+    const bkDir = path.join(path.dirname(DB_PATH), 'backups');
+    if (!fs.existsSync(bkDir)) return res.json({ backups: [] });
+    const out = fs.readdirSync(bkDir)
+      .filter(f => f.endsWith('.db'))
+      .map(f => {
+        const st = fs.statSync(path.join(bkDir, f));
+        return { name: f, size: st.size, mtime: st.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    res.json({ backups: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Trigger a backup snapshot now (admin-only). Mirrors the auto-ticker
+// path; useful for "test the schedule" or one-off snapshots.
+app.post('/api/system/backup-now', requireAdmin, (req, res) => {
+  try {
+    runBackupTickerOnce.__forceForOneCall = true;  // unused — keep for future
+    const bkDir = path.join(path.dirname(DB_PATH), 'backups');
+    if (!fs.existsSync(bkDir)) fs.mkdirSync(bkDir, { recursive: true });
+    require('./db').flushSave();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const out = path.join(bkDir, `manual-${stamp}.db`);
+    fs.copyFileSync(DB_PATH, out);
+    res.json({ success: true, file: path.basename(out) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/system/backup', requireAdmin, (req, res) => {
   try {
     // Force-flush pending writes so the on-disk file reflects every
@@ -5680,12 +5713,61 @@ function assertSchemaSanity(db) {
   }
 }
 
+// ── Auto-backup scheduler ─────────────────────────────────────
+// Polls the DB every minute to see if a fresh backup is due. We poll
+// rather than setInterval-with-the-configured-interval so a settings
+// change applies WITHOUT a restart. State (last run timestamp) is held
+// in memory; on boot the earliest possible run is `interval` hours
+// after the last on-disk backup file's mtime, so a quick restart
+// doesn't trigger an immediate snapshot.
+function runBackupTickerOnce() {
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const enabled = String(cfg.backup_auto_enabled || '').toLowerCase() === 'true';
+    if (!enabled) return;
+    const intervalHrs = Math.max(1, Number(cfg.backup_interval_hours) || 24);
+    const keepN       = Math.max(1, Number(cfg.backup_keep_count) || 14);
+    const dbDir = path.dirname(DB_PATH);
+    const bkDir = path.join(dbDir, 'backups');
+    if (!fs.existsSync(bkDir)) fs.mkdirSync(bkDir, { recursive: true });
+    // Most recent backup mtime — drives the "is one due?" check.
+    const files = fs.readdirSync(bkDir)
+      .filter(f => f.endsWith('.db'))
+      .map(f => ({ f, m: fs.statSync(path.join(bkDir, f)).mtimeMs }))
+      .sort((a, b) => b.m - a.m);
+    const latest = files[0] ? files[0].m : 0;
+    const dueAt  = latest + intervalHrs * 3600 * 1000;
+    if (Date.now() < dueAt) return;
+    // Take a snapshot.
+    require('./db').flushSave();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const out = path.join(bkDir, `auto-${stamp}.db`);
+    fs.copyFileSync(DB_PATH, out);
+    console.log('[backup] auto snapshot written:', out);
+    // Prune older snapshots beyond keepN.
+    const fresh = fs.readdirSync(bkDir)
+      .filter(f => f.endsWith('.db'))
+      .map(f => ({ f, m: fs.statSync(path.join(bkDir, f)).mtimeMs }))
+      .sort((a, b) => b.m - a.m);
+    for (const old of fresh.slice(keepN)) {
+      try { fs.unlinkSync(path.join(bkDir, old.f)); console.log('[backup] pruned', old.f); }
+      catch (_) { /* ignore */ }
+    }
+  } catch (e) {
+    console.error('[backup] ticker failed:', e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3001;
 (async () => {
   const db = await initDb();
   initCompanySettings(db);
   repairBadDates(db);
   assertSchemaSanity(db);
+  // Auto-backup poller — once a minute. The function itself decides
+  // whether a snapshot is actually due based on the configured interval.
+  setInterval(runBackupTickerOnce, 60 * 1000);
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n  Admin Console running at http://localhost:${PORT}\n`);
   });

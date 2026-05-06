@@ -260,7 +260,7 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 /* ── Login ───────────────────────────────────────────────── */
 #login{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;background:linear-gradient(135deg,var(--spice-cream) 0%,#F1F5F9 100%)}
 .login-box{background:var(--spice-paper);border:1px solid var(--spice-line);border-radius:20px;padding:40px;width:400px;box-shadow:0 10px 40px rgba(31,25,21,.08)}
-.login-box h1{font-size:22px;font-weight:700;color:var(--spice-text-main);text-align:center;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:10px;letter-spacing:-.3px;flex-wrap:wrap}
+.login-box h1{font-size:18px;font-weight:700;color:var(--spice-text-main);text-align:center;margin-bottom:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;letter-spacing:-.3px;line-height:1.2}
 .login-box h1 .dot{
   /* Constrained logo container — never overflows the row, never crowds
      the brand name. The img inside is sized via object-fit so PNGs of
@@ -281,7 +281,7 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
   display:block;max-width:100%;max-height:100%;width:auto;height:auto;
   object-fit:contain
 }
-#login-brand-name{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#login-brand-name{display:inline-block;max-width:100%;overflow:visible;white-space:normal;text-align:center;word-break:break-word}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .login-box p{font-size:14px;color:var(--spice-text-mute);text-align:center;margin-bottom:28px}
 .fg{margin-bottom:14px}
@@ -843,7 +843,7 @@ tr:hover td{background:var(--spice-cream)}
 /* Toggle pills must keep their natural compact width — overriding the
    blanket flex:1 above so a `Dispatch` pill doesn't expand to fill the
    remaining row width and look oversized next to its slider. */
-.tally-row > .tally-chk{flex:0 0 auto;min-width:0}
+.tally-row > .tally-bi{flex:0 0 auto;min-width:0}
 .tally-in{
   border:1px solid var(--border);border-radius:6px;padding:6px 8px;
   font-size:12px;color:var(--text);background:#fff;width:100%;
@@ -851,21 +851,8 @@ tr:hover td{background:var(--spice-cream)}
 }
 .tally-in:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 2px var(--green-bg)}
 .tally-in.tally-ro{background:#F8FAFC;color:var(--text3);cursor:not-allowed}
-.tally-chk{
-  /* Slim pill that matches the Feature Flags row style — bordered card,
-     compact padding, switch on the right. The slider markup uses the
-     same .sw/.sl classes the Flags panel uses, so toggle dimensions
-     stay consistent across the app. Tightened padding + smaller font
-     so the row height tracks the slider (~22px) rather than ballooning
-     out from the input/legacy native checkbox sizing. */
-  display:inline-flex;align-items:center;justify-content:space-between;
-  gap:8px;padding:3px 8px;height:24px;
-  font-size:11.5px;font-weight:600;color:var(--text);
-  background:var(--bg);border:1px solid var(--border);border-radius:6px;
-  cursor:pointer;flex:0 0 auto;white-space:nowrap;line-height:1
-}
-.tally-chk > span:first-child{flex:1 1 auto;font-weight:600}
-.tally-chk .sw{margin:0}
+/* (.tally-chk retired — Tally booleans now use the same .fg pill markup
+   as Feature Flags via bi() so dimensions match exactly.) */
 .tally-sep{color:var(--text3);padding:0 4px;font-weight:600}
 .tally-viewbar{
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
@@ -1229,6 +1216,13 @@ body[data-comfort="1"] #comfort-toggle-label::after{content:'\2191';margin-left:
   padding:14px;text-align:center;font-size:11px;color:var(--text3);
 }
 body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
+
+/* ── Lot-entry collapsible widget cards ──────────────────── */
+.le-collapsible.is-collapsed > .le-collapse-body{display:none}
+.le-collapsible.is-collapsed > .le-collapse-head{border-bottom:none}
+.le-collapsible.is-collapsed .le-collapse-chev{transform:rotate(-90deg);transition:transform .15s}
+.le-collapse-chev{transition:transform .15s}
+.le-collapse-head:hover{background:#F8FAFC}
 
 /* ── Lot-entry print toolbar (Print Selected / by Seller / Clear) ── */
 .le-toolbar-btn{
@@ -1904,7 +1898,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <button class="btn btn-a" onclick="document.getElementById('imp-traders').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('traders')">Download Template</button>
           <button id="seller-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('seller')">🗑 Delete Selected <span id="seller-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
-          <button class="needs-delete-all btn" style="background:#c0392b;color:#fff" onclick="deleteAll('traders','Sellers')">Delete All</button>
           <input type="file" id="imp-traders" accept=".xlsx,.xls" style="display:none" onchange="importTraders(event)">
         </div>
         <div id="trader-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
@@ -1921,7 +1914,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <button class="btn btn-a" onclick="document.getElementById('imp-buyers').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('buyers')">Download Template</button>
           <button id="buyer-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('buyer')">🗑 Delete Selected <span id="buyer-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
-          <button class="needs-delete-all btn" style="background:#c0392b;color:#fff" onclick="deleteAll('buyers','Buyers')">Delete All</button>
           <input type="file" id="imp-buyers" accept=".xlsx,.xls" style="display:none" onchange="importBuyers(event)">
         </div>
         <div id="buyer-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
@@ -1932,7 +1924,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <!-- AUCTIONS -->
     <div class="tc" id="tc-auctions">
       <div class="card">
-        <h2>Auctions / Trades <button class="btn btn-g" onclick="openAuctionAdd()">+ New Auction</button></h2>
+        <h2>Trades <button class="btn btn-g" onclick="openAuctionAdd()">+ New Trade</button></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-a" onclick="openImportAuctionModal()">Import Lots from XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('auctions')">Download Template</button>
@@ -2026,15 +2018,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div class="card" style="padding:12px 18px;margin-bottom:14px">
         <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
           <div style="flex:1;min-width:200px">
-            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Trade (Auction)</div>
-            <div style="display:flex;gap:6px">
-              <select id="le-auction" onchange="leOnAuctionChange()" style="flex:1;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff"></select>
-              <button class="btn btn-g" onclick="leOpenNewTradeModal()" title="Create a new trade" style="height:38px;padding:0 12px;font-size:13px;font-weight:600;flex-shrink:0">+ New Trade</button>
-            </div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Trade</div>
+            <select id="le-auction" onchange="leOnAuctionChange()" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff"></select>
           </div>
           <div style="min-width:160px">
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Branch</div>
-            <select id="le-branch" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff;text-transform:uppercase">
+            <select id="le-branch" onchange="try{localStorage.setItem('le_branch',this.value)}catch(_){}" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff;text-transform:uppercase">
               <option value="">— select —</option>
             </select>
           </div>
@@ -2120,8 +2109,15 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
       </div>
 
-      <!-- Entry form — main card -->
-      <div class="card" id="le-form-card" style="padding:20px 24px;display:none">
+      <!-- Entry form — main card. Collapsible: click the header bar to
+           toggle. Persisted in localStorage so the user's preference
+           survives reloads. -->
+      <div class="card le-collapsible" id="le-form-card" data-section="le-form" style="padding:0;display:none">
+        <div class="le-collapse-head" onclick="leToggleSection('le-form')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 24px;cursor:pointer;border-bottom:1px solid var(--border)">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
+          <span style="font-weight:700;font-size:14px">Lot Entry</span>
+        </div>
+        <div class="le-collapse-body" style="padding:20px 24px">
         <!-- Mode banner — flips between Create and Edit. Hidden in create
              mode, visible (with a Cancel-edit chip) in edit mode. -->
         <div id="le-edit-banner" style="display:none;padding:8px 14px;background:#FEF3C7;color:#92400E;border-radius:8px;font-size:13px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
@@ -2214,30 +2210,33 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </button>
           <button class="btn btn-o" onclick="leResetForm()" style="flex:1;height:46px;font-size:14px">Clear</button>
         </div>
+        </div><!-- /le-collapse-body -->
       </div>
 
-      <!-- Recent entries — today's lots from this auction -->
-      <div class="card" style="padding:16px 20px;margin-top:16px">
-        <h3 style="margin:0 0 12px;font-size:14px;color:var(--text);display:flex;align-items:center;gap:8px">
-          <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
-          Recent entries — this auction
-          <span id="le-recent-count" style="font-weight:400;color:var(--text3);font-size:12px;margin-left:8px"></span>
+      <!-- Recent entries — today's lots from this auction. Collapsible. -->
+      <div class="card le-collapsible" id="le-recent-card" data-section="le-recent" style="padding:0;margin-top:16px">
+        <div class="le-collapse-head" onclick="leToggleSection('le-recent')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 20px;cursor:pointer">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
+          <span style="font-weight:700;font-size:14px">Recent entries — this trade</span>
+          <span id="le-recent-count" style="font-weight:400;color:var(--text3);font-size:12px;margin-left:4px"></span>
           <span style="flex:1"></span>
           <!-- Print Selected, Print by Seller, Clear — shown only when ≥1 lot
                is checked. The N badges update live. Styling is unified into a
                .le-toolbar-btn pill set so all three sit on the same baseline,
                with a clear primary / secondary / ghost hierarchy. -->
-          <button id="le-print-selected-btn" type="button" onclick="lePrintSelected()" class="le-toolbar-btn le-tb-primary" style="display:none">
+          <button id="le-print-selected-btn" type="button" onclick="event.stopPropagation();lePrintSelected()" class="le-toolbar-btn le-tb-primary" style="display:none">
             <span aria-hidden="true">🖨</span> Print Selected
             <span id="le-print-selected-count" class="le-tb-badge"></span>
           </button>
-          <button id="le-print-by-seller-btn" type="button" onclick="lePrintBySeller()" class="le-toolbar-btn le-tb-secondary" style="display:none" title="One receipt per seller — bundles all checked lots of the same seller together">
+          <button id="le-print-by-seller-btn" type="button" onclick="event.stopPropagation();lePrintBySeller()" class="le-toolbar-btn le-tb-secondary" style="display:none" title="One receipt per seller — bundles all checked lots of the same seller together">
             <span aria-hidden="true">👤</span> Print by Seller
             <span id="le-print-by-seller-count" class="le-tb-badge"></span>
           </button>
-          <button id="le-print-clear-btn" type="button" onclick="leClearPrintSelection()" class="le-toolbar-btn le-tb-ghost" style="display:none">Clear</button>
-        </h3>
-        <div id="le-recent-list" style="font-size:13px"></div>
+          <button id="le-print-clear-btn" type="button" onclick="event.stopPropagation();leClearPrintSelection()" class="le-toolbar-btn le-tb-ghost" style="display:none">Clear</button>
+        </div><!-- /le-collapse-head -->
+        <div class="le-collapse-body" style="padding:0 20px 16px">
+          <div id="le-recent-list" style="font-size:13px"></div>
+        </div>
       </div>
 
       <!-- ───────────────────────────────────────────────────────────
@@ -2415,7 +2414,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <!-- Destructive group — pushed right -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
             <button class="needs-invoice-revert btn" style="height:38px;padding:0 14px;background:var(--spice-turmeric);color:#fff;font-weight:600" onclick="revertAllInvoices()" title="Revert all invoices — deletes them and re-enables lots for re-invoicing">⟲ Revert All</button>
-            <button class="needs-delete-all btn" style="height:38px;padding:0 14px;background:var(--spice-chili);color:#fff;font-weight:600" onclick="deleteAll('invoices','Invoices')" title="Permanently delete all invoices">🗑 Delete All</button>
           </div>
         </div>
 
@@ -2482,7 +2480,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
-            <button class="needs-delete-all btn" style="height:38px;padding:0 14px;background:var(--spice-chili);color:#fff;font-weight:600" onclick="deleteAll('purchases','Purchase Invoices')">🗑 Delete All</button>
           </div>
         </div>
 
@@ -2755,7 +2752,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
-            <button class="needs-delete-all btn" style="height:38px;padding:0 14px;background:var(--spice-chili);color:#fff;font-weight:600" onclick="deleteAll('bills','Bills of Supply')">🗑 Delete All</button>
           </div>
         </div>
 
@@ -2788,7 +2784,6 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
                is selected; the count badge updates live as boxes toggle. -->
           <button id="dn-bulk-print" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedDebitNotes()" title="Print all ticked debit notes as one combined PDF">🖨 Print Selected <span id="dn-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           <button id="dn-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedDebitNotes()" title="Delete all ticked debit notes">🗑 Delete Selected</button>
-          <button class="needs-delete-all btn" style="background:#c0392b;color:#fff;margin-left:auto" onclick="deleteAllDebitNotesForTrade()">Delete All (this trade)</button>
         </div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
       </div>
@@ -3173,7 +3168,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 </div></div>
 
 <div class="modal-bg" id="auction-modal"><div class="modal">
-  <h2 id="auction-modal-title">New Auction</h2>
+  <h2 id="auction-modal-title">New Trade</h2>
   <input type="hidden" id="a-id">
   <div class="sgrid">
     <div class="fg"><label>Trade No *</label><input id="a-ano"></div>
@@ -4377,21 +4372,29 @@ function applyPermissionAttributes(){
   if (window._userRole) body.setAttribute('data-role', window._userRole);
   // Update the role badge in the topbar with role-themed colors
   const badge = document.getElementById('user-role-badge');
+  const usernameEl = document.getElementById('user-lbl');
   if (badge && window._userRole) {
     const role = window._userRole;
-    const themes = {
-      admin:    { bg:'var(--spice-chili-lt)',    fg:'var(--spice-chili-dk)' },
-      manager:  { bg:'var(--spice-cardamom-lt)', fg:'var(--spice-cardamom-dk)' },
-      operator: { bg:'var(--spice-saffron-lt)',  fg:'var(--spice-saffron-dk)' },
-      lot_entry:{ bg:'#DBEAFE',                  fg:'#1E40AF' }, // blue — field staff
-      viewer:   { bg:'#f1f5f9',                  fg:'#64748b' },
-      user:     { bg:'#f1f5f9',                  fg:'#64748b' }, // legacy
-    };
-    const t = themes[role] || themes.viewer;
-    badge.style.background = t.bg;
-    badge.style.color = t.fg;
-    badge.textContent = role === 'user' ? 'viewer' : role.replace('_',' ');
-    badge.style.display = 'inline-block';
+    const username = (usernameEl && usernameEl.textContent || '').trim().toLowerCase();
+    // Hide the role pill when it would just repeat the username
+    // (typical for the 'admin' user with role 'admin').
+    if (username && username === role.toLowerCase()) {
+      badge.style.display = 'none';
+    } else {
+      const themes = {
+        admin:    { bg:'var(--spice-chili-lt)',    fg:'var(--spice-chili-dk)' },
+        manager:  { bg:'var(--spice-cardamom-lt)', fg:'var(--spice-cardamom-dk)' },
+        operator: { bg:'var(--spice-saffron-lt)',  fg:'var(--spice-saffron-dk)' },
+        lot_entry:{ bg:'#DBEAFE',                  fg:'#1E40AF' },
+        viewer:   { bg:'#f1f5f9',                  fg:'#64748b' },
+        user:     { bg:'#f1f5f9',                  fg:'#64748b' },
+      };
+      const t = themes[role] || themes.viewer;
+      badge.style.background = t.bg;
+      badge.style.color = t.fg;
+      badge.textContent = role === 'user' ? 'viewer' : role.replace('_',' ');
+      badge.style.display = 'inline-block';
+    }
   }
 }
 
@@ -4730,7 +4733,7 @@ async function loadStats(auctionId){
       <div class="auction-hero-label" style="color:var(--spice-text-mute)">No active trade</div>
       <div class="auction-hero-number" style="color:var(--spice-text-main);font-size:22px">Create your first auction</div>
       <div class="auction-hero-date" style="color:var(--spice-text-mute);opacity:1">Head to the Auctions tab to get started.</div>
-      <button class="btn btn-a" onclick="go('auctions')" style="margin-top:8px">+ New Auction</button>
+      <button class="btn btn-a" onclick="go('auctions')" style="margin-top:8px">+ New Trade</button>
     </div>
   `);
 
@@ -4929,7 +4932,7 @@ async function loadStats(auctionId){
       </div>
       <div style="display:flex;gap:10px">
         <button class="btn btn-o" onclick="go('lots')">Import Data</button>
-        <button class="btn btn-a" onclick="go('auctions')">+ New Auction</button>
+        <button class="btn btn-a" onclick="go('auctions')">+ New Trade</button>
       </div>
     </div>
 
@@ -5693,21 +5696,53 @@ async function leSaveNewTrade(){
   }
 }
 
+// Toggle a Lot-Entry collapsible widget by its data-section key. State
+// is persisted in localStorage so the field user's choice survives
+// reloads and tab switches.
+function leToggleSection(key){
+  try {
+    const card = document.querySelector('.le-collapsible[data-section="'+key+'"]');
+    if (!card) return;
+    card.classList.toggle('is-collapsed');
+    const collapsed = card.classList.contains('is-collapsed');
+    try { localStorage.setItem('le_collapsed_'+key, collapsed ? '1' : '0'); } catch(_){}
+  } catch(e) { /* defensive — UI niceties shouldn't crash workflow */ }
+}
+function leRestoreCollapseState(){
+  try {
+    document.querySelectorAll('.le-collapsible[data-section]').forEach(card => {
+      const key = card.getAttribute('data-section');
+      const v = localStorage.getItem('le_collapsed_'+key);
+      if (v === '1') card.classList.add('is-collapsed');
+    });
+  } catch(_){}
+}
+
 async function loadLotEntry(){
-  // Populate the auction picker with active auctions, then wait for the
-  // user to pick one before showing the entry form. We don't auto-select
-  // because picking the wrong auction is the most expensive mistake in
-  // this workflow — better to make it a deliberate click.
+  // Populate the auction picker with active trades. The latest open
+  // trade is pre-selected so the field user lands directly on the entry
+  // form for today's trade — picking from the dropdown is reserved for
+  // back-dating / corrections.
   try {
     const auctions = await j('/api/auctions');
     const sel = document.getElementById('le-auction');
+    // dd/mm/yyyy formatter for the trade label.
+    const fmtDmy = (iso) => {
+      const s = String(iso || '').split('T')[0];
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+    };
+    const list = auctions || [];
     sel.innerHTML = '<option value="">-- Select trade --</option>' +
-      (auctions || []).map(a => {
-        const dateFmt = (a.date || '').split('T')[0];
+      list.map(a => {
         const status = a.status || '';
-        const label = `Trade #${a.ano} · ${dateFmt}${status === 'closed' ? ' (closed)' : ''}`;
+        const label = `Trade #${a.ano} · ${fmtDmy(a.date)}${status === 'closed' ? ' (closed)' : ''}`;
         return `<option value="${a.id}" ${status==='closed'?'disabled':''}>${esc(label)}</option>`;
       }).join('');
+    // Auto-select the most recent OPEN trade. /api/auctions returns rows
+    // newest-first; pick the first non-closed entry.
+    const latest = list.find(a => (a.status || '') !== 'closed');
+    if (latest) sel.value = String(latest.id);
     // Read Lot Entry defaults from settings. Keys match the PWA app.html
     // 1:1 so behavior is consistent: sample_weight pre-fills each new
     // lot, default_litre pre-fills litre wt, show_moisture toggles the
@@ -5751,14 +5786,25 @@ async function loadLotEntry(){
       branchSel.innerHTML = '<option value="">— select —</option>' +
         branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
       // Restore last-used branch from localStorage if it's still in the
-      // list (admin may have removed it).
+      // list (admin may have removed it). Otherwise default to the first
+      // configured branch so the field user doesn't have to pick on
+      // every page load.
       const savedBranch = (typeof localStorage !== 'undefined') ? (localStorage.getItem('le_branch') || '') : '';
       if (savedBranch && branches.includes(savedBranch.toUpperCase())) {
         branchSel.value = savedBranch.toUpperCase();
+      } else if (branches[0]) {
+        branchSel.value = branches[0];
       }
     } else {
       branchSel.innerHTML = '<option value="">⚠ Configure branches in Settings first</option>';
     }
+    // Auto-trigger the entry form for the pre-selected trade so the
+    // user lands directly in the workflow.
+    if (document.getElementById('le-auction').value) {
+      try { leOnAuctionChange(); } catch(_) {}
+    }
+    // Restore collapsed/expanded state of the widget cards.
+    leRestoreCollapseState();
   } catch (e) {
     console.error('Lot Entry: failed to load auctions', e);
     toast('Could not load auctions');
@@ -8055,16 +8101,12 @@ function renderTallyPanel(fields){
     </div>`;
 
   if (_tallyClassic) {
-    // Classic flat list: use the standard fld() renderer; booleans get toggle switches
+    // Classic flat list — go through fld() for EVERY field, including
+    // booleans. fld()'s boolean branch emits the same compact-pill +
+    // .sw slider markup the Feature Flags panel uses, so the To Tally
+    // toggles render at exactly the same size and style.
     let body = '<div class="sgrid">';
-    for (const f of fields) {
-      if (f.field_type === 'boolean') {
-        const ck2 = (f.value === 'true') ? 'checked' : '';
-        body += `<div class="flag-row" style="border:1px solid var(--border);border-radius:6px;padding:8px 12px"><label>${esc(f.label)}</label><label class="sw"><input type="checkbox" data-key="${f.key}" data-type="boolean" ${ck2}><span class="sl"></span></label></div>`;
-      } else {
-        body += fld(f);
-      }
-    }
+    for (const f of fields) body += fld(f);
     body += '</div>';
     return toggleBar + body;
   }
@@ -8091,16 +8133,15 @@ function renderTallyPanel(fields){
     return `<input type="number" step="any" data-key="${k}" value="${esc(v(k))}" placeholder="${esc(placeholder)}" title="${esc(lab(k))}" class="tally-in" style="${style}">`;
   };
 
-  // Boolean — uses the EXACT same markup as Feature Flags so dimensions
-  // match: outer <div class="tally-chk"> wraps a plain text label and a
-  // proper <label class="sw"> slider. (We use a <div> outside, not a
-  // <label>, because <label> can't legally nest another <label>; nesting
-  // breaks the slider sizing in some browsers.)
+  // Boolean — emits the IDENTICAL bordered-pill + .sw slider markup that
+  // fld() produces for Feature Flags / Lot Entry Defaults. Width comes
+  // from the parent .tally-row (flex-grown), so toggles in the macro
+  // form sit on a baseline grid like the rest of the inputs in the row.
   const bi = (k, lblOverride) => {
     if (!map[k]) return '';
     const checked = (v(k) === 'true') ? 'checked' : '';
     const lbl = lblOverride || lab(k).replace(/\s*\(.*?\)\s*/g, '').trim();
-    return `<div class="tally-chk"><span>${esc(lbl)}</span><label class="sw"><input type="checkbox" data-key="${k}" data-type="boolean" ${checked}><span class="sl"></span></label></div>`;
+    return `<div class="fg tally-bi" style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin:0;background:#fff"><label style="margin:0;font-size:12px;font-weight:600">${esc(lbl)}</label><label class="sw"><input type="checkbox" data-key="${k}" data-type="boolean" ${checked}><span class="sl"></span></label></div>`;
   };
 
   // Group/section wrapper
@@ -9039,7 +9080,7 @@ async function loadAuctions(){const d=await j('/api/auctions');
 }
 
 function openAuctionAdd(){
-  document.getElementById('auction-modal-title').textContent='New Auction';
+  document.getElementById('auction-modal-title').textContent='New Trade';
   document.getElementById('a-id').value='';
   document.getElementById('a-ano').value='';
   document.getElementById('a-date').value='';

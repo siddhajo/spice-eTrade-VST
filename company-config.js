@@ -165,6 +165,14 @@ const DEFAULTS = [
 
   // ── INTEGRATIONS ───────────────────────────────────────────
   { key: 'gst_api_key',     value: '',               category: 'integrations', label: 'GST Lookup API Key (gstincheck.co.in)', type: 'text' },
+
+  // ── BACKUP (auto schedule) ────────────────────────────────
+  // Server runs a periodic snapshot of the SQLite file into
+  // `<DB_DIR>/backups/`. Frequency + retention configurable from
+  // Settings. Default OFF — operator opts in.
+  { key: 'backup_auto_enabled',   value: 'false', category: 'backup', label: 'Auto Backup',                       type: 'boolean' },
+  { key: 'backup_interval_hours', value: '24',    category: 'backup', label: 'Backup Interval (hours)',           type: 'number' },
+  { key: 'backup_keep_count',     value: '14',    category: 'backup', label: 'Keep last N backups',               type: 'number' },
   // Praman Lot Code — lives under To Tally now (was under Integrations).
   // Falls back to Short Name when blank.
   { key: 'praman_company',  value: '',               category: 'tally',        label: 'Praman Lot Code (fallback: Short Name)', type: 'text' },
@@ -266,22 +274,6 @@ const DEFAULTS = [
   { key: 'tally_hsn_transport',   value: '996791',                     category: 'tally', label: 'SAC — Transport',             type: 'text' },
   { key: 'tally_hsn_insurance',   value: '997136',                     category: 'tally', label: 'SAC — Insurance',             type: 'text' },
 
-  // ── E-way bill DISTANCE estimation ────────────────────────────
-  // Auto-fills <DISTANCE> on ISP sales vouchers using haversine ×
-  // multiplier between dispatch PIN and consignee PIN. The multiplier
-  // converts straight-line km to road km — bump it for hilly terrain
-  // (Western Ghats), lower it for plains. Per-invoice manual override
-  // is supported via the invoices.distance_km column.
-  //
-  // CAVEAT: haversine × multiplier is a rough estimate. For Western
-  // Ghats routes (Kerala↔Tamil Nadu cardamom belt) it can under-shoot
-  // real road distance by 30–50%. The auto-compute is OFF by default
-  // — turn it on only if you've tuned the multiplier for your routes
-  // or you're OK with the estimate. The recommended workflow is to
-  // populate invoices.distance_km manually (or via an external tool)
-  // and let the generator use those values verbatim.
-  { key: 'distance_auto_enabled',    value: 'false',                   category: 'tally', label: 'Auto-fill <DISTANCE> from PIN coordinates (rough estimate — manual override always wins)', type: 'check' },
-  { key: 'distance_road_multiplier', value: '1.5',                     category: 'tally', label: 'Road-distance multiplier (haversine × this = road km)', type: 'number' },
 ];
 
 const CATEGORIES = {
@@ -298,6 +290,7 @@ const CATEGORIES = {
   flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
   lot_entry:  { order: 11.5, title: 'Lot Entry Defaults',   icon: '📝', description: 'Defaults applied when field staff enter lots from the Lot Entry tab. Sample weight is auto-filled into each new lot; moisture column shows when enabled; edit timeout limits how long after creation a non-admin user can edit their own lots.' },
   integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },
+  backup:     { order: 12.5, title: 'Auto Backup',        icon: '💾', description: 'Periodic snapshot of the database file into a local backups folder. Set the interval (hours) and how many backups to keep — older ones are pruned automatically.' },
   tally:      { order: 13, title: 'To Tally',             icon: '📤', description: 'Configure all settings for the Tally XML export — laid out exactly like the original Configration form. Ledger names here MUST match what exists in your Tally company; if a ledger is missing or misspelled, Tally will reject the import.' },
 };
 
@@ -338,6 +331,8 @@ function initCompanySettings(db) {
     'tally_chc_planter', 'tally_unit_rate',
     'tally_dispatch_company', 'tally_dispatch_address', 'tally_dispatch_place',
     'tally_dispatch_pin', 'tally_dispatch_state', 'tally_dispatch_gstin',
+    // Distance auto-fill removed — workflow is manual per-invoice now.
+    'distance_auto_enabled', 'distance_road_multiplier',
   ];
   const drop = db.prepare('DELETE FROM company_settings WHERE key = ?');
   for (const k of REMOVED_KEYS) drop.run(k);
