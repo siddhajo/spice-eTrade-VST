@@ -912,12 +912,33 @@ app.get('/api/traders', requireViewOrLotEntry, (req, res) => {
   if (search) {
     const q = `%${search}%`;
     const rows = db.all(
-      `SELECT * FROM traders 
+      `SELECT * FROM traders
        WHERE name LIKE ? OR tel LIKE ? OR cr LIKE ? OR pan LIKE ? OR ppla LIKE ? OR aadhar LIKE ?
        ORDER BY name LIMIT ?`,
       [q, q, q, q, q, q, parseInt(limit)||50]
     );
-    return res.json(hydrateBanks(rows));
+    // Dedupe by (uppercased name, normalised CR) so the lot-entry
+    // picker doesn't show the same seller twice when the traders
+    // table has accidental duplicates (legacy imports, two field
+    // staff adding the same person at the same time, etc.). When a
+    // collision happens we keep the row with the LATEST id (most-
+    // recently edited) and merge bank lists across the dropped rows
+    // before returning. Different GSTINs / branches of a real seller
+    // (different CR values) stay as separate rows.
+    const normalize = (s) => String(s || '').trim().toUpperCase();
+    const stripGstinPrefix = (s) => {
+      let v = normalize(s);
+      if (v.startsWith('GSTIN.')) v = v.slice(6);
+      else if (v.startsWith('GSTIN')) v = v.slice(5);
+      return v;
+    };
+    const seen = new Map();
+    for (const r of rows) {
+      const key = normalize(r.name) + '|' + stripGstinPrefix(r.cr);
+      const prev = seen.get(key);
+      if (!prev || (r.id || 0) > (prev.id || 0)) seen.set(key, r);
+    }
+    return res.json(hydrateBanks([...seen.values()]));
   }
   res.json(hydrateBanks(db.all('SELECT * FROM traders ORDER BY name LIMIT 500')));
 });
@@ -2128,6 +2149,38 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
   );
   if (existing) {
     return res.status(409).json({ error: `Lot #${lotNoStr} already exists in this auction` });
+  }
+
+  // The lot must be bound to the exact trader_id the UI picked. When
+  // a seller has multiple GSTIN/branch records in the traders table
+  // (legitimate or legacy), this guarantees the lot doesn't silently
+  // pick up a different one's denormalised values via name fallback.
+  // We rebuild name/cr/pan/etc. from the chosen trader row so a stale
+  // payload (e.g. user picked seller A then their session cached B's
+  // fields) can't write inconsistent data.
+  const traderId = l.trader_id != null ? parseInt(l.trader_id, 10) : null;
+  let trader = null;
+  if (traderId) {
+    trader = db.get('SELECT * FROM traders WHERE id = ?', [traderId]);
+    if (!trader) {
+      return res.status(400).json({ error: `Selected seller (trader id ${traderId}) no longer exists. Re-pick from the search.` });
+    }
+  }
+  if (trader) {
+    // Force-coerce the denormalised fields to the picked trader's row
+    // so the saved lot is unambiguous about which GSTIN / branch /
+    // address it belongs to. The client already sends these values,
+    // but we override on the server as the authoritative source.
+    l.name   = trader.name   || l.name   || '';
+    l.cr     = trader.cr     || '';
+    l.pan    = trader.pan    || '';
+    l.tel    = trader.tel    || '';
+    l.aadhar = trader.aadhar || '';
+    l.padd   = trader.padd   || '';
+    l.ppla   = trader.ppla   || '';
+    l.ppin   = trader.pin    || '';
+    l.pstate = trader.pstate || l.pstate || '';
+    l.pst_code = trader.pst_code || l.pst_code || '';
   }
 
   // Allocation enforcement — only kicks in when the trade has explicit
