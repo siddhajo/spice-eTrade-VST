@@ -16,7 +16,7 @@ const getCompanyIdentity = require('./_company-identity-fallback').resolve();
 // Build an XLSX buffer with a unified brand band on top and Indian-format
 // numeric columns. `opts.title` is the report title shown in the middle of
 // the band; `opts.metaLines` is an array of right-aligned meta strings
-// (e.g. ["Trade #3", "15/04/2026", "ASP"]).
+// (e.g. ["Trade #3", "15/04/2026"]).
 // Reusable XLSX export builder. ALL Excel exports in this app should
 // route through this function so they share:
 //   - The same three-zone brand band (logo + name | title | meta)

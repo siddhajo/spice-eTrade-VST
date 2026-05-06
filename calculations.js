@@ -75,7 +75,7 @@ function gstinStateCode(cr) {
  * Calculate purchase amounts for a lot (after trade)
  * This is what GENERATE.PRG does — fills pqty, prate, puramt, com, gst, etc.
  *
- * e-Trade only build: single-company calculation. The dual ISP/ASP planter
+ * e-Trade only build: single-company calculation. The legacy dual-company planter
  * views from the original Spice Config app have been removed — there is
  * just one P_Qty / P_Rate / PurAmt path here. The dual-storage columns
  * (isp_/asp_) are kept and mirrored to the single value so existing

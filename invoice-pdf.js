@@ -22,8 +22,8 @@ function readFlag(val, defaultOn) {
 // ── Invoice number formatter ──────────────────────────────────────
 // Format: {inv_prefix}/{saleType}-{invoiceNo}/{season_short}
 // Examples:
-//   Sales:    "ISP/L-9/26-27"
-//   Purchase: "ISP/9/26-27"   (no saleType segment)
+//   Sales:    "{prefix}/L-9/26-27"
+//   Purchase: "{prefix}/9/26-27"   (no saleType segment)
 // Separators are hardcoded: "/" outer, "-" between saleType & invoiceNo.
 function formatInvoiceNo(cfg, saleType, invoiceNo) {
   const prefix = cfg.inv_prefix || '';
@@ -56,9 +56,9 @@ function formatINR(n, decimals = 2) {
 }
 
 // ── Effective company details based on business_state ────────────
-// e-Trade-only build: there is a single company identity (ISP). The
-// state toggle (TAMIL NADU / KERALA) just picks which address block
-// (and GSTIN/phone/email) to print — company name, PAN, CIN, etc. are
+// e-Trade-only build: there is a single company identity. The state
+// toggle (TAMIL NADU / KERALA) just picks which address block (and
+// GSTIN/phone/email) to print — company name, PAN, CIN, etc. are
 // always the same.
 function effectiveCompany(cfg) {
   const state = (cfg.business_state || '').toUpperCase();
@@ -195,8 +195,8 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
 
   // ── BILLED TO / SHIPPED TO row ──
   // On a purchase invoice from seller's perspective, BILLED TO is US (the
-  // purchaser — typically ASP when buying). Both columns show the same
-  // ASP block unless shipping to a different address.
+  // purchaser). Both columns show the same buyer block unless shipping
+  // to a different address.
   const headH = 14;
   // Explicit horizontal divider ABOVE the header band
   doc.moveTo(x0, y).lineTo(x1, y).stroke();
@@ -657,10 +657,10 @@ module.exports = { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateA
 /**
  * Sales Invoice PDF (Tax Invoice)
  * Grid-based layout matching the legal GST format:
- *   - Supplier (ISPL) top-left with logo
+ *   - Supplier (this company) top-left with logo
  *   - Invoice metadata grid top-right (Invoice No, Date, Other References, etc.)
  *   - Consignee (Ship to) + Buyer (Bill to) stacked on left
- *   - Dispatch From (sister company ASP) on right
+ *   - Dispatch From (sister company) on right
  *   - Line items table with HSN/SAC, Shipped/Billed qty, Rate, Amount
  *   - HSN summary + tax breakup
  *   - Bank details + signature block
@@ -675,18 +675,18 @@ module.exports = { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateA
 // invoices into a single file. Returns the Buffer only in standalone mode.
 function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceDate, externalDoc, variant) {
   const isBatch = !!externalDoc;
-  // Variant = 'purchase' renders the mirror-image view of an ASP sales invoice:
-  //   - Top-left company block shows ISPL (the receiving company) instead of ASP
-  //   - "Buyer (Bill to)" label becomes "Seller (Bill from)" and displays ASP
-  //   - Bank details show TN bank (ISPL's)
+  // Variant = 'purchase' renders the mirror-image view of an intra-company sale:
+  //   - Top-left company block shows the receiving company instead of the sister
+  //   - "Buyer (Bill to)" label becomes "Seller (Bill from)" and displays the sister
+  //   - Bank details show TN bank (the receiving company's)
   //   - Title shows "Purchase Invoice" instead of "Tax Invoice"
   // All line-item math stays identical (same P_Rate, PurAmt, totals, HSN).
-  // Only valid for ASP invoices; caller must ensure that.
+  // Only valid for intra-company invoices; caller must ensure that.
   const isPurchaseView = (variant === 'purchase');
-  // For the purchase view, we FLIP the top-of-page issuer to ISPL by pretending
+  // For the purchase view, we FLIP the top-of-page issuer to the receiving company by pretending
   // the effective company is the primary (not sister). Easiest way: compute
   // effectiveCompany with a forced-TN cfg clone. The rest of the function still
-  // uses the original cfg so ASP business rules (P_Rate formula, etc.) stay in
+  // uses the original cfg so the intra-company business rules (P_Rate formula, etc.) stay in
   // effect — only the display swaps.
   const co = isPurchaseView
     ? effectiveCompany({ ...cfg, business_state: 'TAMIL NADU' })
@@ -711,7 +711,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // isASP = this invoice is issued by ASP (sister company) instead of ISPL.
   // Triggered when business mode = e-Trade AND state = KERALA.
   // Drives: invoice-prefix swap, Transport/Insurance hidden, bank details
-  //         picked from KL bank settings, "Dispatch From" hidden (ASP
+  //         picked from KL bank settings, "Dispatch From" hidden (sister
   //         invoices don't reference a separate dispatch), logo swap.
   const isASP = false; // e-Trade-only build: no ASP context
   // Hide Transport/Insurance rows in the PDF for Export sales only.
@@ -729,12 +729,12 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
     return String(val).toLowerCase() === 'true';
   }
   // Ship-To visibility:
-  //   ASP invoices → ALWAYS hidden (Consignee block doesn't apply to the
-  //     ASP→ISP internal transfer, per user spec)
-  //   ISP invoices → ALWAYS shown (per business rule: TN invoices need
-  //     buyer ship-to and dispatch addresses on the PDF). The cfg flags
-  //     flag_ship / flag_dispatch are kept for backward compat but
-  //     overridden in the TN/ISP path.
+  //   Intra-company invoices → ALWAYS hidden (Consignee block doesn't
+  //     apply to the internal transfer, per user spec).
+  //   External-customer invoices → ALWAYS shown (per business rule: TN
+  //     invoices need buyer ship-to and dispatch addresses on the PDF).
+  //     The cfg flags flag_ship / flag_dispatch are kept for backward
+  //     compat but overridden in the external-customer path.
   const showShipTo   = isASP ? false : true;
   const showDispatch = isASP ? readFlagSafe(cfg.flag_dispatch, true) : true;
 
@@ -825,7 +825,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   y += 14;
 
   // ── TOP HEADER BLOCK ────────────────────────────────────────
-  // Left half: Logo + ISPL details
+  // Left half: Logo + company details
   // Right half: 2-col sub-grid (Invoice No, e-Way Bill No, Dated / Delivery Note, Mode/Terms / Ref No., Other Refs)
   const topY = y;
   const leftW = W * 0.5;
@@ -841,10 +841,10 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
 
   // ── LEFT BLOCK: Logo + company details ──────────────────────
   box(leftX, topY, leftW, topHeaderH);
-  // Logo file pick. For ASP sales invoice → ASP logo. For ASP purchase view
-  // (issuer is ISPL, not ASP) → ISPL logo.
+  // Logo file pick. Intra-company sales → sister logo. Intra-company
+  // purchase view (issuer is the home company) → home logo.
   const useASPLogo = !isPurchaseView
-                  && false; // e-Trade-only build: no ASP context
+                  && false; // e-Trade-only build: no sister-company context
   const logoFile = useASPLogo ? 'logo-asp.png' : 'logo-ispl.png';
   const logoPath = require('path').join(__dirname, 'public', logoFile);
   const fs = require('fs');
@@ -882,18 +882,18 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // that's the field labeled "Invoice Prefix" in the Invoice settings tab
   // and is the value the user explicitly maintains for this purpose.
   // Falls back to Logo Code (`logo`) only when `inv_prefix` is unset, then
-  // to the user's short_name / trade_name first word. NO hardcoded 'ISP'
+  // to the user's short_name / trade_name first word. NO hardcoded
   // literal — a fresh install with no Invoice Prefix configured renders
-  // a prefix-less identifier rather than leaking the legacy ISP code.
+  // a prefix-less identifier rather than leaking any legacy literal.
   const _idShort = (cfg.short_name || String(cfg.trade_name || '').split(/\s+/)[0] || '').toUpperCase();
   const primaryPrefix = String(cfg.inv_prefix || cfg.logo || _idShort || '').trim();
   const otherPrefix   = primaryPrefix; // dead — kept for the few downstream sites that still read it
   const primaryCfg    = { ...cfg, inv_prefix: primaryPrefix };
-  // ASP invoices always use the "I" segment irrespective of local/interstate
-  // sale type (format: ASP/I-{invno}/{season_short}).
+  // Intra-company invoices always use the "I" segment irrespective of
+  // local/interstate sale type (format: {prefix}/I-{invno}/{season_short}).
   const displaySaleType = isASP ? 'I' : saleType;
-  // Row-1 height: expand to fill both rows' worth of space for ASP (since
-  // Row 2 — Reference No. + Other References — is hidden for ASP).
+  // Row-1 height: expand to fill both rows' worth of space for intra-company
+  // invoices (Row 2 — Reference No. + Other References — is hidden for those).
   const row1H = isASP ? (rRow * 2) : rRow;
   labeledCell(rightX,             ry, r1W, row1H, 'Invoice No.', formatInvoiceNo(primaryCfg, displaySaleType, invoiceNo));
   labeledCell(rightX + r1W,       ry, r1W, row1H, 'e-Way Bill No.', '');
@@ -906,13 +906,13 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   })());
   ry += row1H;
 
-  // Row 2 — ONLY for ISP invoices (ASP omits Reference No. / Other References)
+  // Row 2 — ONLY for external-customer invoices (intra-company omits Reference No. / Other References)
   if (!isASP) {
     // Reference No. & Date — populated with the formatted invoice number
     // so the field carries the document's own self-reference. Older
     // builds left this blank; per the new spec the buyer's accounts team
     // expects this to mirror Invoice No. as the canonical reference key.
-    // Other References stays blank — historically the cross-ASP number,
+    // Other References stays blank — historically the cross-company number,
     // but the single-company e-Trade build has no cross-reference.
     const refNoText = formatInvoiceNo(primaryCfg, displaySaleType, invoiceNo);
     labeledCell(rightX,         ry, rCell, rRow, 'Reference No. & Date.', refNoText);
@@ -924,7 +924,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // ── MIDDLE BLOCK: Consignee + Buyer + Dispatch ──────────────
   // Left column: Consignee (Ship to) stacked above Buyer (Bill to)
   // Right column: Dispatched through | Destination (top row)
-  //               Dispatch From (ASP) — fills remaining height
+  //               Dispatch From (sister) — fills remaining height
 
   const midH = 150; // total middle-block height
   const midY = y;
@@ -983,8 +983,8 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // Draw Buyer (Bill to) / Seller (Bill from) cell
   box(leftX, buyerY, leftW, leftCellH);
   let by = buyerY + 3;
-  // Label flips for purchase view: "Seller (Bill from)" since ISPL is the buyer
-  // here, and ASP is the seller we're buying from.
+  // Label flips for purchase view: "Seller (Bill from)" since the receiving
+  // company is the buyer here, and the sister is the seller.
   const blockLabel = isPurchaseView ? 'Seller (Bill from)' : 'Buyer (Bill to)';
   doc.font('Helvetica').fontSize(7).text(blockLabel, leftX + 3, by); by += 9;
 
@@ -994,7 +994,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // the structure so a future multi-company restoration is easier.
   //
   // Priority is identity-first, legacy s_*/tn_* fields fallback. This
-  // ensures stale ASP/ISP values left over from migrations don't leak
+  // ensures stale dual-company values left over from migrations don't leak
   // into BILLED TO / SHIPPED TO blocks on PDFs.
   const _identBT = getCompanyIdentity(cfg);
   let billTo;
@@ -1047,19 +1047,19 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   let ry2 = midY;
 
   // Dispatched through: prefer a per-call override (passed in invoiceData
-  // from the print modal) over the stored default. Falls back to ISP/ASP
+  // from the print modal) over the stored default. Falls back to the
   // variants in cfg, then the global default.
   const dispThrough = (invoiceData && invoiceData.dispatchedThrough)
     || (isASP
       ? (cfg.dispatched_through_asp || cfg.dispatched_through || '')
       : (cfg.dispatched_through_isp || cfg.dispatched_through || ''));
   labeledCell(rightX,         ry2, rCell, rSmall, 'Dispatched through', dispThrough);
-  // Destination for ISP invoices uses the buyer's CONSIGNEE place (cpla)
-  // since ISP delivers TO the consignee/ship-to address. Falls back to
+  // Destination for external-customer invoices uses the buyer's CONSIGNEE
+  // place (cpla) since we deliver TO the consignee/ship-to address. Falls back to
   // buyer's main place (pla) if no separate consignee is set, then to
   // configured dispatch_destination as a last resort.
-  // ASP invoices use the configured dispatch_destination directly because
-  // ASP→ISPL is internal and the destination is always ISPL's location.
+  // Intra-company invoices use the configured dispatch_destination
+  // directly because the destination is always the home company's location.
   const destination = isASP
     ? (cfg.dispatch_destination || '')
     : (buyer.cpla || buyer.pla || cfg.dispatch_destination || '');
@@ -1205,8 +1205,8 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
     if (showHsn) doc.text(hsnCardamom, colX('hsn') + 2, y + 3, { width: colW.hsn - 4, align: 'center' });
     doc.text(`${li.qty.toFixed(3)} Kgs.`, colX('shipped') + 2, y + 3, { width: colW.shipped - 4, align: 'right' , lineBreak: false});
     doc.font('Helvetica-Bold').text(`${li.qty.toFixed(3)} Kgs.`, colX('billed') + 2, y + 3, { width: colW.billed - 4, align: 'right' , lineBreak: false});
-    // ASP invoices: bill at P_Rate and show PurAmt (ASP→ISP internal transfer price)
-    // ISP invoices: bill at Price and show Amount (external customer price)
+    // Intra-company invoices: bill at P_Rate and show PurAmt (internal transfer price)
+    // External-customer invoices: bill at Price and show Amount
     const lineRate = isASP ? (li.prate != null ? li.prate : li.price) : li.price;
     const lineAmount = isASP ? (li.puramt != null ? li.puramt : li.amount) : li.amount;
     doc.font('Helvetica-Bold').text(formatINR(lineRate), colX('rate') + 2, y + 3, { width: colW.rate - 4, align: 'right' });
@@ -1308,7 +1308,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const transportRate = isLocalSale
     ? pickRate(cfg.local_transport, cfg.transport, 2.5)
     : pickRate(cfg.transport, 2.5);
-  // ASP invoices never bill Transport/Insurance separately (item 5).
+  // Intra-company invoices never bill Transport/Insurance separately (item 5).
   // Wrap both rows + their HSN summary entries in an isASP guard.
   const sacTransport = cfg.sac_transport || '996791';
   if (summary.transportCost > 0 && !hideTransportInsurance) {
@@ -1465,7 +1465,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   }
   hsnRows.push(hsnRow(hsnCardamom, 'Cardamom', summary.totalAmount, summary.cardamomTax));
   if (summary.gunnyCost > 0)     hsnRows.push(hsnRow(hsnGunny, 'Gunny', summary.gunnyCost, summary.gunnyTax));
-  // ASP invoices: Transport/Insurance are not billed, so skip them from HSN summary too
+  // Intra-company invoices: Transport/Insurance are not billed, so skip them from HSN summary too
   if (summary.transportCost > 0 && !hideTransportInsurance) hsnRows.push(hsnRow(sacTransport, 'Transport', summary.transportCost, summary.transportTax));
   if (summary.insuranceCost > 0 && !hideTransportInsurance) hsnRows.push(hsnRow(sacInsurance, 'Insurance', summary.insuranceCost, summary.insuranceTax));
 
@@ -1684,8 +1684,8 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
     bky += 2;
   } // end if (showBank)
   // "for COMPANY NAME" right-aligned
-  // In purchase view, the issuer header is ISPL but the signatory block
-  // represents the SELLING company (ASP) — whose bank received the payment
+  // In purchase view, the issuer header is the home company but the
+  // signatory block represents the SELLING company (sister) — whose bank received the payment
   // and whose authorised signatory certifies the sale. In single-company
   // e-Trade, isPurchaseView is always false; we use the configured
   // identity as the sole source rather than a hardcoded sister name.
@@ -1714,7 +1714,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
 // Agri Bill (Bill of Supply for agriculturist sellers) — layout matches
 // PLANTER-TF-03-1-2.pdf reference. Key differences from a tax invoice:
 //   - Title: "Bill for Purchase from Agriculturist" with Section 2(7) subtitle
-//   - Issuer block = ASP (sister company) — agri purchases are made via ASP
+//   - Issuer block = sister company — agri purchases are made via the sister
 //   - Buyer/Consignee columns: seller is "DETAILS OF SELLER [BILLED FOR]"
 //     and the consignee column is typically empty for self-generated bills
 //   - GST columns are PRESENT but left BLANK (agriculturist is unregistered
@@ -1759,12 +1759,12 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
 
   const boxTopY = y;
 
-  // ── ASP header block (company identity) ──
+  // ── Sister-company header block (company identity) ──
   y += 4;
   // Capture y BEFORE writing the company text, so we can position the logo
   // alongside the text block (vertically centered against it).
   const headerStartY = y;
-  // Logo: Bill of Supply is always issued by ASP, so always use the ASP
+  // Logo: Bill of Supply is always issued by the sister, so always use the sister's
   // logo. Optional — falls through silently if the file isn't present.
   const _logoPath = require('path').join(__dirname, 'public', 'logo-asp.png');
   const _fs = require('fs');
@@ -2151,7 +2151,7 @@ function generateSalesInvoicesBatchPDF(invoices, cfg, variant) {
 
   // `variant` (e.g. 'purchase') is a uniform display-flip applied to every
   // invoice in the batch — used by the bulk purchase-view endpoint to
-  // render the ISPL-side mirror of every selected ASP sales invoice.
+  // render the home-side mirror of every selected sister sales invoice.
   for (const inv of invoices) {
     generateSalesInvoicePDF(
       inv.invoiceData,

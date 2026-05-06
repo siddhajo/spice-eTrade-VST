@@ -2,7 +2,7 @@
  * tally-xml.js — Tally-importable XML generators
  *
  * Ports the VBA macros (ConvertSales, ConvertPurchase, ConvertDebit) from
- * the IDEAL_V5_6 / ASPPL_V5_6 .xlsm files into pure-JS functions that build
+ * the legacy macro .xlsm files into pure-JS functions that build
  * the same <ENVELOPE>...</ENVELOPE> Tally XML payloads.
  *
  * Four export types:
@@ -186,7 +186,7 @@ const HAS_GSTIN_SQL = `(UPPER(COALESCE(cr,'')) LIKE 'GSTIN%' OR cr GLOB '[0-9][0
 const NO_GSTIN_SQL  = `(cr IS NULL OR cr = '' OR (UPPER(cr) NOT LIKE 'GSTIN%' AND cr NOT GLOB '[0-9][0-9]*'))`;
 
 // =====================================================================
-// Helpers shared by ISP/ASP sales generators
+// Helpers shared by sales generators (external + intra-company)
 // =====================================================================
 
 // Two-line "BASICBUYERADDRESS" / "ADDRESS.LIST" — exactly what the
@@ -217,12 +217,12 @@ const _saleLabel = (s) => {
 };
 
 // =====================================================================
-// 1A. ISP SALES VOUCHERS (sales to outside customer)
+// 1A. SALES VOUCHERS (sales to outside customer)
 // =====================================================================
 //
 // Matches reference SALE_TRANS-03.xml — full format with consignee,
 // e-way bill, dispatch-from (sister company), BASICORDERREF (= the
-// matching ASP voucher), order terms list.
+// matching intra-company voucher), order terms list.
 //
 // Input shape (rows from buildSalesIspRows):
 //   rows = [{
@@ -243,20 +243,18 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   //   1. tally_inv_prefix setting (e.g. 'VSTK') — explicit, season-stable
   //   2. cfg.logo (live Logo Code) — back-compat for installs that
   //      historically used the Logo Code as the prefix
-  //   3. 'ISP' literal — final safety net so we never emit blank prefixes
+  //   3. derived short name from company identity
+  //   4. 'INV' — generic last-resort label so we never emit blank
+  //      prefixes. NO fallback to any company-specific code.
   // Trailing '/' appended only if the code doesn't already end with one
   // or '-'. The slash is necessary because <VOUCHERNUMBER> is rendered
   // as `${invPrefix}${separator}${seasonNum}` and a missing slash
   // produces invalid voucher numbers in Tally.
   const _tallyPrefix = String(cfgGet(cfg, 'tally_inv_prefix', '')).trim();
   const _logoCode    = String(cfgGet(cfg, 'logo', '')).trim();
-  // Voucher prefix priority: tally_inv_prefix (Tally settings) → logo
-  // (Settings → Company) → identity.shortName (derived) → 'INV' as a
-  // generic last-resort label. Avoids leaking the legacy 'ISP' code
-  // into voucher numbers on installs where logo isn't configured.
   const _activePrefix = _tallyPrefix || _logoCode || _getCompanyIdentity(cfg).shortName || 'INV';
   const invPrefix = /[/\-]$/.test(_activePrefix) ? _activePrefix : (_activePrefix + '/');
-  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
+  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // optional auxiliary prefix; empty = none
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = cfgBool(cfg, 'tally_dispatch_from', true);
   // E-way bill emission gate — user-controlled, defaults ON, independent
@@ -284,16 +282,15 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const HSN_Card     = cfgGet(cfg, 'tally_hsn_cardamom',  '09083120');
   const HSN_Gunny    = cfgGet(cfg, 'tally_hsn_gunny',     '63051040');
   const GunnyRate    = cfgNum(cfg, 'tally_gunny_rate',     165);
-  // Service ledgers (intra-state ISP only — reference uses fully-spelled
+  // Service ledgers (intra-state only — reference uses fully-spelled
   // names with the rate baked in; user can override in Settings)
   const LDR_Transport  = cfgGet(cfg, 'tally_transport', 'Transport Rs.2.50/per Kg');
   const LDR_Insurance  = cfgGet(cfg, 'tally_insurance', 'Insurance Rs.0.75/per Thousand');
   const SAC_Transport  = cfgGet(cfg, 'tally_hsn_transport', '996791');
   const SAC_Insurance  = cfgGet(cfg, 'tally_hsn_insurance', '997136');
 
-  // Dispatch-from defaults: in the original Spice Config app this used
-  // sister-company (ASP / Kerala) address. In this e-Trade-only build,
-  // there's a single company identity — pull dispatch info from the
+  // Dispatch-from defaults: this single-company build pulls dispatch
+  // info from the
   // configured Kerala address block (since dispatch typically goes via
   // the Kerala warehouse). User can override per-export via opts.
   const d_company    = cfgGet(cfg, 'short_name', cfgGet(cfg, 'trade_name', ''));
@@ -326,9 +323,10 @@ function generSalesIspXML(rows, cfg, opts = {}) {
     const taxNm       = `${sale}${separator}${invoNo}`;
     const voucherNum  = `${invPrefix}${taxNm}/${season}`;
     // Single-company build: <BASICORDERREF> mirrors <VOUCHERNUMBER>.
-    // The original dual-company app pointed this at the matching ASP
-    // voucher; in this build the invoice references itself so Tally
-    // gets a populated tag without phantom ASP/* numbers.
+    // The original dual-company app pointed this at the matching
+    // intra-company voucher; in this single-company build the invoice
+    // references itself so Tally gets a populated tag without phantom
+    // numbers.
     const aspVoucherRef = voucherNum;
 
     const rates       = rateDetails(cfgNum(cfg, 'tally_gst_rate', 5));
@@ -778,17 +776,17 @@ ${rates.cess}
 }
 
 // =====================================================================
-// 1B. ASP SALES VOUCHERS (sister-company internal transfer to ISP)
+// 1B. INTRA-COMPANY SALES VOUCHERS (sister-company internal transfer)
 // =====================================================================
 //
-// Matches reference ASP_SALE_TRANS-03.xml — leaner format. The buyer
-// is ALWAYS ISP (the sister/main company), so address/GSTIN come from
-// the home-company config. Lot rates/amounts come from the ASP-side
+// Matches the legacy intra-company voucher reference — leaner format.
+// The buyer is ALWAYS the home company so address/GSTIN come from the
+// home-company config. Lot rates/amounts come from the sister-side
 // planter calculation (`lots.asp_prate` / `lots.asp_puramt`).
 //
 // Input shape (rows from buildSalesAspRows):
 //   rows = [{
-//     ano, date, sale ('L'|'I'|'E'), invo (= ASP invoice number),
+//     ano, date, sale ('L'|'I'|'E'), invo (= sister-side invoice number),
 //     ispPartyName, ispAddress (joined string), ispPlace, ispPin,
 //     ispGstin, lots: [{lot, bag, qty, rate, amount}, ...],
 //     amounttot, gunnyAmt, gunnyBags, igst, cgst, sgst,
@@ -799,13 +797,13 @@ function generSalesAspXML(rows, cfg, opts = {}) {
   const company       = opts.companyName || cfgGet(cfg, 'tally_asp_company_name', 'Amazing Spice Park Private Limited');
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
-  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
+  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy sister-company prefix; empty = no aux prefix
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
 
-  // ASP's home-state code (for intra/inter detection w.r.t. the buyer)
+  // the sister company's home-state code (for intra/inter detection w.r.t. the buyer)
   const intra         = cfgGet(cfg, 'tally_state_code_amazing', '32');
 
-  // Ledgers — ASP's books use the same names by convention; if user
+  // Ledgers — the sister company's books use the same names by convention; if user
   // wants ASP-specific ledger names, add tally_asp_* keys later.
   const SalesInter   = cfgGet(cfg, 'tally_sales_inter',  'Cardamom Inter-State Sales');
   const SalesIntra   = cfgGet(cfg, 'tally_sales_intra',  'Cardamom Local Sales');
@@ -823,7 +821,7 @@ function generSalesAspXML(rows, cfg, opts = {}) {
   const HSN_Gunny    = cfgGet(cfg, 'tally_hsn_gunny',     '63051040');
   const GunnyRate    = cfgNum(cfg, 'tally_gunny_rate',     165);
 
-  // ASP's own dispatch-from address (own premises in Kerala). Reference
+  // the sister company's own dispatch-from address (own premises in Kerala). Reference
   // shows full address with SBL line. We reuse the home company's KL
   // address fields for this.
   const own_addr1    = cfgGet(cfg, 's_dispatch_address1', '650,Ward 6, Ellikkanam, Nedumkandam');
@@ -833,7 +831,7 @@ function generSalesAspXML(rows, cfg, opts = {}) {
   const own_pin      = cfgGet(cfg, 'tally_dispatch_pin', '685553');
   const own_state    = cfgGet(cfg, 'tally_dispatch_state', 'Kerala');
   // Own company name: legacy s_* fields take priority for installs that
-  // imported from the ASP build, but fall back to the central identity
+  // imported from the sister-company build, but fall back to the central identity
   // resolver instead of a hardcoded "AMAZING SPICE PARK" string.
   const own_company  = cfgGet(cfg, 's_company',
                        cfgGet(cfg, 's_short_name',
@@ -850,11 +848,11 @@ function generSalesAspXML(rows, cfg, opts = {}) {
     const ispPlace    = xe(row.ispPlace || '');
     const ispAddrLines = _addrLines(row.ispAddress, row.ispPlace);
     const isIntra     = String(row.ispGstin || '').slice(0, 2) === String(intra);
-    // ASP→ISP transfer is always inter-state (Kerala→TN by default), so
+    // intra-company transfer is always inter-state (Kerala→TN by default), so
     // the voucher number's sale letter is always 'I'. The upstream
-    // invoice's `sale` (which reflects the ISP→outside-customer leg —
+    // invoice's `sale` (which reflects the company-to-outside-customer leg —
     // could be L/I/E) is preserved on the row but not used in the
-    // voucher number. Reference uses ASP/I-61, ASP/I-62, ... regardless.
+    // voucher number. Reference uses sister-prefixed numbers regardless.
     const sale        = 'I';
     const isExport    = false;
     const invoNo      = String(row.invo || '').trim();
@@ -919,7 +917,7 @@ ${ispAddrLines.map(l => `<ADDRESS>${xe(l)}</ADDRESS>`).join('\n')}
 <ISINVOICE>Yes</ISINVOICE>
 <ISVATDUTYPAID>Yes</ISVATDUTYPAID>`;
 
-    // Party (debtor = ISP) ledger
+    // Party (debtor = home company) ledger
     const totalRound = r0(row.totalRounded || row.total);
     const totalAmt   = r2(row.total);
     const rnd        = r2(totalRound - totalAmt);
@@ -1055,16 +1053,16 @@ ${rates.cess}
 }
 
 // =====================================================================
-// ISP PURCHASE (mirror of ASP→ISP transfer, ISP-side books)
+// PURCHASE MIRROR (intra-company transfer, home-side books)
 // =====================================================================
 //
-// For every ASP sale voucher (ASP→ISP internal transfer), the ISP company
+// For every sister-side sale voucher (intra-company internal transfer), the home company
 // needs a matching purchase voucher in its books. Same line items, same
 // amounts, but viewed from the buyer side:
-//   • PARTYNAME = ASP (the supplier)
-//   • Imports into the ISP Tally company
-//   • VOUCHERNUMBER = same as the ASP sale (e.g. ASP/I-61/26-27) — this is
-//     the cross-reference key. NOT a fresh ISP-prefixed number.
+//   • PARTYNAME = sister company (the supplier)
+//   • Imports into the home Tally company
+//   • VOUCHERNUMBER = same as the sister sale — this is the cross-
+//     reference key. NOT a fresh home-prefixed number.
 //   • Inventory AMOUNTs are negative (purchase debits stock)
 //   • Tax ledger AMOUNTs are negative (input GST claimed)
 //   • Round-off sign is flipped vs the sale (preRound − rounded)
@@ -1077,7 +1075,7 @@ ${rates.cess}
 // directly — no new builder needed.
 //
 function generIspPurchaseXML(rows, cfg, opts = {}) {
-  // Imports into ISP company (the buyer's books)
+  // Imports into the home company (the buyer's books)
   const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
   const tlyrnd        = cfgBool(cfg, 'flag_tally_round', true);
 
@@ -1092,8 +1090,8 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
   const HSN_Card     = cfgGet(cfg, 'tally_hsn_cardamom',        '09083120');
   const HSN_Gunny    = cfgGet(cfg, 'tally_hsn_gunny',           '63051040');
 
-  // Sister/ASP party identity — fetched from sister-company cfg if
-  // present (legacy ASP installs), else falls back to the central
+  // Sister-company party identity — fetched from sister-company cfg if
+  // present (legacy installs), else falls back to the central
   // identity resolver. No hardcoded "AMAZING SPICE PARK" literal.
   const aspName    = cfgGet(cfg, 's_company',
                        cfgGet(cfg, 's_short_name',
@@ -1105,13 +1103,13 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
   const aspState   = cfgGet(cfg, 's_state',    cfgGet(cfg, 'tally_dispatch_state', 'Kerala'));
   const aspGstin   = cfgGet(cfg, 's_gstin',    '');
 
-  // Address lines for the ASP party. Reference shows two lines:
+  // Address lines for the sister-company party. Reference shows two lines:
   //   line 1 = full street address
   //   line 2 = town/place
   const aspAddrLines = _addrLines(aspAddr1, aspPlace || aspAddr2);
 
-  // Place of supply for the receiving company (ISP = TN by default). Sale
-  // letter on the matching ASP sale voucher is always 'I' (inter-state),
+  // Place of supply for the receiving (home) company. Sale letter
+  // on the matching sister sale voucher is always 'I' (inter-state),
   // so place of supply = TN.
   const ispPlaceOfSupply = cfgGet(cfg, 'tally_home_state', 'Tamil Nadu');
 
@@ -1124,19 +1122,19 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
 
   for (const row of rows) {
     const dateval     = toTallyDate(row.date);
-    // Same voucher number as the matching ASP sale — this is the
+    // Same voucher number as the matching sister sale — this is the
     // cross-reference. The builder already produced the per-row data
     // including invo and sale='I' implicit; we re-derive the number here
     // exactly like generSalesAspXML does, so the two stay in lockstep.
     const ainvPrefix  = cfgGet(cfg, 'tally_ainv_prefix', '');
     const separator   = opts.separator || cfgGet(cfg, 'tally_separator', '/');
     const season      = opts.season    || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
-    const sale        = 'I';  // always inter-state for ASP→ISP
+    const sale        = 'I';  // always inter-state for intra-company
     const invoNo      = String(row.invo || '').trim();
     const taxNm       = `${sale}${separator}${invoNo}`;
     const voucherNum  = `${ainvPrefix}${taxNm}/${season}`;
 
-    // Pre-round total (matches the ASP sale's pre-round total). The
+    // Pre-round total (matches the sister sale's pre-round total). The
     // builder computed `total` as r2(taxableTotal + cgst + sgst + igst).
     const preRound    = r2(row.total || 0);
     const rounded     = r0(preRound);
@@ -1144,12 +1142,12 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
     const roundOff    = r2(preRound - rounded);
 
     // For the party AMOUNT, Tally expects the rounded total (positive,
-    // since we owe ASP). The reference shows e.g. <AMOUNT>985352</AMOUNT>.
+    // since we owe the sister company).
     const partyAmt    = tlyrnd ? rounded : preRound;
 
     // IGST always (Kerala→TN inter-state). The reference shows IGST
     // ledger AMOUNT as negative (input tax). cgst/sgst should be 0 here
-    // for the standard ASP→ISP flow.
+    // for the standard intra-company flow.
     const igstAmt     = r2(row.igst || 0);
     const cgstAmt     = r2(row.cgst || 0);
     const sgstAmt     = r2(row.sgst || 0);
@@ -1212,9 +1210,9 @@ ${TAGS.DEEMNO}
 </BILLALLOCATIONS.LIST>
 </LEDGERENTRIES.LIST>`;
 
-    // Tax ledger — IGST only for inter-state (the standard ASP→ISP path).
+    // Tax ledger — IGST only for inter-state (the standard intra-company path).
     // CGST/SGST emitted only if the row was somehow computed as intra
-    // (rare; would happen only if ASP and ISP shared a state).
+    // (rare; would happen only if both companies shared a state).
     if (igstAmt) {
       xml += `
 <LEDGERENTRIES.LIST>
@@ -1383,16 +1381,16 @@ function generSalesXML(rows, cfg, opts = {}) {
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
   // Voucher prefix from Logo Code (single source of truth — see the
-  // ISP generator above for rationale). Falls through to the central
-  // identity resolver's shortName instead of leaking the legacy 'ISP'
+  // sales generator above for rationale). Falls through to the central
+  // identity resolver's shortName instead of leaking any legacy hardcoded
   // literal into voucher numbers.
   const _logoCode2 = String(cfgGet(cfg, 'logo', '')).trim()
                   || _getCompanyIdentity(cfg).shortName || 'INV';
   const invPrefix     = /[/\-]$/.test(_logoCode2) ? _logoCode2 : (_logoCode2 + '/');
-  // ainvPrefix and amazing are kept as locals so the dead ASP branches
+  // ainvPrefix and amazing are kept as locals so the dead sister branches
   // below still parse, but `amazing` is force-disabled in this e-Trade-only
   // build — there is no sister-company Tally export here.
-  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy ASP-prefix (sister company); empty means "no aux prefix"
+  const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // legacy sister-company prefix; empty = no aux prefix
   const amazing       = false;
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = false; // dispatch-from override removed in e-Trade-only build
@@ -1415,7 +1413,7 @@ function generSalesXML(rows, cfg, opts = {}) {
   const HSN_Card     = cfgGet(cfg, 'tally_hsn_cardamom',  '09083110');
   const HSN_Gunny    = cfgGet(cfg, 'tally_hsn_gunny',     '63053200');
 
-  // Dispatch-from address (sister-company despatch, ASP source)
+  // Dispatch-from address (sister-company despatch source)
   const d_company    = cfgGet(cfg, 'tally_dispatch_company', cfgGet(cfg, 's_short_name', ''));
   const d_add        = cfgGet(cfg, 'tally_dispatch_address', cfgGet(cfg, 's_address1', ''));
   const d_place      = cfgGet(cfg, 'tally_dispatch_place',   cfgGet(cfg, 's_place', ''));
@@ -1630,7 +1628,7 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
   // code (cfg.tally_state_code, default 33 = Tamil Nadu).
   const intra      = cfgGet(cfg, 'tally_state_code', '33');
   // Voucher prefix from Logo Code (single source of truth) — falls
-  // through to identity.shortName so we don't leak 'ISP' literal.
+  // through to identity.shortName so we don't leak a hardcoded literal.
   const _rdLogoCode = String(cfgGet(cfg, 'logo', '')).trim()
                    || _getCompanyIdentity(cfg).shortName || 'INV';
   const ainvPrefix = /[/\-]$/.test(_rdLogoCode) ? _rdLogoCode : (_rdLogoCode + '/');
@@ -1945,11 +1943,11 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
   const detailed  = cfgBool(cfg, 'tally_detailed', true);
   const tlyrnd    = cfgBool(cfg, 'tally_round_enabled', true);
   const opt       = cfgBool(cfg, 'tally_optional', false);
-  // amazing/ainvPrefix kept as locals so dead ASP branches below still
+  // amazing/ainvPrefix kept as locals so dead sister branches below still
   // parse; `amazing` is force-disabled in this e-Trade-only build.
   const amazing   = false;
   // Voucher prefix from Logo Code (single source of truth) — falls
-  // through to identity.shortName so we don't leak 'ISP' literal.
+  // through to identity.shortName so we don't leak a hardcoded literal.
   const _urdLogoCode = String(cfgGet(cfg, 'logo', '')).trim()
                     || _getCompanyIdentity(cfg).shortName || 'INV';
   const invPrefix = /[/\-]$/.test(_urdLogoCode) ? _urdLogoCode : (_urdLogoCode + '/');
@@ -1979,7 +1977,7 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
     const amounttot  = r2(row.amounttot);
     const qtytot     = r2(row.qtytot);
     const rt         = r2(qtytot > 0 ? amounttot / qtytot : 0);
-    // Single-company build: URD voucher number uses the ISP prefix.
+    // Single-company build: URD voucher number uses the configured prefix.
     const voucherRef = `${invPrefix}P-${taxNm}/${season}`;
 
     const startVoucher = `<VOUCHER VCHTYPE="Purchase" ACTION="Create" OBJVIEW="Invoice Voucher View">`;
@@ -2301,16 +2299,16 @@ ${TAGS.DEEMNO}
 // Data builders — convert DB rows into the {rows} shape each XML fn wants
 // =====================================================================
 
-// ── ISP / ASP invoice classification ──────────────────────────
+// ── Invoice classification (single vs intra-company) ──────────
 // `invoices.state` is stamped with the *business context* state at the
-// time of invoice generation (TAMIL NADU=ISP, KERALA=ASP). For legacy
+// time of invoice generation (TAMIL NADU=home, KERALA=sister). For legacy
 // rows that pre-date the state stamping, we fall back to a heuristic:
 // if the invoice's `invo` matches `lots.asp_invo` for any lot of that
-// buyer/auction → ASP, else ISP.
-// e-Trade-only build: there is exactly one company (ISP). Every invoice
-// in the table is an ISP invoice regardless of what's stamped in the
+// buyer/auction → sister, else home.
+// e-Trade-only build: there is exactly one company (home). Every invoice
+// in the table is a home-company invoice regardless of what's stamped in the
 // `state` column. The original Spice Config app used the state column
-// to split invoices between ISP and ASP companies — that distinction
+// to split invoices between home and sister companies — that distinction
 // no longer exists here. We accept anything (including legacy KERALA
 // rows from the old build) so users don't see a phantom "no data" when
 // their stored state value doesn't exactly match 'TAMIL NADU'.
@@ -2321,13 +2319,13 @@ const ISP_STATE_SQL = `1=1`;
 const ASP_STATE_SQL = `UPPER(COALESCE(i.state,'')) = 'KERALA'`;
 
 /**
- * Pull ISP sales (state = TAMIL NADU) for an auction. The `invoices`
+ * Pull home-company sales (state = TAMIL NADU) for an auction. The `invoices`
  * table stores ONE summary row per buyer per auction (the writer in
  * server.js inserts the buyer aggregate; per-lot detail lives in the
  * `lots` table). So we read each invoice row directly, then fetch the
  * matching lots separately.
  *
- * Output shape (per row): one voucher per (buyer, sale-type, ISP invo).
+ * Output shape (per row): one voucher per (buyer, sale-type, invoice no).
  * `aspInvo` is the matching ASP invoice number (for BASICORDERREF).
  */
 function buildSalesIspRows(db, auctionId, cfg) {
@@ -2352,13 +2350,13 @@ function buildSalesIspRows(db, auctionId, cfg) {
   `);
   const raw = stmt.all(auctionId);
 
-  // Per-lot details for ISP voucher inventory entries. ISP voucher uses
+  // Per-lot details for sales voucher inventory entries. The voucher uses
   // the SALES rate (lots.price / lots.amount), not the planter rate.
   //
   // We deliberately do NOT filter on `lots.invo = invoice.invo`. The
-  // `lots.invo` column gets overwritten by whichever side (ISP or ASP)
+  // `lots.invo` column gets overwritten by whichever side (home or sister)
   // ran most recently, so it can hold either invoice number — meaning
-  // a strict equality filter silently drops all lots when the ASP step
+  // a strict equality filter silently drops all lots when the sister step
   // was last to write. Since each buyer has at most ONE invoice per
   // auction per state, scoping by (auction_id, buyer) and `amount > 0`
   // is enough to pick the right lots.
@@ -2406,10 +2404,10 @@ function buildSalesIspRows(db, auctionId, cfg) {
   const out = [];
   for (const r of raw) {
     const lotRows = lotsStmt.all(auctionId, r.buyer);
-    // Single-company e-Trade build: there is no ASP cross-reference.
+    // Single-company e-Trade build: there is no intra-company cross-reference.
     // Legacy lots may still carry `asp_invo` values from the old dual-
     // company app, but emitting them as <BASICORDERREF> would just put
-    // a phantom ASP voucher number on every Tally voucher. Force blank
+    // a phantom intra-company voucher number on every Tally voucher. Force blank
     // so the order-ref tag stays empty for new and legacy data alike.
     const aspInvo = '';
 
@@ -2486,16 +2484,17 @@ function buildSalesIspRows(db, auctionId, cfg) {
 }
 
 /**
- * Pull ASP sales (state = KERALA) for an auction. Each ASP voucher is
- * an internal ASP→ISP transfer: ASP sells its lot inventory to the
- * sister company (ISP) at the asp-side planter rate. The buyer is
- * always ISP itself, so we read the ISP party fields from cfg
+ * Pull sister-company sales (state = KERALA) for an auction. Each
+ * voucher is an internal intra-company transfer: the sister sells its
+ * lot inventory to the home company at the sister-side planter rate.
+ * The buyer is always the home company itself, so we read the home
+ * party fields from cfg
  * (tn_address1, tn_address2, tn_gstin, tn_branch).
  *
  * Lot rates/amounts come from `lots.asp_prate` / `lots.asp_puramt`
- * (the ASP-side planter calc). Bag counts come from the lots table.
+ * (the sister-side planter calc). Bag counts come from the lots table.
  *
- * GST is recomputed on (cardamom + gunny) only — ASP vouchers never
+ * GST is recomputed on (cardamom + gunny) only — intra-company vouchers never
  * carry transport/insurance (matches calculations.js isASP branch).
  */
 function buildSalesAspRows(db, auctionId, cfg) {
@@ -2512,7 +2511,7 @@ function buildSalesAspRows(db, auctionId, cfg) {
   // dual-storage migration.
   //
   // Like the ISP builder, we don't filter on `lots.asp_invo = invoice.invo`
-  // — each buyer has at most ONE ASP invoice per auction, so scoping by
+  // — each buyer has at most ONE intra-company invoice per auction, so scoping by
   // (auction_id, buyer) plus a positive asp_puramt is sufficient. This
   // avoids surprises when asp_invo was cleared/changed by a regen.
   const lotsStmt = db.prepare(`
@@ -2526,7 +2525,7 @@ function buildSalesAspRows(db, auctionId, cfg) {
     ORDER BY CAST(lot_no AS INTEGER), lot_no
   `);
 
-  // ISP party identity — the ASP voucher's customer is always ISP.
+  // Home party identity — the intra-company voucher's customer is always the home company.
   // In single-company e-Trade, this defaults to the central identity
   // (no hardcoded "IDEAL SPICES" fallback).
   const ispPartyName = cfgGet(cfg, 'tally_company_name',
@@ -2560,10 +2559,10 @@ function buildSalesAspRows(db, auctionId, cfg) {
     const gunnyAmt = r2(gunnyBags * gunnyRate);
     const taxableTotal = r2(r2(cardAmt) + gunnyAmt);
 
-    // ASP→ISP is intra-state when ASP and ISP share the GSTIN state
-    // code (rare; default config has ASP=32 Kerala, ISP=33 TN, so it's
+    // intra-company is intra-state when sister and home share the GSTIN state
+    // code (rare; default config has sister=32 Kerala, home=33 TN, so it's
     // always inter-state). Recompute fresh because the invoice row's
-    // cgst/sgst/igst was computed for the ISP-side rates.
+    // cgst/sgst/igst was computed for the home-side rates.
     const isIntra = String(ispGstin || '').slice(0, 2) === aspIntraCode;
     let cgst = 0, sgst = 0, igst = 0;
     if (isIntra) {
@@ -2580,7 +2579,7 @@ function buildSalesAspRows(db, auctionId, cfg) {
       sale: r.sale,
       invo: r.invo,
       buyer: r.buyer,
-      buyerName: r.buyer1 || r.buyer || '',  // downstream ISP-side buyer; surfaced for filter UIs
+      buyerName: r.buyer1 || r.buyer || '',  // downstream buyer; surfaced for filter UIs
       ispPartyName,
       ispAddress: ispAddr1,
       ispPlace: ispBranch,
@@ -2752,7 +2751,7 @@ function buildURDPurchaseRows(db, auctionId, cfg) {
   `);
   const raw = stmt.all(auctionId);
 
-  // Read ISP planter values directly from the dedicated columns. These are
+  // Read home-side planter values directly from the dedicated columns. These are
   // populated by calculateLot() on every save (regardless of which
   // business_state mode dad is currently in), so the URD voucher always
   // gets the right view without recomputing or flipping settings.

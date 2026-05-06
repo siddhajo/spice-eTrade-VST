@@ -93,7 +93,7 @@ function getCompanyHeader(db) {
       name = get('trade_name') || get('company_name') || get('tally_company_name') || get('short_name') || '';
 
       // Logo file: derived from `logo` setting (the user's short logo code,
-      // e.g. "VST", "ISPL"). Convention: lowercased + `.png` extension,
+      // (whatever short code the user configured). Convention: lowercased + `.png` extension,
       // located in /public. Falls back to `logo-ispl.png` only if the
       // user's logo file is missing on disk (handled below).
       const logoCode = get('logo').toLowerCase();

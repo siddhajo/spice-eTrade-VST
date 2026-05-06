@@ -854,6 +854,22 @@ tr:hover td{background:var(--spice-cream)}
 /* (.tally-chk retired — Tally booleans now use the same .fg pill markup
    as Feature Flags via bi() so dimensions match exactly.) */
 .tally-sep{color:var(--text3);padding:0 4px;font-weight:600}
+.tally-grouplbl{
+  font-size:10.5px;font-weight:700;letter-spacing:.6px;
+  color:var(--text2);text-transform:uppercase;
+  margin:8px 0 2px;padding-left:2px
+}
+.tally-grouplbl:first-child{margin-top:2px}
+
+/* ── Classic List — vertically stacked groups ──────────────── */
+.tally-classic-stack{display:flex;flex-direction:column;gap:14px}
+.tally-classic-stack > .tally-box{margin:0}
+.tally-classic-stack > .tally-box > legend{
+  font-size:13px;font-weight:700;color:var(--green);
+  padding:0 8px;background:#fff;letter-spacing:.2px
+}
+/* Inside each group, fields tile via the standard sgrid (auto-fill 260px). */
+.tally-classic-stack .sgrid{gap:10px 14px}
 .tally-viewbar{
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   padding:8px 10px;margin-bottom:10px;
@@ -3634,6 +3650,25 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   </div>
 </div></div>
 
+<!-- Forced password-rotation gate: shown when the server flags the current
+     user with must_change_password (seeded admin or admin-issued reset).
+     Every other endpoint returns 403 until the password is rotated, so the
+     UI hides the dashboard and surfaces this modal as the only path forward. -->
+<div class="modal-bg" id="force-pw-modal"><div class="modal" style="max-width:440px">
+  <h2 style="margin-bottom:6px">Set a new password to continue</h2>
+  <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">
+    You're signed in with a default or admin-issued password. Please choose a new one before continuing.
+  </p>
+  <div class="fg"><label>Current password</label><input type="password" id="fpw-cur" autocomplete="current-password"></div>
+  <div class="fg"><label>New password</label><input type="password" id="fpw-new" placeholder="At least 4 characters" autocomplete="new-password"></div>
+  <div class="fg"><label>Confirm new password</label><input type="password" id="fpw-conf" autocomplete="new-password"></div>
+  <div id="fpw-err" style="color:#c0392b;font-size:13px;margin:6px 0;display:none"></div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="logout()">Cancel & Sign Out</button>
+    <button class="btn btn-g" onclick="forceChangePassword()">Update Password</button>
+  </div>
+</div></div>
+
 <script>
 const B=location.origin;let T='';
 const h=(t,o={})=>fetch(B+t,{...o,headers:{'Content-Type':'application/json','Authorization':'Bearer '+T,...(o.headers||{})}});
@@ -3682,6 +3717,17 @@ async function _jOnce(t, o){
       console.warn('Got 401 — clearing stale token');
       localStorage.removeItem('t'); T = '';
       setTimeout(()=>{ document.getElementById('app').style.display='none'; document.getElementById('login').style.display='flex'; }, 100);
+    }
+    // Server forced password rotation mid-session (e.g. admin reset this
+    // user's password while they were logged in elsewhere). Surface the
+    // change-password modal instead of letting every loader fail with a
+    // generic "permission denied" toast.
+    if(r.status === 403 && body && body.must_change_password === true && !window._mustChangePw){
+      window._mustChangePw = true;
+      const appEl = document.getElementById('app');   if (appEl)   appEl.style.display   = 'none';
+      const loginEl = document.getElementById('login'); if (loginEl) loginEl.style.display = 'none';
+      if (typeof showModal === 'function') showModal('force-pw-modal');
+      setTimeout(()=>{ const f=document.getElementById('fpw-cur'); if(f) f.focus(); }, 50);
     }
     const msg = body.error || body.message || `HTTP ${r.status} ${r.statusText||''}`.trim();
     const err = new Error(msg);
@@ -4406,7 +4452,20 @@ async function login(){
   window._userRole  = d.role || 'viewer';
   window._userPerms = new Set(d.permissions || []);
   applyPermissionAttributes();
-  document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';
+  document.getElementById('login').style.display='none';
+  // Forced password rotation: server flagged this account (seeded admin or
+  // admin-issued reset). Every other endpoint returns 403 until rotated, so
+  // gate the app behind the change-password modal — running loadSettings/go
+  // here would just produce a wall of failed loaders.
+  if (d.must_change_password) {
+    window._mustChangePw = true;
+    document.getElementById('app').style.display='none';
+    showModal('force-pw-modal');
+    setTimeout(()=>{ const f=document.getElementById('fpw-cur'); if(f) f.focus(); }, 50);
+    return;
+  }
+  window._mustChangePw = false;
+  document.getElementById('app').style.display='block';
   // Await loadSettings so _sdata (and the topbar badge that depends on it)
   // is populated before the dashboard renders. Without await, opening a
   // new tab/window leaves the badge showing the fallback until the user
@@ -5300,6 +5359,37 @@ async function changeMyPassword(){
   }catch(e){showError(e)}
 }
 
+// Force-rotate path: shown when the server set must_change_password (default
+// admin or admin-issued reset). Mirrors changeMyPassword() but, on success,
+// clears the gate flag and runs the normal post-login bootstrap so the user
+// lands on a working dashboard instead of the empty app shell.
+async function forceChangePassword(){
+  const errEl=document.getElementById('fpw-err');errEl.style.display='none';errEl.textContent='';
+  const cur=document.getElementById('fpw-cur').value;
+  const nu=document.getElementById('fpw-new').value;
+  const conf=document.getElementById('fpw-conf').value;
+  const fail=(m)=>{errEl.textContent=m;errEl.style.display='block'};
+  if(!cur||!nu) return fail('Both current and new password required.');
+  if(nu.length<4) return fail('New password must be at least 4 characters.');
+  if(nu!==conf) return fail('New password and confirmation do not match.');
+  if(nu===cur) return fail('New password must be different from the current one.');
+  try{
+    await j('/api/me/password',{method:'PUT',body:JSON.stringify({current_password:cur,new_password:nu})});
+    document.getElementById('fpw-cur').value='';
+    document.getElementById('fpw-new').value='';
+    document.getElementById('fpw-conf').value='';
+    window._mustChangePw=false;
+    hideModal('force-pw-modal');
+    document.getElementById('app').style.display='block';
+    toast('Password updated. Welcome.');
+    try { await loadSettings(); } catch(_) {}
+    try { await applyFeatureFlags(); } catch(_) {}
+    go(window._userRole === 'lot_entry' ? 'lotentry' : 'dash');
+  }catch(e){
+    fail((e && e.body && e.body.error) || (e && e.message) || 'Failed to update password.');
+  }
+}
+
 // ── Settings ──────────────────────────────────────────────
 let _cats={},_sdata={},_activeCat='',_setFilter='';
 
@@ -5347,7 +5437,7 @@ function applyLogoBadge(){
   const img   = document.getElementById('topbar-logo-img');
   const code = getCurrentLogoCode();
 
-  // Pill text: "ISP" / "ASP"
+  // Pill text: the configured Logo Code, whatever it is
   if(badge){
     if(!code){badge.style.display='none'}
     else{badge.textContent = code; badge.style.display = 'inline-block'}
@@ -7273,8 +7363,13 @@ function leBuildReceiptHtml(format, lots, ctx) {
   const pin    = isKerala ? (cfg.kl_pin      || cfg.tn_pin      || '') : (cfg.tn_pin      || '');
   const gstin  = isKerala ? (cfg.kl_gstin    || cfg.tn_gstin    || '') : (cfg.tn_gstin    || '');
   const branch = isKerala ? (cfg.kl_branch   || cfg.tn_branch   || '') : (cfg.tn_branch   || '');
-  const tradeName = cfg.trade_name || cfg.short_name || '';
-  const shortName = cfg.short_name || cfg.trade_name || '';
+  // Nickname — short identifier from Settings → Company → Nickname.
+  // Falls back to trade name / short name when blank, so receipts print
+  // a sensible header on installs that haven't filled it in yet.
+  const nickname  = String(cfg.praman_company || '').trim()
+                 || cfg.trade_name || cfg.short_name || '';
+  const tradeName = nickname;
+  const shortName = nickname;
   const pan       = cfg.pan       || '';
   const fssai     = cfg.fssai     || '';
   const sbl       = cfg.sbl       || '';
@@ -7287,7 +7382,7 @@ function leBuildReceiptHtml(format, lots, ctx) {
 
   const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
-  const co = { tradeName, shortName, phone, email, addr1, addr2, place, pin, gstin, pan, fssai, sbl, branch, logoUrl };
+  const co = { nickname, tradeName, shortName, phone, email, addr1, addr2, place, pin, gstin, pan, fssai, sbl, branch, logoUrl };
   if (format === 'compact') {
     return leBuildCompactHtml({ groups, co, dateStr, ano, printedAt, escapeHtml });
   }
@@ -7319,11 +7414,14 @@ function leGroupLotsByTrader(lots) {
 // 80mm wide monospace slip. One <section> per seller. Page-break
 // between sections so each seller starts on a fresh slip.
 function leBuildCompactHtml(p) {
+  // Compact thermal slip — minimal header per the dad's spec:
+  //   • Nickname (Settings → Company → Nickname; falls back to trade name)
+  //   • Branch (per-seller — comes from the lot's branch field)
+  //   • GSTIN (state-aware; resolved upstream in leBuildReceiptHtml)
+  // Address / phone / email / PAN / FSSAI / SBL are intentionally omitted
+  // — those still print on the full tax invoice PDF.
   const { groups, co, dateStr, ano, printedAt, escapeHtml } = p;
-  const { tradeName, phone, email, addr1, addr2, place, pin, gstin, pan, fssai, sbl, logoUrl } = co;
-  const addrLine = [addr1, addr2, place, pin].filter(Boolean).join(', ');
-  const idLine = [gstin && `GSTIN: ${gstin}`, pan && `PAN: ${pan}`].filter(Boolean).join('  ');
-  const auxLine = [fssai && `FSSAI: ${fssai}`, sbl && `SBL: ${sbl}`].filter(Boolean).join('  ');
+  const { nickname, gstin } = co;
   const sections = groups.map(g => {
     const lotRows = g.lots.map((l, i) => {
       const wt = Number(l.qty || 0).toFixed(3);
@@ -7346,15 +7444,11 @@ function leBuildCompactHtml(p) {
       </tr>` : '';
     return `
     <section class="receipt">
-      ${logoUrl ? `<div class="logo-wrap"><img class="logo-img" src="${logoUrl}" onerror="this.style.display='none'"></div>` : ''}
-      <div class="hdr">${escapeHtml(tradeName)}</div>
-      ${addrLine ? `<div class="sub">${escapeHtml(addrLine)}</div>` : ''}
-      ${phone || email ? `<div class="sub">${escapeHtml([phone, email].filter(Boolean).join(' | '))}</div>` : ''}
-      ${idLine ? `<div class="sub">${escapeHtml(idLine)}</div>` : ''}
-      ${auxLine ? `<div class="sub">${escapeHtml(auxLine)}</div>` : ''}
+      <div class="hdr">${escapeHtml(nickname)}</div>
+      ${g.branch ? `<div class="sub">${escapeHtml(g.branch.toUpperCase())}</div>` : ''}
+      ${gstin ? `<div class="sub">GSTIN: ${escapeHtml(gstin)}</div>` : ''}
       <div class="planter">Planter: <b>${escapeHtml(g.name || '—')}</b></div>
       <div class="meta">Auction: ${escapeHtml(String(ano))}&nbsp;&nbsp;Date: ${escapeHtml(dateStr)}</div>
-      ${g.branch ? `<div class="meta">Branch: ${escapeHtml(g.branch)}</div>` : ''}
       <table class="rows">
         <thead><tr><th>S.No</th><th>Lots</th><th>Bags</th><th>Weight(kg)</th></tr></thead>
         <tbody>${lotRows}${sampleRow}</tbody>
@@ -7594,15 +7688,14 @@ function getCurrentBusinessState(){
   return f ? f.value : 'TAMIL NADU';
 }
 
-// Returns the logo/company code ("ISP" or "ASP") that represents which
-// company is ACTIVELY issuing invoices/doing calculations.
-// Mirrors server-side effectiveCompany(): Kerala + e-Trade → sister company
-// (ASP); otherwise use primary (ISP). Falls back to configured codes.
+// Returns the user's configured Logo Code — the short label that
+// represents the company actively issuing invoices.
+// Single-company build: there is one identity; this just returns the
+// saved 'logo' setting verbatim, no preset switching.
 function getCurrentLogoCode(){
-  // e-Trade-only single-company build: returns the user's saved Logo
-  // Code value. Returns empty string when nothing's set — applyLogoBadge
-  // hides the badge in that case rather than showing a fabricated 'ISP'
-  // that the user never typed.
+  // Returns empty string when nothing's set — applyLogoBadge hides the
+  // badge in that case rather than showing a fabricated value the user
+  // never typed.
   const data = window._sdata || {};
   for (const cat of Object.keys(data)) {
     const arr = data[cat];
@@ -7723,6 +7816,52 @@ function _bindRateFlagListeners(){
       cb.addEventListener('change', applyRateVisibility);
       cb.dataset._rateBound = '1';
     }
+  }
+}
+
+// ── Partnership <-> CIN mutual exclusion ──────────────────────────
+// is_partnership = ON → 'CIN' is disabled / greyed; partnership_name
+//                       is the active identifier.
+// is_partnership = OFF → 'partnership_name' is disabled / greyed; CIN
+//                        is the active identifier.
+// Reads the live checkbox so the gate updates without a save round-trip.
+function _gateInput(input, disabled){
+  if (!input) return;
+  const wrap = input.closest('.fg') || input.parentElement;
+  input.disabled = !!disabled;
+  if (disabled) {
+    input.style.background = '#F1F5F9';
+    input.style.color = 'var(--text3)';
+    input.style.cursor = 'not-allowed';
+    if (wrap) wrap.style.opacity = '.6';
+  } else {
+    input.style.background = '';
+    input.style.color = '';
+    input.style.cursor = '';
+    if (wrap) wrap.style.opacity = '';
+  }
+}
+function applyPartnershipGate(){
+  const flag = document.querySelector('input[data-key="is_partnership"]');
+  const cinInput   = document.querySelector('input[data-key="cin"]');
+  const partInput  = document.querySelector('input[data-key="partnership_name"]');
+  // Default to current saved value when the toggle isn't on the page.
+  let isPartner = false;
+  if (flag) isPartner = flag.checked;
+  else {
+    for (const cat of Object.keys(_sdata || {})) {
+      const f = (_sdata[cat] || []).find(x => x && x.key === 'is_partnership');
+      if (f) { isPartner = String(f.value).toLowerCase() === 'true'; break; }
+    }
+  }
+  _gateInput(cinInput,   isPartner);
+  _gateInput(partInput, !isPartner);
+}
+function _bindPartnershipListener(){
+  const flag = document.querySelector('input[data-key="is_partnership"]');
+  if (flag && !flag.dataset._partnerBound) {
+    flag.addEventListener('change', applyPartnershipGate);
+    flag.dataset._partnerBound = '1';
   }
 }
 
@@ -7883,6 +8022,12 @@ function renderSettingsPanel(){
   if (ck === 'rates') {
     applyRateVisibility();
     _bindRateFlagListeners();
+  }
+  // Company panel — Partnership toggle disables either CIN or
+  // Partnership Name/No. depending on its state.
+  if (ck === 'company') {
+    applyPartnershipGate();
+    _bindPartnershipListener();
   }
   // Reset dirty flag on panel render so stale dirty state doesn't trigger
   // a false "unsaved changes" warning when switching presets.
@@ -8151,14 +8296,77 @@ function renderTallyPanel(fields){
     </div>`;
 
   if (_tallyClassic) {
-    // Classic flat list — go through fld() for EVERY field, including
-    // booleans. fld()'s boolean branch emits the same compact-pill +
-    // .sw slider markup the Feature Flags panel uses, so the To Tally
-    // toggles render at exactly the same size and style.
-    let body = '<div class="sgrid">';
-    for (const f of fields) body += fld(f);
-    body += '</div>';
-    return toggleBar + body;
+    // Classic List — same fields the macro form uses, organised into
+    // the same 8 logical groups. Each group renders as a fieldset card
+    // (`tally-box`) with a heading; fields inside go through fld() so
+    // booleans get the slim slider and inputs get the standard pill.
+    // Any tally_* key NOT mentioned in CLASSIC_GROUPS lands in the
+    // "Other" group at the bottom — guarantees nothing is silently
+    // hidden if a new key is added without updating the layout.
+    const CLASSIC_GROUPS = [
+      { title: 'Identity & Voucher Numbering', keys: [
+        'tally_company_name', 'tally_inv_prefix', 'tally_separator', 'tally_season',
+        'tally_state_code', 'tally_home_state', 'tally_urd_state',
+      ]},
+      { title: 'Voucher Behaviour', keys: [
+        'tally_detailed', 'tally_round_enabled', 'tally_dispatch_from',
+        'tally_eway_enabled', 'tally_ship_to', 'tally_tcs_enabled',
+        'tally_tds_enabled', 'tally_optional', 'tally_dn_exempt',
+        'tally_sample_stock',
+      ]},
+      { title: 'Sales Ledgers', keys: [
+        'tally_sales_inter', 'tally_sales_intra', 'tally_sales_export',
+        'tally_gunny_inter', 'tally_gunny_intra', 'tally_gunny_export',
+        'tally_dealer_sale_inter', 'tally_dealer_sale_intra',
+      ]},
+      { title: 'Purchase Ledgers', keys: [
+        'tally_purchase_dealer', 'tally_purchase_dealer_inter', 'tally_purchase_dealer_intra',
+        'tally_purchase_auction', 'tally_dn_discount', 'tally_tds_paid_sales',
+      ]},
+      { title: 'Tax Ledgers', keys: [
+        'tally_cgst', 'tally_sgst', 'tally_igst',
+        'tally_dn_cgst', 'tally_dn_sgst', 'tally_dn_igst', 'tally_dn_gst_rate',
+        'tally_tds_ledger', 'tally_tcs',
+      ]},
+      { title: 'Service & Other Ledgers', keys: [
+        'tally_transport', 'tally_transport_rate', 'tally_local_trans_rate', 'tally_hsn_transport',
+        'tally_insurance', 'tally_insurance_rate', 'tally_local_ins_rate', 'tally_hsn_insurance',
+        'tally_sample_planter', 'tally_sample_dealer', 'tally_sample_kgs',
+        'tally_round',
+      ]},
+      { title: 'Stock Items & HSN', keys: [
+        'tally_item_cardamom', 'tally_hsn_cardamom',
+        'tally_item_gunny',    'tally_hsn_gunny',
+        'tally_hsn_service',   'tally_gunny_rate',
+      ]},
+      { title: 'Rates', keys: [
+        'tally_gst_rate', 'tally_service_rate', 'tally_tcs_rate', 'tally_export_rate',
+      ]},
+    ];
+
+    const fieldByKey = {};
+    for (const f of fields) fieldByKey[f.key] = f;
+    const used = new Set();
+    let body = '';
+    for (const g of CLASSIC_GROUPS) {
+      const groupFields = g.keys.map(k => fieldByKey[k]).filter(Boolean);
+      if (!groupFields.length) continue;
+      groupFields.forEach(f => used.add(f.key));
+      body += `<fieldset class="tally-box"><legend>${esc(g.title)}</legend>` +
+              `<div class="sgrid" style="margin:6px 0 0">` +
+              groupFields.map(fld).join('') +
+              `</div></fieldset>`;
+    }
+    // Catch-all for any tally_* keys not declared above so no field
+    // disappears silently after a future schema addition.
+    const orphans = fields.filter(f => !used.has(f.key));
+    if (orphans.length) {
+      body += `<fieldset class="tally-box"><legend>Other</legend>` +
+              `<div class="sgrid" style="margin:6px 0 0">` +
+              orphans.map(fld).join('') +
+              `</div></fieldset>`;
+    }
+    return toggleBar + `<div class="tally-classic-stack">${body}</div>`;
   }
 
   // Index fields by key for direct lookup
@@ -8208,180 +8416,124 @@ function renderTallyPanel(fields){
   const cp = readGlobalSettings();
   const ce = (k, ph, opts={}) => `<input type="text" value="${esc(cp[k]||'')}" placeholder="${esc(ph)}" disabled class="tally-in tally-ro" title="From Settings → ${opts.from||'Company'} (read-only here)" style="${opts.style||''}">`;
 
-  // Company Profile mirror — single-company build, so the panel just
-  // shows the live values from Settings → Company / Address (TN + KL),
-  // grouped by state. The legacy sister-company "ASP" / "ISP" labels
-  // were removed along with the s_* keys; nothing to surface from a
-  // sister company any more.
-  const companyProfile = box('Company Profile',
+  // ── 1. IDENTITY ─────────────────────────────────────────────
+  // Tally company name, voucher numbering, state codes. Greyed
+  // read-only echoes for the address/GSTIN/bank live in the Bank
+  // Details + Address categories.
+  const identityBox = box('Identity & Voucher Numbering',
     row(`<input type="text" data-key="tally_company_name" value="${esc(v('tally_company_name'))}" placeholder="Tally Company Name" title="${esc(lab('tally_company_name'))}" class="tally-in" style="flex:1">`) +
     row(
-      ce('trade_name','Trade Name',{from:'Company'}),
-      ce('short_name','Short Name',{from:'Company'})
+      ti('tally_inv_prefix','Voucher Prefix (e.g. VSTK)'),
+      ti('tally_separator','Separator (e.g. /)',{style:'max-width:140px'}),
+      ti('tally_season','Season (e.g. 26-27)',{style:'max-width:140px'})
     ) +
     row(
-      ce('tn_address1','TN — Address Line 1',{from:'Address (Tamil Nadu)'}),
-      ce('kl_address1','KL — Address Line 1',{from:'Address (Kerala)'})
-    ) +
-    row(
-      ce('tn_address2','TN — Address Line 2',{from:'Address (Tamil Nadu)'}),
-      ce('kl_address2','KL — Address Line 2',{from:'Address (Kerala)'})
-    ) +
-    row(
-      ce('tn_branch','TN — Branch',{from:'Address (Tamil Nadu)'}),
-      ce('kl_branch','KL — Branch',{from:'Address (Kerala)'})
-    ) +
-    row(
-      `<input type="text" value="Tamil Nadu" disabled class="tally-in tally-ro">`,
-      `<input type="text" data-key="tally_state_code" value="${esc(v('tally_state_code'))}" placeholder="Code (e.g. 33)" title="${esc(lab('tally_state_code'))}" class="tally-in">`,
-      `<input type="text" value="Kerala" disabled class="tally-in tally-ro">`
-    ) +
-    row(
-      ce('tn_gstin','TN GSTIN',{from:'Address (Tamil Nadu)'}),
-      ce('kl_gstin','KL GSTIN',{from:'Address (Kerala)'})
-    ) +
-    row(
-      ce('tn_phone','TN — Phone',{from:'Address (Tamil Nadu)'}),
-      ce('kl_phone','KL — Phone',{from:'Address (Kerala)'})
-    ) +
-    row(
-      ce('tn_email','TN — Email',{from:'Address (Tamil Nadu)'}),
-      ce('kl_email','KL — Email',{from:'Address (Kerala)'})
+      ti('tally_state_code','Home GSTIN State Code'),
+      ti('tally_home_state','Home Place of Supply'),
+      ti('tally_urd_state','URD Purchase State')
     )
   );
 
-  // ── ACCOUNT LEDGER NAMES ────────────────────────────────────
-  // Each row in the macro form pairs ledger + HSN + checkbox where
-  // applicable. We mirror that 1:1.
-  const ledgerBox = box('Account Ledger Names',
-    row(ti('tally_sales_inter','Cardamom Inter-State Sales',{style:'flex:2'})) +
-    row(
-      ti('tally_sales_intra','Cardamom Local Sales'),
-      ti('tally_sales_export','Cardamom Export Sales (Deemed)')
-    ) +
-    row(
-      ti('tally_gunny_inter','Gunny Interstate Sales'),
-      ti('tally_dealer_sale_inter','Interstate Dealer-Purch'),
-      ti('tally_dealer_sale_intra','Local Dealer-Purcha')
-    ) +
-    row(
-      ti('tally_gunny_intra','Gunny Local Sales'),
-      ti('tally_gunny_export','Gunny Export Sales')
-    ) +
-    row(
-      ti('tally_purchase_auction','Purchase From Agriculturist'),
-      ti('tally_tds_paid_sales','TDS Paid on Sales')
-    ) +
-    row(
-      ti('tally_purchase_dealer','Trade Purchase From Dealer'),
-      ti('tally_purchase_dealer_inter','Interstate Dealer'),
-      ti('tally_purchase_dealer_intra','Local Dealer')
-    ) +
-    row(
-      ti('tally_dn_discount','Discount on Purch'),
-      ti('tally_commission','Commission-Planter'),
-      ti('tally_hsn_service','SAC (e.g. 996111)',{style:'max-width:120px'}),
-      bi('tally_dn_exempt','Exempted')
-    ) +
-    row(
-      ti('tally_cash_handling','Cash Handling Charges'),
-      ti('tally_cash_handling_planter','Cash Handling Charges-Planter')
-    ) +
-    row(
-      ti('tally_sample_planter','Sample Refund to Planter'),
-      bi('tally_sample_stock','Stock'),
-      ti('tally_sample_dealer','Sample Refund to Dealer')
-    ) +
-    row(
-      ti('tally_round','Round On/Off'),
-      bi('tally_round_enabled','Round'),
-      ti('tally_chc_planter','CHC From Planter')
-    ) +
-    // ── Transport row: ledger + rate + HSN ──
-    row(
-      ti('tally_transport','Transport (e.g. Transport Rs.2.50/per Kg)',{style:'flex:2'}),
-      ni('tally_transport_rate','Rate ₹/Kg',{style:'max-width:90px'}),
-      ti('tally_hsn_transport','HSN/SAC (e.g. 996791)',{style:'max-width:140px'})
-    ) +
-    // ── Insurance row: ledger + rate + HSN ──
-    row(
-      ti('tally_insurance','Insurance (e.g. Insurance Rs.0.75/per Thousand)',{style:'flex:2'}),
-      ni('tally_insurance_rate','Rate ₹/₹1000',{style:'max-width:90px'}),
-      ti('tally_hsn_insurance','HSN/SAC (e.g. 997136)',{style:'max-width:140px'})
-    )
+  // ── 2. SALES LEDGERS ────────────────────────────────────────
+  const salesBox = box('Sales Ledgers',
+    `<div class="tally-grouplbl">Cardamom</div>` +
+    row(ti('tally_sales_inter','Inter-State'),  ti('tally_sales_intra','Local'),  ti('tally_sales_export','Export (Deemed)')) +
+    `<div class="tally-grouplbl">Gunny</div>` +
+    row(ti('tally_gunny_inter','Inter-State'),  ti('tally_gunny_intra','Local'),  ti('tally_gunny_export','Export')) +
+    `<div class="tally-grouplbl">Dealer-Side Sales</div>` +
+    row(ti('tally_dealer_sale_inter','Interstate Dealer-Purch'), ti('tally_dealer_sale_intra','Local Dealer-Purcha'))
   );
 
-  // ── TAX LEDGER NAMES ────────────────────────────────────────
-  const taxLedgerBox = box('Tax Ledger Names',
-    row(ti('tally_cgst','CGST 2.5%'), ti('tally_dn_cgst','CGST 9%')) +
-    row(ti('tally_sgst','SGST 2.5%'), ti('tally_dn_sgst','SGST 9%')) +
-    row(ti('tally_igst','IGST 5%'),   ti('tally_dn_igst','IGST 18%')) +
-    row(ti('tally_tds_ledger','TDS on Purchase of Goods')) +
-    row(ti('tally_tcs','TCS on Sale of Goods'))
+  // ── 3. PURCHASE LEDGERS ─────────────────────────────────────
+  const purchaseBox = box('Purchase Ledgers',
+    row(ti('tally_purchase_dealer','Trade Purchase From Dealer (base)',{style:'flex:1'})) +
+    row(ti('tally_purchase_dealer_inter','Interstate Dealer'), ti('tally_purchase_dealer_intra','Local Dealer')) +
+    row(ti('tally_purchase_auction','Purchase From Agriculturist (URD)',{style:'flex:1'})) +
+    row(ti('tally_dn_discount','Discount on Purch (Debit Note)'), ti('tally_tds_paid_sales','TDS Paid on Sales'))
   );
 
-  // ── TAX RATE ────────────────────────────────────────────────
-  const taxRateBox = box('Tax Rate',
-    row(ni('tally_gst_rate','5'),       bi('tally_amazing_mode','Amazing')) +
-    row(ni('tally_service_rate','18'),  bi('tally_optional','Optional')) +
-    row(ni('tally_tcs_rate','0.1'),     bi('tally_detailed','Detailed Inv')) +
-    row(ni('tally_sample_kgs','1.900'), `<span class="tally-sep">—</span>`, ni('tally_unit_rate','0.1'))
+  // ── 4. TAX LEDGERS ──────────────────────────────────────────
+  const taxLedgerBox = box('Tax Ledgers',
+    `<div class="tally-grouplbl">Output GST 5% (Sales)</div>` +
+    row(ti('tally_cgst','CGST 2.5%'), ti('tally_sgst','SGST 2.5%'), ti('tally_igst','IGST 5%')) +
+    `<div class="tally-grouplbl">Debit Note GST</div>` +
+    row(ti('tally_dn_cgst','CGST'), ti('tally_dn_sgst','SGST'), ti('tally_dn_igst','IGST'), ni('tally_dn_gst_rate','%',{style:'max-width:80px'})) +
+    `<div class="tally-grouplbl">TDS / TCS</div>` +
+    row(ti('tally_tds_ledger','TDS on Purchase of Goods'), ti('tally_tcs','TCS on Sale of Goods'))
   );
 
-  // ── BANK ACCOUNT DETAILS ──────────────────────────────────
-  const bankBox = box('Bank Account Details',
+  // ── 5. SERVICE / OTHER LEDGERS ─────────────────────────────
+  // Transport, Insurance, Sample, Round-off — each ledger paired with
+  // its rate and HSN/SAC where applicable.
+  const serviceBox = box('Service & Other Ledgers',
+    `<div class="tally-grouplbl">Transport</div>` +
+    row(ti('tally_transport','Ledger Name',{style:'flex:2'}), ni('tally_transport_rate','₹/Kg (inter)',{style:'max-width:110px'}), ni('tally_local_trans_rate','₹/Kg (local)',{style:'max-width:110px'}), ti('tally_hsn_transport','SAC',{style:'max-width:110px'})) +
+    `<div class="tally-grouplbl">Insurance</div>` +
+    row(ti('tally_insurance','Ledger Name',{style:'flex:2'}), ni('tally_insurance_rate','₹/₹1000 (inter)',{style:'max-width:120px'}), ni('tally_local_ins_rate','₹/₹1000 (local)',{style:'max-width:120px'}), ti('tally_hsn_insurance','SAC',{style:'max-width:110px'})) +
+    `<div class="tally-grouplbl">Sample Refund</div>` +
+    row(ti('tally_sample_planter','Sample to Planter'), ti('tally_sample_dealer','Sample to Dealer'), ni('tally_sample_kgs','Kgs',{style:'max-width:90px'})) +
+    `<div class="tally-grouplbl">Round Off</div>` +
+    row(ti('tally_round','Round On/Off Ledger',{style:'flex:1'}))
+  );
+
+  // ── 6. STOCK ITEMS / HSN ────────────────────────────────────
+  const stockBox = box('Stock Items & HSN',
+    row(ti('tally_item_cardamom','Cardamom'), ti('tally_hsn_cardamom','HSN (e.g. 09083120)')) +
+    row(ti('tally_item_gunny','Gunny Bag'),   ti('tally_hsn_gunny','HSN (e.g. 63051040)')) +
+    row(ti('tally_hsn_service','SAC — Discount/Service (e.g. 996111)',{style:'flex:1'})) +
+    row(ni('tally_gunny_rate','Gunny ₹/bag',{style:'max-width:120px'}))
+  );
+
+  // ── 7. RATES ───────────────────────────────────────────────
+  const taxRateBox = box('Rates',
+    row(ni('tally_gst_rate','GST Goods %'), ni('tally_service_rate','Service % (DN)'), ni('tally_tcs_rate','TCS/TDS %'), ni('tally_export_rate','Export GST %'))
+  );
+
+  // ── 8. VOUCHER BEHAVIOUR TOGGLES ───────────────────────────
+  const togglesBox = box('Voucher Behaviour',
+    row(bi('tally_detailed','Detailed Inv (one inventory entry per lot)')) +
+    row(bi('tally_round_enabled','Round (use Round On/Off ledger)')) +
+    row(bi('tally_dispatch_from','Dispatch From Address')) +
+    row(bi('tally_eway_enabled','E-way Bill')) +
+    row(bi('tally_ship_to','Ship To (separate consignee)')) +
+    row(bi('tally_tcs_enabled','TCS (apply on Sales)')) +
+    row(bi('tally_tds_enabled','TDS (apply 194Q on RD Purchases)')) +
+    row(bi('tally_optional','Optional (mark vouchers as Optional)')) +
+    row(bi('tally_dn_exempt','Exempted (Debit Note: skip GST tax ledgers)')) +
+    row(bi('tally_sample_stock','Sample Refund as Stock'))
+  );
+
+  // ── BANK (read-only echo) ──────────────────────────────────
+  const bankBox = box('Bank (read-only)',
     row(
       ce('bank_tn_name','Bank Name',{from:'Bank Details'}),
-      ce('tn_branch','Branch',{from:'Address (Tamil Nadu)'}),
       ce('bank_tn_acct','Account No.',{from:'Bank Details'}),
       ce('bank_tn_ifsc','IFSC Code',{from:'Bank Details'})
     )
   );
 
-  // ── STOCK ITEM NAMES + HSN ───────────────────────────────
-  const stockBox = box('Stock Item Names',
-    row(ti('tally_item_cardamom','Cardamom'), ti('tally_hsn_cardamom','HSN (e.g. 09083120)')) +
-    row(ti('tally_item_gunny','Gunny Bag'),    ti('tally_hsn_gunny','HSN (e.g. 63051040)')) +
-    row(
-      bi('tally_dispatch_from','Dispatch'),
-      bi('tally_eway_enabled','E-way Bill'),
-      bi('tally_tcs_enabled','TCS')
-    ) +
-    row(
-      bi('tally_ship_to','Ship To'),
-      bi('tally_tds_enabled','TDS')
-    )
-  );
-
-  // ── ITEM RATES (gunny + local rates that aren't shown elsewhere) ──
-  const itemRatesBox = box('Item Rates',
-    row(ni('tally_gunny_rate','Gunny ₹/bag (e.g. 165)')) +
-    row(ni('tally_local_trans_rate','Local Transport ₹/Kg')) +
-    row(ni('tally_local_ins_rate','Local Insurance ₹/₹1000'))
-  );
-
-  // ── HEADER NOTE ──────────────────────────────────────────
+  // Header note
   const note = `
     <div class="tally-banner">
-      <strong>Layout matches the macro's Configration form.</strong>
-      Greyed-out fields are pulled live from other Settings categories (Company, Sister, Address, Bank). To change them, go to that category. Editable fields here are Tally-specific: ledger names, HSN/SAC codes, rates, and toggles.
+      <strong>Tally export configuration.</strong>
+      Editable fields drive the XML emitted to Tally — ledger names must match what already exists in the Tally company. Read-only fields echo values you maintain in the Company / Address / Bank categories; edit them there.
     </div>`;
 
-  // ── TWO-COLUMN GRID ──────────────────────────────────────
+  // ── TWO-COLUMN GROUPED LAYOUT ──────────────────────────────
   return toggleBar + note + `
     <div class="tally-grid">
       <div class="tally-col">
-        ${companyProfile}
-        ${taxLedgerBox}
+        ${identityBox}
+        ${salesBox}
+        ${purchaseBox}
+        ${stockBox}
         ${bankBox}
       </div>
       <div class="tally-col">
-        ${ledgerBox}
-        <div class="tally-row" style="gap:12px">
-          <div style="flex:1">${taxRateBox}</div>
-          <div style="flex:1">${stockBox}</div>
-          <div style="flex:1">${itemRatesBox}</div>
-        </div>
+        ${togglesBox}
+        ${taxLedgerBox}
+        ${serviceBox}
+        ${taxRateBox}
       </div>
     </div>`;
 }

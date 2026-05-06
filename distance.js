@@ -1,5 +1,5 @@
 // distance.js — PIN-to-PIN road-distance estimator for the e-way bill
-// <DISTANCE> field in ISP sales vouchers.
+// <DISTANCE> field in sales vouchers.
 //
 // Strategy: haversine straight-line distance × road multiplier, cached
 // in the pin_distances table. PIN coordinates come from the local
@@ -7,7 +7,7 @@
 // → PIN Distances admin panel).
 //
 // Why this exists:
-//   - Tally ISP sales vouchers ship a <DISTANCE> field that the e-way
+//   - Tally sales vouchers ship a <DISTANCE> field that the e-way
 //     bill portal cross-checks at upload time. Leaving it blank works
 //     but means manual entry on every voucher. Pre-computing gets the
 //     number on the XML automatically.

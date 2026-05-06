@@ -4,11 +4,17 @@
  */
 
 const DEFAULTS = [
-  // ── COMPANY (Primary - ISP) ────────────────────────────────
+  // ── COMPANY ────────────────────────────────────────────────
   { key: 'logo',            value: '',           category: 'company',   label: 'Logo Code',                type: 'text' },
   { key: 'trade_name',      value: '',  category: 'company',   label: 'Trade Name',               type: 'text' },
   { key: 'legal_name',      value: '', category: 'company', label: 'Legal Name Suffix',        type: 'text' },
   { key: 'short_name',      value: '', category: 'company', label: 'Short Name', type: 'text' },
+  // Nickname — short identifier used as the company code on receipts and
+  // in the Praman e-Trade CSV column 2. Falls back to Short Name when
+  // blank (handled by exports.js / receipt builders). Was previously
+  // `praman_company` under Integrations / To Tally; renamed because it
+  // now drives more than one surface.
+  { key: 'praman_company',  value: '', category: 'company', label: 'Nickname (fallback: Short Name)', type: 'text' },
   { key: 'pan',             value: '',    category: 'company',   label: 'PAN',                      type: 'text' },
   // Partnership toggle: when true, every PDF that previously rendered
   // a "CIN" line switches to "Partnership" with the value from
@@ -183,10 +189,6 @@ const DEFAULTS = [
   { key: 'backup_auto_enabled',   value: 'false', category: 'backup', label: 'Auto Backup',                       type: 'boolean' },
   { key: 'backup_interval_hours', value: '24',    category: 'backup', label: 'Backup Interval (hours)',           type: 'number' },
   { key: 'backup_keep_count',     value: '14',    category: 'backup', label: 'Keep last N backups',               type: 'number' },
-  // Praman Lot Code — lives under To Tally now (was under Integrations).
-  // Falls back to Short Name when blank.
-  { key: 'praman_company',  value: '',               category: 'tally',        label: 'Praman Lot Code (fallback: Short Name)', type: 'text' },
-
   // ── TALLY EXPORT ──────────────────────────────────────────
   // Settings here mirror the macro's Configration form (UserForm1) field-for-field.
   // Identity & defaults
@@ -223,11 +225,11 @@ const DEFAULTS = [
   { key: 'tally_gunny_intra',     value: 'Gunny Sales 5% - Local',     category: 'tally', label: 'Gunny Local Sales',           type: 'text' },
   { key: 'tally_gunny_export',    value: 'Gunny Sales - Export',       category: 'tally', label: 'Gunny Export Sales',          type: 'text' },
 
-  // Dealer-Side Sales (when ISP sells to a dealer)
+  // Dealer-Side Sales (when the company sells to a dealer)
   { key: 'tally_dealer_sale_inter', value: 'Interstate Dealer-Purchase', category: 'tally', label: 'Interstate Dealer-Purch (sales-side)', type: 'text' },
   { key: 'tally_dealer_sale_intra', value: 'Local Dealer-Purchase',      category: 'tally', label: 'Local Dealer-Purcha (sales-side)',      type: 'text' },
 
-  // RD Purchase ledgers (when ISP buys from a dealer)
+  // RD Purchase ledgers (when the company buys from a dealer)
   { key: 'tally_purchase_dealer',     value: 'Trade Purchase From Dealer',category: 'tally', label: 'Trade Purchase From Dealer (base; gets -Local / -Inter_State suffix)', type: 'text' },
   { key: 'tally_purchase_dealer_inter', value: 'Interstate Dealer',      category: 'tally', label: 'Interstate Dealer (purchase-side)',     type: 'text' },
   { key: 'tally_purchase_dealer_intra', value: 'Local Dealer',           category: 'tally', label: 'Local Dealer (purchase-side)',          type: 'text' },
@@ -316,14 +318,24 @@ function initCompanySettings(db) {
   const insert = db.prepare(
     'INSERT OR IGNORE INTO company_settings (key, value, category, label, field_type) VALUES (?, ?, ?, ?, ?)'
   );
+  // Sync label / category / field_type for existing rows so older DBs
+  // pick up renames done in the source (e.g. "ISP Tally Company Name"
+  // → "Tally Company Name"). The user-edited `value` column is left
+  // untouched — only metadata refreshes.
+  const refresh = db.prepare(
+    'UPDATE company_settings SET label = ?, category = ?, field_type = ? WHERE key = ?'
+  );
   const seed = db.transaction(() => {
-    for (const d of DEFAULTS) insert.run(d.key, d.value, d.category, d.label, d.type);
+    for (const d of DEFAULTS) {
+      insert.run(d.key, d.value, d.category, d.label, d.type);
+      refresh.run(d.label, d.category, d.type, d.key);
+    }
   });
   seed();
 
-  // Clean up legacy keys that the original Spice Config (ISP+ASP) build
-  // wrote. They are no longer used in this e-Trade-only build. Safe to
-  // drop on every startup — never referenced by any code path here.
+  // Clean up legacy keys that the original dual-company build wrote.
+  // They are no longer used in this single-company e-Trade build. Safe
+  // to drop on every startup — never referenced by any code path here.
   const REMOVED_KEYS = [
     'asp_profit', 'isp_profit',
     'asp_profit_pooler', 'asp_profit_dealer',
@@ -348,7 +360,7 @@ function initCompanySettings(db) {
   for (const k of REMOVED_KEYS) drop.run(k);
 
   // Drop preset tables — Logo Code is a plain textbox in this build,
-  // there is no ISP/ASP preset switching.
+  // there is no dual-company preset switching.
   try { db.exec('DROP TABLE IF EXISTS company_presets'); } catch (e) {}
   try { db.exec('DROP TABLE IF EXISTS company_preset_meta'); } catch (e) {}
 
@@ -356,10 +368,10 @@ function initCompanySettings(db) {
   // mode-switching build must not leak through to calculation paths.
   db.prepare("UPDATE company_settings SET value = 'e-Trade' WHERE key = 'business_mode'").run();
 
-  // Clear stale Logo Code if a previous build wrote 'ASP' (sister-company
-  // preset state from the old ISP/ASP app). Set to blank so the user
-  // explicitly fills in their identifier — no "ISP" appearing where the
-  // user never typed it.
+  // Clear any stale 'ASP' Logo Code left behind by the legacy dual-
+  // company app. Set to blank so the user explicitly fills in their
+  // identifier — no fabricated code appearing where they never typed
+  // one.
   db.prepare("UPDATE company_settings SET value = '' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
 
   // Clear the legacy AMAZING SPICE PARK default that was seeded into
@@ -387,11 +399,11 @@ function initCompanySettings(db) {
   fixIfLegacy('tally_dn_igst',     'OUTPUT IGST 18%', 'OUTPUT IGST 5%');
   fixIfLegacy('tally_dn_gst_rate', '18',              '5');
 
-  // praman_company moved from 'integrations' to 'tally' — relocate any
-  // existing row and refresh its (shorter) label.
+  // praman_company is now the user's Nickname under Company Details —
+  // relocate any pre-existing row and refresh its label.
   db.prepare(
-    "UPDATE company_settings SET category = 'tally', label = ? WHERE key = 'praman_company'"
-  ).run('Praman Lot Code (fallback: Short Name)');
+    "UPDATE company_settings SET category = 'company', label = ? WHERE key = 'praman_company'"
+  ).run('Nickname (fallback: Short Name)');
 
   // Local transport / insurance toggles moved from To Tally → Rates &
   // Charges and renamed flag_local_*. Carry over any existing user value
