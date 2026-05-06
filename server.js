@@ -3,11 +3,13 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const bcrypt = require('bcrypt');
+const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
-const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, buildDebitNote, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0 } = require('./calculations');
+const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0 } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
 const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
 const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
@@ -69,7 +71,40 @@ const uploadDir = path.join(process.env.SPICE_DATA_DIR || path.join(__dirname, '
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 20 * 1024 * 1024 } });
 
-const hash = pw => crypto.createHash('sha256').update(pw).digest('hex');
+// ── Password hashing ──────────────────────────────────────────────
+// Bcrypt cost factor. 12 ≈ 250ms per hash on modern hardware — slow enough
+// to make brute-force expensive but fast enough that login latency is fine.
+const BCRYPT_ROUNDS = 12;
+
+// Pre-computed dummy bcrypt hash for unknown-user logins. Running a real
+// bcrypt comparison against this when the username isn't found prevents
+// timing-based user enumeration (otherwise unknown-user paths return in
+// microseconds while real-user paths take ~250ms).
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync('__never_a_real_password__', BCRYPT_ROUNDS);
+
+// Hash a plaintext password with bcrypt. Async — every callsite is in a
+// route handler that can be made async.
+async function hashPassword(plain) {
+  return bcrypt.hash(String(plain), BCRYPT_ROUNDS);
+}
+
+// Detect legacy SHA-256 password hashes (64 lowercase hex chars). Bcrypt
+// hashes start with "$2a$" / "$2b$" / "$2y$" so the two are unambiguous.
+const LEGACY_SHA256_RE = /^[a-f0-9]{64}$/i;
+function isLegacyHash(stored) { return LEGACY_SHA256_RE.test(stored || ''); }
+
+// Verify a plaintext password against a stored hash, supporting both new
+// bcrypt rows and legacy SHA-256 rows from before the migration. Returns
+// true/false; never throws on bad input.
+async function verifyPassword(plain, stored) {
+  if (!stored || typeof stored !== 'string') return false;
+  if (isLegacyHash(stored)) {
+    const sha = crypto.createHash('sha256').update(String(plain)).digest('hex');
+    return sha === stored;
+  }
+  try { return await bcrypt.compare(String(plain), stored); }
+  catch { return false; }
+}
 
 // ── Date helpers ──
 // Convert any date-ish input (Date object, Excel serial number, dd/mm/yyyy,
@@ -163,8 +198,23 @@ function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token' });
   const db = getDb();
-  const session = db.get('SELECT * FROM sessions WHERE token = ?', [token]);
-  if (!session) return res.status(403).json({ error: 'Session expired — please sign in again' });
+  // Strict expiry: rows pre-dating the migration get a NULL expires_at and
+  // are grandfathered in. New rows have a hard cap — once expires_at is in
+  // the past, the token is rejected even if last_used_at is recent. Compare
+  // in SQLite (datetime('now','localtime')) so it matches the same TZ
+  // semantics the INSERT used; mixing JS UTC with SQLite localtime would
+  // wrongly expire sessions on any non-UTC host.
+  const session = db.get(
+    `SELECT * FROM sessions
+     WHERE token = ?
+       AND (expires_at IS NULL OR expires_at >= datetime('now','localtime'))`,
+    [token]
+  );
+  if (!session) {
+    // Best-effort cleanup: drop the row if it existed but expired.
+    db.run('DELETE FROM sessions WHERE token = ?', [token]);
+    return res.status(403).json({ error: 'Session expired — please sign in again' });
+  }
   const user = db.get('SELECT * FROM users WHERE id = ?', [session.user_id]);
   if (!user) return res.status(403).json({ error: 'Unauthorized' });
   // Block every other endpoint until the seeded/reset password is rotated —
@@ -361,18 +411,60 @@ app.get('/api/branding', (req, res) => {
   }
 });
 
-app.post('/api/login', (req, res) => {
-  const { username, password, device_label } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
+// Login rate limiter — 10 attempts per 15-minute window per IP. Returns
+// 429 on overflow. Skip-on-success ensures legitimate users who type a
+// wrong password once aren't penalised on every later request after they
+// log in correctly. Defeats credential-stuffing / online brute-force.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many login attempts. Please wait a few minutes and try again.' }
+});
+
+// Strict cap on session lifetime. A leaked Authorization header is now
+// only valid for at most this many days from creation, even if the
+// attacker keeps the session "active" by hitting endpoints (which
+// previously kept it alive forever via the sliding-window sweep).
+const SESSION_TTL_DAYS = 30;
+
+app.post('/api/login', loginLimiter, async (req, res) => {
+  const { username, password, device_label } = req.body || {};
+  if (!username || !password) return res.status(401).json({ error: 'Invalid credentials' });
   const db = getDb();
   const user = db.get('SELECT * FROM users WHERE username = ?', [username]);
-  if (!user || user.password_hash !== hash(password)) return res.status(401).json({ error: 'Invalid credentials' });
+  // Always run a bcrypt verify — against the real hash if the user exists,
+  // against a fixed dummy hash if not — so the response time doesn't leak
+  // whether the username is registered. Single uniform error message.
+  const ok = await verifyPassword(password, user ? user.password_hash : DUMMY_BCRYPT_HASH);
+  if (!user || !ok) return res.status(401).json({ error: 'Invalid credentials' });
+
+  // Opportunistic rehash: if the stored hash is legacy SHA-256, upgrade it
+  // to bcrypt now that we have the plaintext. New users + admin resets
+  // already write bcrypt directly; this catches existing rows on first login.
+  if (isLegacyHash(user.password_hash)) {
+    try {
+      const upgraded = await hashPassword(password);
+      db.run('UPDATE users SET password_hash = ? WHERE id = ?', [upgraded, user.id]);
+    } catch (_) { /* non-fatal — login continues with legacy hash, retry next time */ }
+  }
+
   const token = crypto.randomBytes(32).toString('hex');
   // Create a new session row WITHOUT deleting any existing sessions —
   // this lets the same user stay logged in on multiple devices simultaneously.
-  db.run('INSERT INTO sessions (token, user_id, device_label) VALUES (?, ?, ?)', [token, user.id, device_label || '']);
-  // Clean up very old sessions (> 30 days) so the table doesn't grow forever
-  db.run(`DELETE FROM sessions WHERE last_used_at < datetime('now','-30 days')`);
+  db.run(
+    `INSERT INTO sessions (token, user_id, device_label, expires_at)
+     VALUES (?, ?, ?, datetime('now','localtime','+${SESSION_TTL_DAYS} days'))`,
+    [token, user.id, device_label || '']
+  );
+  // Clean up very old sessions (expired OR > 30d idle) so the table doesn't grow forever
+  db.run(
+    `DELETE FROM sessions
+     WHERE (expires_at IS NOT NULL AND expires_at < datetime('now','localtime'))
+        OR last_used_at < datetime('now','-30 days')`
+  );
   // Return the user's capabilities array so the client can hide buttons
   // they're not allowed to use. Server still validates every request.
   const permissions = Array.from(ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS.viewer);
@@ -410,7 +502,7 @@ app.get('/api/users', requireUserManage, (req, res) => {
   res.json(users);
 });
 
-app.post('/api/users', requireUserManage, (req, res) => {
+app.post('/api/users', requireUserManage, async (req, res) => {
   const { username, password, role } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
   if (password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
@@ -425,9 +517,12 @@ app.post('/api/users', requireUserManage, (req, res) => {
   const db = getDb();
   const existing = db.get('SELECT id FROM users WHERE username = ?', [username]);
   if (existing) return res.status(400).json({ error: 'Username already exists' });
+  // New users start with must_change_password=1 — the admin-supplied
+  // password is a one-time hand-off, not the user's chosen credential.
+  const pwHash = await hashPassword(password);
   db.run(
-    'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
-    [username, hash(password), finalRole]
+    'INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 1)',
+    [username, pwHash, finalRole]
   );
   const created = db.get('SELECT id, username, role FROM users WHERE username = ?', [username]);
   res.json({ success: true, id: created ? created.id : null, username, role: finalRole });
@@ -458,7 +553,7 @@ app.put('/api/users/:id/role', requireUserManage, (req, res) => {
   res.json({ success: true, username: target.username, role: finalRole });
 });
 
-app.put('/api/users/:id/password', requireUserManage, (req, res) => {
+app.put('/api/users/:id/password', requireUserManage, async (req, res) => {
   const { password } = req.body || {};
   if (!password || password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
   const db = getDb();
@@ -466,9 +561,10 @@ app.put('/api/users/:id/password', requireUserManage, (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
   // Force the target to pick a new password on next login — the admin-set
   // value is a one-time hand-off, not the user's chosen credential.
+  const pwHash = await hashPassword(password);
   db.run(
     'UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?',
-    [hash(password), user.id]
+    [pwHash, user.id]
   );
   // Invalidate all sessions of that user (force re-login after password change)
   db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
@@ -490,21 +586,24 @@ app.delete('/api/users/:id', requireUserManage, (req, res) => {
 });
 
 // Change own password — shortcut that doesn't require user id
-app.put('/api/me/password', requirePermission('self_password'), (req, res) => {
+app.put('/api/me/password', requirePermission('self_password'), async (req, res) => {
   const { current_password, new_password } = req.body || {};
   if (!current_password || !new_password) return res.status(400).json({ error: 'Both current and new password required' });
   if (new_password.length < 4) return res.status(400).json({ error: 'New password must be at least 4 characters' });
   const db = getDb();
   const user = db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
-  if (!user || user.password_hash !== hash(current_password)) return res.status(401).json({ error: 'Current password is incorrect' });
-  if (hash(new_password) === user.password_hash) {
+  if (!user || !(await verifyPassword(current_password, user.password_hash))) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+  if (await verifyPassword(new_password, user.password_hash)) {
     return res.status(400).json({ error: 'New password must be different from current password' });
   }
   // Clear must_change_password — this is the gate exit for the seeded
   // admin (and any user the admin force-resets, see PUT /api/users/:id/password).
+  const newHash = await hashPassword(new_password);
   db.run(
     'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
-    [hash(new_password), user.id]
+    [newHash, user.id]
   );
   // Kill all OTHER sessions (keep current one)
   db.run('DELETE FROM sessions WHERE user_id = ? AND token != ?', [user.id, req.session.token]);
@@ -2250,8 +2349,32 @@ app.post('/api/invoices/generate/:auctionId', requireInvoiceWrite, (req, res) =>
   
   const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg);
   if (!invoice) return res.status(404).json({ error: `No lots found for buyer "${buyerCode}" in this auction. Make sure lots have this buyer code assigned.` });
-  
+
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  // Dedup guards — refuse to create a second invoice for the same buyer
+  // + sale type in this trade, or to reuse an invoice number that's
+  // already on file for this trade. Both checks return 409 so the
+  // caller can show a precise reason.
+  const dupBuyer = db.get(
+    'SELECT id, invo FROM invoices WHERE auction_id = ? AND sale = ? AND buyer = ? LIMIT 1',
+    [req.params.auctionId, saleType, buyerCode]
+  );
+  if (dupBuyer) {
+    return res.status(409).json({
+      error: `Invoice already exists for buyer "${buyerCode}" (${saleType}) in this trade — invoice #${dupBuyer.invo}.`,
+      existingId: dupBuyer.id, existingInvo: dupBuyer.invo,
+    });
+  }
+  const dupNo = db.get(
+    'SELECT id, buyer FROM invoices WHERE auction_id = ? AND sale = ? AND invo = ? LIMIT 1',
+    [req.params.auctionId, saleType, String(invoiceNo)]
+  );
+  if (dupNo) {
+    return res.status(409).json({
+      error: `Invoice number ${invoiceNo} (${saleType}) is already used in this trade by buyer "${dupNo.buyer}".`,
+      existingId: dupNo.id, existingBuyer: dupNo.buyer,
+    });
+  }
   const s = invoice.summary;
   // Store the BUSINESS context state (TAMIL NADU=ISP, KERALA=ASP), not
   // the auction's physical state. This lets us distinguish ASP invoices
@@ -2468,12 +2591,35 @@ app.post('/api/invoices/generate-all/:auctionId', requireInvoiceWrite, (req, res
   for (const row of buyers) {
     const useSaleType = saleType || row.default_sale || 'L';
     try {
+      // Dedup — should be filtered upstream by the un-invoiced SQL
+      // expression, but double-check before INSERT so a race or stale
+      // lot.invo state can't produce a duplicate invoice row.
+      const dupBuyer = db.get(
+        'SELECT id, invo FROM invoices WHERE auction_id = ? AND sale = ? AND buyer = ? LIMIT 1',
+        [req.params.auctionId, useSaleType, row.buyer]
+      );
+      if (dupBuyer) {
+        errors.push({ buyer: row.buyer, error: `Already invoiced as #${dupBuyer.invo}` });
+        continue;
+      }
       const invoice = buildSalesInvoice(db, req.params.auctionId, row.buyer, useSaleType, cfg);
       if (!invoice) { errors.push({ buyer: row.buyer, error: 'No matching lots' }); continue; }
       const s = invoice.summary;
       const invoNo = String(nextNo);
       // Store BUSINESS context state — see single-invoice handler for rationale
       const invoiceState = cfg.business_state || auction.state || '';
+      // Skip if the chosen invoice number is already taken in this trade.
+      const dupNo = db.get(
+        'SELECT id, buyer FROM invoices WHERE auction_id = ? AND sale = ? AND invo = ? LIMIT 1',
+        [req.params.auctionId, useSaleType, invoNo]
+      );
+      if (dupNo) {
+        errors.push({ buyer: row.buyer, error: `Invoice #${invoNo} already used by ${dupNo.buyer}` });
+        // Don't increment nextNo for a skipped row so the next iteration
+        // tries the same number; the SELECT will reflect any insert from
+        // an earlier iteration.
+        continue;
+      }
       db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [req.params.auctionId,auction.ano,auction.date,invoiceState,useSaleType,invoNo,row.buyer,invoice.buyer.buyer1||'',
@@ -3008,8 +3154,30 @@ app.post('/api/purchases/generate/:auctionId', requireInvoiceWrite, (req, res) =
   const { sellerName, invoiceNo } = req.body;
   const invoice = buildPurchaseInvoice(db, req.params.auctionId, sellerName, cfg);
   if (!invoice) return res.status(404).json({ error: 'No data for this seller' });
-  
+
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  // Dedup — refuse a second purchase for the same dealer in this trade,
+  // and refuse to reuse an invoice number that's already taken.
+  const dupSeller = db.get(
+    'SELECT id, invo FROM purchases WHERE auction_id = ? AND name = ? LIMIT 1',
+    [req.params.auctionId, invoice.seller.name]
+  );
+  if (dupSeller) {
+    return res.status(409).json({
+      error: `Purchase already exists for dealer "${invoice.seller.name}" in this trade — invoice #${dupSeller.invo}.`,
+      existingId: dupSeller.id, existingInvo: dupSeller.invo,
+    });
+  }
+  const dupNo = db.get(
+    'SELECT id, name FROM purchases WHERE auction_id = ? AND invo = ? LIMIT 1',
+    [req.params.auctionId, String(invoiceNo)]
+  );
+  if (dupNo) {
+    return res.status(409).json({
+      error: `Purchase invoice number ${invoiceNo} is already used in this trade by dealer "${dupNo.name}".`,
+      existingId: dupNo.id, existingDealer: dupNo.name,
+    });
+  }
   const s = invoice.summary;
   db.run(`INSERT INTO purchases (auction_id,ano,date,state,br,name,add_line,place,gstin,invo,qty,amount,cgst,sgst,igst,rund,total,tds)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -3090,10 +3258,28 @@ app.post('/api/purchases/generate-all/:auctionId', requireInvoiceWrite, (req, re
   
   for (const row of sellers) {
     try {
+      // Skip dealers who already have a purchase invoice in this trade.
+      const dupSeller = db.get(
+        'SELECT id, invo FROM purchases WHERE auction_id = ? AND name = ? LIMIT 1',
+        [req.params.auctionId, row.name]
+      );
+      if (dupSeller) {
+        errors.push({ seller: row.name, error: `Already invoiced as #${dupSeller.invo}` });
+        continue;
+      }
       const invoice = buildPurchaseInvoice(db, req.params.auctionId, row.name, cfg);
       if (!invoice) { errors.push({ seller: row.name, error: 'Build failed' }); continue; }
       const s = invoice.summary;
       const invoNo = String(nextNo);
+      // Skip if this number is already taken by another dealer in the trade.
+      const dupNo = db.get(
+        'SELECT id, name FROM purchases WHERE auction_id = ? AND invo = ? LIMIT 1',
+        [req.params.auctionId, invoNo]
+      );
+      if (dupNo) {
+        errors.push({ seller: row.name, error: `Invoice #${invoNo} already used by ${dupNo.name}` });
+        continue;
+      }
       db.run(`INSERT INTO purchases (auction_id,ano,date,state,br,name,add_line,place,gstin,invo,qty,amount,cgst,sgst,igst,rund,total,tds)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [req.params.auctionId,auction.ano,auction.date,auction.state||'','',invoice.seller.name,invoice.seller.address||'',
@@ -3332,8 +3518,30 @@ app.post('/api/bills/generate/:auctionId', requireInvoiceWrite, (req, res) => {
   if (!bill || bill.error) {
     return res.status(404).json({ error: bill?.error || 'No eligible lots found' });
   }
-  
+
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  // Dedup — refuse a second bill for the same seller in this trade,
+  // and refuse to reuse a bill number that's already taken.
+  const dupSeller = db.get(
+    'SELECT id, bil FROM bills WHERE auction_id = ? AND name = ? LIMIT 1',
+    [req.params.auctionId, bill.seller.name]
+  );
+  if (dupSeller) {
+    return res.status(409).json({
+      error: `Bill of supply already exists for seller "${bill.seller.name}" in this trade — bill #${dupSeller.bil}.`,
+      existingId: dupSeller.id, existingBil: dupSeller.bil,
+    });
+  }
+  const dupNo = db.get(
+    'SELECT id, name FROM bills WHERE auction_id = ? AND bil = ? LIMIT 1',
+    [req.params.auctionId, parseInt(billNo)]
+  );
+  if (dupNo) {
+    return res.status(409).json({
+      error: `Bill number ${billNo} is already used in this trade by seller "${dupNo.name}".`,
+      existingId: dupNo.id, existingSeller: dupNo.name,
+    });
+  }
   const s = bill.summary;
   db.run(`INSERT INTO bills (auction_id,ano,date,state,br,crpt,bil,name,add_line,pla,pstate,st_code,crr,pan,qty,cost,igst,net)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -3375,9 +3583,27 @@ app.post('/api/bills/generate-all/:auctionId', requireInvoiceWrite, (req, res) =
   
   for (const row of sellers) {
     try {
+      // Skip sellers who already have a bill in this trade.
+      const dupSeller = db.get(
+        'SELECT id, bil FROM bills WHERE auction_id = ? AND name = ? LIMIT 1',
+        [req.params.auctionId, row.name]
+      );
+      if (dupSeller) {
+        errors.push({ seller: row.name, error: `Already billed as #${dupSeller.bil}` });
+        continue;
+      }
       const bill = buildAgriBill(db, req.params.auctionId, row.name, cfg);
       if (!bill || bill.error) { errors.push({ seller: row.name, error: bill?.error || 'Build failed' }); continue; }
       const s = bill.summary;
+      // Skip if this bill number is already taken in this trade.
+      const dupNo = db.get(
+        'SELECT id, name FROM bills WHERE auction_id = ? AND bil = ? LIMIT 1',
+        [req.params.auctionId, nextNo]
+      );
+      if (dupNo) {
+        errors.push({ seller: row.name, error: `Bill #${nextNo} already used by ${dupNo.name}` });
+        continue;
+      }
       db.run(`INSERT INTO bills (auction_id,ano,date,state,br,crpt,bil,name,add_line,pla,pstate,st_code,crr,pan,qty,cost,igst,net)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
@@ -3635,12 +3861,16 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   // state code (NOT by purchase.igst, which can be stale or
   // misclassified). See the equivalent block in /generate-bulk for
   // detailed rationale.
+  // Dealer state — `purchases.gstin` (the column actually stored on the
+  // row). Earlier code read `purchase.cr` which doesn't exist on the
+  // purchases schema; that silently resolved to '' and forced every DN
+  // to the intra-state branch.
   let dealerStateCode = '';
   {
-    let cr = String(purchase.cr || '').trim().toUpperCase();
-    if (cr.startsWith('GSTIN.')) cr = cr.slice(6);
-    else if (cr.startsWith('GSTIN')) cr = cr.slice(5);
-    if (/^\d{2}/.test(cr)) dealerStateCode = cr.slice(0, 2);
+    let g = String(purchase.gstin || '').trim().toUpperCase();
+    if (g.startsWith('GSTIN.')) g = g.slice(6);
+    else if (g.startsWith('GSTIN')) g = g.slice(5);
+    if (/^\d{2}/.test(g)) dealerStateCode = g.slice(0, 2);
   }
   const companyStateCode = String(cfg.tally_state_code
       || (String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33'));
@@ -3925,12 +4155,15 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
     // strip any "GSTIN."/"gstin." prefix, take the first two digits as
     // the state code, compare to the company's state code (intra).
     // Any non-match → inter-state → IGST applies.
+    // Dealer state — `purchases.gstin` (real column on the row). The
+    // older `p.cr` read resolved to undefined → empty → every DN was
+    // misclassified as intra-state.
     let dealerStateCode = '';
     {
-      let cr = String(p.cr || '').trim().toUpperCase();
-      if (cr.startsWith('GSTIN.')) cr = cr.slice(6);
-      else if (cr.startsWith('GSTIN')) cr = cr.slice(5);
-      if (/^\d{2}/.test(cr)) dealerStateCode = cr.slice(0, 2);
+      let g = String(p.gstin || '').trim().toUpperCase();
+      if (g.startsWith('GSTIN.')) g = g.slice(6);
+      else if (g.startsWith('GSTIN')) g = g.slice(5);
+      if (/^\d{2}/.test(g)) dealerStateCode = g.slice(0, 2);
     }
     const companyStateCode = String(cfg.tally_state_code
         || (String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33'));

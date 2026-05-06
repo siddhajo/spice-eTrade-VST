@@ -12,10 +12,12 @@
     "build:win:release": "electron-builder --win --publish always"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
     "dbffile": "^1.12.0",
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
+    "express-rate-limit": "^8.5.0",
     "multer": "^2.1.1",
     "pdfkit": "^0.15.0",
     "sql.js": "^1.10.3",
@@ -45,13 +47,16 @@
     ],
     "extraResources": [],
     "asarUnpack": [
-      "node_modules/better-sqlite3/**/*"
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bcrypt/**/*"
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/logo-ispl.png",

@@ -515,7 +515,16 @@ function getPaymentSummary(db, auctionId, state, cfg) {
   // First fetch the per-lot summary (e-Trade only — discount column is
   // always lots.refund). Also pulls per-seller GST sums so the Payments
   // tab can show a "GST 5% (CGST+SGST+IGST)" column next to the discount.
-  let query = `SELECT l.name, l.cr,
+  // GROUP BY l.name (only). Earlier this was `GROUP BY l.name, l.cr`
+  // which split a seller across multiple payment rows whenever their
+  // lots carried inconsistent `cr` values (a real data state when a
+  // dealer's GSTIN was edited mid-trade or imported in different
+  // formats). The DN map is keyed by name alone, so the same DN total
+  // got applied to each row → doubled (or N-tupled) discount on the
+  // Payments tab. Grouping by name only collapses the rows back into
+  // one per seller. MAX(l.cr) keeps the most-populated `cr` for the
+  // returned payload.
+  let query = `SELECT l.name, MAX(l.cr) AS cr,
     SUM(l.qty) as total_qty, SUM(l.amount) as total_amount,
     SUM(l.pqty) as total_pqty, SUM(l.prate) as avg_prate,
     SUM(l.puramt) as total_puramt,
@@ -524,11 +533,12 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     SUM(COALESCE(l.sgst,0)) as total_sgst,
     SUM(COALESCE(l.igst,0)) as total_igst,
     SUM(l.balance) as total_payable,
-    COUNT(*) as lot_count
+    COUNT(*) as lot_count,
+    MAX(l.state) AS state
     FROM lots l WHERE l.auction_id = ? AND l.amount > 0`;
   const params = [auctionId];
   if (state) { query += ' AND l.state = ?'; params.push(state); }
-  query += ' GROUP BY l.name, l.cr ORDER BY l.state, l.name';
+  query += ' GROUP BY l.name ORDER BY MAX(l.state), l.name';
   const sellers = db.all(query, params);
 
   // Fetch this auction's identifier (ano) so we can match debit_notes.
@@ -610,17 +620,21 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
   // address/IFSC; we then COALESCE with trader_banks default for
   // sellers who maintain multiple bank accounts.
   const payments = db.all(
-    `SELECT l.state, l.name, l.cr,
+    // GROUP BY l.name (only) — same fix as getPaymentSummary. Splitting
+    // by `cr` produced duplicate bank-payment rows whenever a seller's
+    // lots held inconsistent GSTIN values, leading to NEFT files with
+    // the dealer listed twice for partial amounts.
+    `SELECT MAX(l.state) AS state, l.name, MAX(l.cr) AS cr,
       SUM(l.puramt) as puramt, SUM(l.refund) as advance, SUM(l.balance) as payable,
-      t.id AS trader_id,
-      t.ifsc AS t_ifsc, t.acctnum AS t_acctnum, t.holder_name AS t_holder,
-      t.padd, t.ppla, t.pin
+      MAX(t.id) AS trader_id,
+      MAX(t.ifsc) AS t_ifsc, MAX(t.acctnum) AS t_acctnum, MAX(t.holder_name) AS t_holder,
+      MAX(t.padd) AS padd, MAX(t.ppla) AS ppla, MAX(t.pin) AS pin
     FROM lots l
     LEFT JOIN traders t ON UPPER(TRIM(t.name)) = UPPER(TRIM(l.name))
     WHERE l.auction_id = ? AND l.amount > 0
       AND (l.paid IS NULL OR l.paid = '')
-    GROUP BY l.name, l.cr
-    ORDER BY l.state, l.name`,
+    GROUP BY l.name
+    ORDER BY MAX(l.state), l.name`,
     [auctionId]
   );
 
@@ -857,92 +871,6 @@ function getPurchaseJournal(db, auctionId, type) {
   return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
 }
 
-/**
- * Debit Note calculation
- *
- * IMPORTANT: Debit notes are issued AGAINST PURCHASES — they record a
- * discount/adjustment we've negotiated with a registered dealer (the
- * supplier). The instrument is buyer-side: the buyer (us) issues it to
- * the seller. So the source row is always a `purchases` record, NOT a
- * sales invoice. An earlier version queried the `invoices` table by
- * mistake, allowing DNs to be created against sales transactions —
- * that's wrong and is fixed here.
- *
- * Lookup is by purchase invoice number (`purchases.invo`). When a
- * `saleType` arg is passed it's ignored — purchases don't carry sale
- * type the way sales invoices do — but we accept it positionally so
- * legacy callers (e.g. older /api/debit-notes/generate) don't break.
- */
-function buildDebitNote(db, invoiceNo, saleType, discount, cfg) {
-  // Resolve by purchno (`purchases.invo`). Most-recent wins if duplicates
-  // exist (legacy / re-used numbers across years) — matches /generate-bulk.
-  const inv = db.get(
-    `SELECT * FROM purchases
-      WHERE invo = ?
-      ORDER BY date DESC, id DESC
-      LIMIT 1`,
-    [String(invoiceNo)]
-  );
-  if (!inv) return null;
-
-  // GST rate for the discount itself. The DN is a service charge
-  // (discount-as-credit-note), which uses the discount_gst setting
-  // (typically 18%) — NOT the goods rate (gst_goods, 5% for cardamom).
-  // Earlier code used gst_goods, producing wrong tax on every DN.
-  const gstRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
-
-  // Intra/inter mirrors the source purchase: if the purchase was inter-
-  // state (igst > 0), the DN inherits IGST; otherwise CGST + SGST.
-  const isInter = (Number(inv.igst) || 0) > 0;
-
-  const amount = round2(discount);
-  let cgst = 0, sgst = 0, igst = 0;
-
-  if (cfg.flag_disc_gst) {
-    // Discount amount includes GST — extract it
-    const factor = 100 / (100 + gstRate);
-    const taxable = amount * factor;
-    if (isInter) igst = round2(amount - taxable);
-    else {
-      const tax = (amount - taxable) / 2;
-      cgst = round2(tax);
-      sgst = round2(tax);
-    }
-  } else {
-    // Discount is pre-tax — add GST on top
-    if (isInter) igst = round2(amount * gstRate / 100);
-    else {
-      cgst = round2(amount * (gstRate / 2) / 100);
-      sgst = round2(amount * (gstRate / 2) / 100);
-    }
-  }
-
-  const total = round2(amount + cgst + sgst + igst);
-
-  // Return shape mirrors the original (callers read `invoice.ano`,
-  // `invoice.buyer`, etc.). Re-aliases so a purchase row works as the
-  // `invoice` field without callers needing to change.
-  // Map purchase fields → invoice-like fields:
-  //   purchases.name  → buyer / buyer1 (party = the dealer we're crediting)
-  //   purchases.state → state
-  //   purchases.ano   → ano (trade number, used for DN date lookup)
-  return {
-    invoice: {
-      ano:    inv.ano,
-      state:  inv.state,
-      buyer:  inv.name,
-      buyer1: inv.name,
-      invo:   inv.invo,
-      // Carry intra/inter state of source so downstream code that reads
-      // inv.igst > 0 still works.
-      igst:   inv.igst,
-      cgst:   inv.cgst,
-      sgst:   inv.sgst,
-    },
-    amount, cgst, sgst, igst, total,
-  };
-}
-
 module.exports = {
   calculateLot,
   calculateTDS,
@@ -950,7 +878,6 @@ module.exports = {
   buildSalesInvoice,
   buildPurchaseInvoice,
   buildAgriBill,
-  buildDebitNote,
   listAgriSellers,
   getPaymentSummary,
   getBankPaymentData,

@@ -25,6 +25,7 @@
 
 const initSqlJs = require('sql.js');
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
 
@@ -114,6 +115,7 @@ async function initDb() {
     user_id INTEGER NOT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     last_used_at TEXT DEFAULT (datetime('now','localtime')),
+    expires_at TEXT,
     device_label TEXT DEFAULT '',
     FOREIGN KEY(user_id) REFERENCES users(id)
   )`);
@@ -125,6 +127,7 @@ async function initDb() {
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     token TEXT,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
@@ -479,6 +482,16 @@ async function initDb() {
     // upgraded DBs shed the orphan tables on next restart.
     'DROP TABLE IF EXISTS pin_distances',
     'DROP TABLE IF EXISTS pincodes',
+    // Force-rotate flag for the seeded admin (and any future password reset
+    // by an admin). When non-zero, requireAuth blocks every endpoint except
+    // the change-password / whoami routes until the user picks a new password.
+    'ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0',
+    // Hard expiry cap for sessions. Existing pre-migration rows get NULL
+    // (grandfathered in — relies on the 30-day idle sweep). New rows get
+    // a 30-day cap from creation; requireAuth refuses tokens past expires_at
+    // even if last_used_at is recent, so a leaked Authorization header has
+    // a bounded validity window.
+    'ALTER TABLE sessions ADD COLUMN expires_at TEXT',
   ];
   for (const m of migrations) {
     try { wrapped.exec(m); console.log('Migration applied:', m); }
@@ -548,9 +561,13 @@ async function initDb() {
 
   const row = wrapped.get('SELECT COUNT(*) as cnt FROM users');
   if (!row || row.cnt === 0) {
-    const hash = crypto.createHash('sha256').update('admin123').digest('hex');
-    wrapped.run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)', ['admin', hash, 'admin']);
-    console.log('Default admin created (admin / admin123)');
+    // bcrypt cost 12 — single hash at boot adds ~250ms, only on first run.
+    const hash = bcrypt.hashSync('admin123', 12);
+    wrapped.run(
+      'INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 1)',
+      ['admin', hash, 'admin']
+    );
+    console.log('Default admin created (admin / admin123) — MUST be changed on first login');
   }
 
   console.log('Database ready at', DB_PATH, '(better-sqlite3, WAL mode)');
