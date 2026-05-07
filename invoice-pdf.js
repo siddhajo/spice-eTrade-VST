@@ -198,8 +198,8 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
   // purchaser). Both columns show the same buyer block unless shipping
   // to a different address.
   const headH = 14;
-  // Explicit horizontal divider ABOVE the header band
-  doc.moveTo(x0, y).lineTo(x1, y).stroke();
+  // Prominent horizontal divider ABOVE the BILLED TO header band
+  doc.lineWidth(1).moveTo(x0, y).lineTo(x1, y).stroke().lineWidth(0.5);
   doc.rect(x0, y, gridLeftW, headH).fill('#e8e8e8').stroke();
   doc.rect(gridSplitX, y, gridRightW, headH).fill('#e8e8e8').stroke();
   doc.fillColor('#000').font('Helvetica-Bold').fontSize(9);
@@ -269,9 +269,10 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
   }
   // Horizontal dividers ABOVE and BELOW the description row — drawn
   // AFTER the grey fill so they stay visible (otherwise the fill paints
-  // right over them).
+  // right over them). The BELOW divider uses a thicker stroke to clearly
+  // separate Description of Goods from the line-item table.
   doc.moveTo(x0, y).lineTo(x1, y).stroke();
-  doc.moveTo(x0, y + descH).lineTo(x1, y + descH).stroke();
+  doc.lineWidth(1).moveTo(x0, y + descH).lineTo(x1, y + descH).stroke().lineWidth(0.5);
   y += descH;
 
   // ── Line-item table (same 9-column layout as bill of supply) ──

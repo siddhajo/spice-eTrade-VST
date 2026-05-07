@@ -4576,17 +4576,22 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     const ispPan        = _ident.pan;
     const ispState      = _ident.state;
     const ispStateCode  = _ident.stateCode || (ispState === 'KERALA' ? '32' : '33');
-    const ispAddrLine1  = _ident.address1;
-    const ispAddrLine2  = _ident.address2;
+    // Company address shown directly below the company name. Pull the
+    // resolved identity first; fall back to raw cfg fields so the address
+    // still renders when getCompanyIdentity returns blanks for either line.
+    const ispAddrLine1  = _ident.address1
+      || cfg.address1 || cfg.r_address1 || cfg.tn_address1 || cfg.kl_address1 || '';
+    const ispAddrLine2  = _ident.address2
+      || cfg.address2 || cfg.r_address2 || cfg.tn_address2 || cfg.kl_address2 || '';
 
     const noteRefSuffix = (cfg.season_short || cfg.tally_season || '26-27').replace(/[^0-9-]/g,'');
 
     doc.font('Helvetica-Bold').fontSize(10).text(company.toUpperCase(), PAGE_L + 4, y);
     doc.font('Helvetica-Bold').fontSize(10).text(`No.: ${dn.note_no || ''}/${noteRefSuffix}`, PAGE_R - 200, y, { width: 196, align: 'right' });
     y = doc.y + 2;
-    // Address line 1 sits directly under the company name. Both lines
-    // optional — render whichever are populated.
-    if (ispAddrLine1) doc.font('Helvetica').fontSize(9).text(ispAddrLine1, PAGE_L + 4, y);
+    // Company address sits directly under the company name. Always render
+    // line 1 (uses a placeholder when blank so the layout stays predictable).
+    doc.font('Helvetica').fontSize(9).text(ispAddrLine1 || '', PAGE_L + 4, y, { width: PAGE_R - 200 - (PAGE_L + 4) });
     doc.font('Helvetica-Bold').fontSize(9).text(`Date :${fmtDate(dn.date)}`, PAGE_R - 200, y, { width: 196, align: 'right' });
     y = doc.y + 2;
     if (ispAddrLine2) { doc.font('Helvetica').fontSize(9).text(ispAddrLine2, PAGE_L + 4, y); y = doc.y; }
@@ -4729,6 +4734,43 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     y += TOT_H;
     doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
 
+    // ── Tax calculation rows (mirrors purchase invoice) ──
+    // Each row spans the same right-hand pair of columns as GRAND TOTAL:
+    //   [discount column .. taxable column] holds the label + value.
+    // Rows render only for non-zero figures so an intra-state DN doesn't
+    // print an empty IGST line, and vice versa.
+    const TAX_H = 14;
+    const labelStartIdx = colIdx('discount');                 // left edge of label cell
+    const valueIdx      = taxIdx;                              // taxable column = value
+    const labelStartX   = xs[labelStartIdx];
+    const labelW        = (xs[valueIdx] - xs[labelStartIdx]) - 6;
+    const valueX        = xs[valueIdx] + 3;
+    const valueW        = cols[valueIdx].w - 6;
+    const taxableValue  = Number(dn.amount || totalTaxable) || 0;
+    const cgstAmt       = Number(dn.cgst) || 0;
+    const sgstAmt       = Number(dn.sgst) || 0;
+    const igstAmt       = Number(dn.igst) || 0;
+    const cgstRate      = Number(cfg.gst_cgst) || 2.5;
+    const sgstRate      = Number(cfg.gst_sgst) || 2.5;
+    const igstRate      = Number(cfg.gst_igst) || 5;
+    const taxRows = [
+      { label: 'TAXABLE VALUE',           amt: taxableValue, always: true },
+      { label: `CGST  ${cgstRate}%`,      amt: cgstAmt },
+      { label: `SGST  ${sgstRate}%`,      amt: sgstAmt },
+      { label: `IGST  ${igstRate}%`,      amt: igstAmt },
+    ].filter(r => r.always || r.amt > 0);
+    doc.font('Helvetica').fontSize(9);
+    for (const r of taxRows) {
+      doc.moveTo(PAGE_L, y).lineTo(PAGE_L, y + TAX_H).stroke();
+      doc.moveTo(labelStartX, y).lineTo(labelStartX, y + TAX_H).stroke();
+      doc.moveTo(xs[valueIdx], y).lineTo(xs[valueIdx], y + TAX_H).stroke();
+      doc.moveTo(PAGE_R, y).lineTo(PAGE_R, y + TAX_H).stroke();
+      doc.text(r.label, labelStartX + 3, y + 3, { width: labelW, align: 'right' });
+      doc.text(fmtAmt(r.amt), valueX, y + 3, { width: valueW, align: 'right' });
+      y += TAX_H;
+      doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
+    }
+
     // GRAND TOTAL row
     const GT_H = 18;
     doc.moveTo(PAGE_L, y).lineTo(PAGE_L, y + GT_H).stroke();
@@ -4736,7 +4778,7 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     doc.moveTo(xs[7], y).lineTo(xs[7], y + GT_H).stroke();
     doc.moveTo(PAGE_R, y).lineTo(PAGE_R, y + GT_H).stroke();
     doc.font('Helvetica-Bold').fontSize(10).text('GRAND TOTAL', xs[5] + 3, y + 5, { width: cols[5].w + cols[6].w - 6, align: 'right' });
-    doc.text(fmtAmt(dn.total || totalTaxable), xs[7] + 3, y + 5, { width: cols[7].w - 6, align: 'right' });
+    doc.text(fmtAmt(dn.total || (taxableValue + cgstAmt + sgstAmt + igstAmt) || totalTaxable), xs[7] + 3, y + 5, { width: cols[7].w - 6, align: 'right' });
     y += GT_H;
     doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).stroke();
     y += 14;
@@ -4935,10 +4977,21 @@ app.get('/api/payments/bank/:auctionId', requireView, (req, res) => {
 // "Print" and "WhatsApp" actions on the Payments tab.
 function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]) || { ano:'', date:'' };
+  // The lots schema has no `rate` column — alias `prate` (per-kg purchase
+  // rate post-calculation) as `rate` for the cols->key mapping below.
+  // The previous query referenced a non-existent column, so the SELECT
+  // threw AFTER doc.pipe(res) had begun, leaving the client with an empty
+  // PDF (the catch block could only call doc.end() at that point).
+  // Match seller by trimmed/case-insensitive name so legacy rows whose
+  // `name` was stored with trailing whitespace or mixed case still pair
+  // up — same fallback the trader lookup below already uses.
   const lots = db.all(
-    `SELECT lot_no, qty, rate, amount, puramt, refund, balance, cgst, sgst, igst
-       FROM lots WHERE auction_id = ? AND name = ? AND amount > 0
-       ORDER BY lot_no`,
+    `SELECT lot_no, qty, prate AS rate, amount, puramt, refund, balance, cgst, sgst, igst
+       FROM lots
+      WHERE auction_id = ?
+        AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?))
+        AND amount > 0
+      ORDER BY CAST(lot_no AS INTEGER), lot_no`,
     [auctionId, sellerName]
   ) || [];
   const trader = db.get('SELECT * FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [sellerName]);
@@ -5017,7 +5070,12 @@ app.get('/api/payments/pdf/:auctionId/:sellerName', requireView, (req, res) => {
     const PDFDocument = require('pdfkit');
     doc = new PDFDocument({ size: 'A4', margin: 30 });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="Payment_${req.params.sellerName}_${auctionId}.pdf"`);
+    // Sanitize the seller name before embedding in Content-Disposition.
+    // Raw URL-encoded params or special chars (quotes, CR/LF, semicolons)
+    // produce malformed headers — browsers then fail the print/download
+    // silently. Same pattern the purchase-invoice + sales-invoice routes use.
+    const safeName = String(sellerName || '').replace(/[^\w]/g, '_').slice(0, 80) || 'seller';
+    res.setHeader('Content-Disposition', `inline; filename="Payment_${safeName}_${auctionId}.pdf"`);
     doc.pipe(res); piped = true;
     res.on('close', () => { try { doc.destroy(); } catch(_){} });
     _renderPaymentStatement(doc, db, auctionId, sellerName, cfg);

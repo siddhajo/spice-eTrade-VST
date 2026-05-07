@@ -97,7 +97,10 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   });
 
-  // Helper to emit a single data row honouring numeric coercion + per-col align
+  // Helper to emit a single data row honouring numeric coercion + per-col align.
+  // Rows flagged with `_isSubtotal: true` get distinct styling (bold + light
+  // yellow fill + thin top border) so callers can interleave per-group
+  // subtotal rows directly in `rows` and have them styled automatically.
   function emitDataRow(rowObj) {
     const dataRow = ws.addRow({});
     columns.forEach((c, i) => {
@@ -113,6 +116,15 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
       // so rows align consistently regardless of font size differences.
       cell.alignment = { horizontal: colMeta[i].align, vertical: 'middle' };
     });
+    if (rowObj && rowObj._isSubtotal) {
+      dataRow.font = { bold: true };
+      dataRow.eachCell((cell, ci) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF8E1' } };
+        cell.border = { top: { style: 'thin' } };
+        const m = colMeta[ci - 1];
+        if (m && m.fmt) cell.numFmt = m.fmt;
+      });
+    }
     return dataRow;
   }
 
@@ -265,14 +277,20 @@ async function exportPriceList(db, auctionId) {
 // BIDDER) are dropped — meaningful only AFTER buyers bid on lots.
 // Useful pre-trade for handing buyers a printable lot inventory.
 async function exportPriceListBefore(db, auctionId) {
-  const rows = db.all(
+  const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
+  const tradeNo = a.ano || '';
+  const tradeDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
+  const rawRows = db.all(
     `SELECT lot_no as lot, bags as bag, qty
      FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
   );
+  const rows = rawRows.map(r => ({ trade_no: tradeNo, date: tradeDate, ...r }));
   const cols = [
-    { header: 'LOT', key: 'lot', width: 10 },
-    { header: 'BAG', key: 'bag', width: 8 },
-    { header: 'QTY', key: 'qty', width: 14 },
+    { header: 'TRADE NO', key: 'trade_no', width: 12 },
+    { header: 'DATE',     key: 'date',     width: 12 },
+    { header: 'LOT',      key: 'lot',      width: 10 },
+    { header: 'BAG',      key: 'bag',      width: 8  },
+    { header: 'QTY',      key: 'qty',      width: 14 },
   ];
   return createExcelBuffer('PriceListBefore', cols, rows, {
     db, title: 'Price List (Before)', metaLines: auctionMeta(db, auctionId),
@@ -286,24 +304,87 @@ async function exportPriceListBefore(db, auctionId) {
   });
 }
 
-// ── Export Type 4: Bank Payment (RTGS/NEFT format) ───────────
+// ── Export Type 4: Bank Payment (RTGS/NEFT — bank-import format) ─
+// Bare 13-column sheet (no brand band, no totals) matching the bank's
+// upload template:
+//   TRANSACT_A | MESSAGETYP | DEBITACCOU | PAYMENTAMO | TRANSACT_B |
+//   VALUEDATE  | BENEFICI_A | BENEFIARYN | BENEFIARYB | BENEFIARYE |
+//   BENEFICI_B | REMARKS    | CLIENTCODE
+// Header on row 1, data from row 2. Bank software auto-ingests this
+// shape — adding a brand band would break the import.
 async function exportBankPayment(db, auctionId, cfg) {
   const { getBankPaymentData } = require('./calculations');
   const payments = getBankPaymentData(db, auctionId, cfg);
-  const cols = [
-    { header: 'TransactionType', key: 'transactionType', width: 16 },
-    { header: 'BeneIFSCode', key: 'ifsc', width: 14 },
-    { header: 'BeneAcctNo', key: 'accountNo', width: 20 },
-    { header: 'BeneName', key: 'beneficiaryName', width: 30 },
-    { header: 'BeneAddLine1', key: 'address1', width: 30 },
-    { header: 'BeneAddLine2', key: 'address2', width: 20 },
-    { header: 'BeneAddLine3', key: 'pin', width: 10 },
-    { header: 'Amount', key: 'amount', width: 14 },
-    { header: 'SendertoRcvrInfo', key: 'remarks', width: 50 },
-  ];
-  return createExcelBuffer('BankPayment', cols, payments, {
-    db, title: 'Bank Payment (RTGS/NEFT)', metaLines: auctionMeta(db, auctionId),
+
+  // Sender-side context (state-aware): debit account, IFSC for BT/LBT
+  // detection, and the email used in BENEFIARYE.
+  const isKL = String(cfg.business_state || cfg.state || '').toUpperCase().includes('KERALA');
+  const senderAcct  = (isKL ? cfg.bank_kl_acct  : cfg.bank_tn_acct)  || cfg.bank_tn_acct  || cfg.bank_kl_acct  || '';
+  const senderIfsc  = (isKL ? cfg.bank_kl_ifsc  : cfg.bank_tn_ifsc)  || cfg.bank_tn_ifsc  || cfg.bank_kl_ifsc  || '';
+  const senderEmail = (isKL ? cfg.kl_email      : cfg.tn_email)      || cfg.tn_email      || cfg.kl_email      || '';
+  const senderBankPrefix = String(senderIfsc).slice(0, 4).toUpperCase();
+  // Short tag inserted into REMARKS (e.g. "VSTL" → "5 ANN MARIA SPICES VSTL PAYMENT 5945275.00 Credited").
+  // Falls back to the leading word of trade_name when short_name isn't set.
+  const shortTag = String(cfg.short_name || (cfg.trade_name || '').split(/\s+/)[0] || '').toUpperCase();
+
+  // Auction context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
+  const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
+  const ano = a.ano || '';
+  const valueDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
+
+  const rows = payments.map(p => {
+    const amount = Number(p.amount) || 0;
+    const beneIfsc = String(p.ifsc || '').toUpperCase();
+    const benePrefix = beneIfsc.slice(0, 4);
+    // BT  = book transfer (same bank as sender)
+    // LBT = local bank transfer (different bank, RTGS/NEFT routed)
+    const transactA = (senderBankPrefix && benePrefix === senderBankPrefix) ? 'BT' : 'LBT';
+    return {
+      TRANSACT_A:  transactA,
+      MESSAGETYP:  p.transactionType || 'RTGS',
+      DEBITACCOU:  senderAcct,
+      PAYMENTAMO:  amount,
+      TRANSACT_B:  'INR',
+      VALUEDATE:   valueDate,
+      BENEFICI_A:  p.accountNo || '',
+      BENEFIARYN:  String(p.beneficiaryName || '').toUpperCase(),
+      BENEFIARYB:  beneIfsc,
+      BENEFIARYE:  senderEmail,
+      BENEFICI_B:  '',
+      REMARKS:     `${ano} ${String(p.beneficiaryName || '').toUpperCase()}${shortTag ? ' ' + shortTag : ''} PAYMENT ${amount.toFixed(2)} Credited`,
+      CLIENTCODE:  '',
+    };
   });
+
+  // Build the sheet directly (bypass createExcelBuffer's brand-band).
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('BANK_PAYMENT');
+  const cols = [
+    { key: 'TRANSACT_A',  header: 'TRANSACT_A',  width: 12 },
+    { key: 'MESSAGETYP',  header: 'MESSAGETYP',  width: 12 },
+    { key: 'DEBITACCOU',  header: 'DEBITACCOU',  width: 18 },
+    { key: 'PAYMENTAMO',  header: 'PAYMENTAMO',  width: 14, numFmt: '#,##0.00' },
+    { key: 'TRANSACT_B',  header: 'TRANSACT_B',  width: 10 },
+    { key: 'VALUEDATE',   header: 'VALUEDATE',   width: 12 },
+    { key: 'BENEFICI_A',  header: 'BENEFICI_A',  width: 22 },
+    { key: 'BENEFIARYN',  header: 'BENEFIARYN',  width: 32 },
+    { key: 'BENEFIARYB',  header: 'BENEFIARYB',  width: 16 },
+    { key: 'BENEFIARYE',  header: 'BENEFIARYE',  width: 28 },
+    { key: 'BENEFICI_B',  header: 'BENEFICI_B',  width: 12 },
+    { key: 'REMARKS',     header: 'REMARKS',     width: 60 },
+    { key: 'CLIENTCODE',  header: 'CLIENTCODE',  width: 14 },
+  ];
+  ws.columns = cols.map(c => ({ key: c.key, width: c.width }));
+  cols.forEach((c, i) => {
+    if (c.numFmt) ws.getColumn(i + 1).numFmt = c.numFmt;
+  });
+  // Header row 1 — plain bold, no fill (so bank importers don't choke).
+  const head = ws.getRow(1);
+  cols.forEach((c, i) => { head.getCell(i + 1).value = c.header; });
+  head.font = { bold: true };
+  // Data rows from row 2.
+  rows.forEach(r => ws.addRow(r));
+  return wb.xlsx.writeBuffer();
 }
 
 // ── Export Type 4b: Bank Payment (Before discount) ───────────
@@ -483,7 +564,7 @@ async function exportPaymentSummary(db, auctionId, cfg) {
   // rows show only the lot policy discount. Avoids per-row arithmetic but
   // still preserves the seller-level total.
   const seenSellers = new Set();
-  const enriched = rows.map(r => {
+  const enrichedFlat = rows.map(r => {
     const lotDisc = Number(r.lot_discount) || 0;
     const manualDisc = (!seenSellers.has(r.poolername))
       ? (Number(debitMap[r.poolername]) || 0)
@@ -495,6 +576,31 @@ async function exportPaymentSummary(db, auctionId, cfg) {
       payable: (Number(r.payable) || 0) - manualDisc,
     };
   });
+
+  // Interleave per-pooler subtotal rows after each name group — mirrors
+  // the PDF's groupByKey:'poolername' subtotalKeys behaviour. Rows are
+  // already sorted by (state, name) so a single linear pass groups them.
+  const SUB_KEYS = ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'payable'];
+  const enriched = [];
+  let curName = null;
+  let acc = null;
+  const flushSub = () => {
+    if (!acc || curName == null) return;
+    const sub = { _isSubtotal: true, poolername: `${curName} TOTAL` };
+    SUB_KEYS.forEach(k => { sub[k] = acc[k] || 0; });
+    enriched.push(sub);
+  };
+  for (const r of enrichedFlat) {
+    const k = r.poolername || '';
+    if (k !== curName) {
+      flushSub();
+      curName = k;
+      acc = Object.fromEntries(SUB_KEYS.map(x => [x, 0]));
+    }
+    SUB_KEYS.forEach(x => { acc[x] += Number(r[x]) || 0; });
+    enriched.push(r);
+  }
+  flushSub();
   const cols = [
     { header: 'POOLERNAME', key: 'poolername', width: 30 },
     { header: 'LOT', key: 'lot', width: 8 }, { header: 'BAG', key: 'bag', width: 6 },
@@ -508,8 +614,9 @@ async function exportPaymentSummary(db, auctionId, cfg) {
   // totals row, so users had to compute payable/discount sums manually
   // in Excel before reconciling with bank transfers. PRICE/PRATE are
   // omitted from the sum (averaging rates makes no business sense; a
-  // sum would mislead readers).
-  const sum = (key) => enriched.reduce((s, r) => s + (Number(r[key]) || 0), 0);
+  // sum would mislead readers). Sum over enrichedFlat (data rows only)
+  // so interleaved subtotals don't double-count.
+  const sum = (key) => enrichedFlat.reduce((s, r) => s + (Number(r[key]) || 0), 0);
   const grandTotal = {
     label: 'GRAND TOTAL',
     values: {

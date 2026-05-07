@@ -656,14 +656,18 @@ function getTradeReportData(db, auctionId) {
   //   TRADE NAME ← b.buyer1     (firm/trade name as user stores it —
   //                                "EMPEROR SPICES PRIVATE LIMITED",
   //                                "MAR TRADERS", "VARDHAN TRADING COMPANY")
-  //   BIDDER     ← b.sbl/b.code  (proprietor name from sbl if distinct,
-  //                                falls back to short code)
+  //   BUYER NAME ← b.buyer       (the buyer's short name as the user
+  //                                stores it on the buyers master — the
+  //                                "name" column the rest of the app
+  //                                surfaces. Falls back to lots.buyer
+  //                                then to the short code so the column
+  //                                never goes blank for orphan rows.)
   const rows = db.all(`
     SELECT
       l.code                                                  AS code,
-      COALESCE(NULLIF(b.sbl,    b.buyer1),
-               NULLIF(b.code,   ''),
-               l.buyer1,
+      COALESCE(NULLIF(b.buyer, ''),
+               NULLIF(l.buyer, ''),
+               NULLIF(b.code,  ''),
                '')                                            AS bidder,
       COALESCE(b.buyer1, l.buyer1, '')                        AS trade_name,
       COALESCE(b.state,  '')                                  AS state,
@@ -678,7 +682,7 @@ function getTradeReportData(db, auctionId) {
       OR UPPER(TRIM(b.buyer)) = UPPER(TRIM(l.buyer))
     WHERE l.auction_id = ?
       AND l.amount > 0
-    GROUP BY l.code, b.buyer1, b.sbl, b.code, b.state, b.gstin, l.sale
+    GROUP BY l.code, b.buyer, l.buyer, b.buyer1, b.code, b.state, b.gstin, l.sale
     ORDER BY UPPER(COALESCE(b.buyer1, l.buyer1, l.code)), l.code
   `, [auctionId]);
 
@@ -783,7 +787,7 @@ async function tradeReportXlsx(db, auctionId) {
 
   // Column-header row sits where the brand band reserved space.
   const head = ws.getRow(headerStartRow);
-  ['SALE', 'BIDDER', 'TRADE NAME', 'BAG', 'QUANTITY', 'AMOUNT', 'INV.AMOUNT', 'CODE']
+  ['SALE', 'BUYER NAME', 'TRADE NAME', 'BAG', 'QUANTITY', 'AMOUNT', 'INV.AMOUNT', 'CODE']
     .forEach((label, i) => { head.getCell(i + 1).value = label; });
   head.font = { bold: true };
   head.height = 20;
@@ -1022,7 +1026,7 @@ async function tradeReportPdf(db, auctionId) {
     const headTop = y;
     doc.rect(m, y, usableW, HEAD_H).fillAndStroke('#E8E4DD', '#444');
     doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5);
-    const heads = ['S.NO', 'SALE', 'BIDDER', 'TRADE NAME', 'BAG', 'QUANTITY', 'AMOUNT', 'INV.AMOUNT', 'CODE'];
+    const heads = ['S.NO', 'SALE', 'BUYER NAME', 'TRADE NAME', 'BAG', 'QUANTITY', 'AMOUNT', 'INV.AMOUNT', 'CODE'];
     const aligns = ['center', 'center', 'left', 'left', 'center', 'right', 'right', 'right', 'center'];
     heads.forEach((h, i) => {
       doc.text(fitText(doc, h, colW[i] - 8), colX[i] + 4, y + 5, {

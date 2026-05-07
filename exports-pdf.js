@@ -486,9 +486,11 @@ const COLS = {
     { header: 'BIDDER', key: 'bidder', width: 20 },
   ],
   price_list_before: [
-    { header: 'LOT', key: 'lot', width: 10 },
-    { header: 'BAG', key: 'bag', width: 8 },
-    { header: 'QTY', key: 'qty', width: 14 },
+    { header: 'TRADE NO', key: 'trade_no', width: 12 },
+    { header: 'DATE',     key: 'date',     width: 12 },
+    { header: 'LOT',      key: 'lot',      width: 10 },
+    { header: 'BAG',      key: 'bag',      width: 8  },
+    { header: 'QTY',      key: 'qty',      width: 14 },
   ],
   bank_payment: [
     // PDF-only display columns — restructured for portrait so all data fits
@@ -696,10 +698,15 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
         `SELECT lot_no as lot, bags as bag, qty, price, code, buyer as bidder
          FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
 
-    case 'price_list_before':
+    case 'price_list_before': {
+      const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
+      const tradeNo = a.ano || '';
+      const tradeDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
       return db.all(
         `SELECT lot_no as lot, bags as bag, qty
-         FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
+         FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
+      ).map(r => ({ trade_no: tradeNo, date: tradeDate, ...r }));
+    }
 
     case 'bank_payment': {
       const { getBankPaymentData } = require('./calculations');
