@@ -47,18 +47,18 @@ const DEFAULTS = [
   { key: 'tn_branch',       value: '', category: 'address_tn', label: 'Office Branch',           type: 'text' },
 
   // ── BRANCHES ───────────────────────────────────────────────
-  { key: 'br1',             value: 'NEDUMKANDAM',    category: 'branches',  label: 'Branch 1',                type: 'text' },
-  { key: 'br2',             value: 'UDUBANCHOLA',    category: 'branches',  label: 'Branch 2',                type: 'text' },
-  { key: 'br3',             value: 'MARUKKUMTOTTI',  category: 'branches',  label: 'Branch 3',                type: 'text' },
-  { key: 'br4',             value: 'ANAVILASAM',     category: 'branches',  label: 'Branch 4',                type: 'text' },
-  { key: 'br5',             value: 'VANDANMEDU',     category: 'branches',  label: 'Branch 5',                type: 'text' },
+  { key: 'br1',             value: '',               category: 'branches',  label: 'Branch 1',                type: 'text' },
+  { key: 'br2',             value: '',               category: 'branches',  label: 'Branch 2',                type: 'text' },
+  { key: 'br3',             value: '',               category: 'branches',  label: 'Branch 3',                type: 'text' },
+  { key: 'br4',             value: '',               category: 'branches',  label: 'Branch 4',                type: 'text' },
+  { key: 'br5',             value: '',               category: 'branches',  label: 'Branch 5',                type: 'text' },
   { key: 'br6',             value: '',               category: 'branches',  label: 'Branch 6',                type: 'text' },
   { key: 'br7',             value: '',               category: 'branches',  label: 'Branch 7',                type: 'text' },
   { key: 'br8',             value: '',               category: 'branches',  label: 'Branch 8',                type: 'text' },
   { key: 'br9',             value: '',               category: 'branches',  label: 'Branch 9',                type: 'text' },
-  { key: 'br1_tel',         value: '9786069799',     category: 'branches',  label: 'Branch 1 Mobile',         type: 'text' },
+  { key: 'br1_tel',         value: '',               category: 'branches',  label: 'Branch 1 Mobile',         type: 'text' },
   { key: 'br2_tel',         value: '',               category: 'branches',  label: 'Branch 2 Mobile',         type: 'text' },
-  { key: 'br3_tel',         value: '9080248574',     category: 'branches',  label: 'Branch 3 Mobile',         type: 'text' },
+  { key: 'br3_tel',         value: '',               category: 'branches',  label: 'Branch 3 Mobile',         type: 'text' },
   { key: 'br4_tel',         value: '',               category: 'branches',  label: 'Branch 4 Mobile',         type: 'text' },
   { key: 'br5_tel',         value: '',               category: 'branches',  label: 'Branch 5 Mobile',         type: 'text' },
   { key: 'br6_tel',         value: '',               category: 'branches',  label: 'Branch 6 Mobile',         type: 'text' },
@@ -107,12 +107,12 @@ const DEFAULTS = [
   { key: 'sac_service',     value: '996111',         category: 'hsn',       label: 'Service SAC',              type: 'text' },
 
   // ── BANK DETAILS ───────────────────────────────────────────
-  { key: 'bank_kl_name',    value: 'FEDERAL BANK - PUTTADY', category: 'bank', label: 'Kerala Bank Name',      type: 'text' },
-  { key: 'bank_kl_acct',    value: '10735500094452', category: 'bank',      label: 'Kerala Account No.',       type: 'text' },
-  { key: 'bank_kl_ifsc',    value: 'FDRL0001073',   category: 'bank',      label: 'Kerala IFSC Code',         type: 'text' },
-  { key: 'bank_tn_name',    value: 'CITY UNION BANK-BODINAYAKANUR', category: 'bank', label: 'TN Bank Name',   type: 'text' },
-  { key: 'bank_tn_acct',    value: '510909010383556', category: 'bank',     label: 'TN Account No.',           type: 'text' },
-  { key: 'bank_tn_ifsc',    value: 'CIUB0000346',   category: 'bank',      label: 'TN IFSC Code',             type: 'text' },
+  { key: 'bank_kl_name',    value: '',               category: 'bank',      label: 'Kerala Bank Name',         type: 'text' },
+  { key: 'bank_kl_acct',    value: '',               category: 'bank',      label: 'Kerala Account No.',       type: 'text' },
+  { key: 'bank_kl_ifsc',    value: '',               category: 'bank',      label: 'Kerala IFSC Code',         type: 'text' },
+  { key: 'bank_tn_name',    value: '',               category: 'bank',      label: 'TN Bank Name',             type: 'text' },
+  { key: 'bank_tn_acct',    value: '',               category: 'bank',      label: 'TN Account No.',           type: 'text' },
+  { key: 'bank_tn_ifsc',    value: '',               category: 'bank',      label: 'TN IFSC Code',             type: 'text' },
 
   // ── SEASON ─────────────────────────────────────────────────
   { key: 'season',          value: '',      category: 'season',    label: 'Season Name',              type: 'text' },
@@ -121,12 +121,13 @@ const DEFAULTS = [
   { key: 'season_end',      value: '2027-03-31',     category: 'season',    label: 'FY End Date',              type: 'date' },
 
   // ── INVOICE SETTINGS ───────────────────────────────────────
-  { key: 'inv_prefix',      value: '',            category: 'invoice',   label: 'Invoice Prefix',           type: 'text' },
+  { key: 'inv_prefix',      value: '',               category: 'invoice',   label: 'Invoice Prefix',           type: 'text' },
   { key: 'separator',       value: '-',              category: 'invoice',   label: 'Separator Symbol',         type: 'text' },
-  { key: 'hsn_cardamom',    value: '09083120',       category: 'invoice',   label: 'HSN/SAC — Cardamom',       type: 'text' },
-  { key: 'hsn_gunny',       value: '63051040',       category: 'invoice',   label: 'HSN/SAC — Gunny',          type: 'text' },
+  // hsn_cardamom and hsn_gunny live in the HSN/SAC category — see above.
+  // Earlier they were duplicated here; removed so editing one source of
+  // truth (Settings → HSN/SAC) updates every consumer.
   { key: 'dispatched_through_isp', value: '',         category: 'invoice',   label: 'Dispatched Through', type: 'text' },
-  { key: 'dispatch_destination', value: 'NEDUMKANDAM', category: 'invoice', label: 'Dispatch Destination',     type: 'text' },
+  { key: 'dispatch_destination', value: '',           category: 'invoice', label: 'Dispatch Destination',     type: 'text' },
   { key: 'duplicate_text',  value: 'DUMMY INVOICE',  category: 'invoice',   label: 'Dummy Invoice Text',       type: 'text' },
   { key: 'signature_text',  value: 'Signature of the Authorised Buyer', category: 'invoice', label: 'Signature Label', type: 'text' },
 
@@ -161,7 +162,7 @@ const DEFAULTS = [
   { key: 'sample_weight',   value: '0.000',          category: 'lot_entry', label: 'Default Sample Weight (kg)', type: 'number' },
   { key: 'show_moisture',   value: 'false',          category: 'lot_entry', label: 'Show Moisture Column',     type: 'boolean' },
   { key: 'default_litre',   value: '',               category: 'lot_entry', label: 'Default Litre Weight',     type: 'text' },
-  { key: 'default_crop_type', value: 'VST',          category: 'lot_entry', label: 'Default Crop Type',        type: 'text' },
+  { key: 'default_crop_type', value: '',             category: 'lot_entry', label: 'Default Crop Type',        type: 'text' },
   { key: 'edit_enabled',    value: 'true',           category: 'lot_entry', label: 'Allow Lot Edits (non-admin)', type: 'boolean' },
   { key: 'edit_timeout_sec', value: '0',             category: 'lot_entry', label: 'Edit Timeout (sec; 0 = no limit)', type: 'number' },
   // Default lot receipt format. The Lot Entry print modal lets the
@@ -195,7 +196,7 @@ const DEFAULTS = [
   { key: 'tally_company_name',     value: '',      category: 'tally', label: 'Tally Company Name', type: 'text' },
   { key: 'tally_season',          value: '2026-27',        category: 'tally', label: 'Season Suffix',                  type: 'text' },
   { key: 'tally_separator',       value: '/',              category: 'tally', label: 'Voucher Separator',              type: 'text' },
-  { key: 'tally_inv_prefix',      value: 'VSTK',           category: 'tally', label: 'Voucher Prefix', type: 'text' },
+  { key: 'tally_inv_prefix',      value: '',               category: 'tally', label: 'Voucher Prefix', type: 'text' },
   { key: 'tally_state_code',      value: '33',             category: 'tally', label: 'Home GSTIN State Code (intra)',  type: 'text' },
   { key: 'tally_home_state',      value: 'Tamil Nadu',     category: 'tally', label: 'Home Place of Supply',           type: 'text' },
   { key: 'tally_urd_state',       value: 'Kerala',         category: 'tally', label: 'URD Purchase State (agriculturist)', type: 'text' },

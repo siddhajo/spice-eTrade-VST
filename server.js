@@ -2376,7 +2376,7 @@ app.get('/api/invoices', requireView, (req, res) => {
       cfg.s_pin ||
       cfg.kl_pin ||
       cfg.tn_pin ||
-      '685553'
+      ''
     ).trim();
     const routeStmt = db.prepare(
       // Routes are stored under a normalised (min, max) pair, so a
@@ -5426,7 +5426,7 @@ app.get('/api/tally/preview/:type/:auctionId', requireExport, (req, res) => {
 function getDispatchPin(db) {
   const cfg = require('./company-config').getSettingsFlat(db);
   return String(
-    cfg.tally_dispatch_pin || cfg.s_pin || cfg.kl_pin || cfg.tn_pin || '685553'
+    cfg.tally_dispatch_pin || cfg.s_pin || cfg.kl_pin || cfg.tn_pin || ''
   ).trim();
 }
 

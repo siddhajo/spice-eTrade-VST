@@ -379,26 +379,34 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 
 /* ── Layout: Sidebar + Content ──────────────────────────── */
 .layout{display:flex;min-height:calc(100vh - 64px)}
+/* Sidebar: deep cardamom green — pulls the brand colour from the
+   existing palette (--spice-cardamom-dk #14532D) so the panel reads
+   as part of the spice-trade identity instead of a generic dark
+   stripe. The subtle gradient adds depth without losing readability;
+   text/icon colours below are tuned for AA contrast on this base. */
 .sidebar{
-  width:244px;background:var(--spice-pepper);color:var(--spice-line-strong);
+  width:244px;
+  background:linear-gradient(180deg,#14532D 0%,#0E3F22 100%);
+  color:rgba(255,255,255,.85);
   border-right:none;
   padding:20px 12px;flex-shrink:0;position:sticky;top:64px;
-  height:calc(100vh - 64px);overflow-y:auto
+  height:calc(100vh - 64px);overflow-y:auto;
+  box-shadow:inset -1px 0 0 rgba(255,255,255,.04)
 }
 .sidebar::-webkit-scrollbar{width:6px}
-.sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:3px}
+.sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:3px}
 .side-group{margin-bottom:18px}
 .side-group-lbl{
-  font-size:10.5px;font-weight:700;color:#7A6B58;text-transform:uppercase;
+  font-size:10.5px;font-weight:700;color:rgba(255,255,255,.55);text-transform:uppercase;
   letter-spacing:1.2px;padding:0 12px 8px;margin-top:4px;
   cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;
   transition:color .15s
 }
-.side-group-lbl:hover{color:var(--spice-saffron)}
+.side-group-lbl:hover{color:var(--spice-turmeric)}
 /* Chevron flips when group is collapsed via .side-group.section-collapsed */
 .side-group-lbl::before{
   content:'▼';font-size:8px;display:inline-block;transition:transform .2s;
-  color:var(--spice-text-hint)
+  color:rgba(255,255,255,.4)
 }
 .side-group.section-collapsed .side-group-lbl::before{transform:rotate(-90deg)}
 /* Hide the items when section is collapsed — pure CSS, no JS height calc.
@@ -407,16 +415,24 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 .side-item{
   display:flex;align-items:center;gap:12px;
   padding:12px 14px;border-radius:10px;cursor:pointer;
-  font-size:14px;font-weight:500;color:var(--spice-line-strong);
+  font-size:14px;font-weight:500;color:rgba(255,255,255,.85);
   margin-bottom:2px;transition:all .15s;
-  border:none;background:none;font-family:inherit;width:100%;text-align:left
+  border:none;background:none;font-family:inherit;width:100%;text-align:left;
+  position:relative
 }
-.side-item:hover{background:rgba(255,255,255,.05);color:#fff}
+.side-item:hover{background:rgba(255,255,255,.08);color:#fff}
 .side-item.active{
-  background:rgba(16,185,129,.15);color:var(--spice-saffron);font-weight:600
+  background:rgba(255,255,255,.14);color:#fff;font-weight:600
 }
-.side-item.active svg{color:var(--spice-saffron)}
-.side-item svg{width:18px;height:18px;flex-shrink:0;stroke-width:2;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;color:var(--spice-text-hint)}
+/* Turmeric accent strip on the active item — gives a clear "you are
+   here" cue against the green background without needing to change
+   the icon colour to something that fights with the brand. */
+.side-item.active::before{
+  content:'';position:absolute;left:0;top:8px;bottom:8px;width:3px;
+  background:var(--spice-turmeric);border-radius:0 3px 3px 0
+}
+.side-item.active svg{color:var(--spice-turmeric)}
+.side-item svg{width:18px;height:18px;flex-shrink:0;stroke-width:2;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;color:rgba(255,255,255,.65)}
 
 /* ─────── Collapsed sidebar (icons-only) ───────
    Toggled by the chevron button at the top of the sidebar; persisted
@@ -5015,7 +5031,7 @@ async function loadStats(auctionId){
     <div class="greeting">
       <div>
         <h1>${greet}, ${esc(uname)} <span class="wave">👋</span></h1>
-        <p>Here's what's happening at Ideal Spices today, ${today}</p>
+        <p>Here's what's happening today, ${today}</p>
       </div>
       <div style="display:flex;gap:10px">
         <button class="btn btn-o" onclick="go('lots')">Import Data</button>
@@ -5462,38 +5478,21 @@ function applyModeLabels(){
 // business mode or state changes.
 function applyLogoBadge(){
   const badge = document.getElementById('logo-badge');
-  const img   = document.getElementById('topbar-logo-img');
   const code = getCurrentLogoCode();
 
-  // Pill text: the configured Logo Code, whatever it is
+  // Pill text: the configured Logo Code, whatever it is.
   if(badge){
     if(!code){badge.style.display='none'}
     else{badge.textContent = code; badge.style.display = 'inline-block'}
   }
 
-  // Topbar dot image: single-company build always uses logo-ispl.png.
-  // The Logo Code is a free-text identifier shown in the badge text;
-  // it doesn't switch the image source any more. If the user uploads
-  // a logo via Settings → Company → Logo, it lands at logo-ispl.png.
-  if(!code) return;
-  const src = '/logo-ispl.png';
-  let el = img;
-  if(!el){
-    // img was removed by its onerror handler (missing file). Re-insert so we
-    // try again on every mode/state change — helps after the user drops the
-    // logo files into public/.
-    const dot = document.querySelector('.topbar .dot');
-    if(dot){
-      el = document.createElement('img');
-      el.id = 'topbar-logo-img';
-      el.alt = '';
-      el.onerror = function(){this.remove()};
-      dot.appendChild(el);
-    }
-  }
-  if(el && el.getAttribute('src') !== src){
-    el.src = src;
-  }
+  // Logo IMAGE is owned by applyBranding() — it pulls the URL from
+  // /api/branding (which checks the on-disk uploaded logo) and
+  // populates both #login-logo-img and #topbar-logo-img with a cache-
+  // busting timestamp. We re-trigger that here so a logo upload
+  // surfaces immediately on mode/state changes without a page reload.
+  // No hardcoded /logo-ispl.png fallback any more.
+  try { applyBranding(); } catch(_){}
   // Cascade: anything keyed off ASP context (e.g. the "Print Selected
   // Purchase" button on the Sales tab) gets a visibility refresh here so
   // there's a single place that needs to fire on logo/state changes.
@@ -8414,30 +8413,24 @@ function fld(f){
 // The classic view uses the standard `fld()` renderer so booleans show
 // as toggle switches like Flags. Both views share the same data-key
 // inputs, so captureCurrentPanel() picks edits up identically.
-let _tallyClassic = false;
-function setTallyView(classic){
-  captureCurrentPanel();
-  _tallyClassic = !!classic;
-  renderSettingsPanel();
-}
+// _tallyClassic + setTallyView retained as no-op stubs so any cached
+// HTML still calls them safely. Form Layout was removed; the panel
+// always renders in Classic List mode now.
+let _tallyClassic = true;
+function setTallyView(_classic){ /* no-op: only Classic List exists */ }
 
 function renderTallyPanel(fields){
-  // Toggle bar — appears at the top of either view
-  const toggleBar = `
-    <div class="tally-viewbar">
-      <button class="btn btn-sm ${_tallyClassic?'':'is-active'}" onclick="setTallyView(false)">📋 Form Layout</button>
-      <button class="btn btn-sm ${_tallyClassic?'is-active':''}" onclick="setTallyView(true)">🗂 Classic List</button>
-      <span class="tally-viewbar-hint">Form Layout matches the macro's Configration window. Classic List shows every field individually.</span>
-    </div>`;
+  const toggleBar = '';
 
-  if (_tallyClassic) {
-    // Classic List — same fields the macro form uses, organised into
-    // the same 8 logical groups. Each group renders as a fieldset card
-    // (`tally-box`) with a heading; fields inside go through fld() so
-    // booleans get the slim slider and inputs get the standard pill.
-    // Any tally_* key NOT mentioned in CLASSIC_GROUPS lands in the
-    // "Other" group at the bottom — guarantees nothing is silently
-    // hidden if a new key is added without updating the layout.
+  {
+    // Classic List — the only view now (Form Layout was retired).
+    // Fields organised into 8 logical groups. Each group renders as
+    // a fieldset card (`tally-box`) with a heading; fields inside go
+    // through fld() so booleans get the slim slider and inputs get
+    // the standard pill. Any tally_* key NOT mentioned in
+    // CLASSIC_GROUPS lands in the "Other" group at the bottom —
+    // guarantees nothing is silently hidden if a new key is added
+    // without updating the layout.
     const CLASSIC_GROUPS = [
       { title: 'Identity & Voucher Numbering', keys: [
         'tally_company_name', 'tally_inv_prefix', 'tally_separator', 'tally_season',

@@ -236,7 +236,7 @@ const _saleLabel = (s) => {
 //   }, ...]
 //
 function generSalesIspXML(rows, cfg, opts = {}) {
-  const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
+  const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
   // Voucher prefix priority for <VOUCHERNUMBER>:
@@ -296,8 +296,8 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const d_company    = cfgGet(cfg, 'short_name', cfgGet(cfg, 'trade_name', ''));
   const d_add        = cfgGet(cfg, 'kl_address1', '');
   const d_add2       = cfgGet(cfg, 'kl_address2', '');
-  const d_place      = cfgGet(cfg, 'kl_place', cfgGet(cfg, 'kl_branch', 'NEDUMKANDAM'));
-  const d_pin        = cfgGet(cfg, 'kl_pin', '685553');
+  const d_place      = cfgGet(cfg, 'kl_place', cfgGet(cfg, 'kl_branch', ''));
+  const d_pin        = cfgGet(cfg, 'kl_pin', '');
   const d_state      = cfgGet(cfg, 'kl_state', 'Kerala');
   const d_state_code = '32';
   const d_gstin      = cfgGet(cfg, 'kl_gstin', '');
@@ -827,8 +827,8 @@ function generSalesAspXML(rows, cfg, opts = {}) {
   const own_addr1    = cfgGet(cfg, 's_dispatch_address1', '650,Ward 6, Ellikkanam, Nedumkandam');
   const own_addr2    = cfgGet(cfg, 's_dispatch_address2', 'Idukki, Kerala, 685553');
   const own_sbl      = cfgGet(cfg, 's_sbl', '');
-  const own_place    = cfgGet(cfg, 'tally_dispatch_place', 'NEDUMKANDAM');
-  const own_pin      = cfgGet(cfg, 'tally_dispatch_pin', '685553');
+  const own_place    = cfgGet(cfg, 'tally_dispatch_place', '');
+  const own_pin      = cfgGet(cfg, 'tally_dispatch_pin', '');
   const own_state    = cfgGet(cfg, 'tally_dispatch_state', 'Kerala');
   // Own company name: legacy s_* fields take priority for installs that
   // imported from the sister-company build, but fall back to the central identity
@@ -1076,7 +1076,7 @@ ${rates.cess}
 //
 function generIspPurchaseXML(rows, cfg, opts = {}) {
   // Imports into the home company (the buyer's books)
-  const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
+  const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const tlyrnd        = cfgBool(cfg, 'flag_tally_round', true);
 
   // Ledger names — Trade Purchase From Dealer is the single accounting
@@ -1098,8 +1098,8 @@ function generIspPurchaseXML(rows, cfg, opts = {}) {
                        _getCompanyIdentity(cfg).name || 'Company'));
   const aspAddr1   = cfgGet(cfg, 's_address1', cfgGet(cfg, 's_dispatch_address1', ''));
   const aspAddr2   = cfgGet(cfg, 's_address2', cfgGet(cfg, 's_dispatch_address2', ''));
-  const aspPlace   = cfgGet(cfg, 's_place',    cfgGet(cfg, 'tally_dispatch_place', 'NEDUMKANDAM'));
-  const aspPin     = cfgGet(cfg, 's_pin',      cfgGet(cfg, 'tally_dispatch_pin', '685553'));
+  const aspPlace   = cfgGet(cfg, 's_place',    cfgGet(cfg, 'tally_dispatch_place', ''));
+  const aspPin     = cfgGet(cfg, 's_pin',      cfgGet(cfg, 'tally_dispatch_pin', ''));
   const aspState   = cfgGet(cfg, 's_state',    cfgGet(cfg, 'tally_dispatch_state', 'Kerala'));
   const aspGstin   = cfgGet(cfg, 's_gstin',    '');
 
@@ -1377,7 +1377,7 @@ ${TAGS.DEEMNO}
 //   }, ...]
 //
 function generSalesXML(rows, cfg, opts = {}) {
-  const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
+  const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
   // Voucher prefix from Logo Code (single source of truth — see the
@@ -1619,7 +1619,7 @@ ${rnd < 0 ? TAGS.DEEMYES : TAGS.DEEMNO}
 // }, ...]
 //
 function generRDPurchaseXML(rows, cfg, opts = {}) {
-  const company    = opts.companyName || cfgGet(cfg, 'tally_company_name', 'Ideal Spices Private Limited');
+  const company    = opts.companyName || cfgGet(cfg, 'tally_company_name', '');
   const season     = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const detailed   = cfgBool(cfg, 'tally_detailed', true);
   const tlyrnd     = cfgBool(cfg, 'tally_round_enabled', true);
@@ -1938,7 +1938,7 @@ ${TAGS.DEEMYES}
 // }, ...]
 //
 function generURDPurchaseXML(rows, cfg, opts = {}) {
-  const company   = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
+  const company   = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const season    = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const detailed  = cfgBool(cfg, 'tally_detailed', true);
   const tlyrnd    = cfgBool(cfg, 'tally_round_enabled', true);
@@ -2145,7 +2145,7 @@ ${TAGS.DEEMYES}
 // }, ...]
 //
 function generDebitNoteXML(rows, cfg, opts = {}) {
-  const company    = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
+  const company    = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const season     = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const tlyrnd     = cfgBool(cfg, 'tally_round_enabled', true);
   const exempt     = cfgBool(cfg, 'tally_dn_exempt', false);
@@ -2383,7 +2383,7 @@ function buildSalesIspRows(db, auctionId, cfg) {
     cfgGet(cfg, 's_pin', '') ||
     cfgGet(cfg, 'kl_pin', '') ||
     cfgGet(cfg, 'tn_pin', '') ||
-    '685553'
+    ''
   ).trim();
 
   // Pre-fetch every saved route for this dispatch PIN — one query, then
@@ -2871,7 +2871,7 @@ function buildDebitNoteRows(db, auctionId, cfg) {
 //           state, applicableFrom (yyyymmdd) }]
 //
 function generLedgerXML(rows, cfg, opts = {}) {
-  const company = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', 'Ideal Spices Private Limited'));
+  const company = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const today = toTallyDate(new Date());
 
   // Use "All Masters" reportname for ledger imports.
