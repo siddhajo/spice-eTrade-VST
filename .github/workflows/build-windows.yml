@@ -53,6 +53,23 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # ── 2b. Python 3.11 for node-gyp ───────────────────────────
+      # bcrypt and better-sqlite3 are native modules; @electron/rebuild
+      # invokes node-gyp to rebuild them against Electron's headers.
+      # The legacy node-gyp shipped with these packages imports
+      # `distutils`, which Python 3.12 removed. windows-latest now
+      # ships Python 3.12+ by default, breaking the build.
+      # Pinning Python 3.11 keeps `distutils` available; the
+      # `setuptools` install adds a `distutils` shim as belt-and-
+      # braces in case any tool resolves a different Python.
+      - name: Setup Python 3.11 (node-gyp compatibility)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Ensure distutils via setuptools
+        run: python -m pip install --upgrade setuptools
+
       # ── 3. Cache the Electron framework binary ─────────────────
       # electron-builder downloads ~80 MB of Electron framework per
       # arch + version. Caching shaves ~90s per run on cache hit.
