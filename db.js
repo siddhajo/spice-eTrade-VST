@@ -24,6 +24,30 @@
  */
 
 const initSqlJs = require('sql.js');
+
+// sql.js loads its WASM via fetch/fs. In dev, the file sits at
+// `node_modules/sql.js/dist/sql-wasm.wasm` and the default loader
+// finds it. In a packaged Electron app, the source is sealed inside
+// the `app.asar` archive and Electron's WASM streaming compile can't
+// open archive paths. We tell sql.js where to look explicitly:
+//   - process.resourcesPath/sql-wasm.wasm   (when packaged; build
+//                                            config copies the file via
+//                                            extraResources)
+//   - node_modules/sql.js/dist/sql-wasm.wasm (dev fallback)
+function _resolveSqlJsOpts() {
+  const candidates = [];
+  // Packaged Electron builds expose process.resourcesPath; we ship
+  // the wasm there via electron-builder's extraResources.
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'sql-wasm.wasm'));
+  }
+  candidates.push(path.join(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'));
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return { locateFile: () => p }; }
+    catch (_) { /* fs.existsSync may throw on weird paths — keep trying */ }
+  }
+  return undefined;  // fall back to sql.js's default resolver
+}
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
@@ -88,7 +112,7 @@ async function initDb() {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   // Load sql.js wasm runtime once
-  if (!SQL) SQL = await initSqlJs();
+  if (!SQL) SQL = await initSqlJs(_resolveSqlJsOpts());
 
   // Open existing DB or create empty one
   if (fs.existsSync(DB_PATH)) {
@@ -733,7 +757,7 @@ async function replaceFromBuffer(buf) {
   if (magic !== 'SQLite format 3') {
     throw new Error('Uploaded file is not a valid SQLite database');
   }
-  if (!SQL) SQL = await initSqlJs();
+  if (!SQL) SQL = await initSqlJs(_resolveSqlJsOpts());
   // Sanity-check: must open without throwing.
   let test;
   try { test = new SQL.Database(buf); } catch (e) {

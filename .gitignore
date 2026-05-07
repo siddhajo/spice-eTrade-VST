@@ -1,2 +1,8 @@
-siddhajo_id_ed25519
-siddhajo_id_ed25519.pub
+node_modules/
+dist/
+dist-electron/
+build/
+coverage/
+*.log
+*.tsbuildinfo
+*.env

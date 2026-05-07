@@ -1,0 +1,128 @@
+name: Build Windows installer
+
+# When this runs:
+#   • Push a tag like `v1.0.0` or `v1.2.3-rc1`  → builds + creates a GitHub
+#     Release with the .exe attached.
+#   • Manual dispatch from the Actions tab     → builds the artifact
+#     without creating a release (download from the run summary).
+#   • Push to main                              → smoke-build to catch
+#     packaging regressions early; no artifact retention beyond 7 days.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Attach build to a draft GitHub Release?'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+# Concurrency: cancel any in-progress run for the same ref so a quick
+# follow-up push doesn't queue duplicate Windows builds (each takes
+# 5–8 min and burns minutes on free tier).
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build SpiceETrade-Setup.exe
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    permissions:
+      contents: write   # needed to attach assets to the auto-created Release
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so version-from-git tools work
+
+      # ── 2. Node 20 + npm cache ─────────────────────────────────
+      # Electron 31 supports Node 16+; we use 20 LTS to match what most
+      # devs run locally. The cache key keys on package-lock.json so a
+      # dependency bump invalidates it; otherwise install is ~30s vs 4m.
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── 3. Cache the Electron framework binary ─────────────────
+      # electron-builder downloads ~80 MB of Electron framework per
+      # arch + version. Caching shaves ~90s per run on cache hit.
+      - name: Cache Electron framework
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      # ── 4. Install npm deps ────────────────────────────────────
+      # `npm ci` is reproducible (errors out if lockfile is out of
+      # sync) and skips lifecycle scripts we don't need on the
+      # runner — electron-builder will re-run electron-rebuild for
+      # native modules during the package step anyway.
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 5. Build the Windows installer ─────────────────────────
+      # `--publish never` means we ALWAYS produce the local
+      # SpiceETrade-Setup-X.Y.Z.exe under dist/ regardless of the
+      # publish: block in package.json. We attach to a Release in a
+      # later step (only when triggered by a tag push or explicit
+      # opt-in via workflow_dispatch).
+      - name: Build installer
+        run: npm run build:win
+        env:
+          # electron-builder needs a token to query GitHub for
+          # update-channel metadata when publish: github is in
+          # package.json — even when we tell it `--publish never`.
+          # Workflow's GITHUB_TOKEN is sufficient (read access).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 6. Upload as a workflow artifact ───────────────────────
+      # Every run leaves the .exe downloadable from the run summary
+      # for 7 days. This is the primary way to grab a build that
+      # came from a non-tag push (e.g. testing a feature branch).
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpiceETrade-Setup-${{ github.sha }}
+          path: dist/SpiceETrade-Setup-*.exe
+          retention-days: 7
+          if-no-files-found: error
+
+      # ── 7. Attach to a GitHub Release on tag push ──────────────
+      # Triggered when a tag matching v* is pushed. The Release is
+      # auto-created from the tag name; the .exe attaches as a
+      # downloadable asset. softprops/action-gh-release handles
+      # idempotency (re-running the workflow on the same tag updates
+      # the existing Release in place).
+      - name: Create / update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') ||
+            (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          # Tag name comes from the ref on tag pushes; for manual
+          # dispatch we synthesise one from the run number so the
+          # release page stays unique. Marked as draft on dispatch
+          # so it doesn't go public until you flip the switch.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('manual-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('Manual build #{0}', github.run_number) }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            dist/SpiceETrade-Setup-*.exe
+            dist/latest.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

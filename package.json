@@ -8,18 +8,26 @@
   "scripts": {
     "start": "node server.js",
     "start:electron": "electron .",
+    "build": "electron-builder --publish never",
+    "build:mac": "electron-builder --mac --publish never",
     "build:win": "electron-builder --win --publish never",
-    "build:win:release": "electron-builder --win --publish always"
+    "build:win:release": "electron-builder --win --publish always",
+    "build:mac:release": "electron-builder --mac --publish always"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "call-bind-apply-helpers": "^1.0.2",
     "cors": "^2.8.5",
     "dbffile": "^1.12.0",
+    "es-set-tostringtag": "^2.0.3",
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "express-rate-limit": "^8.5.0",
     "multer": "^2.1.1",
     "pdfkit": "^0.15.0",
+    "side-channel-list": "^1.0.0",
+    "side-channel-map": "^1.0.1",
+    "side-channel-weakmap": "^1.0.2",
     "sql.js": "^1.10.3",
     "xlsx": "^0.18.5"
   },
@@ -39,17 +47,40 @@
       "electron/**/*",
       "public/**/*",
       "*.js",
-      "!electron/README.md",
+      "package.json",
+      "node_modules/**/*",
       "!**/*.map",
-      "!**/*.md",
+      "!**/test/**",
+      "!**/tests/**",
+      "!**/__tests__/**",
+      "!**/.bin/**",
+      "!**/{.eslintrc,.eslintrc.json,.eslintrc.js,.eslintignore,.editorconfig,.nycrc,.travis.yml,.appveyor.yml,.github,.babelrc,tsconfig.json}",
       "!data",
-      "!.git"
+      "!data/**/*",
+      "!.git",
+      "!dist-electron",
+      "!dist"
     ],
-    "extraResources": [],
-    "asarUnpack": [
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/bcrypt/**/*"
+    "asar": false,
+    "afterPack": "./electron/after-pack.js",
+    "extraResources": [
+      {
+        "from": "node_modules/sql.js/dist/sql-wasm.wasm",
+        "to": "sql-wasm.wasm"
+      }
     ],
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "category": "public.app-category.business",
+      "icon": "public/logo-ispl.png",
+      "artifactName": "SpiceETrade-${version}-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
     "win": {
       "target": [
         {
@@ -74,8 +105,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "REPLACE_WITH_YOUR_GITHUB_USERNAME",
-        "repo": "REPLACE_WITH_YOUR_REPO_NAME"
+        "owner": "siddhajo",
+        "repo": "spice-eTrade-VST"
       }
     ]
   }
