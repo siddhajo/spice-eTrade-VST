@@ -116,8 +116,11 @@ jobs:
           # dispatch we synthesise one from the run number so the
           # release page stays unique. Marked as draft on dispatch
           # so it doesn't go public until you flip the switch.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('manual-{0}', github.run_number) }}
-          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('Manual build #{0}', github.run_number) }}
+          # Values quoted because the `#` inside `format('Manual
+          # build #{0}', …)` would otherwise start a YAML comment
+          # mid-expression.
+          tag_name: "${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('manual-{0}', github.run_number) }}"
+          name: "${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('Manual build {0}', github.run_number) }}"
           draft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
