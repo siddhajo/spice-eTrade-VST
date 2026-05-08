@@ -5741,8 +5741,10 @@ function applyModeLabels(){
             || 'e-Trade';
   const btn = document.querySelector('.side-item[data-tab="trades"]');
   if(!btn) return;
-  // Replace the trailing text node (the label after the SVG)
-  const label = (mode === 'e-Trade') ? 'Trades' : 'Trades';
+  // Replace the trailing text node (the label after the SVG).
+  // Both modes use the same user-facing label now — the conditional is
+  // kept in case a future client wants distinct labels per mode again.
+  const label = (mode === 'e-Auction') ? 'Trades' : 'Trades';
   for(const n of btn.childNodes){
     if(n.nodeType === Node.TEXT_NODE && n.textContent.trim()){
       n.textContent = ' '+label;
@@ -8211,13 +8213,16 @@ async function loadSettings(){
 
 // ── Business-mode gating ──────────────────────────────────
 // Fields/categories that should appear only in specific modes.
-// When mode = e-Trade: hide sister company (no sister in trade mode)
+// When mode = e-Trade:    hide sister company (no sister in trade mode)
 //                         hide pooler/dealer deductions, ASP/ISP profit, sample refund
-// When mode = e-Trade:   hide commission, handling, SB sample refund
-const _MODE_HIDE_CATS = { 'e-Trade': ['sister'], 'e-Trade': [] };
+// When mode = e-Auction:  hide commission, handling, SB sample refund
+//
+// The keys here are the CONFIG VALUE for `business_mode` — they match
+// the literal stored on the settings row, NOT user-facing labels.
+const _MODE_HIDE_CATS = { 'e-Trade': ['sister'], 'e-Auction': [] };
 const _MODE_HIDE_KEYS = {
-  'e-Trade': ['deduction1','deduction2','asp_profit_pooler','asp_profit_dealer','isp_profit_pooler','isp_profit_dealer','refund'],
-  'e-Trade':   ['commission','hpc','sb_refund']
+  'e-Trade':   ['deduction1','deduction2','asp_profit_pooler','asp_profit_dealer','isp_profit_pooler','isp_profit_dealer','refund'],
+  'e-Auction': ['commission','hpc','sb_refund']
 };
 
 // State-based category hiding. TN business hides the Kerala address category
@@ -10404,7 +10409,11 @@ async function loadLots(){const aid=document.getElementById('lot-trade').value;i
   }
 
   const mode = getCurrentBusinessMode();
-  const isAuction = (mode === 'e-Trade');
+  // `e-Auction` is the CONFIG VALUE on cfg.business_mode — not a UI label.
+  // The earlier user-facing rename of "Auction" → "Trade" must not touch
+  // this comparison, otherwise the auction-mode column set (Refund /
+  // Commission / Handling) leaks into e-Trade mode.
+  const isAuction = (mode === 'e-Auction');
   // Update the Calculate All button label to show which mode + company will be applied.
   // Including the logo code (ISP / ASP) makes it obvious whose calculation is running —
   // avoids confusion when business mode + state map to different companies.

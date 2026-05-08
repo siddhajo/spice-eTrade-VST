@@ -539,7 +539,7 @@ async function exportPaymentSummary(db, auctionId, cfg) {
   // policy discount AND any manual debit_notes for this trade's sellers.
   // We compute it per-row by adding debit_notes (joined by ano + name).
   const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
-  const discountCol = (mode === 'trade') ? 'advance' : 'refund';
+  const discountCol = (mode === 'auction') ? 'advance' : 'refund';
   const trade = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
   const ano = trade ? trade.ano : null;
   // Build name → manual debit total map (debit_notes can have multiple
@@ -655,7 +655,7 @@ async function exportTDSReturn(db, fromDate, toDate) {
 // ── Export: Tally format (TALY.PRG — purchase data for accounting)
 async function exportTallyPurchase(db, auctionId, cfg) {
   const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
-  const discountCol = (mode === 'trade') ? 'advance' : 'refund';
+  const discountCol = (mode === 'auction') ? 'advance' : 'refund';
   const rows = db.all(
     `SELECT name, padd as add, ppla as place, cr as gstin, tel,
       lot_no as lot, bags as bag, pqty as qty, prate as price, puramt as amount,

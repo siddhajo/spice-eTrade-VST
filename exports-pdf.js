@@ -752,7 +752,7 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
     case 'payment': {
       // Mode-aware discount column — see exports.js exportPaymentSummary.
       const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
-      const discountCol = (mode === 'trade') ? 'advance' : 'refund';
+      const discountCol = (mode === 'auction') ? 'advance' : 'refund';
       return db.all(
         `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
           pqty, prate, puramt, ${discountCol} as discount, balance as payable
@@ -762,7 +762,7 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
 
     case 'tally_purchase': {
       const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
-      const discountCol = (mode === 'trade') ? 'advance' : 'refund';
+      const discountCol = (mode === 'auction') ? 'advance' : 'refund';
       return db.all(
         `SELECT name, padd as add, ppla as place, cr as gstin, tel,
           lot_no as lot, bags as bag, pqty as qty, prate as price, puramt as amount,
