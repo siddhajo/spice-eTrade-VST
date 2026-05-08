@@ -3997,7 +3997,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   <p id="ctm-message" style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px;white-space:pre-line"></p>
   <div class="fg">
     <label id="ctm-label" style="font-size:11px">Type to confirm</label>
-    <input id="ctm-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" style="text-transform:uppercase;letter-spacing:.5px">
+    <!-- IMPORTANT: no text-transform / autocapitalize / letter-spacing on
+         this input. On Windows Chromium-Electron those CSS / HTML hints
+         interact with the IME composition layer and can swallow the very
+         first keystroke (the field appears unresponsive). Comparison is
+         case-insensitive in JS, so we don't need any visual upper-casing. -->
+    <input id="ctm-input" type="text" autocomplete="off" spellcheck="false">
   </div>
   <div id="ctm-err" style="color:#c0392b;font-size:12px;margin:0 0 8px;display:none"></div>
   <div class="actions">
@@ -10895,26 +10900,31 @@ function confirmTyped(opts) {
     errEl.style.display = 'none'; errEl.textContent = '';
     okBtn.textContent = o.okLabel || 'Confirm';
 
+    const modalEl = document.getElementById('confirm-typed-modal');
     let done = false;
+    // Refocus-on-click safety net — see comment below the showModal()
+    // call. Defined BEFORE finish() so finish can detach it on close.
+    const refocus = (e) => {
+      if (e.target === okBtn || e.target === cancelBtn || e.target === inputEl) return;
+      try { inputEl.focus(); } catch(_){}
+    };
     const finish = (val) => {
       if (done) return; done = true;
+      try { modalEl.removeEventListener('mousedown', refocus); } catch(_){}
       hideModal('confirm-typed-modal');
       okBtn.onclick = null; cancelBtn.onclick = null;
       inputEl.onkeydown = null;
       resolve(val);
     };
     okBtn.onclick = () => {
-      // Case-insensitive + trimmed compare. The input has CSS
-      // `text-transform:uppercase` so a lowercase keystroke RENDERS as
-      // uppercase but `value` keeps the original case — strict equality
-      // would silently reject correctly-typed input. Normalising both
-      // sides matches what the user sees on screen.
+      // Case-insensitive + trimmed compare. The user might type any case;
+      // we normalise both sides so what they see matches what we accept.
       const typed = String(inputEl.value || '').trim().toUpperCase();
       if (typed === String(expected).toUpperCase()) { finish(true); }
       else {
         errEl.textContent = `Type "${expected}" to proceed.`;
         errEl.style.display = 'block';
-        inputEl.focus(); inputEl.select();
+        try { inputEl.focus(); inputEl.select(); } catch(_){}
       }
     };
     cancelBtn.onclick = () => finish(false);
@@ -10923,7 +10933,15 @@ function confirmTyped(opts) {
       else if (e.key === 'Escape'){ e.preventDefault(); finish(false); }
     };
     showModal('confirm-typed-modal');
-    setTimeout(() => { try { inputEl.focus(); } catch (_) {} }, 50);
+    // Two-stage focus: rAF (after next paint) + a delayed retry past the
+    // 200ms fadeIn animation. Single-shot focus during the animation is
+    // unreliable on Windows Chromium-Electron — the input shows a caret
+    // but keystrokes don't reach it until the user clicks the field.
+    // The mousedown handler on the modal body is a third safety net:
+    // any click anywhere in the modal returns focus to the input.
+    requestAnimationFrame(() => { try { inputEl.focus(); } catch(_){} });
+    setTimeout(() => { try { inputEl.focus(); inputEl.select(); } catch(_){} }, 220);
+    modalEl.addEventListener('mousedown', refocus);
   });
 }
 
@@ -10953,9 +10971,16 @@ function promptInput(opts) {
     inputEl.placeholder = o.placeholder || '';
     okBtn.textContent   = o.okLabel || 'OK';
 
+    const modalEl = document.getElementById('prompt-input-modal');
     let done = false;
+    // Same Windows-Electron focus hardening as confirmTyped.
+    const refocus = (e) => {
+      if (e.target === okBtn || e.target === cancelBtn || e.target === inputEl) return;
+      try { inputEl.focus(); } catch(_){}
+    };
     const finish = (val) => {
       if (done) return; done = true;
+      try { modalEl.removeEventListener('mousedown', refocus); } catch(_){}
       hideModal('prompt-input-modal');
       okBtn.onclick = null; cancelBtn.onclick = null; inputEl.onkeydown = null;
       resolve(val);
@@ -10967,7 +10992,9 @@ function promptInput(opts) {
       else if (e.key === 'Escape'){ e.preventDefault(); finish(null); }
     };
     showModal('prompt-input-modal');
-    setTimeout(() => { try { inputEl.focus(); inputEl.select(); } catch(_){} }, 50);
+    requestAnimationFrame(() => { try { inputEl.focus(); } catch(_){} });
+    setTimeout(() => { try { inputEl.focus(); inputEl.select(); } catch(_){} }, 220);
+    modalEl.addEventListener('mousedown', refocus);
   });
 }
 
