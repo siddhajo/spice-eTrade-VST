@@ -10904,9 +10904,15 @@ function confirmTyped(opts) {
       resolve(val);
     };
     okBtn.onclick = () => {
-      if (inputEl.value === expected) { finish(true); }
+      // Case-insensitive + trimmed compare. The input has CSS
+      // `text-transform:uppercase` so a lowercase keystroke RENDERS as
+      // uppercase but `value` keeps the original case — strict equality
+      // would silently reject correctly-typed input. Normalising both
+      // sides matches what the user sees on screen.
+      const typed = String(inputEl.value || '').trim().toUpperCase();
+      if (typed === String(expected).toUpperCase()) { finish(true); }
       else {
-        errEl.textContent = `Type "${expected}" exactly (case-sensitive) to proceed.`;
+        errEl.textContent = `Type "${expected}" to proceed.`;
         errEl.style.display = 'block';
         inputEl.focus(); inputEl.select();
       }
