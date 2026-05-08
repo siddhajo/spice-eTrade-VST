@@ -3862,45 +3862,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   </div>
 </div></div>
 
-<!-- Typed-confirmation modal — replacement for window.prompt() which
-     Electron disabled in v7+. Used by destructive actions that require
-     the user to literally type a confirmation word (REVERT, DELETE, etc.)
-     before the action proceeds. Driven by confirmTyped() in JS below. -->
-<div class="modal-bg" id="confirm-typed-modal"><div class="modal" style="max-width:440px">
-  <h2 id="ctm-title" style="margin-bottom:6px">Confirm action</h2>
-  <p id="ctm-message" style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px;white-space:pre-line"></p>
-  <div class="fg">
-    <label id="ctm-label" style="font-size:11px">Type to confirm</label>
-    <!-- IMPORTANT: no text-transform / autocapitalize / letter-spacing on
-         this input. On Windows Chromium-Electron those CSS / HTML hints
-         interact with the IME composition layer and can swallow the very
-         first keystroke (the field appears unresponsive). Comparison is
-         case-insensitive in JS, so we don't need any visual upper-casing. -->
-    <input id="ctm-input" type="text" autocomplete="off" spellcheck="false">
-  </div>
-  <div id="ctm-err" style="color:#c0392b;font-size:12px;margin:0 0 8px;display:none"></div>
-  <div class="actions">
-    <button id="ctm-cancel" class="btn btn-o">Cancel</button>
-    <button id="ctm-ok"     class="btn" style="background:var(--spice-chili);color:#fff;font-weight:600">Confirm</button>
-  </div>
-</div></div>
-
-<!-- Free-text input modal — second replacement for window.prompt(),
-     used when an action needs the user to ENTER a value (lorry number,
-     filename, etc.) rather than type a fixed confirmation word.
-     Driven by promptInput() in JS below. -->
-<div class="modal-bg" id="prompt-input-modal"><div class="modal" style="max-width:480px">
-  <h2 id="pim-title" style="margin-bottom:6px">Enter a value</h2>
-  <p id="pim-message" style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;white-space:pre-line"></p>
-  <div class="fg">
-    <label id="pim-label" style="font-size:11px">Value</label>
-    <input id="pim-input" type="text" autocomplete="off" spellcheck="false">
-  </div>
-  <div class="actions">
-    <button id="pim-cancel" class="btn btn-o">Cancel</button>
-    <button id="pim-ok"     class="btn btn-g">OK</button>
-  </div>
-</div></div>
+<!-- Both confirmTyped() and promptInput() build their modals dynamically
+     in JS now (matches the proven-working promptDispatchedThrough pattern
+     elsewhere in this file). The static markup that used to live here was
+     removed because Chromium-Electron drops focus() calls when an existing
+     element's display flips from none → flex via a CSS class — synchronous
+     focus on a freshly-appended element is the only path that reliably
+     focuses on both Windows and macOS. -->
 
 <script>
 const B=location.origin;let T='';
@@ -10583,40 +10551,56 @@ function confirmTyped(opts) {
   return new Promise((resolve) => {
     const o = opts || {};
     const expected = String(o.expected || 'CONFIRM');
-    const titleEl = document.getElementById('ctm-title');
-    const msgEl   = document.getElementById('ctm-message');
-    const labelEl = document.getElementById('ctm-label');
-    const inputEl = document.getElementById('ctm-input');
-    const errEl   = document.getElementById('ctm-err');
-    const okBtn   = document.getElementById('ctm-ok');
-    const cancelBtn = document.getElementById('ctm-cancel');
+
+    // Build the modal as a fresh DOM tree on every call. Mirrors the
+    // working promptDispatchedThrough() pattern below — synchronous focus
+    // on a freshly-appended input is the only path that reliably wakes
+    // the keyboard on both Windows and macOS Chromium-Electron. The
+    // earlier static-modal-with-class-toggle approach left the input
+    // looking unhighlighted because focus() fires before layout when
+    // display flips from none → flex via a CSS class.
+    const root = document.createElement('div');
+    root.className = 'modal-bg show';
+    root.style.zIndex = '10000';
+    root.innerHTML =
+      '<div class="modal" style="max-width:440px">' +
+        '<h2 style="margin-bottom:6px"></h2>' +
+        '<p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px;white-space:pre-line"></p>' +
+        '<div class="fg">' +
+          '<label style="font-size:11px"></label>' +
+          // Plain text input — no autocapitalize/text-transform tricks.
+          // Comparison is case-insensitive in JS so visual hints aren't
+          // needed and they conflict with the IME composition layer
+          // on Windows Chromium-Electron, swallowing the first keystroke.
+          '<input type="text" autocomplete="off" spellcheck="false">' +
+        '</div>' +
+        '<div style="color:#c0392b;font-size:12px;margin:0 0 8px;display:none"></div>' +
+        '<div class="actions">' +
+          '<button class="btn btn-o">Cancel</button>' +
+          '<button class="btn" style="background:var(--spice-chili);color:#fff;font-weight:600">Confirm</button>' +
+        '</div>' +
+      '</div>';
+    const titleEl  = root.querySelector('h2');
+    const msgEl    = root.querySelector('p');
+    const labelEl  = root.querySelector('label');
+    const inputEl  = root.querySelector('input');
+    const errEl    = root.querySelector('div[style*="color:#c0392b"]');
+    const buttons  = root.querySelectorAll('.actions button');
+    const cancelBtn = buttons[0];
+    const okBtn    = buttons[1];
 
     titleEl.textContent = o.title || 'Confirm action';
     msgEl.textContent   = o.message || '';
     labelEl.textContent = `Type ${expected} to confirm`;
-    inputEl.value = '';
-    errEl.style.display = 'none'; errEl.textContent = '';
-    okBtn.textContent = o.okLabel || 'Confirm';
+    okBtn.textContent   = o.okLabel || 'Confirm';
 
-    const modalEl = document.getElementById('confirm-typed-modal');
     let done = false;
-    // Refocus-on-click safety net — see comment below the showModal()
-    // call. Defined BEFORE finish() so finish can detach it on close.
-    const refocus = (e) => {
-      if (e.target === okBtn || e.target === cancelBtn || e.target === inputEl) return;
-      try { inputEl.focus(); } catch(_){}
-    };
     const finish = (val) => {
       if (done) return; done = true;
-      try { modalEl.removeEventListener('mousedown', refocus); } catch(_){}
-      hideModal('confirm-typed-modal');
-      okBtn.onclick = null; cancelBtn.onclick = null;
-      inputEl.onkeydown = null;
+      try { root.remove(); } catch(_){}
       resolve(val);
     };
     okBtn.onclick = () => {
-      // Case-insensitive + trimmed compare. The user might type any case;
-      // we normalise both sides so what they see matches what we accept.
       const typed = String(inputEl.value || '').trim().toUpperCase();
       if (typed === String(expected).toUpperCase()) { finish(true); }
       else {
@@ -10626,20 +10610,18 @@ function confirmTyped(opts) {
       }
     };
     cancelBtn.onclick = () => finish(false);
-    inputEl.onkeydown = (e) => {
-      if (e.key === 'Enter')      { e.preventDefault(); okBtn.click(); }
-      else if (e.key === 'Escape'){ e.preventDefault(); finish(false); }
-    };
-    showModal('confirm-typed-modal');
-    // Two-stage focus: rAF (after next paint) + a delayed retry past the
-    // 200ms fadeIn animation. Single-shot focus during the animation is
-    // unreliable on Windows Chromium-Electron — the input shows a caret
-    // but keystrokes don't reach it until the user clicks the field.
-    // The mousedown handler on the modal body is a third safety net:
-    // any click anywhere in the modal returns focus to the input.
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')       { e.preventDefault(); okBtn.click(); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+
+    document.body.appendChild(root);
+    // Synchronous focus on a freshly-appended element — same pattern
+    // promptDispatchedThrough has used in production. Belt-and-braces
+    // rAF retry covers the rare case the first focus call lost the race
+    // with layout (Windows-Electron occasionally needs a second tick).
+    try { inputEl.focus(); } catch(_){}
     requestAnimationFrame(() => { try { inputEl.focus(); } catch(_){} });
-    setTimeout(() => { try { inputEl.focus(); inputEl.select(); } catch(_){} }, 220);
-    modalEl.addEventListener('mousedown', refocus);
   });
 }
 
@@ -10655,12 +10637,32 @@ function confirmTyped(opts) {
 function promptInput(opts) {
   return new Promise((resolve) => {
     const o = opts || {};
-    const titleEl = document.getElementById('pim-title');
-    const msgEl   = document.getElementById('pim-message');
-    const labelEl = document.getElementById('pim-label');
-    const inputEl = document.getElementById('pim-input');
-    const okBtn   = document.getElementById('pim-ok');
-    const cancelBtn = document.getElementById('pim-cancel');
+
+    // Same dynamic-modal pattern as confirmTyped above — see the comment
+    // there for why we don't use a static modal + class toggle.
+    const root = document.createElement('div');
+    root.className = 'modal-bg show';
+    root.style.zIndex = '10000';
+    root.innerHTML =
+      '<div class="modal" style="max-width:480px">' +
+        '<h2 style="margin-bottom:6px"></h2>' +
+        '<p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;white-space:pre-line"></p>' +
+        '<div class="fg">' +
+          '<label style="font-size:11px"></label>' +
+          '<input type="text" autocomplete="off" spellcheck="false">' +
+        '</div>' +
+        '<div class="actions">' +
+          '<button class="btn btn-o">Cancel</button>' +
+          '<button class="btn btn-g">OK</button>' +
+        '</div>' +
+      '</div>';
+    const titleEl  = root.querySelector('h2');
+    const msgEl    = root.querySelector('p');
+    const labelEl  = root.querySelector('label');
+    const inputEl  = root.querySelector('input');
+    const buttons  = root.querySelectorAll('.actions button');
+    const cancelBtn = buttons[0];
+    const okBtn    = buttons[1];
 
     titleEl.textContent = o.title || 'Enter a value';
     msgEl.textContent   = o.message || '';
@@ -10669,40 +10671,36 @@ function promptInput(opts) {
     inputEl.placeholder = o.placeholder || '';
     okBtn.textContent   = o.okLabel || 'OK';
 
-    const modalEl = document.getElementById('prompt-input-modal');
     let done = false;
-    // Same Windows-Electron focus hardening as confirmTyped.
-    const refocus = (e) => {
-      if (e.target === okBtn || e.target === cancelBtn || e.target === inputEl) return;
-      try { inputEl.focus(); } catch(_){}
-    };
     const finish = (val) => {
       if (done) return; done = true;
-      try { modalEl.removeEventListener('mousedown', refocus); } catch(_){}
-      hideModal('prompt-input-modal');
-      okBtn.onclick = null; cancelBtn.onclick = null; inputEl.onkeydown = null;
+      try { root.remove(); } catch(_){}
       resolve(val);
     };
     okBtn.onclick     = () => finish(inputEl.value);
     cancelBtn.onclick = () => finish(null);
-    inputEl.onkeydown = (e) => {
-      if (e.key === 'Enter')      { e.preventDefault(); finish(inputEl.value); }
-      else if (e.key === 'Escape'){ e.preventDefault(); finish(null); }
-    };
-    showModal('prompt-input-modal');
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')       { e.preventDefault(); finish(inputEl.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+    });
+
+    document.body.appendChild(root);
+    try { inputEl.focus(); inputEl.select(); } catch(_){}
     requestAnimationFrame(() => { try { inputEl.focus(); } catch(_){} });
-    setTimeout(() => { try { inputEl.focus(); inputEl.select(); } catch(_){} }, 220);
-    modalEl.addEventListener('mousedown', refocus);
   });
 }
 
 async function revertAllInvoices(){
-  if (!ok) return;
   const aid=document.getElementById('inv-auction').value;
   if(!aid){alert('Select an auction first');return}
   if(!confirm('Revert ALL invoices for this auction?\n\nEvery invoice in this auction will be deleted, and every lot will become eligible for re-invoicing. This cannot be undone.\n\nContinue?'))return;
-  const typed=prompt('To confirm, type REVERT in capitals:');
-  if(typed!=='REVERT'){alert('Cancelled.');return}
+  const ok = await confirmTyped({
+    title:    'Revert all invoices?',
+    message:  'This deletes every invoice in this auction and re-enables every lot for invoicing. Cannot be undone.',
+    expected: 'REVERT',
+    okLabel:  'Revert All',
+  });
+  if (!ok) return;
   try{
     const r=await fetch(B+`/api/invoices/revert-all/${aid}`,{method:'POST',headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();
