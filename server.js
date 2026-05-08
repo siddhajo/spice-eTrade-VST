@@ -3979,8 +3979,17 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   const isInter = !!dealerStateCode && dealerStateCode !== companyStateCode;
 
   const dnGstRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
+  // Gate discount-GST on the flag itself, not on whether the source
+  // purchase already happens to carry GST. Older code used the latter as
+  // a proxy, but the proxy goes stale the moment a user toggles
+  // flag_disc_gst — purchases generated in the previous flag state still
+  // have non-zero cgst/sgst/igst and cause new DNs to incorrectly add
+  // tax. Secondary `dealerCarriedGst` filter retained: URD / agriculturist
+  // purchases (no GSTIN, no GST stamped) still produce exempt DNs.
+  const flagDiscGst = String(cfg.flag_disc_gst || '').toLowerCase() === 'true' || cfg.flag_disc_gst === true;
+  const dealerCarriedGst = Number(purchase.cgst) || Number(purchase.sgst) || Number(purchase.igst);
   let cgst = 0, sgst = 0, igst = 0;
-  if (Number(purchase.cgst) || Number(purchase.sgst) || Number(purchase.igst)) {
+  if (flagDiscGst && dealerCarriedGst) {
     if (isInter) {
       igst = round2(discountAmt * dnGstRate / 100);
     } else {
@@ -4151,6 +4160,10 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
   const dealerDays  = Number(cfg.dealer_days)  || 0;
   const crDays      = Number(cfg.discount_days) || 0;
   const dnGstRate   = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
+  // Gate GST on the live `flag_disc_gst` flag. See the corresponding
+  // comment in /api/debit-notes/generate — relying on the source
+  // purchase's stamped GST as a proxy goes stale across flag toggles.
+  const flagDiscGst = String(cfg.flag_disc_gst || '').toLowerCase() === 'true' || cfg.flag_disc_gst === true;
   if (discountPct <= 0) {
     return res.status(400).json({ error: 'Discount % not configured in settings' });
   }
@@ -4283,10 +4296,13 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
         || (String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33'));
     const isInter = !!dealerStateCode && dealerStateCode !== companyStateCode;
 
-    // GST is only emitted when the source purchase carried GST
-    // (registered dealer); URD/agri purchases produce exempt DNs.
+    // GST is only emitted when (a) the flag is on AND (b) the source
+    // purchase carried GST (registered dealer). URD/agri purchases
+    // produce exempt DNs regardless. The flag is the primary gate; the
+    // dealer-carried-GST check still filters URD purchases out.
+    const dealerCarriedGst = Number(p.cgst) || Number(p.sgst) || Number(p.igst);
     let cgst = 0, sgst = 0, igst = 0;
-    if (Number(p.cgst) || Number(p.sgst) || Number(p.igst)) {
+    if (flagDiscGst && dealerCarriedGst) {
       if (isInter) {
         igst = round2(discountAmt * dnGstRate / 100);
       } else {
@@ -4619,7 +4635,12 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     // so the surrounding columns redistribute the freed width — no visible
     // empty band on the PDF. The Taxable Value column also widens to keep
     // the table flush to PAGE_W.
-    const showGstCol = !!cfg.flag_disc_gst;
+    // Robust flag read — handles both real boolean and string-stored
+    // forms. `!!cfg.flag_disc_gst` would treat the string 'false' as
+    // truthy; this matches the same pattern used by the Payments-tab
+    // live derivation at calculations.js so the PDF and the Payments
+    // view always agree.
+    const showGstCol = String(cfg.flag_disc_gst || '').toLowerCase() === 'true' || cfg.flag_disc_gst === true;
     const gstHeaderRate = Number(cfg.discount_gst) || Number(cfg.gst_service) || 18;
     const cols = [
       { key:'sl',       w: 32,  label1:'Sl',       label2:'No',     align:'center' },
