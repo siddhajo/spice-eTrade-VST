@@ -3,11 +3,18 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
+const { loadClientProfile, loadClientOverrides } = require('./client-profile');
+// Single source of truth for the security-mode toggle. `desktop` mode
+// runs in-process behind an Electron window (single local user) and
+// disables online-only hardening (rate-limit, session expiry,
+// must-change-password gate, public bind, tight body limit).
+const CLIENT_PROFILE = loadClientProfile();
+const IS_ONLINE = CLIENT_PROFILE.mode !== 'desktop';
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
 const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0 } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
@@ -31,7 +38,9 @@ const {
 } = require('./tally-xml');
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
+// Online deployments tighten the body limit to 2 MB to defang DoS amplifiers.
+// Desktop keeps 50 MB so the user can still drag-drop large XLSX/JSON imports.
+app.use(express.json({ limit: IS_ONLINE ? '2mb' : '50mb' }));
 
 // Disable caching of HTML files so users always get the latest UI without
 // needing a hard-reload. This is critical for ngrok-tunnelled deployments
@@ -198,28 +207,28 @@ function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token' });
   const db = getDb();
-  // Strict expiry: rows pre-dating the migration get a NULL expires_at and
-  // are grandfathered in. New rows have a hard cap — once expires_at is in
-  // the past, the token is rejected even if last_used_at is recent. Compare
-  // in SQLite (datetime('now','localtime')) so it matches the same TZ
-  // semantics the INSERT used; mixing JS UTC with SQLite localtime would
-  // wrongly expire sessions on any non-UTC host.
-  const session = db.get(
-    `SELECT * FROM sessions
-     WHERE token = ?
-       AND (expires_at IS NULL OR expires_at >= datetime('now','localtime'))`,
-    [token]
-  );
+  // Online: enforce hard expiry (rows pre-dating the migration get NULL
+  // expires_at and are grandfathered in). Compare in SQLite localtime so
+  // a non-UTC host doesn't wrongly expire sessions.
+  // Desktop: single local user, sessions live until logout.
+  const session = IS_ONLINE
+    ? db.get(
+        `SELECT * FROM sessions
+          WHERE token = ?
+            AND (expires_at IS NULL OR expires_at >= datetime('now','localtime'))`,
+        [token]
+      )
+    : db.get('SELECT * FROM sessions WHERE token = ?', [token]);
   if (!session) {
     // Best-effort cleanup: drop the row if it existed but expired.
-    db.run('DELETE FROM sessions WHERE token = ?', [token]);
+    if (IS_ONLINE) db.run('DELETE FROM sessions WHERE token = ?', [token]);
     return res.status(403).json({ error: 'Session expired — please sign in again' });
   }
   const user = db.get('SELECT * FROM users WHERE id = ?', [session.user_id]);
   if (!user) return res.status(403).json({ error: 'Unauthorized' });
-  // Block every other endpoint until the seeded/reset password is rotated —
-  // closes the default-creds attack window even if rate-limiting is missed.
-  if (user.must_change_password && !FORCED_CHANGE_ALLOWED.has(req.path)) {
+  // Online only: block every other endpoint until the seeded/reset password
+  // is rotated. Desktop is a single-user local install — no must-change gate.
+  if (IS_ONLINE && user.must_change_password && !FORCED_CHANGE_ALLOWED.has(req.path)) {
     return res.status(403).json({
       error: 'Password change required before continuing',
       must_change_password: true
@@ -253,8 +262,8 @@ function requireAdmin(req, res, next) {
 //
 // Hierarchy (least → most privileged):
 //   viewer    — read-only
-//   operator  — daily auction-floor work (lots, invoices, buyers/traders)
-//   manager   — branch oversight (auctions, settings, revert)
+//   operator  — daily trade-floor work (lots, invoices, buyers/traders)
+//   manager   — branch oversight (trades, settings, revert)
 //   admin     — full control (delete, user management, business state)
 //
 // Capability names are short snake_case strings. New capabilities are
@@ -270,7 +279,7 @@ const ROLE_PERMISSIONS = {
                       //   is the expected behaviour for "authorised users
                       //   viewing shared valid data".
   ]),
-  // Field-staff role for the auction-hall lot entry workflow. Sees only
+  // Field-staff role for the trade-hall lot entry workflow. Sees only
   // the Lot Entry tab in the sidebar (everything else is gated by
   // `view`, which lot_entry intentionally lacks). The narrow scope —
   // create trades, search sellers, create/edit own lots — matches what
@@ -282,9 +291,9 @@ const ROLE_PERMISSIONS = {
                        // Without this, a second lot_entry user opening the
                        // same trade hit "do not have permission to view"
                        // because some shared endpoints require general view.
-    'lot_entry_view',  // Lot Entry tab + its endpoints (auctions, lots, traders)
+    'lot_entry_view',  // Lot Entry tab + its endpoints (trades, lots, traders)
     'lot_write',       // create/edit own lots; trader search via lot-entry views
-    'auction_write'    // create new trades on the fly during an auction day
+    'auction_write'    // create new trades on the fly during a trade day
   ]),
   operator: new Set([
     'view', 'export', 'self_password',
@@ -297,7 +306,7 @@ const ROLE_PERMISSIONS = {
   manager: new Set([
     'view', 'export', 'self_password', 'lot_entry_view',
     'lot_write', 'invoice_write', 'trader_write', 'buyer_write',
-    'auction_write',  // create/edit auctions (trades)
+    'auction_write',  // create/edit trades (trades)
     'invoice_revert', // revert sales/purchase/bills (undo invoice)
     'settings_write', // edit company settings (rates, addresses, flags)
     'state_toggle'    // toggle business state TN ↔ KL
@@ -415,14 +424,18 @@ app.get('/api/branding', (req, res) => {
 // 429 on overflow. Skip-on-success ensures legitimate users who type a
 // wrong password once aren't penalised on every later request after they
 // log in correctly. Defeats credential-stuffing / online brute-force.
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { error: 'Too many login attempts. Please wait a few minutes and try again.' }
-});
+// Desktop mode swaps in a no-op middleware: a single local user typing a
+// wrong password a few times shouldn't get locked out of their own app.
+const loginLimiter = IS_ONLINE
+  ? rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 10,
+      standardHeaders: true,
+      legacyHeaders: false,
+      skipSuccessfulRequests: true,
+      message: { error: 'Too many login attempts. Please wait a few minutes and try again.' }
+    })
+  : (req, res, next) => next();
 
 // Strict cap on session lifetime. A leaked Authorization header is now
 // only valid for at most this many days from creation, even if the
@@ -454,9 +467,14 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   // Create a new session row WITHOUT deleting any existing sessions —
   // this lets the same user stay logged in on multiple devices simultaneously.
+  // Online: hard-cap expires_at to bound leaked-token validity.
+  // Desktop: leave NULL (sessions live until logout).
+  const expiresClause = IS_ONLINE
+    ? `datetime('now','localtime','+${SESSION_TTL_DAYS} days')`
+    : `NULL`;
   db.run(
     `INSERT INTO sessions (token, user_id, device_label, expires_at)
-     VALUES (?, ?, ?, datetime('now','localtime','+${SESSION_TTL_DAYS} days'))`,
+     VALUES (?, ?, ?, ${expiresClause})`,
     [token, user.id, device_label || '']
   );
   // Clean up very old sessions (expired OR > 30d idle) so the table doesn't grow forever
@@ -788,11 +806,11 @@ app.delete('/api/debit-notes/delete-all', requireDeleteAll, (req, res) => {
   }
 });
 
-// Trades (auctions) bulk-delete — cascades through every child table that
+// Trades (trades) bulk-delete — cascades through every child table that
 // references auction_id. Order matters: clear leaf rows first so foreign-
 // key dependencies don't block the parent delete. Wraps in a try/catch
 // per-table because some installs may not have every optional table.
-app.delete('/api/auctions/delete-all', requireDeleteAll, (req, res) => {
+app.delete('/api/trades/delete-all', requireDeleteAll, (req, res) => {
   try {
     const db = getDb();
     const before = db.get('SELECT COUNT(*) as c FROM auctions').c;
@@ -802,7 +820,7 @@ app.delete('/api/auctions/delete-all', requireDeleteAll, (req, res) => {
       try { db.exec(`DELETE FROM sqlite_sequence WHERE name = '${t}'`); } catch(_) {}
     }
     db.run('DELETE FROM auctions');
-    try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'auctions'"); } catch(_) {}
+    try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'trades'"); } catch(_) {}
     res.json({ success: true, deleted: before });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1086,7 +1104,7 @@ app.delete('/api/traders/:id', requireDelete, (req, res) => {
 });
 
 // ── LOT-ENTRY QUICK-ADD SELLER ─────────────────────────────────
-// Field-staff endpoint for adding a seller on the fly during the auction
+// Field-staff endpoint for adding a seller on the fly during the trade
 // hall workflow. Same shape as POST /api/traders but reachable by the
 // lot_entry role (which doesn't have full trader_write capability).
 // Validates only the minimum required fields — admins can fill out
@@ -1337,7 +1355,7 @@ app.post('/api/buyers/import', requireBuyerWrite, upload.single('file'), async (
     let imported = 0, skipped = 0;
     for (const row of rows) {
       // BUYER = full buyer code (primary key in lot.buyer → matches invoice lookup)
-      // CODE  = short alias printed on tags (e.g. RSH, TE, SL) — used by post-auction price files
+      // CODE  = short alias printed on tags (e.g. RSH, TE, SL) — used by post-trade price files
       // The two may be the same value in some files, or different. Treat them as distinct columns.
       const buyer = mapCol(row, 'BUYER', 'BUYER_CODE', 'BUYERCODE');
       const code  = mapCol(row, 'CODE', 'SHORT_CODE', 'ALIAS');
@@ -1429,11 +1447,11 @@ app.get('/api/buyers/template', requireExport, async (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // AUCTIONS
 // ══════════════════════════════════════════════════════════════
-app.get('/api/auctions', requireViewOrLotEntry, (req, res) => {
+app.get('/api/trades', requireViewOrLotEntry, (req, res) => {
   const rows = getDb().all('SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) as lot_count FROM auctions ORDER BY date DESC, ano DESC LIMIT 100');
   res.json(withFmtDate(rows));
 });
-app.post('/api/auctions', requireAuctionWrite, (req, res) => {
+app.post('/api/trades', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
   const db = getDb();
   const d = normalizeDate(date);
@@ -1443,7 +1461,7 @@ app.post('/api/auctions', requireAuctionWrite, (req, res) => {
   const created = db.get('SELECT id FROM auctions WHERE ano = ? AND date = ? ORDER BY id DESC LIMIT 1', [ano, d]);
   res.json({ success: true, id: created ? created.id : null });
 });
-app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
+app.put('/api/trades/:id', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
   const db = getDb();
   const defaultCrop  = getSetting(db, 'default_crop_type') || 'VST';
@@ -1452,7 +1470,7 @@ app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
     [ano, normalizeDate(date), crop_type||defaultCrop, state||defaultState, req.params.id]);
   res.json({ success: true });
 });
-app.delete('/api/auctions/:id', requireDelete, (req, res) => {
+app.delete('/api/trades/:id', requireDelete, (req, res) => {
   const db = getDb();
   // Cascade-delete every record that belongs to this trade. The
   // dependent tables reference the trade either by `auction_id` (FK,
@@ -1461,9 +1479,9 @@ app.delete('/api/auctions/:id', requireDelete, (req, res) => {
   // covered consistently. Wrapped in a transaction so a partial
   // failure (e.g. one table missing on a not-yet-migrated DB) doesn't
   // leave orphan rows behind.
-  const auction = db.get('SELECT id, ano FROM auctions WHERE id = ?', [req.params.id]);
-  if (!auction) return res.status(404).json({ error: 'Trade not found' });
-  const ano = String(auction.ano || '').trim();
+  const trade = db.get('SELECT id, ano FROM auctions WHERE id = ?', [req.params.id]);
+  if (!trade) return res.status(404).json({ error: 'Trade not found' });
+  const ano = String(trade.ano || '').trim();
 
   const removed = { lots: 0, lot_allocations: 0, invoices: 0, purchases: 0, bills: 0, debit_notes: 0 };
   const cnt = (sql, params) => {
@@ -1471,24 +1489,24 @@ app.delete('/api/auctions/:id', requireDelete, (req, res) => {
   };
   // Pre-count for the response payload so the UI can show "Deleted N
   // invoices, M purchases, …".
-  removed.lots            = cnt('SELECT COUNT(*) AS c FROM lots            WHERE auction_id = ?', [auction.id]);
-  removed.lot_allocations = cnt('SELECT COUNT(*) AS c FROM lot_allocations WHERE auction_id = ?', [auction.id]);
-  removed.invoices        = cnt('SELECT COUNT(*) AS c FROM invoices        WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
-  removed.purchases       = cnt('SELECT COUNT(*) AS c FROM purchases       WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
-  removed.bills           = cnt('SELECT COUNT(*) AS c FROM bills           WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  removed.lots            = cnt('SELECT COUNT(*) AS c FROM lots            WHERE auction_id = ?', [trade.id]);
+  removed.lot_allocations = cnt('SELECT COUNT(*) AS c FROM lot_allocations WHERE auction_id = ?', [trade.id]);
+  removed.invoices        = cnt('SELECT COUNT(*) AS c FROM invoices        WHERE auction_id = ? OR ano = ?', [trade.id, ano]);
+  removed.purchases       = cnt('SELECT COUNT(*) AS c FROM purchases       WHERE auction_id = ? OR ano = ?', [trade.id, ano]);
+  removed.bills           = cnt('SELECT COUNT(*) AS c FROM bills           WHERE auction_id = ? OR ano = ?', [trade.id, ano]);
   removed.debit_notes     = cnt('SELECT COUNT(*) AS c FROM debit_notes     WHERE ano = ?',                  [ano]);
 
   // Actual cascade. Each statement is wrapped in try/catch so a stray
   // missing column on a partially-migrated DB doesn't abort the rest;
   // any failure is logged but doesn't block the trade row's deletion.
   const safeRun = (sql, params) => { try { db.run(sql, params); } catch (e) { console.warn('[delete trade]', e.message); } };
-  safeRun('DELETE FROM lot_allocations WHERE auction_id = ?', [auction.id]);
-  safeRun('DELETE FROM lots            WHERE auction_id = ?', [auction.id]);
-  safeRun('DELETE FROM invoices        WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
-  safeRun('DELETE FROM purchases       WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
-  safeRun('DELETE FROM bills           WHERE auction_id = ? OR ano = ?', [auction.id, ano]);
+  safeRun('DELETE FROM lot_allocations WHERE auction_id = ?', [trade.id]);
+  safeRun('DELETE FROM lots            WHERE auction_id = ?', [trade.id]);
+  safeRun('DELETE FROM invoices        WHERE auction_id = ? OR ano = ?', [trade.id, ano]);
+  safeRun('DELETE FROM purchases       WHERE auction_id = ? OR ano = ?', [trade.id, ano]);
+  safeRun('DELETE FROM bills           WHERE auction_id = ? OR ano = ?', [trade.id, ano]);
   safeRun('DELETE FROM debit_notes     WHERE ano = ?',                  [ano]);
-  safeRun('DELETE FROM auctions        WHERE id  = ?', [auction.id]);
+  safeRun('DELETE FROM auctions        WHERE id  = ?', [trade.id]);
 
   // Payments are NOT a stored entity — they're computed live from the
   // lots table by getPaymentSummary, so once lots are gone the
@@ -1539,7 +1557,7 @@ function rangeSize(startLot, endLot) {
 }
 
 // Get allocations for a trade
-app.get('/api/auctions/:id/allocations', requireViewOrLotEntry, (req, res) => {
+app.get('/api/trades/:id/allocations', requireViewOrLotEntry, (req, res) => {
   const db = getDb();
   const auctionId = parseInt(req.params.id, 10);
   const allocations = db.all(
@@ -1553,7 +1571,7 @@ app.get('/api/auctions/:id/allocations', requireViewOrLotEntry, (req, res) => {
 // Validates: required fields, parseable formats, matching prefixes, no
 // overlapping ranges, and refuses to drop an existing allocation whose
 // lot range still has lots in the lots table.
-app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
+app.post('/api/trades/:id/allocations', requireAuctionWrite, (req, res) => {
   const db = getDb();
   const auctionId = parseInt(req.params.id, 10);
   const { allocations } = req.body;
@@ -1613,7 +1631,7 @@ app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
 
 // Allocation stats (used/total per branch + per-lot grid)
 // Drives both the admin Allocations modal and the Lot Entry status bar.
-app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) => {
+app.get('/api/trades/:id/allocation-stats', requireViewOrLotEntry, (req, res) => {
   const db = getDb();
   const auctionId = parseInt(req.params.id, 10);
   const allocations = db.all(
@@ -1654,7 +1672,7 @@ app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) 
 // inserts a single allocation covering the same range under the
 // destination branch. Refuses to act if any lot in the range is already
 // saved (lots can only be reassigned by deleting + re-entering).
-app.post('/api/auctions/:id/reassign-lots', requireAuctionWrite, (req, res) => {
+app.post('/api/trades/:id/reassign-lots', requireAuctionWrite, (req, res) => {
   const db = getDb();
   const auctionId = parseInt(req.params.id, 10);
   const { from_branch, to_branch, start_lot, end_lot } = req.body;
@@ -1729,7 +1747,7 @@ app.post('/api/auctions/:id/reassign-lots', requireAuctionWrite, (req, res) => {
 
 // Validate a single lot number against (a) duplicates and (b) the
 // branch's allocation. Returns { valid: bool, error?: string }.
-app.get('/api/auctions/:id/validate-lot', requireViewOrLotEntry, (req, res) => {
+app.get('/api/trades/:id/validate-lot', requireViewOrLotEntry, (req, res) => {
   const db = getDb();
   const auctionId = parseInt(req.params.id, 10);
   const lotNo = String(req.query.lot_no || '').trim();
@@ -1752,7 +1770,7 @@ app.get('/api/auctions/:id/validate-lot', requireViewOrLotEntry, (req, res) => {
 
 // Next available lot number for a branch — used by Lot Entry to
 // auto-suggest after every save and after a seller is picked.
-app.get('/api/auctions/:id/next-lot/:branch', requireViewOrLotEntry, (req, res) => {
+app.get('/api/trades/:id/next-lot/:branch', requireViewOrLotEntry, (req, res) => {
   const db = getDb();
   const auctionId = parseInt(req.params.id, 10);
   const branch = req.params.branch;
@@ -1777,8 +1795,8 @@ app.get('/api/auctions/:id/next-lot/:branch', requireViewOrLotEntry, (req, res) 
   res.json({ next_lot: null, error: 'All lots in this branch are used' });
 });
 
-// ── Import Auction + Lots from XLS/XLSX (replaces APPA.PRG) ──
-app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), async (req, res) => {
+// ── Import Trade + Lots from XLS/XLSX (replaces APPA.PRG) ──
+app.post('/api/trades/import', requireAuctionWrite, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const workbook = XLSX.readFile(req.file.path);
@@ -1801,14 +1819,14 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
     };
     const mapNum = (row, ...names) => parseFloat(mapCol(row, ...names)) || 0;
 
-    // If user specified ano/date in the form → that OVERRIDES every row (single-auction import)
-    // Otherwise → resolve auction per row from its own ANO/DATE columns (multi-auction import)
+    // If user specified ano/date in the form → that OVERRIDES every row (single-trade import)
+    // Otherwise → resolve trade per row from its own ANO/DATE columns (multi-trade import)
     const overrideAno = req.body.ano;
     const overrideDate = normalizeDate(req.body.date);
     const cropType = req.body.crop_type || mapCol(rows[0], 'CRPT', 'CROP_TYPE', 'CROPTYPE') || (getSetting(db, 'default_crop_type') || 'VST');
     const state = req.body.state || mapCol(rows[0], 'STATE') || 'TAMIL NADU';
 
-    // Cache of resolved auctions so we don't query the DB for every row
+    // Cache of resolved trades so we don't query the DB for every row
     const auctionCache = new Map(); // key = "ano|date" → {id, ano, date}
     const resolveAuction = (ano, dateStr) => {
       const key = `${ano}|${dateStr}`;
@@ -1846,7 +1864,7 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
         const rowNum = i + 2; // +2 because: 1-based + header row
         if (isBlankRow(row)) continue; // truly empty rows — don't count as skipped
         
-        // Resolve this row's auction (form override OR read from row's ANO/DATE columns)
+        // Resolve this row's trade (form override OR read from row's ANO/DATE columns)
         const rowAno = overrideAno || mapCol(row, 'ANO', 'TNO', 'TRADE', 'TRADE_NO', 'TRADENO');
         // Read raw (un-stringified) DATE cell so Excel Date objects / serial numbers normalize correctly
         const rawDate = row.DATE !== undefined ? row.DATE
@@ -1870,7 +1888,7 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
           const price = mapNum(row, 'PRICE');
           const qty   = mapNum(row, 'QTY', 'QUANTITY', 'WEIGHT', 'WT');
           const bag   = mapNum(row, 'BAG', 'BAGS', 'NO_OF_BAGS');
-          // If file didn't provide AMOUNT, compute qty × price (common in post-auction price sheets)
+          // If file didn't provide AMOUNT, compute qty × price (common in post-trade price sheets)
           let amount  = mapNum(row, 'AMOUNT', 'AMT', 'VALUE', 'TOTAL');
           if (!amount && qty && price) amount = qty * price;
 
@@ -1931,13 +1949,13 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
         }
       }
     } else {
-      // Full import — insert new lots (skip if lot_no already exists for this auction)
+      // Full import — insert new lots (skip if lot_no already exists for this trade)
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const rowNum = i + 2;
         if (isBlankRow(row)) continue;
         
-        // Resolve this row's auction (form override OR read from row's ANO/DATE columns)
+        // Resolve this row's trade (form override OR read from row's ANO/DATE columns)
         const rowAno = overrideAno || mapCol(row, 'ANO', 'TNO', 'TRADE', 'TRADE_NO', 'TRADENO');
         // Read raw DATE cell (may be Date object or Excel serial number) and normalize
         const rawDate = row.DATE !== undefined ? row.DATE
@@ -2018,7 +2036,7 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
       }
     }
 
-    // Build auction breakdown for the response
+    // Build trade breakdown for the response
     const auctionBreakdown = [];
     for (const [key, count] of auctionStats) {
       const [ano, date] = key.split('|');
@@ -2041,8 +2059,8 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
   }
 });
 
-// ── Download Auction/Lots template XLSX ──────────────────────
-app.get('/api/auctions/template', requireExport, async (req, res) => {
+// ── Download Trade/Lots template XLSX ──────────────────────
+app.get('/api/trades/template', requireExport, async (req, res) => {
   const db = getDb();
   const headers = ['ANO','DATE','LOT','CROP','GRADE','CRPT','BR','STATE','NAME','PADD','PPLA','PPIN','PSTATE','PST_CODE',
     'CR','PAN','TEL','AADHAR','BAG','LITRE','QTY','PRICE','AMOUNT','CODE','BUYER','BUYER1','SALE','INVO',
@@ -2065,7 +2083,7 @@ app.get('/api/auctions/template', requireExport, async (req, res) => {
     metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', 'attachment; filename="auction-lots-template.xlsx"');
+  res.setHeader('Content-Disposition', 'attachment; filename="trade-lots-template.xlsx"');
   res.send(Buffer.from(buf));
 });
 
@@ -2148,7 +2166,7 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
     [auctionId, lotNoStr]
   );
   if (existing) {
-    return res.status(409).json({ error: `Lot #${lotNoStr} already exists in this auction` });
+    return res.status(409).json({ error: `Lot #${lotNoStr} already exists in this trade` });
   }
 
   // The lot must be bound to the exact trader_id the UI picked. When
@@ -2242,7 +2260,7 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
         'SELECT id FROM lots WHERE auction_id = ? AND lot_no = ? AND id != ?',
         [current.auction_id, newLotNo, lotId]
       );
-      if (dup) return res.status(409).json({ error: `Lot #${newLotNo} already exists in this auction` });
+      if (dup) return res.status(409).json({ error: `Lot #${newLotNo} already exists in this trade` });
     }
     if (newBranch && (newLotNo !== current.lot_no || newBranch !== current.branch)) {
       const allocs = db.all(
@@ -2273,7 +2291,7 @@ app.delete('/api/lots/:id', requireDelete, (req, res) => {
   getDb().run('DELETE FROM lots WHERE id = ?', [req.params.id]); res.json({ success: true });
 });
 
-// ── Calculate all lots for an auction (GENERATE.PRG) ─────────
+// ── Calculate all lots for a trade (GENERATE.PRG) ─────────
 app.post('/api/lots/calculate/:auctionId', requireLotWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   const lots = db.all('SELECT * FROM lots WHERE auction_id = ? AND amount > 0', [req.params.auctionId]);
@@ -2287,13 +2305,13 @@ app.post('/api/lots/calculate/:auctionId', requireLotWrite, (req, res) => {
   res.json({ success: true, calculated: count });
 });
 
-// Recalculate every lot in every auction with the CURRENT business
+// Recalculate every lot in every trade with the CURRENT business
 // settings. Used by the client when business_state changes — calculations
 // like CGST/SGST/IGST and prate are state-sensitive (intra vs inter), so
 // the saved values become stale on a state flip and must be refreshed.
 //
-// Only touches lots with `amount > 0` (skips empty/auction-floor entries).
-// Returns total lots calculated across all auctions.
+// Only touches lots with `amount > 0` (skips empty/trade-floor entries).
+// Returns total lots calculated across all trades.
 app.post('/api/lots/calculate-all', requireLotWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   const lots = db.all('SELECT * FROM lots WHERE amount > 0');
@@ -2325,7 +2343,7 @@ app.get('/api/invoices', requireView, (req, res) => {
   // Filter list by active business context: when state=KERALA show only
   // ASP-stamped invoices, when state=TAMIL NADU show only ISP-stamped.
   // This avoids the "two rows per buyer" confusion in users who run the
-  // ASP→ISP flow on the same auction.
+  // ASP→ISP flow on the same trade.
   const businessState = String(cfg.business_state || 'TAMIL NADU').toUpperCase();
   let q = 'SELECT * FROM invoices WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
@@ -2343,7 +2361,7 @@ app.get('/api/invoices', requireView, (req, res) => {
   // Hydrate asp_invo: for each invoice, find the ASP invoice number
   // recorded on its lots. Multiple distinct asp_invos are concatenated
   // (rare — usually one ASP invoice maps 1:1 to one ISP invoice for the
-  // same buyer/auction). Empty for ASP invoices themselves.
+  // same buyer/trade). Empty for ASP invoices themselves.
   const aspStmt = db.prepare(
     `SELECT DISTINCT asp_invo FROM lots
      WHERE auction_id = ? AND buyer = ? AND invo = ?
@@ -2438,9 +2456,9 @@ app.post('/api/invoices/generate/:auctionId', requireInvoiceWrite, (req, res) =>
   }
   
   const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg);
-  if (!invoice) return res.status(404).json({ error: `No lots found for buyer "${buyerCode}" in this auction. Make sure lots have this buyer code assigned.` });
+  if (!invoice) return res.status(404).json({ error: `No lots found for buyer "${buyerCode}" in this trade. Make sure lots have this buyer code assigned.` });
 
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   // Dedup guards — refuse to create a second invoice for the same buyer
   // + sale type in this trade, or to reuse an invoice number that's
   // already on file for this trade. Both checks return 409 so the
@@ -2467,13 +2485,13 @@ app.post('/api/invoices/generate/:auctionId', requireInvoiceWrite, (req, res) =>
   }
   const s = invoice.summary;
   // Store the BUSINESS context state (TAMIL NADU=ISP, KERALA=ASP), not
-  // the auction's physical state. This lets us distinguish ASP invoices
-  // from ISP invoices in the same auction, which matters for the sales
+  // the trade's physical state. This lets us distinguish ASP invoices
+  // from ISP invoices in the same trade, which matters for the sales
   // list cross-reference (ASP Inv# column).
-  const invoiceState = cfg.business_state || auction.state || '';
+  const invoiceState = cfg.business_state || trade.state || '';
   db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [req.params.auctionId,auction.ano,auction.date,invoiceState,saleType,String(invoiceNo),buyerCode,invoice.buyer.buyer1||'',
+    [req.params.auctionId,trade.ano,trade.date,invoiceState,saleType,String(invoiceNo),buyerCode,invoice.buyer.buyer1||'',
      invoice.buyer.gstin||'',invoice.buyer.pla||'',s.totalBags,s.totalQty,s.totalAmount,s.gunnyCost,s.transportCost,s.insuranceCost,
      s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'']);
   
@@ -2515,7 +2533,7 @@ app.post('/api/invoices/generate/:auctionId', requireInvoiceWrite, (req, res) =>
   res.json({ success: true, invoice: invoice.summary });
 });
 
-// List eligible buyers for an auction (distinct buyers with lots in amount > 0)
+// List eligible buyers for a trade (distinct buyers with lots in amount > 0)
 app.get('/api/invoices/eligible-buyers/:auctionId', requireView, (req, res) => {
   const { saleType } = req.query;
   const db = getDb();
@@ -2523,7 +2541,7 @@ app.get('/api/invoices/eligible-buyers/:auctionId', requireView, (req, res) => {
   const params = [req.params.auctionId];
 
   // Match buyers by sale type via their default (b.sale) when a type is specified.
-  // A buyer is eligible when any of their lots in this auction isn't yet invoiced
+  // A buyer is eligible when any of their lots in this trade isn't yet invoiced
   // for the current state context (so user can always see/regenerate; server
   // endpoint has stricter filter).
   let saleClause = '';
@@ -2567,13 +2585,13 @@ app.get('/api/invoices/eligible-buyers/:auctionId', requireView, (req, res) => {
   ));
 });
 
-// ── Diagnostic: show EVERYTHING about buyers in an auction ──
+// ── Diagnostic: show EVERYTHING about buyers in a trade ──
 // Helps troubleshoot why eligible-buyers returns an unexpected count.
 app.get('/api/invoices/eligibility-debug/:auctionId', requireView, (req, res) => {
   const db = getDb();
   const aid = req.params.auctionId;
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [aid]);
-  if (!auction) return res.status(404).json({ error: 'Auction not found' });
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [aid]);
+  if (!trade) return res.status(404).json({ error: 'Trade not found' });
 
   // Every distinct value in lots.buyer (including blanks), with counts
   const allBuyerGroups = db.all(
@@ -2605,7 +2623,7 @@ app.get('/api/invoices/eligibility-debug/:auctionId', requireView, (req, res) =>
      )`, [aid]).c;
 
   res.json({
-    auction: { id: auction.id, ano: auction.ano, date: auction.date, crop_type: auction.crop_type },
+    trade: { id: trade.id, ano: trade.ano, date: trade.date, crop_type: trade.crop_type },
     totals: {
       total_lots,
       lots_with_blank_buyer: lots_no_buyer,
@@ -2631,7 +2649,7 @@ app.get('/api/invoices/eligibility-debug/:auctionId', requireView, (req, res) =>
   });
 });
 
-// Batch: generate sales invoice for ALL buyers in an auction
+// Batch: generate sales invoice for ALL buyers in a trade
 app.post('/api/invoices/generate-all/:auctionId', requireInvoiceWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   const { startInvoiceNo, saleType } = req.body;
@@ -2672,9 +2690,9 @@ app.post('/api/invoices/generate-all/:auctionId', requireInvoiceWrite, (req, res
     params
   );
   
-  if (!buyers.length) return res.status(404).json({ error: saleType ? `No un-invoiced buyers for sale type ${saleType}` : 'No un-invoiced buyers with lots in this auction' });
+  if (!buyers.length) return res.status(404).json({ error: saleType ? `No un-invoiced buyers for sale type ${saleType}` : 'No un-invoiced buyers with lots in this trade' });
   
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   const results = [];
   const errors = [];
   
@@ -2697,7 +2715,7 @@ app.post('/api/invoices/generate-all/:auctionId', requireInvoiceWrite, (req, res
       const s = invoice.summary;
       const invoNo = String(nextNo);
       // Store BUSINESS context state — see single-invoice handler for rationale
-      const invoiceState = cfg.business_state || auction.state || '';
+      const invoiceState = cfg.business_state || trade.state || '';
       // Skip if the chosen invoice number is already taken in this trade.
       const dupNo = db.get(
         'SELECT id, buyer FROM invoices WHERE auction_id = ? AND sale = ? AND invo = ? LIMIT 1',
@@ -2712,7 +2730,7 @@ app.post('/api/invoices/generate-all/:auctionId', requireInvoiceWrite, (req, res
       }
       db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [req.params.auctionId,auction.ano,auction.date,invoiceState,useSaleType,invoNo,row.buyer,invoice.buyer.buyer1||'',
+        [req.params.auctionId,trade.ano,trade.date,invoiceState,useSaleType,invoNo,row.buyer,invoice.buyer.buyer1||'',
          invoice.buyer.gstin||'',invoice.buyer.pla||'',s.totalBags,s.totalQty,s.totalAmount,s.gunnyCost,s.transportCost,s.insuranceCost,
          s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'']);
       // ASP-aware lot update: see single-invoice handler above for rationale.
@@ -2847,7 +2865,7 @@ app.post('/api/invoices/:id/revert', requireInvoiceRevert, (req, res) => {
   res.json({ success: true, lotsFreed: 0 });
 });
 
-// Bulk revert: revert ALL invoices in an auction
+// Bulk revert: revert ALL invoices in a trade
 app.post('/api/invoices/revert-all/:auctionId', requireInvoiceRevert, (req, res) => {
   const db = getDb();
   const aid = req.params.auctionId;
@@ -2861,7 +2879,7 @@ app.post('/api/invoices/revert-all/:auctionId', requireInvoiceRevert, (req, res)
       [inv.auction_id, inv.sale, inv.invo, inv.buyer]);
   }
   db.run('DELETE FROM invoices WHERE auction_id = ?', [aid]);
-  // Safety net: clear any orphan invo values from lots in this auction
+  // Safety net: clear any orphan invo values from lots in this trade
   const orphan = db.get(
     `SELECT COUNT(*) as c FROM lots WHERE auction_id = ? AND invo IS NOT NULL AND invo != ''`, [aid]
   ).c;
@@ -3245,7 +3263,7 @@ app.post('/api/purchases/generate/:auctionId', requireInvoiceWrite, (req, res) =
   const invoice = buildPurchaseInvoice(db, req.params.auctionId, sellerName, cfg);
   if (!invoice) return res.status(404).json({ error: 'No data for this seller' });
 
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   // Dedup — refuse a second purchase for the same dealer in this trade,
   // and refuse to reuse an invoice number that's already taken.
   const dupSeller = db.get(
@@ -3271,7 +3289,7 @@ app.post('/api/purchases/generate/:auctionId', requireInvoiceWrite, (req, res) =
   const s = invoice.summary;
   db.run(`INSERT INTO purchases (auction_id,ano,date,state,br,name,add_line,place,gstin,invo,qty,amount,cgst,sgst,igst,rund,total,tds)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [req.params.auctionId,auction.ano,auction.date,auction.state||'','',invoice.seller.name,invoice.seller.address||'',
+    [req.params.auctionId,trade.ano,trade.date,trade.state||'','',invoice.seller.name,invoice.seller.address||'',
      invoice.seller.place||'',invoice.seller.cr||'',String(invoiceNo),s.totalQty,s.totalPuramt,
      s.totalCgst,s.totalSgst,s.totalIgst,s.roundDiff,s.grandTotal,s.tdsAmount]);
   res.json({ success: true, invoice: s });
@@ -3309,7 +3327,7 @@ app.get('/api/purchases/eligible-sellers/:auctionId', requireView, (req, res) =>
   ));
 });
 
-// Batch: generate purchase invoice for ALL registered dealers in an auction
+// Batch: generate purchase invoice for ALL registered dealers in a trade
 app.post('/api/purchases/generate-all/:auctionId', requireInvoiceWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   const { startInvoiceNo } = req.body;
@@ -3340,9 +3358,9 @@ app.post('/api/purchases/generate-all/:auctionId', requireInvoiceWrite, (req, re
     [req.params.auctionId]
   );
   
-  if (!sellers.length) return res.status(404).json({ error: 'No registered dealers (with GSTIN) in this auction' });
+  if (!sellers.length) return res.status(404).json({ error: 'No registered dealers (with GSTIN) in this trade' });
   
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   const results = [];
   const errors = [];
   
@@ -3372,7 +3390,7 @@ app.post('/api/purchases/generate-all/:auctionId', requireInvoiceWrite, (req, re
       }
       db.run(`INSERT INTO purchases (auction_id,ano,date,state,br,name,add_line,place,gstin,invo,qty,amount,cgst,sgst,igst,rund,total,tds)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [req.params.auctionId,auction.ano,auction.date,auction.state||'','',invoice.seller.name,invoice.seller.address||'',
+        [req.params.auctionId,trade.ano,trade.date,trade.state||'','',invoice.seller.name,invoice.seller.address||'',
          invoice.seller.place||'',invoice.seller.cr||'',invoNo,s.totalQty,s.totalPuramt,
          s.totalCgst,s.totalSgst,s.totalIgst,s.roundDiff,s.grandTotal,s.tdsAmount]);
       results.push({ seller: row.name, invoiceNo: invoNo, grandTotal: s.grandTotal });
@@ -3466,11 +3484,11 @@ app.get('/api/purchases/pdf/:auctionId/:sellerName', requireView, async (req, re
 // the app (ASP when Kerala+e-Trade, else ISP from company_settings).
 function enrichPurchaseForPDF(invoice, cfg, db, auctionId) {
   if (!invoice) return invoice;
-  // Stamp auction date + e-TRADE no
+  // Stamp trade date + e-TRADE no
   if (!invoice.invoiceDate && auctionId) {
-    const auction = db.get('SELECT date FROM auctions WHERE id = ?', [auctionId]);
-    if (auction && auction.date) {
-      const d = new Date(auction.date);
+    const trade = db.get('SELECT date FROM auctions WHERE id = ?', [auctionId]);
+    if (trade && trade.date) {
+      const d = new Date(trade.date);
       if (!isNaN(d)) invoice.invoiceDate = d.toLocaleDateString('en-GB');
     }
   }
@@ -3609,7 +3627,7 @@ app.post('/api/bills/generate/:auctionId', requireInvoiceWrite, (req, res) => {
     return res.status(404).json({ error: bill?.error || 'No eligible lots found' });
   }
 
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   // Dedup — refuse a second bill for the same seller in this trade,
   // and refuse to reuse a bill number that's already taken.
   const dupSeller = db.get(
@@ -3635,7 +3653,7 @@ app.post('/api/bills/generate/:auctionId', requireInvoiceWrite, (req, res) => {
   const s = bill.summary;
   db.run(`INSERT INTO bills (auction_id,ano,date,state,br,crpt,bil,name,add_line,pla,pstate,st_code,crr,pan,qty,cost,igst,net)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
+    [req.params.auctionId,trade.ano,trade.date,trade.state||'','',trade.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
      parseInt(billNo),bill.seller.name,bill.seller.address||'',bill.seller.place||'',
      bill.seller.state||'',bill.seller.st_code||'',bill.seller.cr||'',bill.seller.pan||'',
      s.totalQty,s.totalPuramt,0,s.netAmount]);
@@ -3643,12 +3661,12 @@ app.post('/api/bills/generate/:auctionId', requireInvoiceWrite, (req, res) => {
   res.json({ success: true, bill: s });
 });
 
-// List eligible agri sellers for an auction (no GSTIN + amount > 0)
+// List eligible agri sellers for a trade (no GSTIN + amount > 0)
 app.get('/api/bills/eligible-sellers/:auctionId', requireView, (req, res) => {
   res.json(listAgriSellers(getDb(), req.params.auctionId));
 });
 
-// Batch: generate bill of supply for ALL agriculturists (no GSTIN) in an auction
+// Batch: generate bill of supply for ALL agriculturists (no GSTIN) in a trade
 app.post('/api/bills/generate-all/:auctionId', requireInvoiceWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   const { startBillNo } = req.body;
@@ -3665,9 +3683,9 @@ app.post('/api/bills/generate-all/:auctionId', requireInvoiceWrite, (req, res) =
   }
   
   const sellers = listAgriSellers(db, req.params.auctionId);
-  if (!sellers.length) return res.status(404).json({ error: 'No agriculturist sellers (without GSTIN) with lots in this auction' });
+  if (!sellers.length) return res.status(404).json({ error: 'No agriculturist sellers (without GSTIN) with lots in this trade' });
   
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   const results = [];
   const errors = [];
   
@@ -3696,7 +3714,7 @@ app.post('/api/bills/generate-all/:auctionId', requireInvoiceWrite, (req, res) =
       }
       db.run(`INSERT INTO bills (auction_id,ano,date,state,br,crpt,bil,name,add_line,pla,pstate,st_code,crr,pan,qty,cost,igst,net)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [req.params.auctionId,auction.ano,auction.date,auction.state||'','',auction.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
+        [req.params.auctionId,trade.ano,trade.date,trade.state||'','',trade.crop_type||(getSetting(getDb(),'default_crop_type')||'VST'),
          nextNo,bill.seller.name,bill.seller.address||'',bill.seller.place||'',
          bill.seller.state||'',bill.seller.st_code||'',bill.seller.cr||'',bill.seller.pan||'',
          s.totalQty,s.totalPuramt,0,s.netAmount]);
@@ -3731,9 +3749,9 @@ app.get('/api/bills/pdf/:auctionId/:sellerName', requireView, async (req, res) =
     if (bill.seller && !bill.seller.crno) bill.seller.crno = bill.seller.cr || '';
     // Stamp the bill date + e-TRADE number so the new layout can render them
     // in the top strip (Invoice No / e-TRADE No / Date).
-    const auction = db.get('SELECT date FROM auctions WHERE id = ?', [req.params.auctionId]);
-    if (auction && auction.date) {
-      const d = new Date(auction.date);
+    const trade = db.get('SELECT date FROM auctions WHERE id = ?', [req.params.auctionId]);
+    if (trade && trade.date) {
+      const d = new Date(trade.date);
       if (!isNaN(d)) bill.billDate = d.toLocaleDateString('en-GB');
     }
     if (!bill.billDate) bill.billDate = new Date().toLocaleDateString('en-GB');
@@ -3789,9 +3807,9 @@ app.post('/api/bills/pdf-bulk', requireView, async (req, res) => {
       // Enrich for new renderer layout (Invoice No / e-TRADE No / Date strip)
       if (bill.seller && !bill.seller.crno) bill.seller.crno = bill.seller.cr || '';
       if (stored.auction_id) {
-        const auction = db.get('SELECT date FROM auctions WHERE id = ?', [stored.auction_id]);
-        if (auction && auction.date) {
-          const d = new Date(auction.date);
+        const trade = db.get('SELECT date FROM auctions WHERE id = ?', [stored.auction_id]);
+        if (trade && trade.date) {
+          const d = new Date(trade.date);
           if (!isNaN(d)) bill.billDate = d.toLocaleDateString('en-GB');
         }
       }
@@ -4074,9 +4092,9 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
 // the bulk DN consistent with what a user would have manually entered).
 // Trade-wise DN generation. Input: a trade number (`ano`). The endpoint
 // finds EVERY purchase invoice in that trade and creates one DN per
-// purchase (one DN per registered dealer in that auction). Mirrors the
+// purchase (one DN per registered dealer in that trade). Mirrors the
 // natural data model:
-//   - A trade is the unit of business activity (one auction day)
+//   - A trade is the unit of business activity (one trade day)
 //   - Purchases roll up per-dealer for that trade
 //   - Discount adjustments are negotiated trade-wide (per-day basis)
 //   - DN date = trade.date + 1
@@ -4324,13 +4342,13 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
 // see exactly what will be created before they click Generate.
 //
 // Resolves `auctionId` (FK) → `ano` (trade number string) since DNs
-// store ano, not the auction id.
+// store ano, not the trade id.
 app.get('/api/debit-notes/eligible-purchases/:auctionId', requireView, (req, res) => {
   const db = getDb();
-  const auction = db.get('SELECT ano FROM auctions WHERE id = ?', [req.params.auctionId]);
-  if (!auction) return res.status(404).json({ error: 'Auction not found' });
+  const trade = db.get('SELECT ano FROM auctions WHERE id = ?', [req.params.auctionId]);
+  if (!trade) return res.status(404).json({ error: 'Trade not found' });
 
-  const ano = auction.ano;
+  const ano = trade.ano;
   // Anti-join: purchases in this trade where no DN exists for the same
   // (ano, dealer name) pair. The dealer name is the natural key here —
   // matches the idempotency rule used by /generate-bulk.
@@ -4380,7 +4398,7 @@ app.get('/api/debit-notes/next-note-no', requireView, (req, res) => {
 // This endpoint previously generated DNs across EVERY trade in a single
 // sweep. The new spec (Generate Debit Note + Generate All) explicitly
 // forbids cross-trade or global generation: every action must be scoped
-// to one trade selected via the dn-auction dropdown.
+// to one trade selected via the dn-trade dropdown.
 //
 // Hard-disabled with 410 Gone so any orphan client (older browser tab,
 // scripted consumer) gets a clear migration message instead of silently
@@ -4450,9 +4468,9 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
     // dealer's lots (so the per-lot Discount column sums back to the
     // DN total). Match on `lots.name` (seller) — same column the
     // purchase invoice uses.
-    const auction = db.get('SELECT * FROM auctions WHERE ano = ? LIMIT 1', [dn.ano]);
+    const trade = db.get('SELECT * FROM auctions WHERE ano = ? LIMIT 1', [dn.ano]);
     let lots = [];
-    if (auction) {
+    if (trade) {
       lots = db.all(
         `SELECT lot_no, qty, prate, puramt, pqty
            FROM lots
@@ -4460,7 +4478,7 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
             AND UPPER(COALESCE(name,'')) = UPPER(?)
             AND amount > 0
           ORDER BY CAST(lot_no AS INTEGER), lot_no`,
-        [auction.id, dealerName]
+        [trade.id, dealerName]
       );
     }
 
@@ -4890,14 +4908,14 @@ app.get('/api/payments/:auctionId', requireView, (req, res) => {
   res.json(summary);
 });
 
-// Delete the lots + DNs for a list of sellers in one auction. Powers
+// Delete the lots + DNs for a list of sellers in one trade. Powers
 // the "Delete Selected" button on the Payments tab. Each row in the
 // payments table is a roll-up of one seller's lots in the trade, so
 // deleting a payment "row" means clearing those underlying lots.
 //
 // Body: { sellerNames: ['DealerA', 'DealerB', ...] }
 //
-// Trade-scoped — only touches data in this auction. Names are matched
+// Trade-scoped — only touches data in this trade. Names are matched
 // case-insensitively to be tolerant of legacy data inconsistencies.
 app.post('/api/payments/:auctionId/delete-sellers', requireDelete, (req, res) => {
   try {
@@ -4907,8 +4925,8 @@ app.post('/api/payments/:auctionId/delete-sellers', requireDelete, (req, res) =>
     if (!names.length) {
       return res.status(400).json({ error: 'sellerNames array is required' });
     }
-    const auction = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
-    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+    const trade = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
+    if (!trade) return res.status(404).json({ error: 'Trade not found' });
 
     // Build a parameterised IN clause. SQLite max parameters is 999;
     // we cap chunks at 500 names per query to stay well within limits.
@@ -4942,13 +4960,13 @@ app.post('/api/payments/:auctionId/delete-sellers', requireDelete, (req, res) =>
         `SELECT COUNT(*) AS c FROM debit_notes
           WHERE ano = ?
             AND UPPER(COALESCE(name,'')) IN (${placeholders})`,
-        [auction.ano, ...upperBatch]
+        [trade.ano, ...upperBatch]
       ).c;
       db.run(
         `DELETE FROM debit_notes
           WHERE ano = ?
             AND UPPER(COALESCE(name,'')) IN (${placeholders})`,
-        [auction.ano, ...upperBatch]
+        [trade.ano, ...upperBatch]
       );
       dnsDeleted += dnsBefore;
     }
@@ -4973,10 +4991,10 @@ app.get('/api/payments/bank/:auctionId', requireView, (req, res) => {
 
 // ── Payment Statement PDF (per-seller) ────────────────────────
 // Lightweight A4 PDF showing the payment due to one seller for one
-// auction: header, seller block, lots breakdown, totals. Powers both
+// trade: header, seller block, lots breakdown, totals. Powers both
 // "Print" and "WhatsApp" actions on the Payments tab.
 function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
-  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]) || { ano:'', date:'' };
+  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]) || { ano:'', date:'' };
   // The lots schema has no `rate` column — alias `prate` (per-kg purchase
   // rate post-calculation) as `rate` for the cols->key mapping below.
   // The previous query referenced a non-existent column, so the SELECT
@@ -5010,10 +5028,10 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
   y += 10;
 
   doc.font('Helvetica').fontSize(10);
-  doc.text(`Seller: ${sellerName}`, PAGE_L, y); doc.text(`Auction: ${auction.ano}`, PAGE_L + 280, y);
+  doc.text(`Seller: ${sellerName}`, PAGE_L, y); doc.text(`Trade: ${trade.ano}`, PAGE_L + 280, y);
   y += 14;
   doc.text(`Phone: ${trader && trader.tel ? trader.tel : '-'}`, PAGE_L, y);
-  doc.text(`Date: ${fmtDate(auction.date)}`, PAGE_L + 280, y);
+  doc.text(`Date: ${fmtDate(trade.date)}`, PAGE_L + 280, y);
   y += 18;
 
   const cols = [
@@ -5065,8 +5083,8 @@ app.get('/api/payments/pdf/:auctionId/:sellerName', requireView, (req, res) => {
     const sellerName = decodeURIComponent(req.params.sellerName);
     // Validate BEFORE piping — once we pipe, any subsequent throw can't
     // be turned into a JSON response (headers + body already going out).
-    const auction = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
-    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+    const trade = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+    if (!trade) return res.status(404).json({ error: 'Trade not found' });
     const PDFDocument = require('pdfkit');
     doc = new PDFDocument({ size: 'A4', margin: 30 });
     res.setHeader('Content-Type', 'application/pdf');
@@ -5095,8 +5113,8 @@ app.post('/api/payments/pdf-bulk', requireView, (req, res) => {
     const auctionId = Number(req.body.auction_id);
     const names = Array.isArray(req.body.names) ? req.body.names : [];
     if (!auctionId || !names.length) return res.status(400).json({ error: 'auction_id and names[] required' });
-    const auction = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
-    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+    const trade = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+    if (!trade) return res.status(404).json({ error: 'Trade not found' });
     const PDFDocument = require('pdfkit');
     doc = new PDFDocument({ size: 'A4', margin: 30 });
     res.setHeader('Content-Type', 'application/pdf');
@@ -5418,7 +5436,7 @@ app.get('/api/tally/preview/:type/:auctionId', requireExport, (req, res) => {
 //
 // Workflow: user clicks NIC, looks up dispatch→consignee distance on
 // the portal, types it in, clicks Save. We write to route_distances —
-// every other invoice between the same two PINs (this auction and all
+// every other invoice between the same two PINs (this trade and all
 // future ones) auto-resolves.
 
 // Resolve the configured dispatch PIN with the same fallback chain the
@@ -5438,7 +5456,7 @@ function normalizeRouteKey(fromPin, toPin) {
   return a < b ? [a, b] : [b, a];
 }
 
-// List ISP invoices for an auction with their resolved distance + source
+// List ISP invoices for a trade with their resolved distance + source
 // tag. The UI uses this to render the table — `km` is the value to
 // display, `source` tells the user where it came from ('manual' = per-
 // invoice override, 'route' = looked up by PIN pair, 'none' = blank).
@@ -5625,7 +5643,7 @@ app.put('/api/invoices/:id/distance', requireExport, (req, res) => {
 });
 
 
-// Party listing for an auction — used by the single-party picker UI.
+// Party listing for a trade — used by the single-party picker UI.
 // Returns every distinct party (buyer/RD/URD) with the kind it would be
 // exported under so the frontend can group and filter.
 app.get('/api/tally/parties/:auctionId', requireExport, (req, res) => {
@@ -5658,7 +5676,7 @@ app.get('/api/tally/party-ledger/:kind/:auctionId', requireExport, (req, res) =>
     const cfg = getSettingsFlat(db);
     const rows = partyDef.builder(db, auctionId, cfg, { partyName });
     if (rows.length === 0) {
-      return res.status(404).json({ error: `Party "${partyName}" not found in ${kind} for auction ${auctionId}` });
+      return res.status(404).json({ error: `Party "${partyName}" not found in ${kind} for trade ${auctionId}` });
     }
     const xml = generLedgerXML(rows, cfg, { companyName: resolveTallyCompanyName(cfg, partyDef.company) });
     const safeName = String(partyName).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
@@ -5676,10 +5694,10 @@ app.get('/api/tally/party-ledger/:kind/:auctionId', requireExport, (req, res) =>
 // party, for one of the voucher types: sales_isp, sales_asp, rd_purchase,
 // urd_purchase, debit_note. Useful when a single buyer/dealer needs a
 // voucher import in isolation (e.g. you missed one and don't want to
-// re-import the whole auction).
+// re-import the whole trade).
 //
 // We reuse the existing TALLY_EXPORTS builders (which produce rows for
-// the entire auction) and filter the rows by party name in-memory. The
+// the entire trade) and filter the rows by party name in-memory. The
 // "party name" field varies per voucher type:
 //   sales_isp     → row.partyName     (= invoices.buyer1, the buyer)
 //   sales_asp     → row.buyerName     (= the downstream ISP-side buyer)
@@ -5728,7 +5746,7 @@ app.get('/api/tally/party-voucher/:type/:auctionId', requireExport, (req, res) =
     }
     if (rows.length === 0) {
       return res.status(404).json({
-        error: `No ${def.label} found for "${partyName}" in auction ${auctionId}`,
+        error: `No ${def.label} found for "${partyName}" in trade ${auctionId}`,
         availableParties: [...new Set(allRows.map(keyFn).filter(Boolean))].slice(0, 20),
       });
     }
@@ -5758,7 +5776,7 @@ app.get('/api/tally/export/:type/:auctionId', requireExport, (req, res) => {
     const rows = def.builder(db, auctionId, cfg);
     if (rows.length === 0) {
       const what = def.isLedger ? def.label.toLowerCase() : `${def.label.toLowerCase()}`;
-      return res.status(404).json({ error: `No ${what} found for auction ${auctionId}` });
+      return res.status(404).json({ error: `No ${what} found for trade ${auctionId}` });
     }
     const xml = def.generator(rows, cfg, { companyName: resolveTallyCompanyName(cfg, def.company) });
     const filename = `${def.name}_${auctionId}.xml`;
@@ -5799,7 +5817,7 @@ app.get('/api/stats', requireView, (req, res) => {
   const counts = {
     traders:    (db.get('SELECT COUNT(*) as c FROM traders') || {}).c || 0,
     buyers:     (db.get('SELECT COUNT(*) as c FROM buyers') || {}).c || 0,
-    auctions:   (db.get('SELECT COUNT(*) as c FROM auctions') || {}).c || 0,
+    trades:   (db.get('SELECT COUNT(*) as c FROM auctions') || {}).c || 0,
     lots:       (db.get('SELECT COUNT(*) as c FROM lots') || {}).c || 0,
     invoices:   (db.get('SELECT COUNT(*) as c FROM invoices') || {}).c || 0,
     purchases:  (db.get('SELECT COUNT(*) as c FROM purchases') || {}).c || 0,
@@ -5807,13 +5825,13 @@ app.get('/api/stats', requireView, (req, res) => {
     debit_notes:(db.get('SELECT COUNT(*) as c FROM debit_notes') || {}).c || 0,
   };
 
-  // All auctions (for the dashboard picker)
+  // All trades (for the dashboard picker)
   const allAuctions = db.all(
     `SELECT id, ano, date, crop_type FROM auctions ORDER BY id DESC LIMIT 50`
   );
 
   // ── Cumulative totals across ALL trades (lifetime) ──
-  // Aggregates over every lot in every auction, regardless of state.
+  // Aggregates over every lot in every trade, regardless of state.
   const cumRow = db.get(
     `SELECT COALESCE(SUM(qty),0) as qty,
             COALESCE(SUM(amount),0) as amount,
@@ -5824,11 +5842,11 @@ app.get('/api/stats', requireView, (req, res) => {
     qty:    cumRow.qty    || 0,
     amount: cumRow.amount || 0,
     lots:   cumRow.lots   || 0,
-    auctions: counts.auctions,
+    trades: counts.trades,
   };
 
-  // ── Per-trade breakdown (one row per auction, newest first) ──
-  // One query with a LEFT JOIN so auctions with zero lots still appear.
+  // ── Per-trade breakdown (one row per trade, newest first) ──
+  // One query with a LEFT JOIN so trades with zero lots still appear.
   const perTradeBreakdown = db.all(
     `SELECT a.id, a.ano, a.date, a.crop_type,
             COUNT(l.id) as lots,
@@ -5844,8 +5862,8 @@ app.get('/api/stats', requireView, (req, res) => {
   );
 
   // Pick: ?auction_id=N if provided
-  //   - "all" (or no param) => dashboard shows cumulative view, no individual auction highlighted
-  //   - specific id         => dashboard drills into that one auction
+  //   - "all" (or no param) => dashboard shows cumulative view, no individual trade highlighted
+  //   - specific id         => dashboard drills into that one trade
   let currentAuction = null;
   const rawAuctionId = req.query.auction_id;
   const isAllMode = (rawAuctionId === 'all' || rawAuctionId === '' || rawAuctionId === undefined);
@@ -5866,7 +5884,7 @@ app.get('/api/stats', requireView, (req, res) => {
     auctionStats = { ...currentAuction, totalLots, priced, invoiced, totalQty, totalAmt };
   }
 
-  // Top sellers (this week — by total amount in auctions dated within last 7 days)
+  // Top sellers (this week — by total amount in trades dated within last 7 days)
   const topSellers = db.all(
     `SELECT l.name as name, COUNT(*) as lots, COALESCE(SUM(l.qty),0) as qty, COALESCE(SUM(l.amount),0) as amount
      FROM lots l JOIN auctions a ON a.id = l.auction_id
@@ -5884,7 +5902,7 @@ app.get('/api/stats', requireView, (req, res) => {
      ORDER BY i.id DESC LIMIT 5`
   );
 
-  // Today's trade totals (active auction lots)
+  // Today's trade totals (active trade lots)
   const todayQty = auctionStats ? auctionStats.totalQty : 0;
   const todayAmt = auctionStats ? auctionStats.totalAmt : 0;
 
@@ -5901,8 +5919,8 @@ app.get('/api/stats', requireView, (req, res) => {
   ) || {}).s || 0;
 
   // Pending invoices:
-  //   - Drilled into an auction: un-invoiced priced lots in that auction
-  //   - Cumulative mode: un-invoiced priced lots across ALL auctions
+  //   - Drilled into a trade: un-invoiced priced lots in that trade
+  //   - Cumulative mode: un-invoiced priced lots across ALL trades
   let pendingInvoices = 0;
   if (currentAuction) {
     pendingInvoices = (db.get(
@@ -5922,7 +5940,7 @@ app.get('/api/stats', requireView, (req, res) => {
   // The branch list is anchored to the user's configured Settings →
   // Branches & Contacts (br1..br9), so the dashboard tiles are stable
   // and reflect the user's organizational structure — not whatever
-  // string appeared in `lots.branch` for a given auction.
+  // string appeared in `lots.branch` for a given trade.
   //
   // Lots are aggregated per configured branch (case-insensitive match)
   // across either ALL trades (cumulative mode) or just the currently-
@@ -6007,7 +6025,7 @@ app.get('/api/stats', requireView, (req, res) => {
 // ══════════════════════════════════════════════════════════════
 function repairBadDates(db) {
   // Fix rows where date is an Excel serial number stored as string, or Date-object-toString garbage
-  const tables = ['auctions', 'bills', 'debit_notes', 'invoices', 'purchases', 'lots'];
+  const tables = ['trades', 'bills', 'debit_notes', 'invoices', 'purchases', 'lots'];
   let totalFixed = 0;
   for (const tbl of tables) {
     try {
@@ -6121,6 +6139,18 @@ app.post('/api/system/restore', requireAdmin, restoreUpload.single('file'), asyn
 // Position: AFTER all routes are registered (so this catches anything
 // not handled), BEFORE app.listen().
 
+// Per-client extension hook — registers any clients/<id>/overrides/index.js
+// on top of the built-in routes. MUST sit before the 404 catch-all below;
+// overrides registered later than that handler would never match because
+// Express picks the first responder in the middleware chain. db / settings
+// helpers are passed by reference and are called lazily inside the
+// override's handlers, so it's safe to run this before initDb() finishes.
+loadClientOverrides(app, {
+  getDb, getSettingsFlat,
+  requireAuth, requirePermission, requireAnyPermission,
+  IS_ONLINE, CLIENT_PROFILE,
+});
+
 // 404 for unmatched /api routes — JSON body, never HTML
 app.use('/api', (req, res) => {
   res.status(404).json({
@@ -6153,7 +6183,7 @@ function assertSchemaSanity(db) {
     ['lots',         'auction_id', 'lots tracks the trade via auction_id, NOT a denormalised "ano" column'],
     ['lots',         'buyer',      'lots.buyer is the buyer code on the lot'],
     ['lots',         'name',       'lots.name is the seller name'],
-    ['auctions',     'ano',        'trade number lives on auctions.ano (string)'],
+    ['auctions',   'ano',        'trade number lives on auctions.ano (string)'],
     ['debit_notes',  'ano',        'DN keeps the trade number denormalised on the row'],
     ['purchases',    'invo',       'purchase invoice number'],
     ['purchases',    'name',       'purchases.name is the seller'],
@@ -6225,7 +6255,11 @@ const PORT = process.env.PORT || 3001;
   // Auto-backup poller — once a minute. The function itself decides
   // whether a snapshot is actually due based on the configured interval.
   setInterval(runBackupTickerOnce, 60 * 1000);
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  Admin Console running at http://localhost:${PORT}\n`);
+  // Desktop mode binds loopback only — the Electron renderer reaches the
+  // server in-process and there's no reason to expose the port on the LAN.
+  // Online mode binds 0.0.0.0 so the platform's reverse proxy can reach it.
+  const BIND_ADDR = IS_ONLINE ? '0.0.0.0' : '127.0.0.1';
+  app.listen(PORT, BIND_ADDR, () => {
+    console.log(`\n  Admin Console running at http://localhost:${PORT}  [${CLIENT_PROFILE.id} · ${CLIENT_PROFILE.mode}]\n`);
   });
 })();

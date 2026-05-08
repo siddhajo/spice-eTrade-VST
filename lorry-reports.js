@@ -9,7 +9,7 @@
  *      buyer, with full GSTIN headers and per-buyer subtotals
  *
  * State classification rule:
- *   intra-state when UPPER(buyer.state) === UPPER(auction.state)
+ *   intra-state when UPPER(buyer.state) === UPPER(trade.state)
  *   else inter-state. Buyers with no state info are bucketed as intra-state
  *   (matches the FoxPro fallback — local until proven otherwise).
  */
@@ -86,10 +86,10 @@ function wrapText(doc, text, maxWidth) {
   return lines.length ? lines : [''];
 }
 
-// Pull auction header (ano + date + state) for subtitle / state-classification.
+// Pull trade header (ano + date + state) for subtitle / state-classification.
 function getAuctionHeader(db, auctionId) {
   const a = db.get('SELECT id, ano, date, crop_type, state FROM auctions WHERE id = ?', [auctionId]);
-  if (!a) throw new Error('Auction not found');
+  if (!a) throw new Error('Trade not found');
   return a;
 }
 
@@ -144,7 +144,7 @@ function getLotSlipRows(db, auctionId) {
 }
 
 async function lotSlipCodeXlsx(db, auctionId) {
-  const auction = getAuctionHeader(db, auctionId);
+  const trade = getAuctionHeader(db, auctionId);
   const rows    = getLotSlipRows(db, auctionId);
 
   // Reshape rows for the helper. We duplicate `lot` into a second key
@@ -181,8 +181,8 @@ async function lotSlipCodeXlsx(db, auctionId) {
       db,
       title: 'LOT SLIP CODE',
       metaLines: [
-        `e-TRADE No: ${auction.ano}`,
-        `Date: ${fmtDateDMY(auction.date)}`,
+        `e-TRADE No: ${trade.ano}`,
+        `Date: ${fmtDateDMY(trade.date)}`,
       ],
       grandTotal: {
         // Place the literal 'Total' string in the lot column (matches the
@@ -195,7 +195,7 @@ async function lotSlipCodeXlsx(db, auctionId) {
 
 // PDF — carbon-copy layout (two identical halves side-by-side per page)
 async function lotSlipCodePdf(db, auctionId) {
-  const auction = getAuctionHeader(db, auctionId);
+  const trade = getAuctionHeader(db, auctionId);
   const rows    = getLotSlipRows(db, auctionId);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 18 });
@@ -248,8 +248,8 @@ async function lotSlipCodePdf(db, auctionId) {
     doc.font('Helvetica').fontSize(8).fillColor('#000')
        .text(`Page: ${page}`, xOrigin, afterY, { width: halfW, align: 'right' });
     doc.font('Helvetica-Bold').fontSize(9)
-       .text(`e-TRADE No: ${auction.ano}`, xOrigin, afterY + 12, { width: halfW / 2, align: 'left' });
-    doc.text(`Date: ${fmtDateDMY(auction.date)}`, xOrigin + halfW / 2, afterY + 12, { width: halfW / 2, align: 'right' });
+       .text(`e-TRADE No: ${trade.ano}`, xOrigin, afterY + 12, { width: halfW / 2, align: 'left' });
+    doc.text(`Date: ${fmtDateDMY(trade.date)}`, xOrigin + halfW / 2, afterY + 12, { width: halfW / 2, align: 'right' });
 
     // Column header row
     const hy = BODY_TOP;
@@ -373,7 +373,7 @@ function getTruckListRows(db, auctionId) {
 }
 
 async function truckListXlsx(db, auctionId) {
-  const auction = getAuctionHeader(db, auctionId);
+  const trade = getAuctionHeader(db, auctionId);
   const rows = getTruckListRows(db, auctionId);
 
   // Map raw rows to the column-key shape createExcelBuffer expects.
@@ -412,8 +412,8 @@ async function truckListXlsx(db, auctionId) {
       db,
       title: 'TRUCK LIST',
       metaLines: [
-        `e-TRADE No: ${auction.ano}`,
-        `Date: ${fmtDateDMY(auction.date)}`,
+        `e-TRADE No: ${trade.ano}`,
+        `Date: ${fmtDateDMY(trade.date)}`,
       ],
       grandTotal: {
         // Place "TOTAL" label in CODE column (matches the pre-refactor layout).
@@ -424,7 +424,7 @@ async function truckListXlsx(db, auctionId) {
 }
 
 async function truckListPdf(db, auctionId) {
-  const auction = getAuctionHeader(db, auctionId);
+  const trade = getAuctionHeader(db, auctionId);
   const rows = getTruckListRows(db, auctionId);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 36 });
@@ -461,8 +461,8 @@ async function truckListPdf(db, auctionId) {
       x: m, y: m, width: usableW,
       title: 'TRUCK LIST',
       metaLines: [
-        `e-TRADE No: ${auction.ano}`,
-        `Date: ${fmtDateDMY(auction.date)}`,
+        `e-TRADE No: ${trade.ano}`,
+        `Date: ${fmtDateDMY(trade.date)}`,
       ],
     });
     y = afterY;
@@ -561,9 +561,9 @@ async function truckListPdf(db, auctionId) {
 //   { code, buyer1, sbl, gstin, state, lots: [{lot,bag,qty,rate,amount}],
 //     totalLotCount, totalBag, totalQty, totalAmount }
 function getBuyerLotLorryData(db, auctionId) {
-  const auction = getAuctionHeader(db, auctionId);
+  const trade = getAuctionHeader(db, auctionId);
   const rows    = getLotsWithBuyer(db, auctionId);
-  const auctionState = String(auction.state || '').trim().toUpperCase();
+  const auctionState = String(trade.state || '').trim().toUpperCase();
 
   // Group by buyer code (short) — falls back to buyer (full) if code is empty
   const groups = new Map();
@@ -617,11 +617,11 @@ function getBuyerLotLorryData(db, auctionId) {
   interState.sort(sortFn);
   intraState.sort(sortFn);
 
-  return { auction, interState, intraState };
+  return { trade, interState, intraState };
 }
 
 async function buyerLotLorryXlsx(db, auctionId) {
-  const { auction, interState, intraState } = getBuyerLotLorryData(db, auctionId);
+  const { trade, interState, intraState } = getBuyerLotLorryData(db, auctionId);
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('BuyerLotLorry');
@@ -640,9 +640,9 @@ async function buyerLotLorryXlsx(db, auctionId) {
     colCount: 6,
     title: 'BUYER LOT LORRY',
     metaLines: [
-      `e-TRADE No: ${auction.ano}`,
-      `Date: ${fmtDateDMY(auction.date)}`,
-      auction.state || '',
+      `e-TRADE No: ${trade.ano}`,
+      `Date: ${fmtDateDMY(trade.date)}`,
+      trade.state || '',
     ].filter(Boolean),
   });
 
@@ -764,7 +764,7 @@ async function buyerLotLorryXlsx(db, auctionId) {
 }
 
 async function buyerLotLorryPdf(db, auctionId) {
-  const { auction, interState, intraState } = getBuyerLotLorryData(db, auctionId);
+  const { trade, interState, intraState } = getBuyerLotLorryData(db, auctionId);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 30 });
   const buffers = [];
@@ -825,8 +825,8 @@ async function buyerLotLorryPdf(db, auctionId) {
       x: m, y: m, width: usableW,
       title: 'BUYER LOT LORRY',
       metaLines: [
-        `e-TRADE No: ${auction.ano}`,
-        `Date: ${fmtDateDMY(auction.date)}`,
+        `e-TRADE No: ${trade.ano}`,
+        `Date: ${fmtDateDMY(trade.date)}`,
       ],
     });
     y = afterY;

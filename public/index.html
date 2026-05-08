@@ -736,22 +736,43 @@ tr:hover td{background:var(--spice-cream)}
 .kpi.chili .kpi-icon{background:var(--spice-chili-lt);color:var(--spice-chili)}
 .kpi-icon svg{width:18px;height:18px;stroke-width:2;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
 
-/* Compact KPI strip used by the Lot Data Summary — denser rows so six
-   tiles (4 lot metrics + sold/withdrawn tiles) fit on a row without
-   towering. Scoped via #lot-kpis so dashboard KPIs are unaffected. */
+/* Compact KPI strip used by the Lot Data Summary — six glance-able tiles
+   on one row. Uniform height, uniform value size, meta locked to bottom
+   so tiles with extra data (Total Amount, Sold, Withdrawn) align with
+   the simpler tiles (Lots, Total Quantity, Calculated). The decorative
+   corner icons that work at 4 tiles per row become noise at 6, so we
+   hide them here. Scoped via #lot-kpis to leave dashboard KPIs alone. */
 #lot-kpis.kpi-grid{gap:10px;margin-bottom:14px}
-#lot-kpis .kpi{padding:10px 14px;border-radius:12px}
-#lot-kpis .kpi-label{font-size:10.5px;letter-spacing:.6px;margin-bottom:4px}
-#lot-kpis .kpi-value{font-size:22px}
-#lot-kpis .kpi-icon{width:28px;height:28px;right:10px;top:10px;border-radius:8px}
-#lot-kpis .kpi-icon svg{width:14px;height:14px}
-#lot-kpis .kpi-meta{font-size:11px;color:var(--spice-text-mute);margin-top:4px;line-height:1.35;font-weight:500}
+#lot-kpis .kpi{
+  padding:12px 14px;border-radius:12px;
+  display:flex;flex-direction:column;gap:5px;
+  min-height:96px;background:#fff;border:1px solid var(--spice-line)
+}
+#lot-kpis .kpi::before{width:3px}
+#lot-kpis .kpi-label{
+  font-size:10.5px;font-weight:700;letter-spacing:.7px;
+  color:var(--spice-text-mute);text-transform:uppercase;margin-bottom:0
+}
+#lot-kpis .kpi-value{
+  font-size:22px;font-weight:800;line-height:1;letter-spacing:-.4px;
+  color:var(--spice-text-main);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+#lot-kpis .kpi-value .kpi-unit{
+  font-size:13px;font-weight:600;color:var(--spice-text-mute);margin-left:4px
+}
+#lot-kpis .kpi-meta{
+  font-size:11px;line-height:1.35;font-weight:500;
+  color:var(--spice-text-mute);margin-top:auto;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden
+}
+#lot-kpis .kpi-icon{display:none}
 
 /* Row layout — 2fr / 1fr grid */
 .dash-row{display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px}
 .dash-row-eq{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
 
-/* Current auction hero */
+/* Current trade hero */
 .auction-hero{
   background:linear-gradient(135deg,var(--spice-cardamom) 0%,var(--spice-cardamom-dk) 100%);
   color:#fff;border-radius:16px;padding:26px 28px;position:relative;overflow:hidden
@@ -1382,6 +1403,85 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 .le-collapse-chev{transition:transform .15s}
 .le-collapse-head:hover{background:#F8FAFC}
 
+/* ── Lot-entry operational header & KPI strip ──────────────────────
+   Compact, glance-able tiles surfacing the metrics a field operator
+   needs during fast lot-entry: how much they've entered, where their
+   branch sits in its allocation, how many lots remain, and whether
+   any threshold is breached. Color states roll across all four tiles
+   uniformly: green (healthy) → amber (≥70% used) → red (≥90% / over). */
+.le-op-card{padding:14px 18px;margin-bottom:14px}
+.le-pickers{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.le-pickers .fld{display:flex;flex-direction:column;gap:4px;min-width:160px}
+.le-pickers .fld.grow{flex:1;min-width:220px}
+.le-pickers .fld-label{font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px}
+.le-pickers .fld-input{width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff;font-family:inherit}
+
+.le-kpi-strip{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;
+  border-top:1px solid var(--border);padding-top:12px
+}
+.le-kpi{
+  position:relative;background:#FAFBFC;border:1px solid var(--border);
+  border-radius:10px;padding:10px 14px 12px;min-height:78px;overflow:hidden
+}
+.le-kpi::before{content:'';position:absolute;left:0;top:0;width:3px;height:100%;background:#94A3B8}
+.le-kpi.is-green::before{background:var(--green)}
+.le-kpi.is-amber::before{background:#F59E0B}
+.le-kpi.is-red::before  {background:#DC2626}
+.le-kpi-label{font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.le-kpi-value{font-size:24px;font-weight:800;line-height:1.05;color:var(--text);letter-spacing:-.5px}
+.le-kpi-value .unit{font-size:13px;font-weight:600;color:var(--text2);margin-left:3px}
+.le-kpi-meta{font-size:11px;color:var(--text3);margin-top:6px;line-height:1.35;font-weight:500}
+.le-kpi-bar{height:4px;background:#E2E8F0;border-radius:2px;overflow:hidden;margin-top:6px}
+.le-kpi-bar-fill{height:100%;width:0%;background:#94A3B8;border-radius:2px;transition:width .25s ease,background .15s}
+.le-kpi.is-green .le-kpi-bar-fill{background:var(--green)}
+.le-kpi.is-amber .le-kpi-bar-fill{background:#F59E0B}
+.le-kpi.is-red   .le-kpi-bar-fill{background:#DC2626}
+
+.le-status-pill{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  font-size:12px;font-weight:700;letter-spacing:.2px;background:#F1F5F9;color:#64748B
+}
+.le-status-pill::before{
+  content:'';width:7px;height:7px;border-radius:50%;background:currentColor;
+  box-shadow:0 0 0 3px rgba(100,116,139,.18)
+}
+.le-status-pill.is-green{background:#ECFDF5;color:#065F46}
+.le-status-pill.is-green::before{box-shadow:0 0 0 3px rgba(16,185,129,.22)}
+.le-status-pill.is-amber{background:#FEF3C7;color:#92400E}
+.le-status-pill.is-amber::before{box-shadow:0 0 0 3px rgba(245,158,11,.22)}
+.le-status-pill.is-red{background:#FEE2E2;color:#991B1B}
+.le-status-pill.is-red::before{box-shadow:0 0 0 3px rgba(220,38,38,.22)}
+
+.le-warn-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:18px;height:18px;padding:0 5px;font-size:10px;font-weight:800;
+  color:#fff;background:#DC2626;border-radius:9px
+}
+
+@media(max-width:900px){.le-kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.le-kpi-strip{grid-template-columns:1fr}.le-kpi-value{font-size:22px}}
+
+/* ── Compact per-branch allocation rows (inside Lot Allocation card) */
+.le-alloc-row{
+  display:grid;grid-template-columns:140px 1fr 90px 70px;align-items:center;gap:10px;
+  padding:6px 10px;border-radius:8px;font-size:12px;background:transparent
+}
+.le-alloc-row.is-me{background:var(--green-bg);font-weight:600}
+.le-alloc-row .br-name{font-weight:700;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.le-alloc-row.is-me .br-name{color:var(--green)}
+.le-alloc-row .ranges{font-family:monospace;font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.le-alloc-row .pct-bar{position:relative;height:6px;background:#E2E8F0;border-radius:3px;overflow:hidden}
+.le-alloc-row .pct-bar > div{height:100%;border-radius:3px;transition:width .25s,background .15s}
+.le-alloc-row .pct-bar.is-green > div{background:var(--green)}
+.le-alloc-row .pct-bar.is-amber > div{background:#F59E0B}
+.le-alloc-row .pct-bar.is-red   > div{background:#DC2626}
+.le-alloc-row .nums{font-family:monospace;font-size:12px;color:var(--text2);text-align:right;white-space:nowrap}
+.le-alloc-row .free{font-weight:700;text-align:right;white-space:nowrap}
+.le-alloc-row .free.is-green{color:var(--green)}
+.le-alloc-row .free.is-amber{color:#B45309}
+.le-alloc-row .free.is-red  {color:#991B1B}
+
 /* ── Lot-entry print toolbar (Print Selected / by Seller / Clear) ── */
 .le-toolbar-btn{
   display:inline-flex;align-items:center;gap:6px;
@@ -1674,7 +1774,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
         </div>
         <h1 class="login-hero-headline">Run every <span>e-Trade</span> day with confidence.</h1>
-        <p class="login-hero-tagline">Lot entry, payments, GST invoices, Tally export &amp; WhatsApp receipts — built for the spice auction floor.</p>
+        <p class="login-hero-tagline">Lot entry, payments, GST invoices, Tally export &amp; WhatsApp receipts — built for the spice trade floor.</p>
         <ul class="login-hero-bullets">
           <li>Lot entry with branch allocation &amp; live validation</li>
           <li>One-click GST invoices, debit notes &amp; PDFs</li>
@@ -1780,15 +1880,15 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Buyers
         </button>
-        <button class="side-item" data-tab="auctions" onclick="go('auctions')">
+        <button class="side-item" data-tab="trades" onclick="go('trades')">
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-          Auctions
+          Trades
         </button>
         <button class="side-item" data-tab="lots" onclick="go('lots')">
           <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           Lots
         </button>
-        <!-- Lot Entry — fast desktop entry form for the auction-hall
+        <!-- Lot Entry — fast desktop entry form for the trade-hall
              workflow (one row per lot, seller search, save & next).
              Uses the existing /api/traders + /api/lots endpoints so
              data flows straight into the same DB the admin views.
@@ -1943,7 +2043,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           Backup &amp; Restore
         </h2>
         <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 18px;max-width:720px;line-height:1.5">
-          Download the entire database as a single <code style="background:var(--bg);padding:1px 4px;border-radius:3px">.db</code> file, or restore from one you saved earlier. A backup captures every auction, lot, invoice, payment, debit note, setting and user — bit-for-bit identical to what's running right now.
+          Download the entire database as a single <code style="background:var(--bg);padding:1px 4px;border-radius:3px">.db</code> file, or restore from one you saved earlier. A backup captures every trade, lot, invoice, payment, debit note, setting and user — bit-for-bit identical to what's running right now.
         </p>
 
         <!-- ── Download ───────────────────────────────────────── -->
@@ -2032,7 +2132,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       </div>
       <div class="fg"><label>Role</label>
         <select id="nu-role" onchange="updateRoleDescription()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff">
-          <option value="operator" selected>Operator — daily auction work</option>
+          <option value="operator" selected>Operator — daily trade work</option>
           <option value="manager">Manager — branch oversight</option>
           <option value="admin">Admin — full control</option>
           <option value="viewer">Viewer — read-only</option>
@@ -2069,7 +2169,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div class="fg"><label>Role</label>
         <select id="change-role-select" onchange="updateChangeRoleDescription()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff">
           <option value="viewer">Viewer — read-only</option>
-          <option value="operator">Operator — daily auction work</option>
+          <option value="operator">Operator — daily trade work</option>
           <option value="manager">Manager — branch oversight</option>
           <option value="admin">Admin — full control</option>
         </select>
@@ -2114,12 +2214,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     </div>
 
     <!-- AUCTIONS -->
-    <div class="tc" id="tc-auctions">
+    <div class="tc" id="tc-trades">
       <div class="card">
         <h2>Trades <button class="btn btn-g" onclick="openAuctionAdd()">+ New Trade</button></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-a" onclick="openImportAuctionModal()">Import Lots from XLS/XLSX</button>
-          <button class="btn btn-o" onclick="downloadTemplate('auctions')">Download Template</button>
+          <button class="btn btn-o" onclick="downloadTemplate('trades')">Download Template</button>
           <button id="trade-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('trade')">🗑 Delete Selected <span id="trade-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
         </div>
         <div id="auction-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
@@ -2136,7 +2236,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--spice-cardamom)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             </span>
             Lot Data
-            <span style="font-weight:400;font-size:12px;color:var(--text3)">Select an auction from Auctions tab first</span>
+            <span style="font-weight:400;font-size:12px;color:var(--text3)">Select a trade from Trades tab first</span>
           </span>
         </h2>
 
@@ -2158,10 +2258,8 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
           <div class="kpi turmeric">
             <div class="kpi-label">Total Amount</div>
-            <div class="kpi-value" id="lot-kpi-amount" style="font-size:18px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
-            <div class="kpi-icon">
-              <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            </div>
+            <div class="kpi-value" id="lot-kpi-amount">₹0</div>
+            <div class="kpi-meta" id="lot-kpi-amount-meta" title="Max · Min · Avg price per kg">Max ₹— · Min ₹— · Avg ₹—</div>
           </div>
           <div class="kpi chili">
             <div class="kpi-label">Calculated</div>
@@ -2189,7 +2287,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <select id="lot-auction" onchange="loadLots()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+          <select id="lot-trade" onchange="loadLots()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="refreshLots(this)" title="Reload the lots table from the server">🔄 Refresh</button>
@@ -2208,7 +2306,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     </div>
 
     <!-- LOT ENTRY — fast desktop entry form modeled on the PWA app.html
-         workflow but using e-Trade's existing /api/auctions, /api/traders,
+         workflow but using e-Trade's existing /api/trades, /api/traders,
          /api/lots endpoints. Layout: trade + branch picker on top, then
          a single-column entry form, then a recent-entries panel below.
          Save & Next keeps the seller selected and clears only the
@@ -2222,29 +2320,57 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </h2>
       </div>
 
-      <!-- Trade + branch picker — small bar at the top, sticky-feeling -->
-      <div class="card" style="padding:12px 18px;margin-bottom:14px">
-        <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-          <div style="flex:1;min-width:200px">
-            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Trade</div>
-            <select id="le-auction" onchange="leOnAuctionChange()" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff"></select>
+      <!-- Operational header — pickers + glance-able KPI tiles in one card.
+           Color states across all four tiles roll uniformly:
+             green  = healthy / under 70% used
+             amber  = nearing limit (≥ 70%)
+             red    = at / over allocation, or 0 free lots remaining -->
+      <div class="card le-op-card">
+        <div class="le-pickers">
+          <div class="fld grow">
+            <div class="fld-label">Trade</div>
+            <select id="le-trade" class="fld-input" onchange="leOnAuctionChange()"></select>
           </div>
-          <div style="min-width:160px">
-            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Branch</div>
-            <select id="le-branch" onchange="try{localStorage.setItem('le_branch',this.value)}catch(_){}" style="width:100%;height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:#fff;text-transform:uppercase">
+          <div class="fld">
+            <div class="fld-label">Branch</div>
+            <select id="le-branch" class="fld-input" onchange="leOnBranchChange()" style="text-transform:uppercase">
               <option value="">— select —</option>
             </select>
           </div>
-          <div style="min-width:140px">
-            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">My Today's Lots</div>
-            <div id="le-stats" style="height:38px;padding:0 12px;display:inline-flex;align-items:center;background:var(--green-bg);color:var(--green);font-weight:700;border-radius:8px;font-size:14px;font-family:monospace">0 lots · 0 kg</div>
+          <button class="needs-auction-write btn btn-g" type="button" onclick="leOpenNewTradeModal()" style="height:38px;padding:0 16px;font-weight:600">+ New Trade</button>
+        </div>
+
+        <div class="le-kpi-strip">
+          <div class="le-kpi" id="le-kpi-trade">
+            <div class="le-kpi-label">Lots in Trade</div>
+            <div class="le-kpi-value" id="le-kpi-trade-n">0</div>
+            <div class="le-kpi-meta" id="le-kpi-trade-meta">— bags · — kg</div>
+          </div>
+          <div class="le-kpi" id="le-kpi-mybranch">
+            <div class="le-kpi-label">My Branch Usage</div>
+            <div class="le-kpi-value" id="le-kpi-used">—<span class="unit" id="le-kpi-used-pct"></span></div>
+            <div class="le-kpi-bar"><div class="le-kpi-bar-fill" id="le-kpi-used-fill"></div></div>
+            <div class="le-kpi-meta" id="le-kpi-used-meta">select a branch to see usage</div>
+          </div>
+          <div class="le-kpi" id="le-kpi-free">
+            <div class="le-kpi-label">Free Lots</div>
+            <div class="le-kpi-value" id="le-kpi-free-n">—</div>
+            <div class="le-kpi-meta" id="le-kpi-free-meta">remaining in your branch</div>
+          </div>
+          <div class="le-kpi" id="le-kpi-status">
+            <div class="le-kpi-label">Status</div>
+            <div class="le-kpi-value" style="font-size:13px;line-height:1.4"><span class="le-status-pill" id="le-status-pill">No trade</span></div>
+            <div class="le-kpi-meta" id="le-kpi-status-meta">pick a trade to begin</div>
           </div>
         </div>
+        <!-- Legacy stats sink — superseded by the tiles above; kept hidden so
+             any code path still writing to it doesn't throw. -->
+        <div id="le-stats" style="display:none"></div>
       </div>
 
       <!-- New Trade modal — quick form, mirrors PWA admin's Create Trade UX
            but trimmed to essentials. Lot allocations are skipped here;
-           admin can still edit them later from the Auctions tab if needed. -->
+           admin can still edit them later from the Trades tab if needed. -->
       <div class="modal-overlay" id="le-newtrade-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
         <div style="background:#fff;border-radius:14px;width:min(440px,92vw);padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
           <h3 style="margin:0 0 14px;font-size:16px;display:flex;align-items:center;gap:8px">
@@ -2403,7 +2529,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
         <!-- Moisture row — visibility driven by 'show_moisture' setting.
              Hidden by default so the form stays compact for trades that
-             don't track moisture (most cardamom auctions). -->
+             don't track moisture (most cardamom trades). -->
         <div id="le-moisture-wrap" style="display:none;margin-bottom:16px">
           <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Moisture %</div>
           <input type="number" id="le-moisture" step="0.1" min="0" max="100" placeholder="e.g. 12.5" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
@@ -2421,7 +2547,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div><!-- /le-collapse-body -->
       </div>
 
-      <!-- Recent entries — today's lots from this auction. Collapsible. -->
+      <!-- Recent entries — today's lots from this trade. Collapsible. -->
       <div class="card le-collapsible" id="le-recent-card" data-section="le-recent" style="padding:0;margin-top:16px">
         <div class="le-collapse-head" onclick="leToggleSection('le-recent')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 20px;cursor:pointer">
           <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
@@ -2449,7 +2575,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
       <!-- ───────────────────────────────────────────────────────────
            Add New Seller modal — minimal-fields quick add for the
-           auction-hall workflow. Admin can fill out missing details
+           trade-hall workflow. Admin can fill out missing details
            later from the Sellers tab. Mirrors PWA app.html's flow. -->
       <div class="modal-overlay" id="le-newseller-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
         <div style="background:#fff;border-radius:14px;width:min(480px,92vw);padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
@@ -2597,9 +2723,9 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
         </div>
 
-        <!-- ── Action toolbar — grouped: Auction selector / Create / Print / Manage ── -->
+        <!-- ── Action toolbar — grouped: Trade selector / Create / Print / Manage ── -->
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <select id="inv-auction" onchange="loadInvoices();loadInvEligibleBuyers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+          <select id="inv-trade" onchange="loadInvoices();loadInvEligibleBuyers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
           <!-- Create group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
@@ -2675,7 +2801,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <select id="pur-auction" onchange="loadPurchases();loadPurEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+          <select id="pur-trade" onchange="loadPurchases();loadPurEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="needs-invoice-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenPurModal()">+ Generate Purchase</button>
@@ -2741,7 +2867,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <select id="pay-auction" onchange="loadPayments()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+          <select id="pay-trade" onchange="loadPayments()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="loadPayments()">↻ Reload</button>
@@ -2789,7 +2915,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <span>Export Center — XLSX</span>
           </h3>
           <div class="tally-section-body">
-            <div class="fg" style="max-width:300px;margin-top:12px"><label>Select Trade</label><select id="exp-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select></div>
+            <div class="fg" style="max-width:300px;margin-top:12px"><label>Select Trade</label><select id="exp-trade" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select></div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:12px" id="export-btns"></div>
           </div>
         </div>
@@ -2805,10 +2931,10 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <div class="tally-section-body">
             <p style="font-size:12px;color:var(--text2);margin:12px 0">These exports produce .dbf files that your dad's FoxPro application can read directly. Date format: DD/MM/YYYY. Lot numbers preserve leading zeros.</p>
 
-            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Per Auction</h3>
+            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Per Trade</h3>
             <div style="display:flex;gap:8px;align-items:end;margin-bottom:12px;flex-wrap:wrap">
-              <div class="fg" style="margin:0;flex:1;min-width:200px"><label>Trade</label><select id="dbf-auction" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:100%"></select></div>
-              <button class="btn btn-a" onclick="downloadDbf('lots',{auctionId:document.getElementById('dbf-auction').value})">Lots (CPA1.DBF)</button>
+              <div class="fg" style="margin:0;flex:1;min-width:200px"><label>Trade</label><select id="dbf-trade" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:100%"></select></div>
+              <button class="btn btn-a" onclick="downloadDbf('lots',{auctionId:document.getElementById('dbf-trade').value})">Lots (CPA1.DBF)</button>
             </div>
 
             <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Date Range</h3>
@@ -2837,10 +2963,10 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <div class="tc" id="tc-lorry">
       <div class="card">
         <h2>Lorry Reports
-          <span style="font-weight:400;font-size:12px;color:var(--text3)">Auction-floor reports for the day's trade</span>
+          <span style="font-weight:400;font-size:12px;color:var(--text3)">Trade-floor reports for the day's trade</span>
         </h2>
         <div class="fg" style="max-width:360px"><label>Select Trade</label>
-          <select id="lorry-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
+          <select id="lorry-trade" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-top:14px">
@@ -2888,8 +3014,8 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="margin-top:14px;padding:10px 12px;background:var(--spice-saffron-lt);border-radius:8px;font-size:12px;color:var(--text2);line-height:1.5">
-          <strong>Note:</strong> All three reports pull live data from the selected auction's lots and the buyers master.
-          The Buyer Lot Lorry report classifies buyers as <strong>Intra-state</strong> when the buyer's state matches the auction state, otherwise <strong>Inter-state</strong>.
+          <strong>Note:</strong> All three reports pull live data from the selected trade's lots and the buyers master.
+          The Buyer Lot Lorry report classifies buyers as <strong>Intra-state</strong> when the buyer's state matches the trade state, otherwise <strong>Inter-state</strong>.
         </div>
       </div>
     </div>
@@ -2948,7 +3074,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <select id="bill-auction" onchange="loadBills();loadEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+          <select id="bill-trade" onchange="loadBills();loadEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('gen-bill-modal')">+ Generate Bill</button>
@@ -2976,7 +3102,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <!-- Trade selector: shared scope for BOTH actions below. The
                list view filters by it; both Generate buttons inherit it
                so neither action can ever cross trade boundaries. -->
-          <select id="dn-auction" onchange="loadDebitNotes()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+          <select id="dn-trade" onchange="loadDebitNotes()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
           <!-- Generate Debit Note (single): inputs = trade (dropdown) +
                purchase invoice number (modal). Generates ONE DN for the
@@ -3002,11 +3128,11 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <div class="tc" id="tc-tally">
       <div class="card">
         <h2>To Tally
-          <span style="font-weight:400;font-size:12px;color:var(--text3)">Generate Tally-importable XML files from your auction data</span>
+          <span style="font-weight:400;font-size:12px;color:var(--text3)">Generate Tally-importable XML files from your trade data</span>
         </h2>
 
         <div class="fg" style="max-width:360px"><label>Select Trade</label>
-          <select id="tally-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
+          <select id="tally-trade" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
         </div>
 
         <div style="margin-top:12px;padding:10px 14px;background:var(--green-bg);border-radius:8px;border:1px solid var(--green);font-size:12px;color:var(--text2);line-height:1.5">
@@ -3030,7 +3156,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
               <span style="width:32px;height:32px;border-radius:8px;background:var(--green-bg);display:inline-flex;align-items:center;justify-content:center;font-size:18px">🛒</span>
               <div>
                 <div style="font-weight:700;color:var(--text);font-size:14px">Sales Party Ledgers</div>
-                <div style="font-size:11px;color:var(--text3)">Buyers from this auction's invoices (under Local / Inter Dealer-Purchase)</div>
+                <div style="font-size:11px;color:var(--text3)">Buyers from this trade's invoices (under Local / Inter Dealer-Purchase)</div>
               </div>
             </div>
             <div id="tally-preview-ledger_sales" style="font-size:11px;color:var(--text3);min-height:18px;margin:6px 0"></div>
@@ -3083,7 +3209,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </h3>
         <div class="tally-section-body">
         <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Pick one party from this auction and download just its ledger. Useful when you've added a new buyer/trader and only need to create that one ledger in Tally.</div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Pick one party from this trade and download just its ledger. Useful when you've added a new buyer/trader and only need to create that one ledger in Tally.</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <div style="flex:2;min-width:220px"><label style="font-size:11px;color:var(--text2);font-weight:600">Search</label>
               <div class="tally-search" id="tally-party-search-wrap">
@@ -3103,7 +3229,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <button class="btn btn-a" onclick="loadTallyParties()" style="padding:7px 14px;font-size:12px">Refresh List</button>
           </div>
           <div id="tally-party-list" style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
-            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh List</strong> to load parties.</div>
+            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick a trade and click <strong>Refresh List</strong> to load parties.</div>
           </div>
         </div>
         </div>
@@ -3137,7 +3263,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <button class="btn btn-a" onclick="loadTallyParties()" style="padding:7px 14px;font-size:12px">Refresh List</button>
           </div>
           <div id="tally-pv-list" style="margin-top:10px;max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
-            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh List</strong> to load parties.</div>
+            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick a trade and click <strong>Refresh List</strong> to load parties.</div>
           </div>
         </div>
         </div>
@@ -3228,18 +3354,18 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <div class="tally-section-body">
         <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
           <div style="font-size:11px;color:var(--text3);margin-bottom:10px;line-height:1.5">
-            Sales vouchers carry a <code style="background:var(--bg);padding:1px 4px;border-radius:3px">&lt;DISTANCE&gt;</code> field used by the e-way bill portal. Click <strong>NIC</strong> to look up the distance on the official portal (captcha-gated; one route at a time), paste the result, click <strong>Save</strong>. <strong>The value is saved per route</strong>, so every other invoice between the same two PINs — this auction and all future ones — picks it up automatically. The <span style="font-size:9px;padding:1px 5px;background:var(--green-bg);color:var(--green);border-radius:8px;font-weight:700">auto</span> badge marks rows that resolved via the saved route table.
+            Sales vouchers carry a <code style="background:var(--bg);padding:1px 4px;border-radius:3px">&lt;DISTANCE&gt;</code> field used by the e-way bill portal. Click <strong>NIC</strong> to look up the distance on the official portal (captcha-gated; one route at a time), paste the result, click <strong>Save</strong>. <strong>The value is saved per route</strong>, so every other invoice between the same two PINs — this trade and all future ones — picks it up automatically. The <span style="font-size:9px;padding:1px 5px;background:var(--green-bg);color:var(--green);border-radius:8px;font-weight:700">auto</span> badge marks rows that resolved via the saved route table.
           </div>
 
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
             <button class="btn btn-a" onclick="loadInvoiceDistances()" style="padding:6px 12px;font-size:12px">Refresh</button>
             <label style="font-size:11px;color:var(--text2);font-weight:600">Trade:</label>
-            <select id="dist-inv-auction" style="padding:5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></select>
+            <select id="dist-inv-trade" style="padding:5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></select>
             <span id="dist-inv-count" style="font-size:11px;color:var(--text3)"></span>
             <button class="btn" onclick="clearAllDistanceOverrides()" title="Wipe all per-invoice manual distances so every sales invoice resolves via the route table" style="padding:6px 12px;font-size:11px;background:#FEF3C7;color:#B45309;border:1px solid #F59E0B;margin-left:auto">Clear all overrides</button>
           </div>
           <div id="dist-inv-list" style="max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
-            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh</strong>.</div>
+            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick a trade and click <strong>Refresh</strong>.</div>
           </div>
         </div>
         </div>
@@ -3269,7 +3395,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             </select>
           </div>
           <div class="fg" style="margin:0;min-width:240px"><label>Trade</label>
-            <select id="jr-auction" style="width:100%;padding:6px"></select>
+            <select id="jr-trade" style="width:100%;padding:6px"></select>
           </div>
           <div class="fg" style="margin:0" id="jr-sale-wrap"><label>Sale Type</label>
             <select id="jr-sale"><option value="">All</option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option></select>
@@ -3337,7 +3463,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div style="font-size:11px;color:var(--spice-text-hint);margin-top:4px">Full buyer code used everywhere</div>
     </div>
     <div class="fg"><label>Code (short alias)</label><input id="b-code" placeholder="e.g. RSH" style="text-transform:uppercase">
-      <div style="font-size:11px;color:var(--spice-text-hint);margin-top:4px">Short alias used in auction tags &amp; price files</div>
+      <div style="font-size:11px;color:var(--spice-text-hint);margin-top:4px">Short alias used in trade tags &amp; price files</div>
     </div>
     <div class="fg"><label>Trade Name</label><input id="b-buyer1"></div>
     <div class="fg"><label>GSTIN</label><div style="display:flex;gap:6px"><input id="b-gstin" style="flex:1"><button class="btn btn-a" type="button" onclick="gstLookup('b')" style="white-space:nowrap;padding:6px 10px">Fetch from GST</button></div></div>
@@ -3395,7 +3521,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
          refuses to drop ranges with saved lots in them)
        • Reassign Lots — move an unused range from one branch to
          another (splits the source allocation around the moved range)
-     Opened from the Auctions tab "🗂️" action button per row.
+     Opened from the Trades tab "🗂️" action button per row.
      ════════════════════════════════════════════════════════════ -->
 <div class="modal-bg" id="alloc-modal"><div class="modal" style="max-width:560px">
   <h2 style="margin-bottom:6px">Lot Allocations — Trade #<span id="alloc-modal-ano"></span></h2>
@@ -3527,7 +3653,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       </span>
     </label>
     <div id="gi-buyer-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;background:var(--bg)">
-      <div style="color:var(--text3);font-size:12px;padding:10px;text-align:center">Select an auction first</div>
+      <div style="color:var(--text3);font-size:12px;padding:10px;text-align:center">Select a trade first</div>
     </div>
   </div>
   <div id="gi-hint" style="font-size:11px;color:var(--text3);padding:4px 0"></div>
@@ -3692,9 +3818,9 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 <div class="modal-bg" id="import-auction-modal"><div class="modal">
   <h2>Import Lots from XLS / XLSX</h2>
   <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Import lots from an Excel file. The file should have columns like <strong>ANO</strong> (trade no), <strong>DATE</strong>, <strong>LOT</strong>, <strong>NAME</strong>, <strong>BAG</strong>, <strong>QTY</strong>, etc.</p>
-  <p style="font-size:12px;color:var(--green);background:var(--green-bg);border:1px solid var(--green-border);border-radius:6px;padding:8px 10px;margin-bottom:14px">💡 If your file has multiple trade numbers (ANO 1, 2, 3…), leave the override fields below blank — each row goes into its own auction automatically.</p>
+  <p style="font-size:12px;color:var(--green);background:var(--green-bg);border:1px solid var(--green-border);border-radius:6px;padding:8px 10px;margin-bottom:14px">💡 If your file has multiple trade numbers (ANO 1, 2, 3…), leave the override fields below blank — each row goes into its own trade automatically.</p>
   <div class="sgrid">
-    <div class="fg"><label>Trade No — OVERRIDE (blank = read from each row's ANO)</label><input id="ia-ano" placeholder="Leave blank for multi-auction files"></div>
+    <div class="fg"><label>Trade No — OVERRIDE (blank = read from each row's ANO)</label><input id="ia-ano" placeholder="Leave blank for multi-trade files"></div>
     <div class="fg"><label>Date — OVERRIDE (blank = read from each row)</label><input type="date" id="ia-date"></div>
     <div class="fg"><label>Default Crop Type</label><input id="ia-crpt"></div>
     <div class="fg"><label>Default State</label><select id="ia-state"><option>TAMIL NADU</option><option>KERALA</option></select></div>
@@ -3711,16 +3837,16 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   <div class="actions"><button class="btn btn-o" onclick="hideModal('import-auction-modal')">Cancel</button><button class="btn btn-g" onclick="importAuction()">Import</button></div>
 </div></div>
 
-<!-- ═══ PRICE IMPORT (post-auction) ═══════════════════════ -->
+<!-- ═══ PRICE IMPORT (post-trade) ═══════════════════════ -->
 <div class="modal-bg" id="price-import-modal"><div class="modal">
-  <h2>Price Import — Post-Auction Data</h2>
-  <p style="font-size:13px;color:var(--spice-text-mute);margin-bottom:10px">Use this after the auction ends to update prices, buyer codes, and quantities on existing lots.</p>
+  <h2>Price Import — Post-Trade Data</h2>
+  <p style="font-size:13px;color:var(--spice-text-mute);margin-bottom:10px">Use this after the trade ends to update prices, buyer codes, and quantities on existing lots.</p>
   <div style="font-size:12px;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:10px 12px;margin-bottom:14px">
     <strong>Expected columns:</strong> STATE, TNO (or ANO), DATE, LOT, BAG, QTY, PRICE, CODE<br>
     <span style="color:var(--spice-text-mute)">Extra columns are ignored. Amount is auto-computed as QTY × PRICE if not provided.</span>
   </div>
   <div class="sgrid">
-    <div class="fg"><label>Trade No — override (blank = read TNO from each row)</label><input id="pi-ano" placeholder="Leave blank for multi-auction files"></div>
+    <div class="fg"><label>Trade No — override (blank = read TNO from each row)</label><input id="pi-ano" placeholder="Leave blank for multi-trade files"></div>
     <div class="fg"><label>Date — override (blank = read from each row)</label><input type="date" id="pi-date"></div>
   </div>
   <div class="fg" style="margin-top:10px"><label>Select File (.xls or .xlsx)</label>
@@ -4054,7 +4180,7 @@ function emptyStateHTML(opts){
     lots:     '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M7 11h10M7 15h6"/></svg>',
     traders:  '<svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
     buyers:   '<svg viewBox="0 0 24 24"><path d="M3 3h2l2 10h13l2-7H6"/><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/></svg>',
-    auctions: '<svg viewBox="0 0 24 24"><path d="M14 7L9 12l-4-4"/><path d="M14 17l5-5 1 1"/><path d="M6 19h12"/></svg>',
+    trades: '<svg viewBox="0 0 24 24"><path d="M14 7L9 12l-4-4"/><path d="M14 17l5-5 1 1"/><path d="M6 19h12"/></svg>',
     invoices: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>',
     payments: '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="7" cy="15" r="1.5"/></svg>',
     bills:    '<svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>',
@@ -4294,7 +4420,7 @@ const ICONS={
   // sheet (mobile) or wa.me link (desktop fallback).
   whatsapp:'<svg viewBox="0 0 24 24"><path d="M20.5 3.5A11 11 0 0 0 3.6 17.3L2 22l4.8-1.5A11 11 0 1 0 20.5 3.5z"/><path d="M16.5 14.3c-.3-.2-1.7-.8-2-.9-.3-.1-.5-.2-.7.2s-.8.9-1 1.1c-.2.2-.4.2-.7 0a8 8 0 0 1-2.4-1.5 9 9 0 0 1-1.6-2c-.2-.3 0-.5.1-.7l.5-.5.3-.5a.6.6 0 0 0 0-.5l-.8-2c-.2-.5-.4-.4-.6-.4h-.5c-.2 0-.5 0-.7.4a3.4 3.4 0 0 0-1 2.4c0 1.5 1 2.9 1.2 3.1a11 11 0 0 0 4.5 4 5 5 0 0 0 3 .8c.5-.1 1.7-.7 1.9-1.4.2-.6.2-1.2.1-1.4l-.6-.2z"/></svg>',
   // Allocations icon — a clipboard with bracketed lot ranges. Used on
-  // the Auctions tab row actions to open the per-trade lot allocation
+  // the Trades tab row actions to open the per-trade lot allocation
   // modal (Edit + Reassign).
   alloc:'<svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2" ry="2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>'
 };
@@ -4763,7 +4889,7 @@ function go(tab){
     try { applyLogoBadge(); } catch(_) {}
   }
   const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
-    auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
+    trades:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
     bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,tally:loadTallyAuctions};
   if(loaders[tab]){
@@ -4882,7 +5008,7 @@ async function refreshCurrentTab(){
 // ── Dashboard ─────────────────────────────────────────────
 // _dashSelectedAuctionId:
 //   null  => "All Trades" (cumulative view, default)
-//   <id>  => drilled into that specific auction
+//   <id>  => drilled into that specific trade
 let _dashSelectedAuctionId = null;
 
 // Branch panel collapse state — persists across loadStats() re-renders
@@ -4909,7 +5035,7 @@ async function loadStats(auctionId){
     : `/api/stats?auction_id=all&${_cb}`;
   const d=await j(url);
   const K=d.kpi||{}, A=d.currentAuction, S=d.topSellers||[], I=d.recentInvoices||[], C=d.counts||{}, AA=d.allAuctions||[];
-  const CUM=d.cumulative||{qty:0,amount:0,lots:0,auctions:0};
+  const CUM=d.cumulative||{qty:0,amount:0,lots:0,trades:0};
   const PT=d.perTradeBreakdown||[];
   // Note: do NOT auto-sync _dashSelectedAuctionId from the server response.
   // The server may return a currentAuction when we're in cumulative mode (for
@@ -4933,7 +5059,7 @@ async function loadStats(auctionId){
     : revDelta>=0 ? `<span class="kpi-delta">▲ ${revDelta}% vs last month</span>`
     : `<span class="kpi-delta down">▼ ${Math.abs(revDelta)}% vs last month</span>`;
 
-  // Build auction picker — includes "All Trades" as default option
+  // Build trade picker — includes "All Trades" as default option
   const isAllMode = !_dashSelectedAuctionId;
   const allSel = isAllMode ? ' selected' : '';
   const pickerOptions =
@@ -4945,20 +5071,20 @@ async function loadStats(auctionId){
   const picker = `<select onchange="loadStats(this.value === 'all' ? null : parseInt(this.value))" style="background:rgba(255,255,255,.85);border:1px solid rgba(22,101,52,.25);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;color:var(--spice-cardamom-dk);cursor:pointer;font-family:inherit">${pickerOptions}</select>`;
 
   // Hero card: "All Trades" cumulative view in default/cumulative mode,
-  // otherwise the drilled-in current-auction view.
+  // otherwise the drilled-in current-trade view.
   const aHTML = isAllMode ? `
     <div class="auction-hero" style="background:var(--spice-cardamom-lt);color:var(--spice-text-main)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
         <div class="auction-hero-label" style="color:var(--spice-cardamom-dk);opacity:.85">All Trades · Cumulative</div>
         ${picker}
       </div>
-      <div class="auction-hero-number" style="color:var(--spice-cardamom-dk)">${CUM.auctions||0} Trade${CUM.auctions===1?'':'s'}</div>
-      <div class="auction-hero-date" style="color:var(--spice-text-mute);opacity:1">Lifetime totals across every auction</div>
+      <div class="auction-hero-number" style="color:var(--spice-cardamom-dk)">${CUM.trades||0} Trade${CUM.trades===1?'':'s'}</div>
+      <div class="auction-hero-date" style="color:var(--spice-text-mute);opacity:1">Lifetime totals across every trade</div>
       <div class="auction-hero-stats">
         <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${CUM.lots||0}</strong>Total Lots</div>
         <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${kgK(CUM.qty)}</strong>Total Qty</div>
         <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${inrL(CUM.amount)}</strong>Total Volume</div>
-        <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${CUM.auctions?inrL((CUM.amount||0)/CUM.auctions).replace('₹','₹'):'—'}</strong>Avg / Trade</div>
+        <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${CUM.trades?inrL((CUM.amount||0)/CUM.trades).replace('₹','₹'):'—'}</strong>Avg / Trade</div>
       </div>
       <div style="font-size:12px;color:var(--spice-text-mute);opacity:.9;border-top:1px solid rgba(22,101,52,.15);padding-top:10px;margin-top:4px">
         💡 Select a specific trade above to drill into its details
@@ -4989,9 +5115,9 @@ async function loadStats(auctionId){
   ` : `
     <div class="auction-hero" style="background:var(--tab-bg);color:var(--spice-text-main)">
       <div class="auction-hero-label" style="color:var(--spice-text-mute)">No active trade</div>
-      <div class="auction-hero-number" style="color:var(--spice-text-main);font-size:22px">Create your first auction</div>
-      <div class="auction-hero-date" style="color:var(--spice-text-mute);opacity:1">Head to the Auctions tab to get started.</div>
-      <button class="btn btn-a" onclick="go('auctions')" style="margin-top:8px">+ New Trade</button>
+      <div class="auction-hero-number" style="color:var(--spice-text-main);font-size:22px">Create your first trade</div>
+      <div class="auction-hero-date" style="color:var(--spice-text-mute);opacity:1">Head to the Trades tab to get started.</div>
+      <button class="btn btn-a" onclick="go('trades')" style="margin-top:8px">+ New Trade</button>
     </div>
   `);
 
@@ -5190,7 +5316,7 @@ async function loadStats(auctionId){
       </div>
       <div style="display:flex;gap:10px">
         <button class="btn btn-o" onclick="go('lots')">Import Data</button>
-        <button class="btn btn-a" onclick="go('auctions')">+ New Trade</button>
+        <button class="btn btn-a" onclick="go('trades')">+ New Trade</button>
       </div>
     </div>
 
@@ -5204,8 +5330,8 @@ async function loadStats(auctionId){
             ? ((CUM.amount||0)>=100000?'L':'')
             : (((A && A.totalAmt)||0)>=100000?'L':'')}</span></div>
         <span class="kpi-delta neutral">${isAllMode
-          ? `${CUM.auctions||0} trade${CUM.auctions===1?'':'s'}`
-          : (A ? `${kg(A.totalQty)} traded` : 'No auction')}</span>
+          ? `${CUM.trades||0} trade${CUM.trades===1?'':'s'}`
+          : (A ? `${kg(A.totalQty)} traded` : 'No trade')}</span>
       </div>
       <div class="kpi cardamom">
         <div class="kpi-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg></div>
@@ -5249,7 +5375,7 @@ async function loadStats(auctionId){
               <div class="qa-label">Export Data</div>
               <div class="qa-sub">XLSX or PDF</div>
             </button>
-            <button class="qa" onclick="go('auctions')">
+            <button class="qa" onclick="go('trades')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div>
               <div class="qa-label">New Trade</div>
               <div class="qa-sub">Start today's trade</div>
@@ -5456,7 +5582,7 @@ function openAddUserModal(){
 const ROLE_DESCRIPTIONS = {
   viewer:   'Can view all data and download reports/exports. Cannot create, edit, or delete anything.',
   operator: 'Can create/edit lots, generate invoices, and manage buyers/traders. Cannot delete records or change settings.',
-  manager:  'Everything Operator can do, plus: create auctions, revert invoices, and edit company settings. Still cannot delete records or manage users.',
+  manager:  'Everything Operator can do, plus: create trades, revert invoices, and edit company settings. Still cannot delete records or manage users.',
   admin:    'Full control: everything Manager can do, plus: delete records, bulk delete, manage users, and toggle business state.'
 };
 function updateRoleDescription(){
@@ -5607,16 +5733,16 @@ function getDefaultBusinessState(){
 }
 
 // Update sidebar labels based on business_mode setting.
-// e-Trade  → the "Auctions" menu item displays as "Trades"
-// e-Auction → displays as "Auctions" (default)
+// e-Trade  → the "Trades" menu item displays as "Trades"
+// e-Trade → displays as "Trades" (default)
 function applyModeLabels(){
   const mode = (_sdata.mode||[]).find(f=>f.key==='business_mode')?.value
             || (_sdata.flags||[]).find(f=>f.key==='business_mode')?.value
-            || 'e-Auction';
-  const btn = document.querySelector('.side-item[data-tab="auctions"]');
+            || 'e-Trade';
+  const btn = document.querySelector('.side-item[data-tab="trades"]');
   if(!btn) return;
   // Replace the trailing text node (the label after the SVG)
-  const label = (mode === 'e-Trade') ? 'Trades' : 'Auctions';
+  const label = (mode === 'e-Trade') ? 'Trades' : 'Trades';
   for(const n of btn.childNodes){
     if(n.nodeType === Node.TEXT_NODE && n.textContent.trim()){
       n.textContent = ' '+label;
@@ -5828,10 +5954,10 @@ async function loadFormulas(){
   ]);
 
   // ── Payment summary ─────────────────────────────────────────
-  html += card('Payment summary (per seller, per auction)', [
+  html += card('Payment summary (per seller, per trade)', [
     {
       label: 'Total Amount, Total Purchase, Total Discount',
-      note: 'Sum across all lots a seller sold in the auction.',
+      note: 'Sum across all lots a seller sold in the trade.',
       formula: `Total Amount   = Σ ( Lot Amount )<br>
                 Total PurAmt   = Σ ( PurAmt )<br>
                 Total Discount = Σ ( Discount )`,
@@ -5871,9 +5997,9 @@ async function loadFormulas(){
 // LOT ENTRY — fast desktop entry form
 // ══════════════════════════════════════════════════════════════
 // Modeled on the PWA app.html workflow but speaks directly to e-Trade's
-// existing /api/auctions, /api/traders, /api/lots endpoints. Keeping the
+// existing /api/trades, /api/traders, /api/lots endpoints. Keeping the
 // state confined to a single `_le` object so it's easy to reset between
-// auctions and so we don't pollute window.* with another half-dozen
+// trades and so we don't pollute window.* with another half-dozen
 // globals.
 const _le = {
   selectedSeller: null,    // { id, name, cr, pan, tel, ppla, pin, banks: [...] }
@@ -5899,12 +6025,12 @@ const _le = {
 // ── New Trade modal ────────────────────────────────────────
 // Quick-create flow — admin/operator/manager/lot_entry can spin up a
 // new trade without leaving the Lot Entry tab. Posts to e-Trade's
-// existing POST /api/auctions endpoint, which means the new trade is
-// immediately visible in the regular Auctions tab too.
+// existing POST /api/trades endpoint, which means the new trade is
+// immediately visible in the regular Trades tab too.
 function leOpenNewTradeModal(){
   // Default date to today, suggest next trade number based on existing
-  // auctions visible in the dropdown (max ano + 1, or 1 if empty).
-  const sel = document.getElementById('le-auction');
+  // trades visible in the dropdown (max ano + 1, or 1 if empty).
+  const sel = document.getElementById('le-trade');
   let maxAno = 0;
   for (const opt of sel.options) {
     const m = (opt.textContent || '').match(/Trade #(\d+)/);
@@ -5939,19 +6065,19 @@ async function leSaveNewTrade(){
   const btn = document.getElementById('le-nt-save');
   btn.disabled = true;
   try {
-    const result = await j('/api/auctions', {
+    const result = await j('/api/trades', {
       method: 'POST',
       body: JSON.stringify({ ano, date, crop_type: crop, state })
     });
     toast(`Trade #${ano} created ✓`);
     leCloseNewTradeModal();
-    // Reload the auction list and auto-select the newly created trade.
-    // The server returns { id } from POST /api/auctions, but the GET
+    // Reload the trade list and auto-select the newly created trade.
+    // The server returns { id } from POST /api/trades, but the GET
     // includes more fields — easier to just refresh and select by id.
-    const auctions = await j('/api/auctions');
-    const sel = document.getElementById('le-auction');
+    const trades = await j('/api/trades');
+    const sel = document.getElementById('le-trade');
     sel.innerHTML = '<option value="">-- Select trade --</option>' +
-      (auctions || []).map(a => {
+      (trades || []).map(a => {
         const dateFmt = (a.date || '').split('T')[0];
         const status = a.status || '';
         const label = `Trade #${a.ano} · ${dateFmt}${status === 'closed' ? ' (closed)' : ''}`;
@@ -5991,27 +6117,27 @@ function leRestoreCollapseState(){
 }
 
 async function loadLotEntry(){
-  // Populate the auction picker with active trades. The latest open
+  // Populate the trade picker with active trades. The latest open
   // trade is pre-selected so the field user lands directly on the entry
   // form for today's trade — picking from the dropdown is reserved for
   // back-dating / corrections.
   try {
-    const auctions = await j('/api/auctions');
-    const sel = document.getElementById('le-auction');
+    const trades = await j('/api/trades');
+    const sel = document.getElementById('le-trade');
     // dd/mm/yyyy formatter for the trade label.
     const fmtDmy = (iso) => {
       const s = String(iso || '').split('T')[0];
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
       return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
     };
-    const list = auctions || [];
+    const list = trades || [];
     sel.innerHTML = '<option value="">-- Select trade --</option>' +
       list.map(a => {
         const status = a.status || '';
         const label = `Trade #${a.ano} · ${fmtDmy(a.date)}${status === 'closed' ? ' (closed)' : ''}`;
         return `<option value="${a.id}" ${status==='closed'?'disabled':''}>${esc(label)}</option>`;
       }).join('');
-    // Auto-select the most recent OPEN trade. /api/auctions returns rows
+    // Auto-select the most recent OPEN trade. /api/trades returns rows
     // newest-first; pick the first non-closed entry.
     const latest = list.find(a => (a.status || '') !== 'closed');
     if (latest) sel.value = String(latest.id);
@@ -6072,19 +6198,19 @@ async function loadLotEntry(){
     }
     // Auto-trigger the entry form for the pre-selected trade so the
     // user lands directly in the workflow.
-    if (document.getElementById('le-auction').value) {
+    if (document.getElementById('le-trade').value) {
       try { leOnAuctionChange(); } catch(_) {}
     }
     // Restore collapsed/expanded state of the widget cards.
     leRestoreCollapseState();
   } catch (e) {
-    console.error('Lot Entry: failed to load auctions', e);
-    toast('Could not load auctions');
+    console.error('Lot Entry: failed to load trades', e);
+    toast('Could not load trades');
   }
 }
 
 function leOnAuctionChange(){
-  const aid = document.getElementById('le-auction').value;
+  const aid = document.getElementById('le-trade').value;
   document.getElementById('le-form-card').style.display = aid ? 'block' : 'none';
   if (!aid) {
     _le.recentLots = []; _le.recentTotal = 0; _le.recentOffset = 0;
@@ -6099,7 +6225,7 @@ function leOnAuctionChange(){
   // Clear any cross-trade selection so checked lots from a previous
   // trade don't print on the new trade's receipt.
   if (_le.selectedForPrint) _le.selectedForPrint.clear();
-  // Persist the picked auction so the user doesn't have to reselect
+  // Persist the picked trade so the user doesn't have to reselect
   // after a refresh.
   try { localStorage.setItem('le_aid', aid); } catch(e){}
   // Focus seller search to start fast entry flow
@@ -6136,7 +6262,7 @@ document.addEventListener('DOMContentLoaded', () => {
                          onChanged: () => { const s=document.querySelector('#tc-buyers input[type=search]');  searchBuyers(s?s.value:''); } });
   BulkActions.register({ id:'lot',    tbodyId:'lots-list',     resource:'lots',     label:'lot',
                          onChanged: () => { if (typeof loadLots === 'function') loadLots(); } });
-  BulkActions.register({ id:'trade',  tbodyId:'auctions-list', resource:'auctions', label:'trade',
+  BulkActions.register({ id:'trade',  tbodyId:'auctions-list', resource:'trades', label:'trade',
                          onChanged: () => { if (typeof loadAuctions === 'function') loadAuctions(); } });
 });
 
@@ -6226,7 +6352,7 @@ function lePickSeller(t){
   let grade = '1';
   if (cr.length > 5 && !cr.toUpperCase().startsWith('CR.')) grade = '2';
   document.getElementById('le-grade').value = grade;
-  // Auto-suggest the next lot number for the current branch + auction.
+  // Auto-suggest the next lot number for the current branch + trade.
   // Keeps fields blank in edit mode so we don't clobber an existing lot
   // number being edited.
   if (!_le.editingLotId) leAutoSuggestLotNo();
@@ -6270,7 +6396,7 @@ function leRenderBankPicker(t){
 // auto-incremented because the trade's numbering scheme is ambiguous.
 //
 // When the trade has explicit allocations for this branch, the server's
-// /api/auctions/:id/next-lot/:branch endpoint owns the truth — it walks
+// /api/trades/:id/next-lot/:branch endpoint owns the truth — it walks
 // the allocated ranges in order and returns the first free lot number.
 // We only fall through to the local heuristic when no allocation exists.
 async function leAutoSuggestLotNo(){
@@ -6350,7 +6476,7 @@ function leShowError(msg){
 }
 
 async function leSaveLot(){
-  const aid = document.getElementById('le-auction').value;
+  const aid = document.getElementById('le-trade').value;
   if (!aid) { leShowError('Select a trade first'); return; }
   if (!_le.selectedSeller) { leShowError('Search and pick a seller'); return; }
   const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
@@ -6568,7 +6694,7 @@ async function leDeleteLot(lotId, lotNo){
 }
 
 // ── New Seller modal ─────────────────────────────────────
-// Quick-add for the auction-hall workflow. Pre-fills the name from the
+// Quick-add for the trade-hall workflow. Pre-fills the name from the
 // search query the user typed. POST hits /api/traders/quick which
 // accepts lot_entry role too.
 function leOpenNewSellerModal(prefilledName){
@@ -6644,13 +6770,13 @@ async function leSaveNewSeller(){
 // and stores total + offset on _le so "Load more" can extend the list
 // without re-fetching what's already shown.
 //
-// Why server-side instead of client-side: a busy auction can produce
+// Why server-side instead of client-side: a busy trade can produce
 // 200-500 lots in a session. Pulling them all and sorting client-side
 // burns memory + CPU on the field-staff phones. Now the server returns
 // a 25-row window keyed on the most recent entries (lot_no DESC), and
 // "Load more" appends the next batch.
 async function loadLeRecent(){
-  const aid = document.getElementById('le-auction').value;
+  const aid = document.getElementById('le-trade').value;
   if (!aid) return;
   try {
     const PAGE = 25;
@@ -6676,9 +6802,9 @@ async function loadLeRecent(){
 
 // Append the next page of lots from the server. Cheap on the wire (25
 // rows of cardamom-lot data is ~3-5 KB) and avoids memory pressure on
-// long auction days.
+// long trade days.
 async function leLoadMoreRecent(){
-  const aid = document.getElementById('le-auction').value;
+  const aid = document.getElementById('le-trade').value;
   if (!aid) return;
   const PAGE = 25;
   const offset = _le.recentOffset || _le.recentLots.length;
@@ -6776,25 +6902,34 @@ function renderLeRecent(){
 // the locally-loaded window. With server-side pagination, the local
 // `_le.recentLots` only holds the latest 25 rows; summing that would
 // undercount. The summary endpoint returns { n, bags, qty } for the
-// whole auction and is dirt cheap (one indexed COUNT/SUM).
+// whole trade and is dirt cheap (one indexed COUNT/SUM).
 async function leUpdateStats(){
-  const stats = document.getElementById('le-stats');
-  if (!stats) return;
-  const aid = document.getElementById('le-auction').value;
-  if (!aid) { stats.textContent = '0 lots · 0 bags · 0 kg'; return; }
+  // Drives the "Lots in Trade" KPI tile. Numbers come from the cheap
+  // server-side aggregate (/api/lots/:aid?summary=1) so they reflect
+  // the entire trade, not just the 25-row recent window.
+  const $ = (id) => document.getElementById(id);
+  const tNum  = $('le-kpi-trade-n');
+  const tMeta = $('le-kpi-trade-meta');
+  const aid   = document.getElementById('le-trade').value;
+  // Hidden legacy sink — still writes to keep any third-party hook working.
+  const stats = $('le-stats');
+
+  const setTile = (n, bags, qty, isPartial) => {
+    if (tNum)  tNum.textContent  = isPartial ? `${n}+` : String(n);
+    if (tMeta) tMeta.innerHTML   = `<strong>${bags}${isPartial?'+':''}</strong> bags · <strong>${qty.toFixed(1)}${isPartial?'+':''}</strong> kg`;
+    if (stats) stats.textContent = `${n}${isPartial?'+':''} lots · ${bags}${isPartial?'+':''} bags · ${qty.toFixed(1)}${isPartial?'+':''} kg`;
+  };
+
+  if (!aid) { setTile(0, 0, 0, false); return; }
   try {
     const s = await j(`/api/lots/${aid}?summary=1`);
-    const n        = Number(s && s.n)    || 0;
-    const totalBags= Number(s && s.bags) || 0;
-    const totalKg  = Number(s && s.qty)  || 0;
-    stats.textContent = `${n} lots · ${totalBags} bags · ${totalKg.toFixed(1)} kg`;
-  } catch(e) {
-    // Fall back to local-window stats if the summary endpoint fails —
-    // better to show stale numbers than nothing.
-    const n         = _le.recentLots.length;
-    const totalKg   = _le.recentLots.reduce((s, l) => s + (Number(l.qty) || 0), 0);
-    const totalBags = _le.recentLots.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0);
-    stats.textContent = `${n}+ lots · ${totalBags}+ bags · ${totalKg.toFixed(1)}+ kg`;
+    setTile(Number(s && s.n) || 0, Number(s && s.bags) || 0, Number(s && s.qty) || 0, false);
+  } catch(_) {
+    // Fall back to the local 25-row window so the tile never goes blank.
+    const n    = _le.recentLots.length;
+    const bags = _le.recentLots.reduce((a, l) => a + (parseInt(l.bags, 10) || 0), 0);
+    const qty  = _le.recentLots.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+    setTile(n, bags, qty, true);
   }
 }
 
@@ -6802,9 +6937,9 @@ async function leUpdateStats(){
 // LOT ALLOCATIONS — admin modal + Lot Entry status bar
 // ════════════════════════════════════════════════════════════════
 // Three responsibilities, all sharing the same backend data shape
-// returned by /api/auctions/:id/allocations and /allocation-stats:
+// returned by /api/trades/:id/allocations and /allocation-stats:
 //
-//   1. Admin Auctions tab: a 🗂️ action-button per row opens
+//   1. Admin Trades tab: a 🗂️ action-button per row opens
 //      openAllocModal() — Edit + Reassign tabs.
 //   2. Lot Entry tab: leLoadAllocBar() refreshes the per-branch
 //      progress bar above the entry form on every lot save and
@@ -6925,8 +7060,8 @@ async function openAllocModal(auctionId, ano) {
 
   try {
     const [allocData, statsData] = await Promise.all([
-      j(`/api/auctions/${_allocEditAuctionId}/allocations`),
-      j(`/api/auctions/${_allocEditAuctionId}/allocation-stats`),
+      j(`/api/trades/${_allocEditAuctionId}/allocations`),
+      j(`/api/trades/${_allocEditAuctionId}/allocation-stats`),
     ]);
     const allocs = allocData.allocations || [];
     if (allocs.length) {
@@ -6976,7 +7111,7 @@ async function loadReassignPreview() {
   const preview = document.getElementById('ra-preview');
   if (!from || !_allocEditAuctionId) { preview.textContent = ''; return; }
   try {
-    const d = await j(`/api/auctions/${_allocEditAuctionId}/allocation-stats`);
+    const d = await j(`/api/trades/${_allocEditAuctionId}/allocation-stats`);
     const branchStats = (d.stats || []).find(s => s.branch === from);
     if (!branchStats) { preview.textContent = `No allocation found for ${from}`; return; }
     const avail = branchStats.total - branchStats.used;
@@ -7001,7 +7136,7 @@ async function executeReassign() {
   if (!confirm(`Reassign lots ${start}-${end} from ${from} to ${to}?`)) return;
 
   try {
-    const d = await j(`/api/auctions/${_allocEditAuctionId}/reassign-lots`, {
+    const d = await j(`/api/trades/${_allocEditAuctionId}/reassign-lots`, {
       method: 'POST',
       body: JSON.stringify({ from_branch: from, to_branch: to, start_lot: start, end_lot: end })
     });
@@ -7010,7 +7145,7 @@ async function executeReassign() {
     errEl.style.color = 'var(--green)';
     errEl.textContent = '✓ ' + (d.message || 'Reassigned');
     // Reload edit panel rows to reflect the split
-    const reloaded = await j(`/api/auctions/${_allocEditAuctionId}/allocations`);
+    const reloaded = await j(`/api/trades/${_allocEditAuctionId}/allocations`);
     await populateAllocRows('alloc-edit', reloaded.allocations || []);
     loadReassignPreview();
     document.getElementById('ra-start').value = '';
@@ -7033,7 +7168,7 @@ async function saveAllocations() {
     return;
   }
   try {
-    await j(`/api/auctions/${_allocEditAuctionId}/allocations`, {
+    await j(`/api/trades/${_allocEditAuctionId}/allocations`, {
       method: 'POST',
       body: JSON.stringify({ allocations: rows })
     });
@@ -7049,7 +7184,7 @@ async function saveAllocations() {
 
 // ── + Add Extra Lots — quick-append range to current trade ──────
 async function leOpenAddLots() {
-  const aid = document.getElementById('le-auction').value;
+  const aid = document.getElementById('le-trade').value;
   if (!aid) { toast('Select a trade first'); return; }
   const branches = await getAllocBranches();
   const sel = document.getElementById('add-lots-branch');
@@ -7067,7 +7202,7 @@ async function leOpenAddLots() {
 }
 
 async function saveQuickAddLots() {
-  const aid    = document.getElementById('le-auction').value;
+  const aid    = document.getElementById('le-trade').value;
   const branch = document.getElementById('add-lots-branch').value;
   const start  = document.getElementById('add-lots-start').value.trim();
   const end    = document.getElementById('add-lots-end').value.trim();
@@ -7081,11 +7216,11 @@ async function saveQuickAddLots() {
 
   try {
     // Append to existing allocations (full set must be re-sent because
-    // POST /api/auctions/:id/allocations is a bulk-replace endpoint).
-    const d1 = await j(`/api/auctions/${aid}/allocations`);
+    // POST /api/trades/:id/allocations is a bulk-replace endpoint).
+    const d1 = await j(`/api/trades/${aid}/allocations`);
     const existing = d1.allocations || [];
     existing.push({ branch, start_lot: start, end_lot: end });
-    await j(`/api/auctions/${aid}/allocations`, {
+    await j(`/api/trades/${aid}/allocations`, {
       method: 'POST',
       body: JSON.stringify({ allocations: existing })
     });
@@ -7099,22 +7234,139 @@ async function saveQuickAddLots() {
 }
 
 // ── Lot Entry status bar ─────────────────────────────────────────
-// Refreshed on auction change, branch change, save, and delete.
+// Refreshed on trade change, branch change, save, and delete.
 // Highlights the user's currently-selected branch and dims the rest.
 // Also drives the per-lot picker grid below the bars (lePickLot).
 //
 // Visibility rules (refreshed on every call):
-//   • Auction NOT selected             → hide entire card
-//   • Auction selected, no allocations → show card with empty-state
+//   • Trade NOT selected             → hide entire card
+//   • Trade selected, no allocations → show card with empty-state
 //                                        and (for admins) Manage button
-//   • Auction selected, no branch yet  → show bars + "pick your branch"
-//   • Auction selected, branch w/ alloc→ show bars + per-lot chip grid
-//   • Auction selected, branch w/o alloc→ show bars + "no lots for X"
+//   • Trade selected, no branch yet  → show bars + "pick your branch"
+//   • Trade selected, branch w/ alloc→ show bars + per-lot chip grid
+//   • Trade selected, branch w/o alloc→ show bars + "no lots for X"
+// ─── KPI tile drivers (My Branch / Free Lots / Status) ────────────
+// Centralised so leLoadAllocBar's success/failure paths share one
+// renderer. `state` is one of:
+//   - 'no-trade'   : nothing selected yet
+//   - 'no-alloc'   : trade picked but no allocations defined
+//   - 'no-branch'  : allocations exist, user hasn't chosen a branch
+//   - 'no-mybranch': branch chosen but no allocation for it
+//   - 'ok'         : we have used/total numbers for the user's branch
+function _leSetTier(el, tier) {
+  if (!el) return;
+  el.classList.remove('is-green', 'is-amber', 'is-red');
+  if (tier) el.classList.add(`is-${tier}`);
+}
+function _leSetPill(tier, text) {
+  const p = document.getElementById('le-status-pill');
+  if (!p) return;
+  p.classList.remove('is-green', 'is-amber', 'is-red');
+  if (tier) p.classList.add(`is-${tier}`);
+  p.textContent = text;
+}
+function leRenderKpis(state, info) {
+  const $ = (id) => document.getElementById(id);
+  const usedTile = $('le-kpi-mybranch');
+  const freeTile = $('le-kpi-free');
+  const statusTile = $('le-kpi-status');
+  const usedNum = $('le-kpi-used');
+  const usedPct = $('le-kpi-used-pct');
+  const usedFill = $('le-kpi-used-fill');
+  const usedMeta = $('le-kpi-used-meta');
+  const freeNum = $('le-kpi-free-n');
+  const freeMeta = $('le-kpi-free-meta');
+  const statusMeta = $('le-kpi-status-meta');
+
+  // Default: clear color tiers, neutral copy
+  [usedTile, freeTile, statusTile].forEach(el => _leSetTier(el, null));
+  if (usedFill) usedFill.style.width = '0%';
+  if (usedPct)  usedPct.textContent  = '';
+
+  if (state === 'no-trade') {
+    if (usedNum)  usedNum.textContent = '—';
+    if (usedMeta) usedMeta.textContent = 'select a trade to see usage';
+    if (freeNum)  freeNum.textContent = '—';
+    if (freeMeta) freeMeta.textContent = 'remaining in your branch';
+    _leSetPill(null, 'No trade');
+    if (statusMeta) statusMeta.textContent = 'pick a trade to begin';
+    return;
+  }
+  if (state === 'no-alloc') {
+    if (usedNum)  usedNum.textContent = '—';
+    if (usedMeta) usedMeta.textContent = 'no allocations on this trade';
+    if (freeNum)  freeNum.textContent = '—';
+    if (freeMeta) freeMeta.textContent = 'allocations not configured';
+    _leSetPill('amber', 'No allocations');
+    if (statusMeta) statusMeta.textContent = 'ask an admin to configure ranges';
+    return;
+  }
+  if (state === 'no-branch') {
+    if (usedNum)  usedNum.textContent = '—';
+    if (usedMeta) usedMeta.textContent = 'select your branch above';
+    if (freeNum)  freeNum.textContent = '—';
+    if (freeMeta) freeMeta.textContent = 'pick a branch to see free lots';
+    _leSetPill('amber', 'Pick branch');
+    if (statusMeta) statusMeta.textContent = 'select your branch to start';
+    return;
+  }
+  if (state === 'no-mybranch') {
+    if (usedNum)  usedNum.textContent = '0';
+    if (usedMeta) usedMeta.innerHTML  = `no allocation for <strong>${esc(info.branch || '')}</strong>`;
+    if (freeNum)  freeNum.textContent = '0';
+    if (freeMeta) freeMeta.innerHTML  = 'request range from admin';
+    _leSetPill('red', 'No range');
+    if (statusMeta) statusMeta.innerHTML = `<strong>${esc(info.branch || '')}</strong> has no allocation`;
+    _leSetTier(usedTile, 'red'); _leSetTier(freeTile, 'red'); _leSetTier(statusTile, 'red');
+    return;
+  }
+
+  // state === 'ok'
+  const { branch, used, total } = info;
+  const free = Math.max(0, total - used);
+  const pct  = total > 0 ? Math.round((used / total) * 100) : 0;
+  const tier = pct >= 90 || free === 0 ? 'red'
+            : pct >= 70 || free <= 5    ? 'amber'
+            : 'green';
+  if (usedNum)  usedNum.textContent = `${used}/${total}`;
+  if (usedPct)  usedPct.textContent = ` · ${pct}%`;
+  if (usedFill) usedFill.style.width = `${Math.min(100, pct)}%`;
+  if (usedMeta) usedMeta.innerHTML  = `<strong>${esc(branch)}</strong> branch`;
+  if (freeNum)  freeNum.textContent = String(free);
+  if (freeMeta) {
+    freeMeta.innerHTML = free === 0
+      ? `<strong style="color:#991B1B">at capacity</strong> · request more`
+      : free <= 5
+        ? `<strong style="color:#B45309">only ${free} left</strong> in ${esc(branch)}`
+        : `remaining in <strong>${esc(branch)}</strong>`;
+  }
+
+  const statusText = tier === 'red'
+    ? (free === 0 ? 'At capacity' : 'Critical')
+    : tier === 'amber' ? 'Filling up' : 'Healthy';
+  _leSetPill(tier, statusText);
+  if (statusMeta) {
+    statusMeta.innerHTML = tier === 'red'
+      ? `<strong>${pct}% used</strong>${free === 0 ? ' — no free lots' : ' — request more lots'}`
+      : tier === 'amber'
+        ? `<strong>${pct}% used</strong> — approaching limit`
+        : `${used} of ${total} entered (${pct}%)`;
+  }
+  _leSetTier(usedTile, tier); _leSetTier(freeTile, tier); _leSetTier(statusTile, tier);
+}
+
+// Branch onchange — persist + refresh tiles & per-branch bars so the
+// user's chosen branch is reflected in the KPI strip without a save.
+function leOnBranchChange() {
+  try { localStorage.setItem('le_branch', document.getElementById('le-branch').value); } catch(_){}
+  leLoadAllocBar();
+}
+
 async function leLoadAllocBar() {
   const card = document.getElementById('le-alloc-card');
   if (!card) return;
-  const aid = document.getElementById('le-auction').value;
-  if (!aid) { card.style.display = 'none'; return; }
+  const aid = document.getElementById('le-trade').value;
+  if (!aid) { card.style.display = 'none'; leRenderKpis('no-trade'); return; }
   // Card is always visible once a trade is picked — empty states are
   // rendered *inside* it so field staff can see the feature exists
   // (and admins can act on it). Previously this hid the whole card
@@ -7129,20 +7381,21 @@ async function leLoadAllocBar() {
   const gridLabel    = document.getElementById('le-lot-grid-branch');
   const gridHelp     = document.getElementById('le-lot-grid-help');
 
-  // The auction picker stamps a trade ANO on the option label — used
+  // The trade picker stamps a trade ANO on the option label — used
   // in the empty-state CTA so the admin knows which trade to configure.
-  const auctionSel = document.getElementById('le-auction');
+  const auctionSel = document.getElementById('le-trade');
   const auctionLabel = auctionSel?.options?.[auctionSel.selectedIndex]?.textContent || '';
   const isAdminish = (window._userRole === 'admin' || window._userRole === 'manager');
 
   let stats = [];
   try {
-    const d = await j(`/api/auctions/${aid}/allocation-stats`);
+    const d = await j(`/api/trades/${aid}/allocation-stats`);
     stats = Array.isArray(d.stats) ? d.stats : [];
   } catch (e) {
     barsHost.innerHTML = `<div style="font-size:11px;color:var(--text3);padding:4px 0">Couldn't load allocation status: ${esc(e.message || 'network error')}</div>`;
     summaryHost.textContent = '';
     gridSection.style.display = 'none';
+    leRenderKpis('no-alloc');
     return;
   }
 
@@ -7151,7 +7404,7 @@ async function leLoadAllocBar() {
     summaryHost.textContent = 'no allocations yet';
     const cta = isAdminish
       ? `<button type="button" class="btn btn-g" onclick="openAllocModal(${parseInt(aid,10)},${JSON.stringify(esc(auctionLabel)).replace(/"/g,'&quot;')})" style="height:30px;padding:0 14px;font-size:12px;font-weight:600;margin-top:6px">📋 Set up allocations</button>`
-      : `<div style="font-size:11px;color:var(--text3);margin-top:6px">Ask an admin to configure lot allocations for this trade in the Auctions tab.</div>`;
+      : `<div style="font-size:11px;color:var(--text3);margin-top:6px">Ask an admin to configure lot allocations for this trade in the Trades tab.</div>`;
     barsHost.innerHTML = `<div style="padding:10px 4px;font-size:12px;color:var(--text2)">
       <div style="font-weight:600;margin-bottom:2px">No lot allocations defined for this trade.</div>
       <div style="font-size:11px;color:var(--text3)">Allocations reserve a range of lot numbers per branch (e.g. <code>BODI 001-050</code>) so two field-staff users can't enter the same lot.</div>
@@ -7159,6 +7412,7 @@ async function leLoadAllocBar() {
     </div>`;
     gridSection.style.display = 'none';
     gridHost.innerHTML = '';
+    leRenderKpis('no-alloc');
     return;
   }
 
@@ -7168,6 +7422,9 @@ async function leLoadAllocBar() {
   // "BODI") still matches the dropdown selection.
   const myBr = (document.getElementById('le-branch').value || '').trim().toUpperCase();
   const sameBranch = (a, b) => String(a||'').trim().toUpperCase() === String(b||'').trim().toUpperCase();
+  const tierFor = (pct, free) => (pct >= 90 || free === 0) ? 'red'
+                              : (pct >= 70 || free <= 5)    ? 'amber'
+                              : 'green';
 
   let grandUsed = 0, grandTotal = 0;
   const sorted = stats.slice().sort((a, b) => {
@@ -7179,18 +7436,31 @@ async function leLoadAllocBar() {
   barsHost.innerHTML = sorted.map(s => {
     grandUsed += s.used; grandTotal += s.total;
     const pct = s.total > 0 ? Math.round((s.used / s.total) * 100) : 0;
+    const free = s.total - s.used;
+    const tier = tierFor(pct, free);
     const isMe = sameBranch(s.branch, myBr);
-    const barColor = pct >= 90 ? '#C62828' : pct >= 70 ? '#E67E22' : 'var(--green)';
     const rangeStr = s.ranges.map(r => `${r.start}-${r.end}`).join(', ');
-    return `<div style="display:flex;align-items:center;gap:8px;font-size:11px;${isMe ? 'background:var(--green-bg);padding:4px 8px;border-radius:6px;border:1px solid rgba(22,101,52,.2)' : 'opacity:.75;padding:4px 8px'}">
-      <span style="width:90px;font-weight:${isMe ? 700 : 600};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${isMe ? 'var(--green)' : 'var(--text2)'}">${esc(s.branch)}${isMe ? ' ●' : ''}</span>
-      <span style="font-family:monospace;color:var(--text3);width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(rangeStr)}">${esc(rangeStr)}</span>
-      <div style="flex:1;height:6px;background:#e8e8e8;border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${barColor};border-radius:3px"></div></div>
-      <span style="color:var(--text3);white-space:nowrap;width:54px;text-align:right">${s.used}/${s.total}</span>
-      <span style="color:${(s.total - s.used) > 0 ? 'var(--green)' : '#C62828'};font-weight:600;white-space:nowrap;width:48px;text-align:right">${s.total - s.used} free</span>
+    const warn = (tier === 'red') ? `<span class="le-warn-badge" title="At/over capacity">!</span>` : '';
+    return `<div class="le-alloc-row${isMe ? ' is-me' : ''}">
+      <span class="br-name">${esc(s.branch)}${warn}</span>
+      <span class="ranges" title="${esc(rangeStr)}">${esc(rangeStr)}</span>
+      <span class="nums"><span class="pct-bar is-${tier}" style="display:inline-block;width:60px;vertical-align:middle;margin-right:6px"><div style="width:${Math.min(100,pct)}%"></div></span>${s.used}/${s.total}</span>
+      <span class="free is-${tier}">${free} free</span>
     </div>`;
   }).join('');
   summaryHost.textContent = `${grandUsed}/${grandTotal} lots used overall`;
+
+  // Drive the KPI tiles based on user's selected branch.
+  if (!myBr) {
+    leRenderKpis('no-branch');
+  } else {
+    const my = stats.find(s => sameBranch(s.branch, myBr));
+    if (!my) {
+      leRenderKpis('no-mybranch', { branch: myBr });
+    } else {
+      leRenderKpis('ok', { branch: my.branch, used: my.used, total: my.total });
+    }
+  }
 
   // ── Lot chip grid (the "Lot Selection" feature) ────────────────
   // Always visible whenever allocations exist. When the user's
@@ -7290,11 +7560,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // suggestion respects allocation ranges), falls back to the local
 // max+1 heuristic when the trade has no allocation defined.
 async function leNextLotNo() {
-  const aid = document.getElementById('le-auction').value;
+  const aid = document.getElementById('le-trade').value;
   const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
   if (!aid || !branch) return null;
   try {
-    const d = await j(`/api/auctions/${aid}/next-lot/${encodeURIComponent(branch)}`);
+    const d = await j(`/api/trades/${aid}/next-lot/${encodeURIComponent(branch)}`);
     if (d && d.next_lot) return d.next_lot;
   } catch (e) { /* fall through to local heuristic */ }
   return null;
@@ -7457,18 +7727,18 @@ async function leConfirmPrint() {
   const errEl = document.getElementById('le-print-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
 
-  // Gather context: company settings, current auction, branches.
+  // Gather context: company settings, current trade, branches.
   let cfg = {};
   try { cfg = await j('/api/company-settings/flat'); }
   catch (e) { /* fall back to empty cfg — receipt still renders */ }
 
-  // Look up the selected auction's metadata so the receipt header has
+  // Look up the selected trade's metadata so the receipt header has
   // the trade ANO + date even if we got here from a different tab.
-  const aid = document.getElementById('le-auction').value;
-  let auction = null;
+  const aid = document.getElementById('le-trade').value;
+  let trade = null;
   try {
-    const all = await j('/api/auctions');
-    auction = (all || []).find(a => String(a.id) === String(aid)) || null;
+    const all = await j('/api/trades');
+    trade = (all || []).find(a => String(a.id) === String(aid)) || null;
   } catch (e) {}
 
   // For the detailed format, we need the seller's bank details (A/C +
@@ -7518,7 +7788,7 @@ async function leConfirmPrint() {
 
   let firstFailed = false;
   for (const batch of batches) {
-    const html = leBuildReceiptHtml(fmt, batch, { cfg, auction, traderInfo });
+    const html = leBuildReceiptHtml(fmt, batch, { cfg, trade, traderInfo });
     const win = window.open('', '_blank', 'width=720,height=840');
     if (!win) { firstFailed = true; break; }
     win.document.open();
@@ -7550,13 +7820,13 @@ async function leConfirmPrint() {
 }
 
 // Build a plain-text WhatsApp summary for one trader's lots. Mirrors the
-// receipt content (auction ANO + date, per-lot bag/qty/price/amount, total)
+// receipt content (trade ANO + date, per-lot bag/qty/price/amount, total)
 // but in a phone-friendly text shape with no PDF attachment.
 function leBuildReceiptText(traderName, lots, ctx) {
-  const auction = ctx.auction || {};
+  const trade = ctx.trade || {};
   const company = ((ctx.cfg && (ctx.cfg.trade_name || ctx.cfg.short_name)) || 'COMPANY').toUpperCase();
-  const ano = auction.ano || '';
-  const date = String(auction.date || '').slice(0,10).split('-').reverse().join('/');
+  const ano = trade.ano || '';
+  const date = String(trade.date || '').slice(0,10).split('-').reverse().join('/');
   const fmtN = (n, dp=2) => Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:dp,maximumFractionDigits:dp});
   const lines = [];
   lines.push(`*${company}*`);
@@ -7588,11 +7858,11 @@ async function leWhatsappReceipt() {
 
   let cfg = {};
   try { cfg = await j('/api/company-settings/flat'); } catch (_) {}
-  const aid = document.getElementById('le-auction').value;
-  let auction = null;
+  const aid = document.getElementById('le-trade').value;
+  let trade = null;
   try {
-    const all = await j('/api/auctions');
-    auction = (all || []).find(a => String(a.id) === String(aid)) || null;
+    const all = await j('/api/trades');
+    trade = (all || []).find(a => String(a.id) === String(aid)) || null;
   } catch (_) {}
 
   const lots = _le_pending_print.lots;
@@ -7610,7 +7880,7 @@ async function leWhatsappReceipt() {
   let sent = 0, opened = 0;
   for (const grp of items) {
     const phone = await _lookupSellerPhone(grp.traderName);
-    const msg = leBuildReceiptText(grp.traderName, grp.lots, { cfg, auction });
+    const msg = leBuildReceiptText(grp.traderName, grp.lots, { cfg, trade });
     if (useApi && phone) {
       const ok = await _waCloudSendText(phone, msg);
       if (ok) { sent++; continue; }
@@ -7631,7 +7901,7 @@ async function leWhatsappReceipt() {
 // lots by trader so a seller's multiple lots print on one receipt.
 function leBuildReceiptHtml(format, lots, ctx) {
   const groups = leGroupLotsByTrader(lots);
-  const auction = ctx.auction || {};
+  const trade = ctx.trade || {};
   const cfg = ctx.cfg || {};
   const traderInfo = ctx.traderInfo || {};
   const today = new Date();
@@ -7666,8 +7936,8 @@ function leBuildReceiptHtml(format, lots, ctx) {
   // path. Cache-bust on print so a freshly-uploaded logo shows immediately.
   const logoUrl = `/logo-ispl.png?t=${Date.now()}`;
 
-  const dateStr = (auction.date || '').split('T')[0] || printedAt;
-  const ano = auction.ano || '?';
+  const dateStr = (trade.date || '').split('T')[0] || printedAt;
+  const ano = trade.ano || '?';
 
   const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
@@ -7737,7 +8007,7 @@ function leBuildCompactHtml(p) {
       ${g.branch ? `<div class="sub">${escapeHtml(g.branch.toUpperCase())}</div>` : ''}
       ${gstin ? `<div class="sub">GSTIN: ${escapeHtml(gstin)}</div>` : ''}
       <div class="planter">Planter: <b>${escapeHtml(g.name || '—')}</b></div>
-      <div class="meta">Auction: ${escapeHtml(String(ano))}&nbsp;&nbsp;Date: ${escapeHtml(dateStr)}</div>
+      <div class="meta">Trade: ${escapeHtml(String(ano))}&nbsp;&nbsp;Date: ${escapeHtml(dateStr)}</div>
       <table class="rows">
         <thead><tr><th>S.No</th><th>Lots</th><th>Bags</th><th>Weight(kg)</th></tr></thead>
         <tbody>${lotRows}${sampleRow}</tbody>
@@ -7941,12 +8211,12 @@ async function loadSettings(){
 
 // ── Business-mode gating ──────────────────────────────────
 // Fields/categories that should appear only in specific modes.
-// When mode = e-Auction: hide sister company (no sister in auction mode)
+// When mode = e-Trade: hide sister company (no sister in trade mode)
 //                         hide pooler/dealer deductions, ASP/ISP profit, sample refund
 // When mode = e-Trade:   hide commission, handling, SB sample refund
-const _MODE_HIDE_CATS = { 'e-Auction': ['sister'], 'e-Trade': [] };
+const _MODE_HIDE_CATS = { 'e-Trade': ['sister'], 'e-Trade': [] };
 const _MODE_HIDE_KEYS = {
-  'e-Auction': ['deduction1','deduction2','asp_profit_pooler','asp_profit_dealer','isp_profit_pooler','isp_profit_dealer','refund'],
+  'e-Trade': ['deduction1','deduction2','asp_profit_pooler','asp_profit_dealer','isp_profit_pooler','isp_profit_dealer','refund'],
   'e-Trade':   ['commission','hpc','sb_refund']
 };
 
@@ -8426,7 +8696,7 @@ function onBusinessModeChanged(newMode){
   // Re-render nav + panel: categories/fields appear or disappear based on mode
   renderSettingsNav();
   renderSettingsPanel();
-  // Update the sidebar label (Auctions ↔ Trades) immediately
+  // Update the sidebar label (Trades ↔ Trades) immediately
   applyModeLabels();
   // Logo code may have flipped (ASP ↔ ISP)
   applyLogoBadge();
@@ -8485,7 +8755,7 @@ async function onBusinessStateChanged(newState){
       toast(`Recalculated ${r.calculated} lots for ${newState}`);
       // If the user is viewing the Lots tab, refresh it so the new
       // values appear immediately
-      if (typeof loadLots === 'function' && document.getElementById('lot-auction')?.value) {
+      if (typeof loadLots === 'function' && document.getElementById('lot-trade')?.value) {
         loadLots();
       }
     }
@@ -8509,7 +8779,7 @@ async function onBusinessStateChanged(newState){
   // Refresh invoice list — the listing now filters by business state, so
   // the visible rows change when state flips. Only refreshes if the user
   // is currently looking at Sales Invoices tab (avoids unnecessary calls).
-  if (typeof loadInvoices === 'function' && document.getElementById('inv-auction')) {
+  if (typeof loadInvoices === 'function' && document.getElementById('inv-trade')) {
     try { await loadInvoices(); } catch (_) {}
   }
   toast(`State set to ${newState}`);
@@ -8518,7 +8788,7 @@ function renderSettings(){renderSettingsNav();renderSettingsPanel()}
 // ── Settings field help text ───────────────────────────
 // Shown as a ? tooltip next to the label. Keep concise (1-2 lines).
 const FIELD_HELP = {
-  commission:      'In e-Auction mode, the percentage commission charged on (Amount + Refund). Default 1%.',
+  commission:      'In e-Trade mode, the percentage commission charged on (Amount + Refund). Default 1%.',
   hpc:             'Handling percentage applied on the commission. e.g. 10% means Handling = Commission × 10%.',
   deduction1:      'Company margin % on Grade 1 (Pooler) lots. P_Rate = round(Price × (1 − Deduction%)).',
   deduction2:      'Company margin % on Grade 2 (Dealer) lots. P_Rate = round(Price × (1 − Deduction%)).',
@@ -8527,14 +8797,14 @@ const FIELD_HELP = {
   isp_profit_pooler: 'Primary-company margin % on Grade 1 (Pooler) lots: P_Rate = round(Price × (1 − ratio%)). PurAmt = Qty × P_Rate (no sample refund).',
   isp_profit_dealer: 'Primary-company margin % on Grade 2 (Dealer) lots: P_Rate = round(Price × (1 − ratio%)). PurAmt = Qty × P_Rate (no sample refund).',
   refund:          'Sample quantity (in kilograms) added to the lot qty in e-Trade mode to compute P_Qty. P_Qty = Qty + Sample Refund.',
-  sb_refund:       'SB (Sample Bag) refund in kilograms, multiplied by Price to compute the Refund amount in e-Auction mode.',
+  sb_refund:       'SB (Sample Bag) refund in kilograms, multiplied by Price to compute the Refund amount in e-Trade mode.',
   gst_goods:       'GST rate applied on goods (e.g. spices). Split equally into CGST + SGST for intra-state, or IGST for inter-state. Default 5%.',
   gst_service:     'GST rate applied on services (commission, handling). Default 18%.',
   discount_gst:    'GST rate applied on the discount-on-purchase amount when the "Discount includes GST" flag is on. Typically 5%.',
   discount_pct:    'Trade credit discount percentage per 1000 rupees per day. Discount = round(PurAmt/1000 × days × %).',
   discount_days:   'Number of days the trade credit is extended. Multiplied with Discount % to compute the Discount amount.',
   flag_disc_gst:   'When ON, GST is charged on top of the Discount amount (using the service rate) and subtracted from the Payable.',
-  business_mode:   'e-Trade: grade-based deduction + discount workflow. e-Auction: commission + handling + sample refund workflow.',
+  business_mode:   'e-Trade: grade-based deduction + discount workflow. e-Trade: commission + handling + sample refund workflow.',
   business_state:  'Tamil Nadu uses the TN office details (address, GSTIN, bank). Kerala uses the KL details. Invoices adapt automatically.',
   tcs_tds:         'TDS / TCS percentage applied on eligible invoices for tax compliance.',
 };
@@ -8969,7 +9239,7 @@ async function restoreDbBackup(ev){
       return;
     }
     toast(`Restored ${(data.restoredBytes/1024/1024).toFixed(2)} MB. Reloading…`);
-    // Reload the page so every cached entity (auctions, settings, etc.)
+    // Reload the page so every cached entity (trades, settings, etc.)
     // reflects the restored DB.
     setTimeout(()=>location.reload(), 1200);
   } catch(e) {
@@ -9540,10 +9810,10 @@ async function importBuyers(e){
     searchBuyers('');setTimeout(()=>status.style.display='none',5000);
   }catch(err){status.style.background='var(--red-bg)';status.style.color='var(--red)';status.textContent='Error: '+err.message}}
 
-// ── Auctions ──────────────────────────────────────────────
-async function loadAuctions(){const d=await j('/api/auctions');
+// ── Trades ──────────────────────────────────────────────
+async function loadAuctions(){const d=await j('/api/trades');
   DataTable.mount('auctions-list', d, {
-    emptyState: { icon: 'auctions', title: "No auctions yet", body: "Create your first auction (trade) from the Add Auction button to start entering lots." }, 
+    emptyState: { icon: 'trades', title: "No trades yet", body: "Create your first trade (trade) from the Add Trade button to start entering lots." }, 
     columns: [
       BulkActions.column('trade'),
       { key:'ano', label:'Trade No', sort:'text', render:(a)=>`<b>${esc(a.ano)}</b>` },
@@ -9556,8 +9826,8 @@ async function loadAuctions(){const d=await j('/api/auctions');
           // would terminate the onclick attribute — escape any single quote
           // in ano to keep the JS literal valid.
           iconBtn('alloc','Manage lot allocations & reassign',`openAllocModal(${a.id},'${String(a.ano||'?').replace(/'/g,"\\'")}')`)
-          + iconBtn('edit','Edit auction',`openAuctionEdit(${JSON.stringify(a).replace(/"/g,'&quot;')})`)
-          + iconBtn('del','Delete auction',`delAuction(${a.id})`) }
+          + iconBtn('edit','Edit trade',`openAuctionEdit(${JSON.stringify(a).replace(/"/g,'&quot;')})`)
+          + iconBtn('del','Delete trade',`delAuction(${a.id})`) }
     ]
   });
 }
@@ -9572,7 +9842,7 @@ function openAuctionAdd(){
   showModal('auction-modal');
 }
 function openAuctionEdit(a){
-  document.getElementById('auction-modal-title').textContent='Edit Auction';
+  document.getElementById('auction-modal-title').textContent='Edit Trade';
   document.getElementById('a-id').value=a.id;
   document.getElementById('a-ano').value=a.ano||'';
   document.getElementById('a-date').value=a.date||'';
@@ -9586,10 +9856,10 @@ async function saveAuction(){
     crop_type:document.getElementById('a-crpt').value,state:document.getElementById('a-state').value};
   if(!body.ano||!body.date){alert('Trade No and Date are required');return}
   try{
-    const r=await fetch(B+(id?`/api/auctions/${id}`:'/api/auctions'),{method:id?'PUT':'POST',
+    const r=await fetch(B+(id?`/api/trades/${id}`:'/api/trades'),{method:id?'PUT':'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
-    hideModal('auction-modal');toast(id?'Auction updated':'Auction created');loadAuctions();
+    hideModal('auction-modal');toast(id?'Trade updated':'Trade created');loadAuctions();
   }catch(e){showError(e)}
 }
 async function delAuction(id){
@@ -9597,7 +9867,7 @@ async function delAuction(id){
   // out in the prompt so the user understands what's about to vanish
   // — "all its lots" alone hid the fact that invoices, purchases,
   // bills, and debit notes go with it. Optional preflight via
-  // /api/auctions/:id/preview-delete could fetch counts up-front, but
+  // /api/trades/:id/preview-delete could fetch counts up-front, but
   // a static warning is good enough for a one-trade delete.
   const ok = confirm(
     'Delete this trade and ALL records linked to it?\n\n' +
@@ -9610,7 +9880,7 @@ async function delAuction(id){
   );
   if (!ok) return;
   try {
-    const r = await j(`/api/auctions/${id}`, { method: 'DELETE' });
+    const r = await j(`/api/trades/${id}`, { method: 'DELETE' });
     const d = (r && r.deleted) || {};
     const parts = [];
     if (d.lots)        parts.push(`${d.lots} lot${d.lots===1?'':'s'}`);
@@ -9650,16 +9920,16 @@ async function importAuction(){
     if(dt)fd.append('date',dt);
     fd.append('crop_type',document.getElementById('ia-crpt').value);
     fd.append('state',document.getElementById('ia-state').value);
-    const r=await fetch(B+'/api/auctions/import',{method:'POST',headers:{'Authorization':'Bearer '+T},body:fd});
+    const r=await fetch(B+'/api/trades/import',{method:'POST',headers:{'Authorization':'Bearer '+T},body:fd});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error);
     hideModal('import-auction-modal');fileInput.value='';
     status.style.background='var(--green-bg)';status.style.color='var(--green-dk)';
     const action=d.updated>0?'Updated':'Imported';
     const count=d.updated>0?d.updated:d.imported;
-    let html=`<div style="font-weight:700;font-size:14px;margin-bottom:4px">✓ ${action} ${count} lots across ${d.auctionCount||1} auction(s)</div>`;
+    let html=`<div style="font-weight:700;font-size:14px;margin-bottom:4px">✓ ${action} ${count} lots across ${d.auctionCount||1} trade(s)</div>`;
     html+=`<div style="font-size:12px">Total rows: ${d.total} · ${d.skipped} skipped</div>`;
-    // Show auction breakdown
+    // Show trade breakdown
     if(d.auctionBreakdown&&d.auctionBreakdown.length){
       html+=`<div style="margin-top:8px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px"><strong>Breakdown:</strong><br>`;
       html+=d.auctionBreakdown.map(a=>`• Trade <b>${esc(a.ano)}</b>${a.date?' ('+fmtD(a.date)+')':''} — ${a.count} lot(s)`).join('<br>');
@@ -9703,7 +9973,7 @@ async function doPriceImport(){
     const dt=document.getElementById('pi-date').value;
     if(ano)fd.append('ano',ano);
     if(dt)fd.append('date',dt);
-    const r=await fetch(B+'/api/auctions/import',{method:'POST',headers:{'Authorization':'Bearer '+T},body:fd});
+    const r=await fetch(B+'/api/trades/import',{method:'POST',headers:{'Authorization':'Bearer '+T},body:fd});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||'Import failed');
 
@@ -9713,7 +9983,7 @@ async function doPriceImport(){
     document.getElementById('pi-date').value='';
 
     let summary = `✓ Price import complete\n\n`;
-    summary += `Updated: ${d.updated || 0} lot(s) across ${d.auctionCount || 1} auction(s)\n`;
+    summary += `Updated: ${d.updated || 0} lot(s) across ${d.auctionCount || 1} trade(s)\n`;
     summary += `Total rows read: ${d.total || 0}\n`;
     summary += `Skipped: ${d.skipped || 0}\n`;
     if(d.skipped>0 && d.skipReasons && d.skipReasons.length){
@@ -9732,18 +10002,18 @@ async function doPriceImport(){
   }
 }
 
-// ── Auction dropdowns ─────────────────────────────────────
-async function fillAucSelect(selId){const d=await j('/api/auctions');const sel=document.getElementById(selId);
+// ── Trade dropdowns ─────────────────────────────────────
+async function fillAucSelect(selId){const d=await j('/api/trades');const sel=document.getElementById(selId);
   sel.innerHTML=d.map(a=>`<option value="${a.id}">${a.ano} — ${fmtD(a.date)} (${a.lot_count} lots)</option>`).join('');return d}
-function loadLotAuctions(){fillAucSelect('lot-auction').then(()=>loadLots())}
-function loadInvAuctions(){fillAucSelect('inv-auction').then(()=>{loadInvoices();loadInvEligibleBuyers()})}
-function loadPurAuctions(){fillAucSelect('pur-auction').then(()=>{loadPurchases();loadPurEligibleSellers()})}
+function loadLotAuctions(){fillAucSelect('lot-trade').then(()=>loadLots())}
+function loadInvAuctions(){fillAucSelect('inv-trade').then(()=>{loadInvoices();loadInvEligibleBuyers()})}
+function loadPurAuctions(){fillAucSelect('pur-trade').then(()=>{loadPurchases();loadPurEligibleSellers()})}
 
 async function loadInvEligibleBuyers(){
-  const aid=document.getElementById('inv-auction').value;
+  const aid=document.getElementById('inv-trade').value;
   const list=document.getElementById('gi-buyer-list');if(!list)return;
   const saleType=document.getElementById('gi-sale')?.value || '';
-  if(!aid){list.innerHTML='<div style="color:var(--text3);font-size:12px;padding:10px;text-align:center">Select an auction first</div>';return}
+  if(!aid){list.innerHTML='<div style="color:var(--text3);font-size:12px;padding:10px;text-align:center">Select a trade first</div>';return}
   try{
     const all=await j(`/api/invoices/eligible-buyers/${aid}`);
     // Hard filter by selected Sale Type:
@@ -9753,12 +10023,12 @@ async function loadInvEligibleBuyers(){
       ? all.filter(b => !b.default_sale || String(b.default_sale).trim() === saleType)
       : all;
     if(!all.length){
-      list.innerHTML='<div style="color:var(--amber);font-size:12px;padding:10px;text-align:center">⚠ No buyers have lots in this auction.</div>';
+      list.innerHTML='<div style="color:var(--amber);font-size:12px;padding:10px;text-align:center">⚠ No buyers have lots in this trade.</div>';
       const h=document.getElementById('gi-hint');if(h)h.textContent='';
       return;
     }
     if(!buyers.length){
-      list.innerHTML=`<div style="color:var(--amber);font-size:12px;padding:10px;text-align:center">No buyers with default Sale Type &ldquo;${esc(saleType)}&rdquo; in this auction.<br><span style="color:var(--text3)">Try a different Sale Type, or assign a default in the Buyers tab.</span></div>`;
+      list.innerHTML=`<div style="color:var(--amber);font-size:12px;padding:10px;text-align:center">No buyers with default Sale Type &ldquo;${esc(saleType)}&rdquo; in this trade.<br><span style="color:var(--text3)">Try a different Sale Type, or assign a default in the Buyers tab.</span></div>`;
       const h=document.getElementById('gi-hint');if(h)h.textContent='';
       return;
     }
@@ -9797,14 +10067,14 @@ function updateBuyerSelectionHint(){
 }
 
 async function loadPurEligibleSellers(){
-  const aid=document.getElementById('pur-auction').value;
+  const aid=document.getElementById('pur-trade').value;
   const dd=document.getElementById('gp-seller');if(!dd)return;
   if(!aid){dd.innerHTML='<option value="">— Select seller —</option>';return}
   try{
     const sellers=await j(`/api/purchases/eligible-sellers/${aid}`);
     if(!sellers.length){
       dd.innerHTML='<option value="">— No registered dealers —</option>';
-      const h=document.getElementById('gp-hint');if(h)h.innerHTML='<span style="color:var(--amber)">⚠ No sellers with GSTIN in this auction. Use Bills of Supply tab for agriculturists.</span>';
+      const h=document.getElementById('gp-hint');if(h)h.innerHTML='<span style="color:var(--amber)">⚠ No sellers with GSTIN in this trade. Use Bills of Supply tab for agriculturists.</span>';
       return;
     }
     dd.innerHTML='<option value="">— Select seller —</option>'+sellers.map(s=>
@@ -9814,11 +10084,11 @@ async function loadPurEligibleSellers(){
 }
 
 function openGenInvModal(){
-  if(!document.getElementById('inv-auction').value){alert('Select an auction first');return}
+  if(!document.getElementById('inv-trade').value){alert('Select a trade first');return}
   loadInvEligibleBuyers();showModal('gen-inv-modal');
 }
 function openGenPurModal(){
-  if(!document.getElementById('pur-auction').value){alert('Select an auction first');return}
+  if(!document.getElementById('pur-trade').value){alert('Select a trade first');return}
   loadPurEligibleSellers();showModal('gen-pur-modal');
 }
 
@@ -9826,14 +10096,14 @@ function openGenPurModal(){
 let _genAllKind='';
 async function openGenAllModal(kind){
   _genAllKind=kind;
-  const aidMap={invoices:'inv-auction',purchases:'pur-auction',bills:'bill-auction'};
+  const aidMap={invoices:'inv-trade',purchases:'pur-trade',bills:'bill-trade'};
   const aid=document.getElementById(aidMap[kind])?.value;
-  if(!aid){alert('Select an auction first');return}
+  if(!aid){alert('Select a trade first');return}
   const titles={invoices:'Generate Sales Invoices for All Buyers',purchases:'Generate Purchase Invoices for All Dealers',bills:'Generate Bills of Supply for All Agriculturists'};
   const descs={
-    invoices:'Creates one invoice per unique buyer with lots in this auction. Already-invoiced lots are skipped.',
-    purchases:'Creates one purchase invoice per unique dealer (GSTIN holder) with lots in this auction.',
-    bills:'Creates one bill of supply per unique agriculturist (no GSTIN) with lots in this auction.'
+    invoices:'Creates one invoice per unique buyer with lots in this trade. Already-invoiced lots are skipped.',
+    purchases:'Creates one purchase invoice per unique dealer (GSTIN holder) with lots in this trade.',
+    bills:'Creates one bill of supply per unique agriculturist (no GSTIN) with lots in this trade.'
   };
   document.getElementById('gen-all-title').textContent=titles[kind];
   document.getElementById('gen-all-desc').textContent=descs[kind];
@@ -9850,7 +10120,7 @@ async function openGenAllModal(kind){
 async function refreshGenAllPreview(){
   const kind=_genAllKind;
   if(!kind)return;
-  const aidMap={invoices:'inv-auction',purchases:'pur-auction',bills:'bill-auction'};
+  const aidMap={invoices:'inv-trade',purchases:'pur-trade',bills:'bill-trade'};
   const aid=document.getElementById(aidMap[kind])?.value;
   if(!aid)return;
   const endpointMap={invoices:'invoices/eligible-buyers',purchases:'purchases/eligible-sellers',bills:'bills/eligible-sellers'};
@@ -9876,7 +10146,7 @@ async function refreshGenAllPreview(){
       preview.style.borderColor='var(--spice-turmeric-lt)';
       const st=kind==='invoices'?document.getElementById('ga-sale')?.value:'';
       const filter=st?` for sale type <strong>${st}</strong>`:'';
-      preview.innerHTML=`<strong>No eligible ${labelMap[kind]}(s) found${filter}.</strong><br><span style="font-size:11px;color:var(--text3)">Common reasons:<br>• Lots haven't been assigned a buyer code yet<br>• All lots in this auction have already been invoiced<br>• When a sale type filter is set, no buyer's default matches it</span>`;
+      preview.innerHTML=`<strong>No eligible ${labelMap[kind]}(s) found${filter}.</strong><br><span style="font-size:11px;color:var(--text3)">Common reasons:<br>• Lots haven't been assigned a buyer code yet<br>• All lots in this trade have already been invoiced<br>• When a sale type filter is set, no buyer's default matches it</span>`;
     }
   }catch(e){
     preview.style.background='var(--red-bg)';preview.style.borderColor='var(--red)';
@@ -9887,14 +10157,14 @@ async function refreshGenAllPreview(){
 async function diagnoseEligibility(){
   const kind=_genAllKind;
   if(kind!=='invoices'){alert('Diagnose currently supports Sales Invoices only.');return}
-  const aid=document.getElementById('inv-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('inv-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   const diag=document.getElementById('ga-diag');
   diag.style.display='block';
   diag.textContent='Loading diagnostics…';
   try{
     const d=await j(`/api/invoices/eligibility-debug/${aid}`);
-    let html=`<strong>Auction #${d.auction.ano} — ${fmtD(d.auction.date)}</strong><br>`;
+    let html=`<strong>Trade #${d.trade.ano} — ${fmtD(d.trade.date)}</strong><br>`;
     html+=`Total lots: <b>${d.totals.total_lots}</b>, blank-buyer: <b>${d.totals.lots_with_blank_buyer}</b>, already invoiced: <b>${d.totals.lots_already_invoiced}</b><br>`;
     html+=`Distinct buyer codes in lots: <b>${d.totals.distinct_buyer_codes_in_lots}</b>, rows in buyers table: <b>${d.totals.buyers_table_total}</b><br><br>`;
     html+=`<table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -9919,7 +10189,7 @@ async function diagnoseEligibility(){
 
 async function doGenerateAll(){
   const kind=_genAllKind;
-  const aidMap={invoices:'inv-auction',purchases:'pur-auction',bills:'bill-auction'};
+  const aidMap={invoices:'inv-trade',purchases:'pur-trade',bills:'bill-trade'};
   const aid=document.getElementById(aidMap[kind]).value;
   const start=document.getElementById('ga-start').value.trim();
   if(!start||parseInt(start)<1){alert('Enter a starting number (positive integer)');return}
@@ -9946,10 +10216,10 @@ async function doGenerateAll(){
   }catch(e){showError(e)}
   finally{submitBtn.disabled=false;submitBtn.textContent='Generate All'}
 }
-function loadPayAuctions(){fillAucSelect('pay-auction').then(()=>loadPayments())}
+function loadPayAuctions(){fillAucSelect('pay-trade').then(()=>loadPayments())}
 function loadExpAuctions(){
-  fillAucSelect('exp-auction').then(renderExportBtns);
-  fillAucSelect('dbf-auction');
+  fillAucSelect('exp-trade').then(renderExportBtns);
+  fillAucSelect('dbf-trade');
   // Default DBF date range: current month
   const today=new Date().toISOString().slice(0,10);
   const firstOfMonth=today.slice(0,8)+'01';
@@ -9960,13 +10230,13 @@ function loadExpAuctions(){
 
 // ── Lorry Reports ─────────────────────────────────────────
 function loadLorryAuctions(){
-  fillAucSelect('lorry-auction');
+  fillAucSelect('lorry-trade');
 }
 const LORRY_LABELS={lot_slip_code:'Lot Slip (Code)',truck_list:'Truck List',buyer_lot_lorry:'Buyer Lot Lorry'};
 async function downloadLorry(type,format){
   format=format||'xlsx';
-  const aid=document.getElementById('lorry-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('lorry-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   const label=LORRY_LABELS[type]||type;
   await withOverlay(`Generating ${label} (${format.toUpperCase()})…`, async () => {
     const r=await fetch(B+`/api/lorry-reports/${type}/${aid}?format=${format}`,{headers:{'Authorization':'Bearer '+T}});
@@ -10015,14 +10285,14 @@ const L_IDS={lot_no:'l-lotno',name:'l-name',cr:'l-cr',branch:'l-branch',grade:'l
 
 // Refresh wrapper: surfaces feedback so the user knows the click registered.
 // Root cause the button "did nothing" was: loadLots() silently bailed when
-// no auction was selected AND the visual state looked identical so users
+// no trade was selected AND the visual state looked identical so users
 // couldn't tell if anything happened. Fix: visible button feedback +
 // explicit table clear before reload + clearer toast.
 async function refreshLots(btn){
-  const sel = document.getElementById('lot-auction');
+  const sel = document.getElementById('lot-trade');
   const aid = sel && sel.value;
   if (!aid) {
-    toast('Select an auction first');
+    toast('Select a trade first');
     return;
   }
   // Direct-click feedback: briefly animate the button so the user knows
@@ -10052,7 +10322,7 @@ async function refreshLots(btn){
   }
 }
 
-async function loadLots(){const aid=document.getElementById('lot-auction').value;if(!aid)return;
+async function loadLots(){const aid=document.getElementById('lot-trade').value;if(!aid)return;
   // Cache-buster ensures the browser actually hits the server (otherwise Refresh
   // may return stale cached JSON and nothing visibly changes)
   const d=await j(`/api/lots/${aid}?_=${Date.now()}`);
@@ -10077,8 +10347,31 @@ async function loadLots(){const aid=document.getElementById('lot-auction').value
       const $ = (id) => document.getElementById(id);
       if ($('lot-kpi-count'))  $('lot-kpi-count').textContent  = arr.length;
       if ($('lot-kpi-qty'))    $('lot-kpi-qty').innerHTML      = `${fmtI(totalQty, 0)}<span class="kpi-unit">kg</span>`;
-      if ($('lot-kpi-amount')) $('lot-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 0)}`;
-      if ($('lot-kpi-calc'))   $('lot-kpi-calc').innerHTML     = `${pct}%<span class="kpi-unit"> done</span>`;
+      if ($('lot-kpi-amount')) $('lot-kpi-amount').textContent = `₹${fmtI(totalAmount, 0)}`;
+      if ($('lot-kpi-calc'))   $('lot-kpi-calc').innerHTML     = `${pct}%<span class="kpi-unit">done</span>`;
+
+      // Price stats meta line under Total Amount.
+      //   Max / Min : computed across SOLD lots only (price > 0 and amount > 0)
+      //   Avg       : weighted average — Σ amount / Σ qty across sold lots
+      // Filtering on amount>0 keeps withdrawn / unsold rows from skewing the
+      // bounds (a starting price set on a lot that didn't trade is noise).
+      // Price values are integers in practice (₹/kg). Drop the ".00" trailing
+      // zeros so the line fits the narrow 6-tile grid without wrapping.
+      const soldLots = arr.filter(l => (Number(l.amount) || 0) > 0 && (Number(l.price) || 0) > 0);
+      const priceMax = soldLots.length ? Math.max(...soldLots.map(l => Number(l.price) || 0)) : 0;
+      const priceMin = soldLots.length ? Math.min(...soldLots.map(l => Number(l.price) || 0)) : 0;
+      const soldQty  = soldLots.reduce((s, l) => s + (Number(l.qty)    || 0), 0);
+      const soldAmt  = soldLots.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+      const priceAvg = soldQty > 0 ? (soldAmt / soldQty) : 0;
+      const ametaEl = $('lot-kpi-amount-meta');
+      if (ametaEl) {
+        ametaEl.innerHTML = soldLots.length
+          ? `Max ₹${fmtI(priceMax,0)} · Min ₹${fmtI(priceMin,0)} · Avg ₹${fmtI(priceAvg,0)}`
+          : 'Max ₹— · Min ₹— · Avg ₹—';
+        ametaEl.title = soldLots.length
+          ? `Max ₹${fmtI(priceMax,2)}  ·  Min ₹${fmtI(priceMin,2)}  ·  Avg ₹${fmtI(priceAvg,2)} per kg`
+          : 'Max · Min · Avg price per kg';
+      }
 
       // Sold / Withdrawn aggregates from the same lot list (no extra fetch).
       // Sold      = code present and not 'WD'
@@ -10111,14 +10404,14 @@ async function loadLots(){const aid=document.getElementById('lot-auction').value
   }
 
   const mode = getCurrentBusinessMode();
-  const isAuction = (mode === 'e-Auction');
+  const isAuction = (mode === 'e-Trade');
   // Update the Calculate All button label to show which mode + company will be applied.
   // Including the logo code (ISP / ASP) makes it obvious whose calculation is running —
   // avoids confusion when business mode + state map to different companies.
   const calcBtn = document.getElementById('btn-calculate-all');
   if (calcBtn) calcBtn.textContent = `Calculate All (${getCurrentLogoCode()} · ${mode})`;
   // Column set depends on mode:
-  //   e-Auction: show Refund, Commission, Handling; HIDE P_Qty, P_Rate, PurAmt, Discount
+  //   e-Trade: show Refund, Commission, Handling; HIDE P_Qty, P_Rate, PurAmt, Discount
   //   e-Trade:   show Discount, P_Qty, P_Rate, PurAmt; HIDE Refund, Commission, Handling
   const baseCols = [
     { key:'lot_no', label:'Lot', sort:'text', totalKind:'count',
@@ -10188,7 +10481,7 @@ async function loadLots(){const aid=document.getElementById('lot-auction').value
     ...filteredTaxCols,
   ];
   DataTable.mount('lots-list', d, {
-    emptyState: { icon: 'lots', title: "No lots in this auction yet", body: "Add your first lot using the form on the left — enter Lot #, Name, Qty, and Price to get started." },  columns });
+    emptyState: { icon: 'lots', title: "No lots in this trade yet", body: "Add your first lot using the form on the left — enter Lot #, Name, Qty, and Price to get started." },  columns });
 }
 
 function openLotEdit(l){
@@ -10285,7 +10578,7 @@ async function delLot(id){if(!confirm('Delete this lot?'))return;
 }
 
 async function calculateAll(){
-  const aid=document.getElementById('lot-auction').value;if(!aid)return;
+  const aid=document.getElementById('lot-trade').value;if(!aid)return;
   const btn = document.getElementById('btn-calculate-all');
   await withBusy(btn, async () => {
     const d=await j(`/api/lots/calculate/${aid}`,{method:'POST'});
@@ -10294,15 +10587,15 @@ async function calculateAll(){
   });
 }
 async function validateLots(){
-  const aid=document.getElementById('lot-auction').value;if(!aid)return;
+  const aid=document.getElementById('lot-trade').value;if(!aid)return;
   const d=await j(`/api/lots/validate/${aid}`);
   alert(d.length?`${d.length} lots have issues:\n`+d.map(l=>l.lot_no+': price='+l.price+' amt='+l.amount+' buyer='+l.buyer).join('\n'):'All lots OK');
 }
 
 // ── Invoices ──────────────────────────────────────────────
 async function generateInvoice(){
-  const aid=document.getElementById('inv-auction').value;
-  if(!aid){alert('Please select an auction first');return}
+  const aid=document.getElementById('inv-trade').value;
+  if(!aid){alert('Please select a trade first');return}
   const saleType=document.getElementById('gi-sale').value;
   const startInvNo=parseInt(document.getElementById('gi-invno').value.trim(),10);
   if(!startInvNo||isNaN(startInvNo)||startInvNo<1){alert('Enter a valid starting invoice number');return}
@@ -10366,7 +10659,7 @@ async function generateInvoice(){
 }
 
 async function loadInvoices(){
-  const aid=document.getElementById('inv-auction')?.value;
+  const aid=document.getElementById('inv-trade')?.value;
   const url=aid?`/api/invoices?auction_id=${aid}`:'/api/invoices';
   const d=await j(url);
   // Invoice count badge
@@ -10381,7 +10674,7 @@ async function loadInvoices(){
   // ── Update KPI strip ───────────────────────────────────────────
   // Show 4 stats: count, total qty, taxable amount (sum of `amount`),
   // and grand total including all GST + round (sum of `tot`). Strip is
-  // hidden until at least one invoice exists so empty auctions don't
+  // hidden until at least one invoice exists so empty trades don't
   // show a row of zeros.
   const kpiStrip = document.getElementById('inv-kpis');
   if (kpiStrip) {
@@ -10523,9 +10816,9 @@ async function revertInvoice(id, buyerName, invLabel){
 }
 
 async function revertAllInvoices(){
-  const aid=document.getElementById('inv-auction').value;
-  if(!aid){alert('Select an auction first');return}
-  if(!confirm('Revert ALL invoices for this auction?\n\nEvery invoice in this auction will be deleted, and every lot will become eligible for re-invoicing. This cannot be undone.\n\nContinue?'))return;
+  const aid=document.getElementById('inv-trade').value;
+  if(!aid){alert('Select a trade first');return}
+  if(!confirm('Revert ALL invoices for this trade?\n\nEvery invoice in this trade will be deleted, and every lot will become eligible for re-invoicing. This cannot be undone.\n\nContinue?'))return;
   const typed=prompt('To confirm, type REVERT in capitals:');
   if(typed!=='REVERT'){alert('Cancelled.');return}
   try{
@@ -11048,8 +11341,8 @@ async function delInvoice(id){if(!confirm('Delete this invoice? Related lots wil
 
 // ── Purchases ─────────────────────────────────────────────
 async function generatePurchase(){
-  const aid=document.getElementById('pur-auction').value;
-  if(!aid){alert('Please select an auction first');return}
+  const aid=document.getElementById('pur-trade').value;
+  if(!aid){alert('Please select a trade first');return}
   const sellerName=document.getElementById('gp-seller').value.trim();
   const invoiceNo=document.getElementById('gp-invno').value.trim();
   if(!sellerName){alert('Enter seller name');return}
@@ -11067,7 +11360,7 @@ async function generatePurchase(){
   }catch(e){showError(e)}}
 
 async function loadPurchases(){
-  const aid=document.getElementById('pur-auction')?.value;
+  const aid=document.getElementById('pur-trade')?.value;
   const url=aid?`/api/purchases?auction_id=${aid}`:'/api/purchases';
   const d=await j(url);
   const arr = Array.isArray(d) ? d : [];
@@ -11194,7 +11487,7 @@ async function _lookupSellerPhone(name) {
   } catch (_) { return ''; }
 }
 
-// Cached company name & auction lookups — fetched once per page load.
+// Cached company name & trade lookups — fetched once per page load.
 let _CCFG = null;
 async function _getCompanyName() {
   if (!_CCFG) { try { _CCFG = await j('/api/company-settings/flat') || {}; } catch (_) { _CCFG = {}; } }
@@ -11202,7 +11495,7 @@ async function _getCompanyName() {
 }
 let _AUCTIONS = null;
 async function _getAuctionAno(auctionId) {
-  if (!_AUCTIONS) { try { _AUCTIONS = await j('/api/auctions') || []; } catch (_) { _AUCTIONS = []; } }
+  if (!_AUCTIONS) { try { _AUCTIONS = await j('/api/trades') || []; } catch (_) { _AUCTIONS = []; } }
   const a = _AUCTIONS.find(x => Number(x.id) === Number(auctionId));
   return a ? a.ano : '';
 }
@@ -11441,9 +11734,9 @@ function _collectSelectedPaymentNames() {
   return Array.from(body.querySelectorAll('.pay-select-cb:checked')).map(cb => cb.value).filter(Boolean);
 }
 async function printSelectedPayments() {
-  const aid = Number(document.getElementById('pay-auction').value);
+  const aid = Number(document.getElementById('pay-trade').value);
   const names = _collectSelectedPaymentNames();
-  if (!aid) { alert('Select an auction first'); return; }
+  if (!aid) { alert('Select a trade first'); return; }
   if (!names.length) { alert('Tick one or more sellers first'); return; }
   await fetchPdfWithOverlay(
     `Building merged statement for ${names.length} sellers…`,
@@ -11454,9 +11747,9 @@ async function printSelectedPayments() {
 }
 // Bulk Payments — queue of individual TEXT messages, one per seller.
 async function whatsappSelectedPayments() {
-  const aid = Number(document.getElementById('pay-auction').value);
+  const aid = Number(document.getElementById('pay-trade').value);
   const names = _collectSelectedPaymentNames();
-  if (!aid) { alert('Select an auction first'); return; }
+  if (!aid) { alert('Select a trade first'); return; }
   if (!names.length) { alert('Tick one or more sellers first'); return; }
   // Need each seller's payable for the message — pull from the rendered
   // table rows so we don't refetch.
@@ -11516,7 +11809,7 @@ function updatePaymentBulkButtons() {
 async function deleteSelectedPayments() {
   const body = document.getElementById('payments-list');
   if (!body) return;
-  const aid = document.getElementById('pay-auction').value;
+  const aid = document.getElementById('pay-trade').value;
   if (!aid) { alert('Select a trade first'); return; }
   const names = Array.from(body.querySelectorAll('.pay-select-cb:checked'))
     .map(cb => cb.value)
@@ -11524,7 +11817,7 @@ async function deleteSelectedPayments() {
   if (!names.length) { toast('Tick one or more sellers first'); return; }
   if (!confirm(
     `Delete the lots for ${names.length} seller${names.length === 1 ? '' : 's'} in this trade?\n\n` +
-    `This will permanently remove all lots (and any debit notes) for the selected sellers in this auction. ` +
+    `This will permanently remove all lots (and any debit notes) for the selected sellers in this trade. ` +
     `Other trades' data is not touched. This action CANNOT be undone.`
   )) return;
   try {
@@ -11542,9 +11835,9 @@ async function deleteSelectedPayments() {
 }
 
 async function loadPayments(){
-  const aid=document.getElementById('pay-auction').value;
+  const aid=document.getElementById('pay-trade').value;
   const body=document.getElementById('payments-list');
-  if(!aid){body.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Select an auction above</td></tr>';return}
+  if(!aid){body.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Select a trade above</td></tr>';return}
 
   // Visual feedback — set the body to a loading state so the user sees
   // an obvious refresh even when the underlying data hasn't changed.
@@ -11598,7 +11891,7 @@ async function loadPayments(){
     }
 
     DataTable.mount('payments-list', d, {
-      emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this auction to see per-seller payable amounts here." },
+      emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this trade to see per-seller payable amounts here." },
       columns: [
         // Selection column for bulk actions. Click on a checkbox toggles
         // the row's inclusion in the "Delete Selected" set; the master
@@ -11640,7 +11933,7 @@ async function loadPayments(){
           render:(p)=>`<span style="font-weight:700;color:var(--spice-cardamom-dk);font-size:14px">${fmtI(p.total_payable||0,2)}</span>` },
         { key:'_actions', label:'Actions', sortable:false, searchable:false,
           render:(p)=>{
-            const aid = Number((document.getElementById('pay-auction')||{}).value)||0;
+            const aid = Number((document.getElementById('pay-trade')||{}).value)||0;
             const nm = encodeURIComponent(p.name||'');
             const pay = Number(p.total_payable)||0;
             return iconBtn('print','Print payment statement',`printPayment(${aid},decodeURIComponent('${nm}'))`)
@@ -11731,7 +12024,7 @@ const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',praman_c
   pooler_register:'Pooler Register',full_file:'Full File',collection:'Collection',trade_report:'Trade Report',dealer_list:'Dealer List',
   payment:'Payment Summary'};
 // Export types that only support a specific format (no XLSX/PDF choice).
-// e.g., Praman is a CSV-only upload format for the Praman auction platform.
+// e.g., Praman is a CSV-only upload format for the Praman trade platform.
 const EXP_CSV_ONLY = new Set(['praman_csv']);
 // Full File has too many columns to fit any printable PDF page — only XLSX.
 const EXP_XLSX_ONLY = new Set(['full_file']);
@@ -11761,8 +12054,8 @@ function renderExportBtns(){document.getElementById('export-btns').innerHTML=Obj
   </div>`;
 }).join('')}
 async function exportType(type,format){format=format||'xlsx';
-  const aid=document.getElementById('exp-auction')?.value||document.getElementById('pay-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('exp-trade')?.value||document.getElementById('pay-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   const label = (EXP_LABELS[type]||type);
   await withOverlay(`Exporting ${label} (${format.toUpperCase()})…`, async () => {
     // CSV exports ignore format query param — server picks ext from EXPORT_TYPES.
@@ -11804,17 +12097,17 @@ async function exportTDS(format){format=format||'xlsx';const f=document.getEleme
 }
 
 // ── Bills (Agriculturist) ──────────────────────────────────
-function loadBillAuctions(){fillAucSelect('bill-auction').then(()=>{loadBills();loadEligibleSellers()})}
+function loadBillAuctions(){fillAucSelect('bill-trade').then(()=>{loadBills();loadEligibleSellers()})}
 async function loadEligibleSellers(){
-  const aid=document.getElementById('bill-auction').value;
+  const aid=document.getElementById('bill-trade').value;
   if(!aid){document.getElementById('gb-hint').textContent='';return}
   try{
     const sellers=await j(`/api/bills/eligible-sellers/${aid}`);
     const dd=document.getElementById('gb-seller-dd');
     if(!dd)return;
     if(!sellers.length){
-      dd.innerHTML='<option value="">— No eligible sellers in this auction —</option>';
-      document.getElementById('gb-hint').innerHTML='<span style="color:var(--amber)">⚠ No agriculturist sellers (without GSTIN) found in this auction. Check if lots have been calculated or if all sellers have GSTIN.</span>';
+      dd.innerHTML='<option value="">— No eligible sellers in this trade —</option>';
+      document.getElementById('gb-hint').innerHTML='<span style="color:var(--amber)">⚠ No agriculturist sellers (without GSTIN) found in this trade. Check if lots have been calculated or if all sellers have GSTIN.</span>';
       return;
     }
     dd.innerHTML='<option value="">— Select seller —</option>'+sellers.map(s=>
@@ -11822,7 +12115,7 @@ async function loadEligibleSellers(){
     document.getElementById('gb-hint').textContent=`${sellers.length} eligible seller(s) available`;
   }catch(e){console.warn(e)}}
 async function loadBills(){
-  const aid=document.getElementById('bill-auction')?.value;
+  const aid=document.getElementById('bill-trade')?.value;
   const url=aid?`/api/bills?auction_id=${aid}`:'/api/bills';
   const d=await j(url);
   const arr = Array.isArray(d) ? d : [];
@@ -11895,7 +12188,7 @@ async function saveBillEdit(){
     hideModal('bill-edit-modal');toast('Bill updated');loadBills();
   }catch(e){showError(e)}}
 async function generateBill(){
-  const aid=document.getElementById('bill-auction').value;if(!aid){alert('Select auction');return}
+  const aid=document.getElementById('bill-trade').value;if(!aid){alert('Select trade');return}
   const sellerName=document.getElementById('gb-seller').value.trim();
   const billNo=document.getElementById('gb-billno').value.trim();
   if(!sellerName||!billNo){alert('Enter seller name and bill no');return}
@@ -11923,20 +12216,20 @@ async function delBill(id){if(!confirm('Delete bill?'))return;await j(`/api/bill
 // nav routing so it fires on every tab activation, not just first open
 // (otherwise newly-created trades won't appear).
 function loadDnAuctions() {
-  fillAucSelect('dn-auction').then(() => loadDebitNotes());
+  fillAucSelect('dn-trade').then(() => loadDebitNotes());
 }
 
-// loadDebitNotes — list view. Filters by the dn-auction dropdown's
+// loadDebitNotes — list view. Filters by the dn-trade dropdown's
 // selected trade ID (resolved to its `ano`) so users only see DNs for
 // the trade they're currently working on. With no selection, shows all.
 async function loadDebitNotes(){
-  const aid = document.getElementById('dn-auction')?.value || '';
+  const aid = document.getElementById('dn-trade')?.value || '';
   // Resolve trade id → ano. The DN table stores `ano` (the trade
-  // number string) rather than the auction id FK, so filtering happens
+  // number string) rather than the trade id FK, so filtering happens
   // client-side after fetch. Cheap because DN counts are small.
   let filterAno = '';
   if (aid) {
-    const opt = document.querySelector(`#dn-auction option[value="${aid}"]`);
+    const opt = document.querySelector(`#dn-trade option[value="${aid}"]`);
     if (opt) filterAno = (opt.textContent || '').split('—')[0].trim();
   }
   const all = await j('/api/debit-notes');
@@ -11997,18 +12290,18 @@ async function saveDebitEdit(){
 
 // openGenDebitModal — opens the trade-aware DN modal. Validates that a
 // trade is selected, then loads the eligible-purchases preview before
-// the user clicks Generate. The trade is taken from the dn-auction
+// the user clicks Generate. The trade is taken from the dn-trade
 // dropdown (single source of truth — same dropdown that filters the
 // list above), so the user can never generate DNs for a different
 // trade than they're viewing.
 // ── Shared trade-context resolver ─────────────────────────────────
 // Both Generate Debit Note (single) and Generate All read the trade
-// from the SAME source of truth: the dn-auction dropdown. Returns
+// from the SAME source of truth: the dn-trade dropdown. Returns
 // { auctionId, ano, label } or null when no trade is selected. All DN
 // generation paths must go through this — keeps the trade scope
 // consistent and prevents accidental cross-trade actions.
 function _resolveDnTrade() {
-  const sel = document.getElementById('dn-auction');
+  const sel = document.getElementById('dn-trade');
   const aid = sel ? sel.value : '';
   if (!aid) return null;
   const label = sel.options[sel.selectedIndex]?.textContent || '';
@@ -12242,7 +12535,7 @@ document.addEventListener('change', (e)=>{
 // Print Selected — fetches each ticked DN's PDF concurrently, merges in
 // the browser by opening each in a new tab. We don't bundle server-side
 // because DN PDFs are small (1-page each) and a multi-tab approach
-// matches the print-and-staple workflow auction-hall accountants use.
+// matches the print-and-staple workflow trade-hall accountants use.
 async function printSelectedDebitNotes(){
   const body=document.getElementById('debit-list');
   if(!body)return;
@@ -12402,15 +12695,15 @@ function copySkippedDnToClipboard(){
 
 // ── Journals ───────────────────────────────────────────────
 async function loadJournalDefault(){
-  // e-Trade-only build: journals filter by TRADE (auction), not date
-  // range. Populate the trade selector with all auctions (most recent
-  // first). Re-uses /api/auctions which the Exports/Payments tabs also
+  // e-Trade-only build: journals filter by TRADE (trade), not date
+  // range. Populate the trade selector with all trades (most recent
+  // first). Re-uses /api/trades which the Exports/Payments tabs also
   // hit — so list shape is consistent.
-  const sel = document.getElementById('jr-auction');
+  const sel = document.getElementById('jr-trade');
   if (sel && !sel.options.length) {
     try {
-      const auctions = await j('/api/auctions');
-      const opts = (auctions||[]).map(a =>
+      const trades = await j('/api/trades');
+      const opts = (trades||[]).map(a =>
         `<option value="${a.id}">${esc(a.ano || ('#'+a.id))} — ${esc(a.date || '')}</option>`
       );
       sel.innerHTML = '<option value="">— Select trade —</option>' + opts.join('');
@@ -12436,13 +12729,13 @@ const TALLY_LABELS={
 const TALLY_TYPES=Object.keys(TALLY_LABELS);
 const TALLY_LEDGER_TYPES=['ledger_sales','ledger_rd_purchase','ledger_urd_purchase','ledger'];
 function loadTallyAuctions(){
-  fillAucSelect('tally-auction');
+  fillAucSelect('tally-trade');
   // Hide off-mode (ISP/ASP) widgets based on the current business state.
   // Re-runs every entry to the tab so a state change in another tab is
   // reflected as soon as the user lands here.
   applyTallyCompanyVisibility();
-  // Clear preview text + party list when auction changes
-  const sel=document.getElementById('tally-auction');
+  // Clear preview text + party list when trade changes
+  const sel=document.getElementById('tally-trade');
   if(sel&&!sel.dataset.tallyBound){
     sel.addEventListener('change',()=>{
       TALLY_TYPES.forEach(t=>{
@@ -12450,7 +12743,7 @@ function loadTallyAuctions(){
       });
       // also clear the party list
       _tallyParties=null;
-      const resetMsg='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Auction changed — click <strong>Refresh List</strong> to reload parties.</div>';
+      const resetMsg='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Trade changed — click <strong>Refresh List</strong> to reload parties.</div>';
       const list=document.getElementById('tally-party-list');
       if(list)list.innerHTML=resetMsg;
       const pvList=document.getElementById('tally-pv-list');
@@ -12460,8 +12753,8 @@ function loadTallyAuctions(){
   }
 }
 async function tallyPreview(type){
-  const aid=document.getElementById('tally-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('tally-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   const target=document.getElementById('tally-preview-'+type);
   if(target)target.textContent='Loading…';
   try{
@@ -12477,7 +12770,7 @@ async function tallyPreview(type){
       const coBadge = data.targetCompany ? ` <span style="color:var(--text3);font-size:10px">→ ${esc(data.targetCompany)}</span>` : '';
       if(TALLY_LEDGER_TYPES.includes(type)){
         if(data.ledgerCount===0){
-          target.innerHTML=`<span style="color:#C62828">No ledgers — empty auction or no matching parties</span>`;
+          target.innerHTML=`<span style="color:#C62828">No ledgers — empty trade or no matching parties</span>`;
         }else{
           const k=data.byKind||{};
           const breakdown=['party','sales','purchase','tax']
@@ -12486,7 +12779,7 @@ async function tallyPreview(type){
           target.innerHTML=`<strong style="color:var(--green)">${data.ledgerCount}</strong> ledger${data.ledgerCount===1?'':'s'}` + (breakdown?` · ${breakdown}`:'') + coBadge;
         }
       }else if(data.voucherCount===0){
-        target.innerHTML=`<span style="color:#C62828">No data found for this auction</span>`;
+        target.innerHTML=`<span style="color:#C62828">No data found for this trade</span>`;
       }else{
         // For voucher types that don't carry per-row lots (debit notes,
         // journal entries), show the number of distinct dealers instead
@@ -12505,8 +12798,8 @@ async function tallyPreview(type){
   }
 }
 async function tallyDownload(type){
-  const aid=document.getElementById('tally-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('tally-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   const label=TALLY_LABELS[type]||type;
 
   // Lorry / vehicle no for the e-way bill is read directly from each
@@ -12530,7 +12823,7 @@ async function tallyDownload(type){
 }
 
 // ── Single-party picker ──────────────────────────────────
-// Fetches every distinct party in the auction and renders a filterable
+// Fetches every distinct party in the trade and renders a filterable
 // list. Clicking a party triggers the per-party endpoint to download
 // just that one ledger.
 let _tallyParties=null;
@@ -12538,8 +12831,8 @@ const TALLY_PARTY_KIND_LABEL={sales:'Sales',rd_purchase:'RD Purchase',urd_purcha
 const TALLY_PARTY_KIND_BG={sales:'var(--green-bg)',rd_purchase:'var(--spice-saffron-lt)',urd_purchase:'var(--spice-cardamom-lt)'};
 const TALLY_PARTY_KIND_CO={sales:'isp',rd_purchase:'asp',urd_purchase:'asp'};
 async function loadTallyParties(){
-  const aid=document.getElementById('tally-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('tally-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   const list=document.getElementById('tally-party-list');
   const pvList=document.getElementById('tally-pv-list');
   const loadingHtml='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Loading parties…</div>';
@@ -12608,8 +12901,8 @@ function renderTallyPartyList(){
   list.innerHTML=html;
 }
 async function tallyDownloadParty(kind,partyName){
-  const aid=document.getElementById('tally-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('tally-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   await withOverlay(`Generating ${partyName} ledger XML…`, async () => {
     const url=B+`/api/tally/party-ledger/${kind}/${aid}?name=${encodeURIComponent(partyName)}`;
     const r=await fetch(url,{headers:{'Authorization':'Bearer '+T}});
@@ -12743,8 +13036,8 @@ function renderTallyPartyVoucherList(){
   list.innerHTML=html;
 }
 async function tallyDownloadPartyVoucher(type,partyName){
-  const aid=document.getElementById('tally-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  const aid=document.getElementById('tally-trade')?.value;
+  if(!aid){alert('Select a trade first');return}
   await withOverlay(`Generating ${TALLY_LABELS[type]||type} voucher for ${partyName}…`, async () => {
     const url=B+`/api/tally/party-voucher/${type}/${aid}?name=${encodeURIComponent(partyName)}`;
     const r=await fetch(url,{headers:{'Authorization':'Bearer '+T}});
@@ -12795,9 +13088,9 @@ function openMapsDistance(fromPin, toPin){
 async function loadInvoiceDistances(){
   const list=document.getElementById('dist-inv-list');
   const cnt=document.getElementById('dist-inv-count');
-  // Mirror the main auction selector if our local one is empty/stale.
-  const sel=document.getElementById('dist-inv-auction');
-  const main=document.getElementById('tally-auction');
+  // Mirror the main trade selector if our local one is empty/stale.
+  const sel=document.getElementById('dist-inv-trade');
+  const main=document.getElementById('tally-trade');
   if(sel&&main){
     const want=Array.from(main.options).map(o=>`<option value="${esc(o.value)}">${esc(o.textContent)}</option>`).join('');
     if(sel.innerHTML!==want)sel.innerHTML=want;
@@ -12805,7 +13098,7 @@ async function loadInvoiceDistances(){
   }
   const aid=sel?.value;
   if(!aid){
-    list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction first.</div>';
+    list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick a trade first.</div>';
     return;
   }
   list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Loading…</div>';
@@ -12814,7 +13107,7 @@ async function loadInvoiceDistances(){
     if(!r.ok){list.innerHTML='<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">Failed to load</div>';return}
     const data=await r.json();
     if(cnt)cnt.textContent=`${data.count} sales invoice${data.count===1?'':'s'}`;
-    if(data.count===0){list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">No invoices in this auction.</div>';return}
+    if(data.count===0){list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">No invoices in this trade.</div>';return}
 
     // Dispatch PIN comes from the server response — same fallback chain
     // the voucher generator uses (cfg.tally_dispatch_pin → s_pin → 685553).
@@ -12972,7 +13265,7 @@ document.addEventListener('change',e=>{if(e.target.id==='jr-type')updateJournalS
 
 async function loadJournal(){
   const type=document.getElementById('jr-type').value;
-  const auctionId=document.getElementById('jr-auction').value;
+  const auctionId=document.getElementById('jr-trade').value;
   if(!auctionId){alert('Select a trade');return}
   let url, cols;
   // Each col entry is the DataTable column descriptor. `sort:'date'`,
@@ -13047,7 +13340,7 @@ async function loadJournal(){
 }
 async function exportJournal(){
   const type=document.getElementById('jr-type').value;
-  const auctionId=document.getElementById('jr-auction').value;
+  const auctionId=document.getElementById('jr-trade').value;
   if(!auctionId){alert('Select a trade');return}
   let url,name;
   if(type==='sales'){
@@ -13065,7 +13358,7 @@ async function exportJournal(){
 async function previewInvoice(type){
   let aid,body;
   if(type==='sales'){
-    aid=document.getElementById('inv-auction').value;
+    aid=document.getElementById('inv-trade').value;
     // New UI: buyer is a checkbox list — preview uses the first checked buyer
     const list=document.getElementById('gi-buyer-list');
     const checked=list?list.querySelectorAll('.gi-cb:checked'):[];
@@ -13075,15 +13368,15 @@ async function previewInvoice(type){
     }
     body={saleType:document.getElementById('gi-sale').value,buyerCode:checked[0].value,type:'sales'};
   }else if(type==='purchase'){
-    aid=document.getElementById('pur-auction').value;
+    aid=document.getElementById('pur-trade').value;
     body={buyerCode:document.getElementById('gp-seller').value.trim(),type:'purchase'};
     if(!body.buyerCode){alert('Enter seller name');return}
   }else{
-    aid=document.getElementById('bill-auction').value;
+    aid=document.getElementById('bill-trade').value;
     body={buyerCode:document.getElementById('gb-seller').value.trim(),type:'agri'};
     if(!body.buyerCode){alert('Enter seller name');return}
   }
-  if(!aid){alert('Select auction');return}
+  if(!aid){alert('Select trade');return}
   try{
     const r=await fetch(B+`/api/invoices/preview/${aid}`,{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});

@@ -752,7 +752,7 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
     case 'payment': {
       // Mode-aware discount column — see exports.js exportPaymentSummary.
       const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
-      const discountCol = (mode === 'auction') ? 'advance' : 'refund';
+      const discountCol = (mode === 'trade') ? 'advance' : 'refund';
       return db.all(
         `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
           pqty, prate, puramt, ${discountCol} as discount, balance as payable
@@ -762,7 +762,7 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
 
     case 'tally_purchase': {
       const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
-      const discountCol = (mode === 'auction') ? 'advance' : 'refund';
+      const discountCol = (mode === 'trade') ? 'advance' : 'refund';
       return db.all(
         `SELECT name, padd as add, ppla as place, cr as gstin, tel,
           lot_no as lot, bags as bag, pqty as qty, prate as price, puramt as amount,
@@ -822,14 +822,14 @@ async function exportPdf(db, type, auctionId, cfg, extra = {}) {
   if (type === 'tds_return') {
     subtitle = `Period: ${extra.from || ''} to ${extra.to || ''}`;
   } else if (auctionId) {
-    const auction = db.get('SELECT ano, date, crop_type FROM auctions WHERE id = ?', [auctionId]);
-    if (auction) {
-      const d = auction.date ? auction.date.split('-').reverse().join('/') : '';
+    const trade = db.get('SELECT ano, date, crop_type FROM auctions WHERE id = ?', [auctionId]);
+    if (trade) {
+      const d = trade.date ? trade.date.split('-').reverse().join('/') : '';
       // Two clean meta lines, joined by " — " so renderTablePdf can split
       // them back into separate right-side rows. The crop type (ISP/ASP) is
       // omitted — the active preset is already obvious from the logo and
       // company name in the brand block.
-      subtitle = `e-TRADE No: ${auction.ano} — Date: ${d}`;
+      subtitle = `e-TRADE No: ${trade.ano} — Date: ${d}`;
       if (extra.state) subtitle += ` — State: ${extra.state}`;
     }
   }

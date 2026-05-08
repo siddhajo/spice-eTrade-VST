@@ -8,14 +8,15 @@
   "scripts": {
     "start": "node server.js",
     "start:electron": "electron .",
-    "build": "electron-builder --publish never",
-    "build:mac": "electron-builder --mac --publish never",
-    "build:win": "electron-builder --win --publish never",
-    "build:win:release": "electron-builder --win --publish always",
-    "build:mac:release": "electron-builder --mac --publish always"
+    "apply-client": "node scripts/apply-client.js",
+    "build": "npm run apply-client && electron-builder --publish never",
+    "build:mac": "npm run apply-client && electron-builder --mac --publish never",
+    "build:win": "npm run apply-client && electron-builder --win --publish never",
+    "build:win:release": "npm run apply-client && electron-builder --win --publish always",
+    "build:mac:release": "npm run apply-client && electron-builder --mac --publish always"
   },
   "dependencies": {
-    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "call-bind-apply-helpers": "^1.0.2",
     "cors": "^2.8.5",
     "dbffile": "^1.12.0",
@@ -71,8 +72,20 @@
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.business",
       "icon": "public/logo-ispl.png",

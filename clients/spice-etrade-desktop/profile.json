@@ -1,0 +1,21 @@
+{
+  "id": "spice-etrade-desktop",
+  "mode": "desktop",
+  "displayName": "Spice e-Trade",
+  "build": {
+    "appId": "com.vinoth.spice-etrade",
+    "productName": "Spice e-Trade",
+    "win": {
+      "icon": "public/logo-ispl.png",
+      "artifactName": "SpiceETrade-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "icon": "public/logo-ispl.png",
+      "artifactName": "SpiceETrade-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "shortcutName": "Spice e-Trade"
+    }
+  },
+  "defaults": {}
+}

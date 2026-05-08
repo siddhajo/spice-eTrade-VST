@@ -103,12 +103,12 @@ function getDistance(db, fromPin, toPin, opts = {}) {
  * are NOT in the `pincodes` table — the admin UI uses this to surface
  * PINs that need lat/lon entered.
  *
- * Optionally scoped to one auction so users can clean up just the PINs
+ * Optionally scoped to one trade so users can clean up just the PINs
  * relevant to vouchers they're about to export.
  */
 function listMissingPins(db, auctionId = null) {
   // Pull DISTINCT PINs from buyers (via invoices) + traders (via lots),
-  // optionally scoped to a single auction. Then anti-join against
+  // optionally scoped to a single trade. Then anti-join against
   // `pincodes` to surface only the unknown ones.
   const buyerSql = `
     SELECT DISTINCT b.pin AS pin, COALESCE(b.pla, '') AS place, COALESCE(b.state, '') AS state, 'buyer' AS kind
