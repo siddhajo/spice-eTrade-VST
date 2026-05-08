@@ -72,7 +72,7 @@ file and immediately starts using it natively.
 ### 5. Verify
 
 - Login with your existing admin account — should work unchanged.
-- Click through Sellers, Buyers, Trades, Lots — all data should be
+- Click through Sellers, Buyers, Auctions, Lots — all data should be
   there.
 - Try creating a new trader and refresh. If the record persists, you're
   done.

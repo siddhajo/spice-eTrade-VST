@@ -49,7 +49,7 @@ function _resolveSqlJsOpts() {
   return undefined;  // fall back to sql.js's default resolver
 }
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
 
@@ -386,7 +386,7 @@ async function initDb() {
   // is always stored first — that way A↔B and B↔A share one row. Used
   // by the To Tally → 🗺️ E-way Bill Distance UI: user looks up the
   // distance once on the NIC portal, types it in, and every invoice
-  // between the same two PINs (this trade and all future ones) picks
+  // between the same two PINs (this auction and all future ones) picks
   // it up automatically.
   wrapped.exec(`CREATE TABLE IF NOT EXISTS route_distances (
     from_pin TEXT NOT NULL,
@@ -540,14 +540,14 @@ async function initDb() {
     }
   } catch (e) { /* ignore — column may not exist on first run */ }
 
-  // One-time data fix: legacy invoices were stamped with the trade's
-  // state (TAMIL NADU/KERALA based on physical trade location), not the
+  // One-time data fix: legacy invoices were stamped with the auction's
+  // state (TAMIL NADU/KERALA based on physical auction location), not the
   // business context state. Retag them so the sales list can correctly
   // distinguish ASP rows from ISP rows.
   //
   // Heuristic per invoice:
   //   - If the invoice's `invo` equals `lots.asp_invo` for any of its
-  //     buyer/trade lots AND those lots' current `invo` differs from
+  //     buyer/auction lots AND those lots' current `invo` differs from
   //     `asp_invo` → invoice was the ASP step (stamp KERALA).
   //   - Else if any of those lots have `asp_invo == invo == this invoice's
   //     invo` → ASP-only run (stamp KERALA).
@@ -587,22 +587,11 @@ async function initDb() {
   if (!row || row.cnt === 0) {
     // bcrypt cost 12 — single hash at boot adds ~250ms, only on first run.
     const hash = bcrypt.hashSync('admin123', 12);
-    // Online deployments force a password rotation on first login (closes
-    // the default-creds attack window). Desktop installs are single-user
-    // and local — no surprise prompt; the user can still rotate via the
-    // existing change-password UI whenever they want.
-    let mustChange = 1;
-    try {
-      const { isOnline } = require('./client-profile');
-      mustChange = isOnline() ? 1 : 0;
-    } catch (_) { /* fall back to safe default of 1 */ }
     wrapped.run(
-      'INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, ?)',
-      ['admin', hash, 'admin', mustChange]
+      'INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 1)',
+      ['admin', hash, 'admin']
     );
-    console.log(mustChange
-      ? 'Default admin created (admin / admin123) — MUST be changed on first login'
-      : 'Default admin created (admin / admin123) — desktop mode, change at your leisure');
+    console.log('Default admin created (admin / admin123) — MUST be changed on first login');
   }
 
   console.log('Database ready at', DB_PATH, '(better-sqlite3, WAL mode)');

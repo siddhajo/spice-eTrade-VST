@@ -191,7 +191,7 @@ function colLetter(n) {
   return s;
 }
 
-// Build the common XLSX header meta lines for a given trade. Returns
+// Build the common XLSX header meta lines for a given auction. Returns
 // an array like ["e-TRADE No: 3", "Date: 15/04/2026"]. The crop type
 // (ISP/ASP) is omitted — the active preset is already shown via the logo
 // and company name in the brand block.
@@ -327,7 +327,7 @@ async function exportBankPayment(db, auctionId, cfg) {
   // Falls back to the leading word of trade_name when short_name isn't set.
   const shortTag = String(cfg.short_name || (cfg.trade_name || '').split(/\s+/)[0] || '').toUpperCase();
 
-  // Trade context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
+  // Auction context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
   const ano = a.ano || '';
   const valueDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
@@ -536,14 +536,14 @@ async function exportSalesTaxes(db, auctionId) {
 // ── Export: Payment Summary ──────────────────────────────────
 async function exportPaymentSummary(db, auctionId, cfg) {
   // Match getPaymentSummary semantics: discount includes BOTH the per-lot
-  // policy discount AND any manual debit_notes for this trade's sellers.
+  // policy discount AND any manual debit_notes for this auction's sellers.
   // We compute it per-row by adding debit_notes (joined by ano + name).
   const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
   const discountCol = (mode === 'auction') ? 'advance' : 'refund';
-  const trade = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
-  const ano = trade ? trade.ano : null;
+  const auction = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
+  const ano = auction ? auction.ano : null;
   // Build name → manual debit total map (debit_notes can have multiple
-  // rows per seller per trade; we sum)
+  // rows per seller per auction; we sum)
   const debitMap = {};
   if (ano) {
     const debits = db.all(
@@ -755,7 +755,7 @@ async function exportPurchaseJournal(db, auctionId, type) {
   });
 }
 
-// ── Export: Praman CSV (Lot Slip in Praman trade platform format) ──
+// ── Export: Praman CSV (Lot Slip in Praman auction platform format) ──
 // Produces a CSV (NOT xlsx) matching the column layout required by Praman's
 // lot-upload interface. Returns a Buffer of CSV text.
 //
@@ -803,7 +803,7 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
   const header = [
     'Lot Number', 'Lot Company', 'Collection Centre', 'Planter/Dealer',
     'Planter Name', 'CRNO/SBL No', 'Quantity(Kg)', 'Litre Weight(Gms)',
-    'Bags', 'Grade Type', 'Grade', 'Reserved Price', 'Trade Start Price(Rs)',
+    'Bags', 'Grade Type', 'Grade', 'Reserved Price', 'Auction Start Price(Rs)',
     'Immature Seeds(%)', 'Moisture Content(%)', 'Planter Mobile Number',
     'Youtube Video Link'
   ];
@@ -863,7 +863,7 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
       '', // Grade Type (not captured — blank as per sample)
       '', // Grade (Praman's own grade codes, not ours — blank)
       '', // Reserved Price (blank)
-      '', // Trade Start Price (blank)
+      '', // Auction Start Price (blank)
       '', // Immature Seeds (blank)
       '', // Moisture Content (blank)
       planterMobile,

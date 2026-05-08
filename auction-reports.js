@@ -1,5 +1,5 @@
 /**
- * auction-reports.js — Specialized trade reports that don't fit the generic
+ * auction-reports.js — Specialized auction reports that don't fit the generic
  * column-based table renderer in exports-pdf.js. Each one mirrors a specific
  * FoxPro report layout the customer is replacing.
  *
@@ -104,7 +104,7 @@ function wrapText(doc, text, maxWidth) {
 
 function getAuctionHeader(db, auctionId) {
   const a = db.get('SELECT id, ano, date, crop_type, state FROM auctions WHERE id = ?', [auctionId]);
-  if (!a) throw new Error('Trade not found');
+  if (!a) throw new Error('Auction not found');
   return a;
 }
 
@@ -114,7 +114,7 @@ function getAuctionHeader(db, auctionId) {
 //
 // Mirrors LOT_SLIP.pdf. Two identical halves per page (carbon copy), 4 cols
 // per half: LOT | BAG | QTY | PRICE — PRICE is intentionally blank because
-// this slip is printed BEFORE the trade so the auctioneer can fill in
+// this slip is printed BEFORE the auction so the auctioneer can fill in
 // hammer prices by hand. Total bags + qty at the end.
 
 function getLotSlipPreRows(db, auctionId, state) {
@@ -128,7 +128,7 @@ function getLotSlipPreRows(db, auctionId, state) {
 }
 
 async function lotSlipPdf(db, auctionId, _cfg, extra) {
-  const trade = getAuctionHeader(db, auctionId);
+  const auction = getAuctionHeader(db, auctionId);
   const rows = getLotSlipPreRows(db, auctionId, extra && extra.state);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 18 });
@@ -137,7 +137,7 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
 
   const m = 18;
   // Wide gutter between the two halves so the page can be torn or cut down
-  // the middle to give two physical copies (one for the trade office, one
+  // the middle to give two physical copies (one for the auction office, one
   // for the seller). A dashed cut-line is drawn in the gutter as a guide.
   const gutter = 40;
   const pageW = doc.page.width;
@@ -176,8 +176,8 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
     doc.font('Helvetica').fontSize(8)
        .text(`Page: ${page}`, xOrigin, afterY, { width: halfW, align: 'right' });
     doc.font('Helvetica-Bold').fontSize(9)
-       .text(`e-TRADE No:${trade.ano}`, xOrigin, afterY + 12, { width: halfW / 2, align: 'left' });
-    doc.text(`Date:${fmtDateDMY(trade.date)}`, xOrigin + halfW / 2, afterY + 12, { width: halfW / 2, align: 'right' });
+       .text(`e-TRADE No:${auction.ano}`, xOrigin, afterY + 12, { width: halfW / 2, align: 'left' });
+    doc.text(`Date:${fmtDateDMY(auction.date)}`, xOrigin + halfW / 2, afterY + 12, { width: halfW / 2, align: 'right' });
 
     const hy = BODY_TOP;
     doc.rect(xOrigin, hy, halfW, HEAD_H).fillAndStroke('#E8E4DD', '#444');
@@ -304,7 +304,7 @@ function getCollectionRows(db, auctionId) {
   // engine limitation, not our SQL.
   //
   // Final fix: pull two flat result sets and join in JavaScript:
-  //   1. all invoices for this trade (one row each — no fanout)
+  //   1. all invoices for this auction (one row each — no fanout)
   //   2. all buyers (small master table — pulled once)
   // Then for each invoice pick the single best-matching buyer
   // (preferring code-match `buyers.buyer = invoices.buyer` over
@@ -357,7 +357,7 @@ function getCollectionRows(db, auctionId) {
 }
 
 function classifyByState(rows, auctionState) {
-  // Group rows by buyer state. Trade's home state goes last (after any
+  // Group rows by buyer state. Auction's home state goes last (after any
   // out-of-state buyers — matches the FoxPro layout where TAMIL NADU comes
   // first only because it's the only state in this trade).
   const groups = new Map();
@@ -368,7 +368,7 @@ function classifyByState(rows, auctionState) {
     groups.get(st).push(r);
   }
   return [...groups.entries()].sort(([a], [b]) => {
-    // Trade's home state first
+    // Auction's home state first
     if (a === auctionSt) return -1;
     if (b === auctionSt) return 1;
     return a.localeCompare(b);
@@ -376,9 +376,9 @@ function classifyByState(rows, auctionState) {
 }
 
 async function collectionXlsx(db, auctionId) {
-  const trade = getAuctionHeader(db, auctionId);
+  const auction = getAuctionHeader(db, auctionId);
   const rows = getCollectionRows(db, auctionId);
-  const groups = classifyByState(rows, trade.state);
+  const groups = classifyByState(rows, auction.state);
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Collection');
@@ -396,8 +396,8 @@ async function collectionXlsx(db, auctionId) {
     colCount: 5,
     title: 'COLLECTION',
     metaLines: [
-      `e-TRADE No: ${trade.ano}`,
-      `Date: ${fmtDateDMY(trade.date)}`,
+      `e-TRADE No: ${auction.ano}`,
+      `Date: ${fmtDateDMY(auction.date)}`,
     ],
   });
 
@@ -451,9 +451,9 @@ async function collectionXlsx(db, auctionId) {
 }
 
 async function collectionPdf(db, auctionId) {
-  const trade = getAuctionHeader(db, auctionId);
+  const auction = getAuctionHeader(db, auctionId);
   const rows = getCollectionRows(db, auctionId);
-  const groups = classifyByState(rows, trade.state);
+  const groups = classifyByState(rows, auction.state);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 24 });
   const buffers = [];
@@ -510,8 +510,8 @@ async function collectionPdf(db, auctionId) {
       x: m, y: m, width: usableW,
       title: 'COLLECTION',
       metaLines: [
-        `e-TRADE No: ${trade.ano}`,
-        `Date: ${fmtDateDMY(trade.date)}`,
+        `e-TRADE No: ${auction.ano}`,
+        `Date: ${fmtDateDMY(auction.date)}`,
         `Page: ${doc.bufferedPageRange().count}`,
       ],
     });
@@ -635,7 +635,7 @@ async function collectionPdf(db, auctionId) {
 // REPORT 3 — TRADE REPORT (XLSX + PDF, BUYERS LIST FOR VERIFICATION)
 // ════════════════════════════════════════════════════════════
 //
-// Mirrors TRADE_REPORT.pdf. Per buyer-code in the trade:
+// Mirrors TRADE_REPORT.pdf. Per buyer-code in the auction:
 //   SALE | BIDDER (short name) | TRADE NAME (firm) | BAG | QUANTITY | AMOUNT | INV.AMOUNT | CODE
 // Grouped by state, with subtotals:
 //   - INTER-STATE SALES (within state)
@@ -646,7 +646,7 @@ async function collectionPdf(db, auctionId) {
 // counts and MAX/MIN/AVERAGE prices and COST OF CARDAMOM.
 
 function getTradeReportData(db, auctionId) {
-  const trade = getAuctionHeader(db, auctionId);
+  const auction = getAuctionHeader(db, auctionId);
 
   // One row per buyer code, summed across all lots.
   // INV.AMOUNT comes from the invoices table (sum of `tot` per buyer).
@@ -702,11 +702,11 @@ function getTradeReportData(db, auctionId) {
   invRows.forEach(r => { if (r.code) invByCode[r.code] = Number(r.inv_amount) || 0; });
 
   // Stamp each buyer-row with inv_amount and a uniform sale code (I/L)
-  const auctionState = String(trade.state || '').trim().toUpperCase();
+  const auctionState = String(auction.state || '').trim().toUpperCase();
   rows.forEach(r => {
     r.inv_amount = invByCode[r.code] || 0;
     const buyerSt = String(r.state || '').trim().toUpperCase();
-    // Inter-state if buyer state ≠ trade state. Empty buyer state defaults
+    // Inter-state if buyer state ≠ auction state. Empty buyer state defaults
     // to intra-state (matches the FoxPro fallback).
     r.sale = (buyerSt && buyerSt !== auctionState) ? 'I' : 'L';
   });
@@ -720,7 +720,7 @@ function getTradeReportData(db, auctionId) {
     if (r.sale === 'I') stateGroups.get(st).inter.push(r);
     else                stateGroups.get(st).intra.push(r);
   }
-  // Sort: trade's home state first
+  // Sort: auction's home state first
   const sortedStates = [...stateGroups.entries()].sort(([a], [b]) => {
     if (a === auctionState) return -1;
     if (b === auctionState) return 1;
@@ -752,11 +752,11 @@ function getTradeReportData(db, auctionId) {
   };
   if (stats.sold_qty > 0) stats.avg_price = stats.cost / stats.sold_qty;
 
-  return { trade, sortedStates, stats };
+  return { auction, sortedStates, stats };
 }
 
 async function tradeReportXlsx(db, auctionId) {
-  const { trade, sortedStates, stats } = getTradeReportData(db, auctionId);
+  const { auction, sortedStates, stats } = getTradeReportData(db, auctionId);
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('TradeReport');
@@ -780,8 +780,8 @@ async function tradeReportXlsx(db, auctionId) {
     colCount: 8,
     title: 'BUYERS LIST FOR VERIFICATION',
     metaLines: [
-      `e-TRADE No: ${trade.ano}`,
-      `DATE: ${fmtDateDMY(trade.date)}`,
+      `e-TRADE No: ${auction.ano}`,
+      `DATE: ${fmtDateDMY(auction.date)}`,
     ],
   });
 
@@ -948,7 +948,7 @@ async function tradeReportXlsx(db, auctionId) {
 }
 
 async function tradeReportPdf(db, auctionId) {
-  const { trade, sortedStates, stats } = getTradeReportData(db, auctionId);
+  const { auction, sortedStates, stats } = getTradeReportData(db, auctionId);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 18 });
   const buffers = [];
@@ -1012,8 +1012,8 @@ async function tradeReportPdf(db, auctionId) {
       x: m, y: m, width: usableW,
       title: 'BUYERS LIST FOR VERIFICATION',
       metaLines: [
-        `e-TRADE No: ${trade.ano}`,
-        `Date: ${fmtDateDMY(trade.date)}`,
+        `e-TRADE No: ${auction.ano}`,
+        `Date: ${fmtDateDMY(auction.date)}`,
         `Page: ${pageNum}`,
       ],
     });

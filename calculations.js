@@ -224,11 +224,11 @@ function calculateTCS(invoiceAmount, priorSales, cfg) {
 
 /**
  * Build sales invoice data for a buyer
- * Aggregates lots by buyer for a given trade
+ * Aggregates lots by buyer for a given auction
  * Sale type filter is optional — if lots don't have sale set yet, filter by buyer only
  */
 function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
-  // Get all lots for this buyer in this trade that have amounts
+  // Get all lots for this buyer in this auction that have amounts
   // Don't filter by sale — we're ASSIGNING the sale type now
   const lots = db.all(
     `SELECT * FROM lots WHERE auction_id = ? AND buyer = ? AND amount > 0 
@@ -404,7 +404,7 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
 
 /**
  * Build purchase invoice data for a seller
- * Aggregates lots by seller for a given trade (registered dealers only)
+ * Aggregates lots by seller for a given auction (registered dealers only)
  */
 function buildPurchaseInvoice(db, auctionId, sellerName, cfg) {
   // A lot qualifies for a Purchase Invoice if it has a GSTIN-bearing seller —
@@ -503,12 +503,12 @@ function buildPurchaseInvoice(db, auctionId, sellerName, cfg) {
  * Generate payment summary for sellers (PAYCHECK.PRG equivalent)
  */
 function getPaymentSummary(db, auctionId, state, cfg) {
-  // The "discount" column is the sum of two parts per seller per trade:
+  // The "discount" column is the sum of two parts per seller per auction:
   //   1. Per-lot computed discount (lots.refund in e-Trade, lots.advance in
-  //      trade mode) — based on discount_pct × days × puramt
-  //   2. Per-seller debit notes for this trade — manual adjustments
+  //      auction mode) — based on discount_pct × days × puramt
+  //   2. Per-seller debit notes for this auction — manual adjustments
   //      (e.g., quality complaints, settlement deductions). Joined by
-  //      seller name + trade ano so we sum all debit_notes that apply.
+  //      seller name + auction ano so we sum all debit_notes that apply.
   // Total payable already accounts for these via balance recalc, but the
   // displayed "Discount" column needs the COMBINED figure so the user
   // sees both the policy discount and any manual adjustments.
@@ -541,11 +541,11 @@ function getPaymentSummary(db, auctionId, state, cfg) {
   query += ' GROUP BY l.name ORDER BY MAX(l.state), l.name';
   const sellers = db.all(query, params);
 
-  // Fetch this trade's identifier (ano) so we can match debit_notes.
+  // Fetch this auction's identifier (ano) so we can match debit_notes.
   // Debit notes are keyed by ano + seller name (no FK to auctions.id),
   // mirroring the legacy FoxPro flow.
-  const trade = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
-  const ano = trade ? trade.ano : null;
+  const auction = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
+  const ano = auction ? auction.ano : null;
   // Build a name → debit_note total map for fast lookup
   const debitMap = {};
   if (ano) {
@@ -698,7 +698,7 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     }
   } catch (_) { /* trader_banks may not exist on partial migrations */ }
 
-  const trade = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
+  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
   const roundAmounts = cfg.flag_round;
 
   return payments.map(p => {
@@ -720,7 +720,7 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
       address2: p.ppla || '',
       pin: p.pin || '',
       amount,
-      remarks: `${trade ? trade.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited`,
+      remarks: `${auction ? auction.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited`,
       holderName: holderNm,
     };
   });
@@ -771,7 +771,7 @@ function buildAgriBill(db, auctionId, sellerName, cfg) {
   );
   
   if (!allLots.length) {
-    return { error: `No lots found for seller "${trimmedName}" in this trade. Check the exact spelling.` };
+    return { error: `No lots found for seller "${trimmedName}" in this auction. Check the exact spelling.` };
   }
 
   // Check if any have GSTIN — those aren't eligible for Bills of Supply
@@ -834,7 +834,7 @@ function buildAgriBill(db, auctionId, sellerName, cfg) {
 }
 
 /**
- * List agri-eligible sellers for an trade
+ * List agri-eligible sellers for an auction
  * (sellers without GSTIN who have lots with amount > 0)
  */
 function listAgriSellers(db, auctionId) {
@@ -866,18 +866,18 @@ function _ddmmyyyy(d) {
 
 /**
  * Sales Journal (JOUR.PRG)
- * Trade-wise sales invoice register. Filters invoices by trade id
+ * Trade-wise sales invoice register. Filters invoices by auction id
  * (resolved via auctions.ano so old invoices with a NULL auction_id
  * still match by ano). Dates rendered dd/mm/yyyy.
  */
 function getSalesJournal(db, auctionId, saleType) {
-  const trade = db.get('SELECT id, ano FROM auctions WHERE id = ?', [auctionId]);
-  if (!trade) return [];
+  const auction = db.get('SELECT id, ano FROM auctions WHERE id = ?', [auctionId]);
+  if (!auction) return [];
   let query = `SELECT date, sale, invo, buyer, buyer1, gstin, place,
       bag, qty, amount as cardamom, gunny, pava_hc as transport, ins as insurance,
       cgst, sgst, igst, tcs, rund, tot as total
     FROM invoices WHERE (auction_id = ? OR ano = ?)`;
-  const params = [trade.id, trade.ano];
+  const params = [auction.id, auction.ano];
   if (saleType) { query += ' AND sale = ?'; params.push(saleType); }
   query += ' ORDER BY date, sale, invo';
   const rows = db.all(query, params);
@@ -890,15 +890,15 @@ function getSalesJournal(db, auctionId, saleType) {
  * type: 'dealer' (registered) or 'agri' (agriculturist bills)
  */
 function getPurchaseJournal(db, auctionId, type) {
-  const trade = db.get('SELECT id, ano FROM auctions WHERE id = ?', [auctionId]);
-  if (!trade) return [];
+  const auction = db.get('SELECT id, ano FROM auctions WHERE id = ?', [auctionId]);
+  if (!auction) return [];
   if (type === 'agri') {
     // bills table only has `ano`, not auction_id, so match by ano alone.
     const rows = db.all(
       `SELECT date, bil as bill_no, name, add_line as address, pla as place, pstate as state,
         crr as cr, pan, qty, cost, igst, net
       FROM bills WHERE ano = ? ORDER BY date, bil`,
-      [trade.ano]
+      [auction.ano]
     );
     return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
   }
@@ -907,7 +907,7 @@ function getPurchaseJournal(db, auctionId, type) {
     `SELECT date, invo as invoice_no, name, add_line as address, place, state,
       gstin, qty, amount, cgst, sgst, igst, rund, total, tds
     FROM purchases WHERE (auction_id = ? OR ano = ?) ORDER BY date, invo`,
-    [trade.id, trade.ano]
+    [auction.id, auction.ano]
   );
   return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
 }

@@ -1954,7 +1954,7 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
   const ainvPrefix= cfgGet(cfg, 'tally_ainv_prefix', '');
   const sStateName= cfgGet(cfg, 'tally_urd_state', 'Kerala');
 
-  const Auction_LDR    = cfgGet(cfg, 'tally_purchase_auction', 'Trade Purchase Account');
+  const Auction_LDR    = cfgGet(cfg, 'tally_purchase_auction', 'Auction Purchase Account');
   const Round_LDR      = cfgGet(cfg, 'tally_round', 'Round Off');
   const Item_Card      = cfgGet(cfg, 'tally_item_cardamom', 'Cardamom');
   const HSN_Card       = cfgGet(cfg, 'tally_hsn_cardamom',  '09083110');
@@ -2304,7 +2304,7 @@ ${TAGS.DEEMNO}
 // time of invoice generation (TAMIL NADU=home, KERALA=sister). For legacy
 // rows that pre-date the state stamping, we fall back to a heuristic:
 // if the invoice's `invo` matches `lots.asp_invo` for any lot of that
-// buyer/trade → sister, else home.
+// buyer/auction → sister, else home.
 // e-Trade-only build: there is exactly one company (home). Every invoice
 // in the table is a home-company invoice regardless of what's stamped in the
 // `state` column. The original Spice Config app used the state column
@@ -2319,8 +2319,8 @@ const ISP_STATE_SQL = `1=1`;
 const ASP_STATE_SQL = `UPPER(COALESCE(i.state,'')) = 'KERALA'`;
 
 /**
- * Pull home-company sales (state = TAMIL NADU) for an trade. The `invoices`
- * table stores ONE summary row per buyer per trade (the writer in
+ * Pull home-company sales (state = TAMIL NADU) for an auction. The `invoices`
+ * table stores ONE summary row per buyer per auction (the writer in
  * server.js inserts the buyer aggregate; per-lot detail lives in the
  * `lots` table). So we read each invoice row directly, then fetch the
  * matching lots separately.
@@ -2358,7 +2358,7 @@ function buildSalesIspRows(db, auctionId, cfg) {
   // ran most recently, so it can hold either invoice number — meaning
   // a strict equality filter silently drops all lots when the sister step
   // was last to write. Since each buyer has at most ONE invoice per
-  // trade per state, scoping by (auction_id, buyer) and `amount > 0`
+  // auction per state, scoping by (auction_id, buyer) and `amount > 0`
   // is enough to pick the right lots.
   const lotsStmt = db.prepare(`
     SELECT lot_no AS lot, bags AS bag, qty, price AS rate, amount, asp_invo
@@ -2484,7 +2484,7 @@ function buildSalesIspRows(db, auctionId, cfg) {
 }
 
 /**
- * Pull sister-company sales (state = KERALA) for an trade. Each
+ * Pull sister-company sales (state = KERALA) for an auction. Each
  * voucher is an internal intra-company transfer: the sister sells its
  * lot inventory to the home company at the sister-side planter rate.
  * The buyer is always the home company itself, so we read the home
@@ -2511,7 +2511,7 @@ function buildSalesAspRows(db, auctionId, cfg) {
   // dual-storage migration.
   //
   // Like the ISP builder, we don't filter on `lots.asp_invo = invoice.invo`
-  // — each buyer has at most ONE intra-company invoice per trade, so scoping by
+  // — each buyer has at most ONE intra-company invoice per auction, so scoping by
   // (auction_id, buyer) plus a positive asp_puramt is sufficient. This
   // avoids surprises when asp_invo was cleared/changed by a regen.
   const lotsStmt = db.prepare(`
@@ -2598,7 +2598,7 @@ function buildSalesAspRows(db, auctionId, cfg) {
 }
 
 /**
- * Pull invoices for an trade, group by invoice number, attach lots.
+ * Pull invoices for an auction, group by invoice number, attach lots.
  * Used by Sales export.
  */
 function buildSalesRows(db, auctionId, cfg) {
@@ -2680,7 +2680,7 @@ function buildSalesRows(db, auctionId, cfg) {
 }
 
 /**
- * Pull purchases (registered dealers) for an trade.
+ * Pull purchases (registered dealers) for an auction.
  * RD = gstin starts with "GSTIN." marker (matches the macro convention).
  */
 function buildRDPurchaseRows(db, auctionId, cfg) {
@@ -2696,7 +2696,7 @@ function buildRDPurchaseRows(db, auctionId, cfg) {
   `);
   const raw = stmt.all(auctionId);
 
-  // Pull lots for each purchase (matched by name + trade)
+  // Pull lots for each purchase (matched by name + auction)
   const lotsStmt = db.prepare(`
     SELECT lot_no AS lot, bags AS bag, pqty AS qty, prate AS rate,
            puramt AS amount, bilamt
@@ -2740,7 +2740,7 @@ function buildRDPurchaseRows(db, auctionId, cfg) {
 }
 
 /**
- * Pull bills of supply (URD/agriculturist) for an trade.
+ * Pull bills of supply (URD/agriculturist) for an auction.
  */
 function buildURDPurchaseRows(db, auctionId, cfg) {
   const stmt = db.prepare(`
@@ -2802,12 +2802,12 @@ function buildURDPurchaseRows(db, auctionId, cfg) {
 }
 
 /**
- * Pull debit notes for an trade.
+ * Pull debit notes for an auction.
  */
 function buildDebitNoteRows(db, auctionId, cfg) {
   // The `debit_notes` table has no auction_id FK — it stores `ano`
   // (the trade number) directly. Earlier this builder filtered DNs by
-  // `date = trade.date`, but DN dates are now set to trade.date + 1
+  // `date = auction.date`, but DN dates are now set to trade.date + 1
   // (per the new "DN date = trade date + 1" rule), so date-equality
   // filtering returned ZERO rows and the user got "no data found".
   // Fix: filter by `ano` instead — that's the stable join key.
@@ -3099,7 +3099,7 @@ function _urdTraderRow(t, todayDate, auctionLDR) {
 
 /**
  * Build sales-party ledger rows (mirrors generLED).
- * One row per distinct buyer that appears in this trade's invoices.
+ * One row per distinct buyer that appears in this auction's invoices.
  * Filter: optional `partyName` to limit output to a single buyer.
  */
 function buildSalesPartyLedgerRows(db, auctionId, cfg, opts = {}) {
@@ -3128,7 +3128,7 @@ function buildSalesPartyLedgerRows(db, auctionId, cfg, opts = {}) {
 /**
  * Build RD-purchase party ledger rows (mirrors generLEDGERD).
  * One row per distinct trader with a GSTIN (either "GSTIN.<gstin>" or
- * bare 15-char) in the trade's lots.
+ * bare 15-char) in the auction's lots.
  */
 function buildRDPartyLedgerRows(db, auctionId, cfg, opts = {}) {
   const todayDate = toTallyDate(new Date());
@@ -3156,7 +3156,7 @@ function buildRDPartyLedgerRows(db, auctionId, cfg, opts = {}) {
 
 /**
  * Build URD-purchase party ledger rows (mirrors generLEDGERP).
- * One row per distinct agriculturist (no GSTIN) in the trade's lots.
+ * One row per distinct agriculturist (no GSTIN) in the auction's lots.
  */
 function buildURDPartyLedgerRows(db, auctionId, cfg, opts = {}) {
   const todayDate = toTallyDate(new Date());
@@ -3180,7 +3180,7 @@ function buildURDPartyLedgerRows(db, auctionId, cfg, opts = {}) {
 }
 
 /**
- * List every party in an trade with the kind it would be exported as.
+ * List every party in an auction with the kind it would be exported as.
  * Powers the "single-party" picker UI on the To Tally page so dad can
  * pick exactly one and emit just that ledger.
  *

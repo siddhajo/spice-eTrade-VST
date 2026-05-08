@@ -822,14 +822,14 @@ async function exportPdf(db, type, auctionId, cfg, extra = {}) {
   if (type === 'tds_return') {
     subtitle = `Period: ${extra.from || ''} to ${extra.to || ''}`;
   } else if (auctionId) {
-    const trade = db.get('SELECT ano, date, crop_type FROM auctions WHERE id = ?', [auctionId]);
-    if (trade) {
-      const d = trade.date ? trade.date.split('-').reverse().join('/') : '';
+    const auction = db.get('SELECT ano, date, crop_type FROM auctions WHERE id = ?', [auctionId]);
+    if (auction) {
+      const d = auction.date ? auction.date.split('-').reverse().join('/') : '';
       // Two clean meta lines, joined by " — " so renderTablePdf can split
       // them back into separate right-side rows. The crop type (ISP/ASP) is
       // omitted — the active preset is already obvious from the logo and
       // company name in the brand block.
-      subtitle = `e-TRADE No: ${trade.ano} — Date: ${d}`;
+      subtitle = `e-TRADE No: ${auction.ano} — Date: ${d}`;
       if (extra.state) subtitle += ` — State: ${extra.state}`;
     }
   }
