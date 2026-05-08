@@ -3988,6 +3988,41 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   </div>
 </div></div>
 
+<!-- Typed-confirmation modal — replacement for window.prompt() which
+     Electron disabled in v7+. Used by destructive actions that require
+     the user to literally type a confirmation word (REVERT, DELETE, etc.)
+     before the action proceeds. Driven by confirmTyped() in JS below. -->
+<div class="modal-bg" id="confirm-typed-modal"><div class="modal" style="max-width:440px">
+  <h2 id="ctm-title" style="margin-bottom:6px">Confirm action</h2>
+  <p id="ctm-message" style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px;white-space:pre-line"></p>
+  <div class="fg">
+    <label id="ctm-label" style="font-size:11px">Type to confirm</label>
+    <input id="ctm-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" style="text-transform:uppercase;letter-spacing:.5px">
+  </div>
+  <div id="ctm-err" style="color:#c0392b;font-size:12px;margin:0 0 8px;display:none"></div>
+  <div class="actions">
+    <button id="ctm-cancel" class="btn btn-o">Cancel</button>
+    <button id="ctm-ok"     class="btn" style="background:var(--spice-chili);color:#fff;font-weight:600">Confirm</button>
+  </div>
+</div></div>
+
+<!-- Free-text input modal — second replacement for window.prompt(),
+     used when an action needs the user to ENTER a value (lorry number,
+     filename, etc.) rather than type a fixed confirmation word.
+     Driven by promptInput() in JS below. -->
+<div class="modal-bg" id="prompt-input-modal"><div class="modal" style="max-width:480px">
+  <h2 id="pim-title" style="margin-bottom:6px">Enter a value</h2>
+  <p id="pim-message" style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;white-space:pre-line"></p>
+  <div class="fg">
+    <label id="pim-label" style="font-size:11px">Value</label>
+    <input id="pim-input" type="text" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="actions">
+    <button id="pim-cancel" class="btn btn-o">Cancel</button>
+    <button id="pim-ok"     class="btn btn-g">OK</button>
+  </div>
+</div></div>
+
 <script>
 const B=location.origin;let T='';
 const h=(t,o={})=>fetch(B+t,{...o,headers:{'Content-Type':'application/json','Authorization':'Bearer '+T,...(o.headers||{})}});
@@ -9466,8 +9501,13 @@ async function downloadTemplate(type){
 async function deleteAll(resource,label){
   const first=confirm(`Delete ALL ${label}?\n\nThis will permanently remove every record from the ${label.toLowerCase()} table. This action CANNOT be undone.\n\nClick OK to continue.`);
   if(!first)return;
-  const typed=prompt(`To confirm, type DELETE in capitals:`);
-  if(typed!=='DELETE'){alert('Cancelled.');return}
+  const ok = await confirmTyped({
+    title:    `Delete all ${label.toLowerCase()}?`,
+    message:  `Every row in ${label.toLowerCase()} will be permanently removed. Cannot be undone.`,
+    expected: 'DELETE',
+    okLabel:  'Delete All',
+  });
+  if (!ok) return;
   try{
     const r=await fetch(B+`/api/${resource}/delete-all`,{method:'DELETE',headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();
@@ -10824,12 +10864,118 @@ async function revertInvoice(id, buyerName, invLabel){
   }catch(e){showError(e)}
 }
 
+// confirmTyped — drop-in replacement for the prompt()-based "type X to
+// confirm" pattern. window.prompt() is disabled in Electron (v7+) and
+// throws "prompt() is and will not be supported", which silently broke
+// every destructive action gated by typed confirmation in the desktop
+// app. This modal-based flow works in both browser and Electron.
+//
+// Usage:
+//   const ok = await confirmTyped({ title, message, expected, danger:true });
+//   if (!ok) return;     // user cancelled or typed the wrong word
+//
+// Returns Promise<boolean>. Resolves true only when the user types the
+// exact `expected` string (case-sensitive) and clicks Confirm.
+function confirmTyped(opts) {
+  return new Promise((resolve) => {
+    const o = opts || {};
+    const expected = String(o.expected || 'CONFIRM');
+    const titleEl = document.getElementById('ctm-title');
+    const msgEl   = document.getElementById('ctm-message');
+    const labelEl = document.getElementById('ctm-label');
+    const inputEl = document.getElementById('ctm-input');
+    const errEl   = document.getElementById('ctm-err');
+    const okBtn   = document.getElementById('ctm-ok');
+    const cancelBtn = document.getElementById('ctm-cancel');
+
+    titleEl.textContent = o.title || 'Confirm action';
+    msgEl.textContent   = o.message || '';
+    labelEl.textContent = `Type ${expected} to confirm`;
+    inputEl.value = '';
+    errEl.style.display = 'none'; errEl.textContent = '';
+    okBtn.textContent = o.okLabel || 'Confirm';
+
+    let done = false;
+    const finish = (val) => {
+      if (done) return; done = true;
+      hideModal('confirm-typed-modal');
+      okBtn.onclick = null; cancelBtn.onclick = null;
+      inputEl.onkeydown = null;
+      resolve(val);
+    };
+    okBtn.onclick = () => {
+      if (inputEl.value === expected) { finish(true); }
+      else {
+        errEl.textContent = `Type "${expected}" exactly (case-sensitive) to proceed.`;
+        errEl.style.display = 'block';
+        inputEl.focus(); inputEl.select();
+      }
+    };
+    cancelBtn.onclick = () => finish(false);
+    inputEl.onkeydown = (e) => {
+      if (e.key === 'Enter')      { e.preventDefault(); okBtn.click(); }
+      else if (e.key === 'Escape'){ e.preventDefault(); finish(false); }
+    };
+    showModal('confirm-typed-modal');
+    setTimeout(() => { try { inputEl.focus(); } catch (_) {} }, 50);
+  });
+}
+
+// promptInput — drop-in replacement for the prompt(message, default)
+// pattern when the action needs a free-text value rather than a typed
+// confirmation. Returns Promise<string|null>: a string (possibly empty)
+// when the user clicks OK, or null when they cancel — same contract as
+// the native prompt(), so existing call-sites' null-checks keep working.
+//
+// Usage:
+//   const val = await promptInput({ title, message, defaultValue, label, okLabel });
+//   if (val === null) return;     // user cancelled
+function promptInput(opts) {
+  return new Promise((resolve) => {
+    const o = opts || {};
+    const titleEl = document.getElementById('pim-title');
+    const msgEl   = document.getElementById('pim-message');
+    const labelEl = document.getElementById('pim-label');
+    const inputEl = document.getElementById('pim-input');
+    const okBtn   = document.getElementById('pim-ok');
+    const cancelBtn = document.getElementById('pim-cancel');
+
+    titleEl.textContent = o.title || 'Enter a value';
+    msgEl.textContent   = o.message || '';
+    labelEl.textContent = o.label || 'Value';
+    inputEl.value       = o.defaultValue || '';
+    inputEl.placeholder = o.placeholder || '';
+    okBtn.textContent   = o.okLabel || 'OK';
+
+    let done = false;
+    const finish = (val) => {
+      if (done) return; done = true;
+      hideModal('prompt-input-modal');
+      okBtn.onclick = null; cancelBtn.onclick = null; inputEl.onkeydown = null;
+      resolve(val);
+    };
+    okBtn.onclick     = () => finish(inputEl.value);
+    cancelBtn.onclick = () => finish(null);
+    inputEl.onkeydown = (e) => {
+      if (e.key === 'Enter')      { e.preventDefault(); finish(inputEl.value); }
+      else if (e.key === 'Escape'){ e.preventDefault(); finish(null); }
+    };
+    showModal('prompt-input-modal');
+    setTimeout(() => { try { inputEl.focus(); inputEl.select(); } catch(_){} }, 50);
+  });
+}
+
 async function revertAllInvoices(){
   const aid=document.getElementById('inv-trade').value;
   if(!aid){alert('Select a trade first');return}
   if(!confirm('Revert ALL invoices for this trade?\n\nEvery invoice in this trade will be deleted, and every lot will become eligible for re-invoicing. This cannot be undone.\n\nContinue?'))return;
-  const typed=prompt('To confirm, type REVERT in capitals:');
-  if(typed!=='REVERT'){alert('Cancelled.');return}
+  const ok = await confirmTyped({
+    title:    'Revert all invoices?',
+    message:  'This deletes every invoice in this trade and re-enables every lot for invoicing. Cannot be undone.',
+    expected: 'REVERT',
+    okLabel:  'Revert All',
+  });
+  if (!ok) return;
   try{
     const r=await fetch(B+`/api/invoices/revert-all/${aid}`,{method:'POST',headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();
@@ -11153,14 +11299,17 @@ async function setLorryNoForSelected(){
   const presets=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
   const def=presets.length ? presets[0][0] : '';
 
-  const lorry=prompt(
-    `Set lorry / vehicle number for ${ids.length} invoice${ids.length===1?'':'s'}.\n\n` +
-    `Leave blank to CLEAR. Spaces and case are normalised (TN-66-H-1234 → TN66H1234).\n\n` +
-    (presets.length>1 ? `Existing values in selection: ${presets.map(p=>p[0]+(p[1]>1?` (×${p[1]})`:'')).join(', ')}\n\n` : '') +
-    `Vehicle no:`,
-    def
-  );
-  if(lorry===null) return; // user cancelled
+  const lorry = await promptInput({
+    title:        `Set lorry no — ${ids.length} invoice${ids.length===1?'':'s'}`,
+    message:
+      `Leave blank to CLEAR. Spaces and case are normalised (TN-66-H-1234 → TN66H1234).` +
+      (presets.length>1 ? `\n\nExisting values in selection: ${presets.map(p=>p[0]+(p[1]>1?` (×${p[1]})`:'')).join(', ')}` : ''),
+    label:        'Vehicle no',
+    placeholder:  'e.g. TN66H1234',
+    defaultValue: def,
+    okLabel:      'Apply',
+  });
+  if (lorry === null) return; // user cancelled
 
   try{
     const r=await fetch(B+'/api/invoices/lorry-no',{
@@ -12327,8 +12476,13 @@ async function deleteAllDebitNotesForTrade() {
   if (!t) { alert('Select a trade first'); return; }
   const first = confirm(`Delete ALL debit notes in trade #${t.ano}?\n\nThis only affects this trade — other trades' debit notes are not touched. This action CANNOT be undone.`);
   if (!first) return;
-  const typed = prompt(`To confirm, type DELETE in capitals:`);
-  if (typed !== 'DELETE') { alert('Cancelled.'); return; }
+  const ok = await confirmTyped({
+    title:    `Delete all debit notes in trade #${t.ano}?`,
+    message:  `Every debit note in trade #${t.ano} will be permanently deleted. Other trades are unaffected.`,
+    expected: 'DELETE',
+    okLabel:  'Delete All',
+  });
+  if (!ok) return;
   try {
     const r = await fetch(B + `/api/debit-notes/delete-all?ano=${encodeURIComponent(t.ano)}`, {
       method: 'DELETE',
