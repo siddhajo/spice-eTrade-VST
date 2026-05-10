@@ -215,6 +215,11 @@ const DEFAULTS = [
   // want EWAYBILLDETAILS.LIST emitted (e.g. small intra-state supplies
   // below the e-way bill threshold where the buyer doesn't want it).
   { key: 'tally_eway_enabled',    value: 'true',           category: 'tally', label: 'E-way Bill (emit EWAYBILLDETAILS in Sales XML)', type: 'boolean' },
+  // Dispatch (origin) PIN used by the e-way bill distance resolver.
+  // Read by server.js#getDispatchPin() and by the per-invoice distance
+  // hydration; route_distances rows are looked up keyed by this PIN
+  // paired with the buyer's PIN. Must be a 6-digit Indian PIN.
+  { key: 'tally_dispatch_pin',    value: '',               category: 'tally', label: 'Dispatch PIN (origin for e-way bill distance)', type: 'text' },
 
   // Sales Account Ledgers (Cardamom)
   { key: 'tally_sales_inter',     value: 'Cardamom Sales 5%',          category: 'tally', label: 'Cardamom Inter-State Sales',  type: 'text' },
@@ -351,7 +356,12 @@ function initCompanySettings(db) {
     'tally_commission', 'tally_cash_handling', 'tally_cash_handling_planter',
     'tally_chc_planter', 'tally_unit_rate',
     'tally_dispatch_company', 'tally_dispatch_address', 'tally_dispatch_place',
-    'tally_dispatch_pin', 'tally_dispatch_state', 'tally_dispatch_gstin',
+    // NOTE: tally_dispatch_pin must NOT be in this list — server.js's
+    // getDispatchPin() and the e-way bill distance resolver still read
+    // it. Including it here silently wipes the value on every boot,
+    // so even after a user saves a route distance the resolver sees
+    // an empty dispatch PIN and resolved_distance_km stays null.
+    'tally_dispatch_state', 'tally_dispatch_gstin',
     // Distance auto-fill removed — workflow is manual per-invoice now.
     'distance_auto_enabled', 'distance_road_multiplier',
     // Local transport / insurance toggles moved out of Tally to Rates.
