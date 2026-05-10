@@ -10627,11 +10627,18 @@ function confirmTyped(opts) {
       else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
     });
 
+    // Pre-emptively release the previous focus so the input's focus()
+    // call below isn't refused. Chromium logs:
+    //   "Autofocus processing was blocked because a document already
+    //    has a focused element."
+    // That fires when the button that triggered the modal still has
+    // focus; releasing it first lets the input grab focus cleanly.
+    try { document.activeElement && document.activeElement.blur(); } catch(_){}
+
     document.body.appendChild(root);
     // Synchronous focus on a freshly-appended element — same pattern
-    // promptDispatchedThrough has used in production. Belt-and-braces
-    // rAF retry covers the rare case the first focus call lost the race
-    // with layout (Windows-Electron occasionally needs a second tick).
+    // promptDispatchedThrough has used in production. rAF retry covers
+    // the rare case the first focus call loses the race with layout.
     try { inputEl.focus(); } catch(_){}
     requestAnimationFrame(() => { try { inputEl.focus(); } catch(_){} });
   });
@@ -10659,11 +10666,21 @@ function promptInput(opts) {
       'z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
     root.innerHTML =
       '<div class="modal" style="max-width:480px">' +
+      // Scoped focus visuals — `.fg input { outline:none }` globally
+      // strips the focus ring; we re-add a clearly-visible one here so
+      // the user can see the input is focused. Also pins caret-color
+      // and color explicitly to defeat any inherited transparency.
+      '<style>' +
+        '.__pi-input{caret-color:#000 !important;color:#000 !important}' +
+        '.__pi-input:focus{outline:2px solid var(--spice-saffron, #10B981) !important;' +
+        'outline-offset:1px !important;border-color:var(--spice-saffron, #10B981) !important;' +
+        'box-shadow:0 0 0 3px rgba(16,185,129,0.18) !important}' +
+      '</style>' +
         '<h2 style="margin-bottom:6px"></h2>' +
         '<p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;white-space:pre-line"></p>' +
         '<div class="fg">' +
           '<label style="font-size:11px"></label>' +
-          '<input type="text" autocomplete="off" spellcheck="false">' +
+          '<input class="__pi-input" type="text" autocomplete="off" spellcheck="false">' +
         '</div>' +
         '<div class="actions">' +
           '<button class="btn btn-o">Cancel</button>' +
@@ -10697,6 +10714,12 @@ function promptInput(opts) {
       if (e.key === 'Enter')       { e.preventDefault(); finish(inputEl.value); }
       else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
     });
+
+    // Pre-emptively release the previous focus — see the matching
+    // comment in confirmTyped above. Chromium refuses focus() against a
+    // document that already has a focused element (typically the
+    // button that triggered this modal).
+    try { document.activeElement && document.activeElement.blur(); } catch(_){}
 
     document.body.appendChild(root);
     try { inputEl.focus(); inputEl.select(); } catch(_){}
