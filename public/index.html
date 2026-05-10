@@ -2626,7 +2626,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           </div>
         </div>
 
-        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Sale</th><th>Inv#</th><th>Lorry</th><th>Distance (km)</th><th>Code</th><th>Trade Name</th><th>Qty</th><th>Amount</th><th>Insurance</th><th>Transport</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="invoices-list"></tbody></table></div>
+        <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Sale</th><th>Inv#</th><th>Lorry</th><th>Distance (km)</th><th>Code</th><th>Trade Name</th><th>Qty</th><th>Amount</th><th>Gunny</th><th>Insurance</th><th>Transport</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="invoices-list"></tbody></table></div>
       </div>
     </div>
 
@@ -10488,6 +10488,9 @@ async function loadInvoices(){
           : '<span style="color:var(--text3)">—</span>' },
       { key:'qty', label:'Qty', sort:'number', numeric:true, fmt:(n)=>fmtI(n,3) },
       { key:'amount', label:'Amount', sort:'number', numeric:true, fmt:(n)=>fmtI(n,2) },
+      // Gunny — packaging cost stored on `invoices.gunny`. Same numeric
+      // formatting as Amount / Insurance / Transport for column alignment.
+      { key:'gunny',   label:'Gunny',     sort:'number', numeric:true, fmt:(n)=>fmtI(n,2) },
       // Insurance & Transport — visible at-a-glance on each invoice row.
       // Stored on `invoices.ins` and `invoices.pava_hc` respectively.
       { key:'ins',     label:'Insurance', sort:'number', numeric:true, fmt:(n)=>fmtI(n,2) },
