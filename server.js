@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
@@ -5834,27 +5834,66 @@ app.get('/api/stats', requireView, (req, res) => {
   );
 
   // ── Cumulative totals across ALL trades (lifetime) ──
-  // Aggregates over every lot in every auction, regardless of state.
+  // Aggregates over every lot in every auction. sold_qty / wd_qty slice
+  // the same total — sold = lots with code present and not 'WD',
+  // withdrawn = code = 'WD'. Lots with empty code (unsold) are in
+  // neither slice but still counted in the qty total.
+  // Min/Max/Avg derive from SOLD lots only (price > 0, amount > 0):
+  //   - Min/Max use the bounding sold-lot prices
+  //   - Avg is weighted: Σ amount ÷ Σ sold_qty
+  // Withdrawn lots have no transacted price so their inclusion would
+  // skew bounds and averages.
   const cumRow = db.get(
     `SELECT COALESCE(SUM(qty),0) as qty,
             COALESCE(SUM(amount),0) as amount,
-            COUNT(*) as lots
+            COUNT(*) as lots,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(code,''))) NOT IN ('','WD') THEN qty ELSE 0 END),0) as sold_qty,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(code,'')))  =  'WD'        THEN qty ELSE 0 END),0) as wd_qty,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(code,''))) NOT IN ('','WD') AND amount > 0 THEN amount ELSE 0 END),0) as sold_amount,
+            (SELECT COALESCE(MIN(price),0) FROM lots WHERE price > 0 AND amount > 0
+              AND UPPER(TRIM(COALESCE(code,''))) NOT IN ('','WD')) as min_price,
+            (SELECT COALESCE(MAX(price),0) FROM lots WHERE price > 0 AND amount > 0
+              AND UPPER(TRIM(COALESCE(code,''))) NOT IN ('','WD')) as max_price
      FROM lots`
   ) || {};
+  const cumSoldQty = Number(cumRow.sold_qty) || 0;
+  const cumSoldAmt = Number(cumRow.sold_amount) || 0;
   const cumulative = {
-    qty:    cumRow.qty    || 0,
-    amount: cumRow.amount || 0,
-    lots:   cumRow.lots   || 0,
-    auctions: counts.auctions,
+    qty:       cumRow.qty       || 0,
+    amount:    cumRow.amount    || 0,
+    lots:      cumRow.lots      || 0,
+    auctions:  counts.auctions,
+    sold_qty:  cumSoldQty,
+    wd_qty:    cumRow.wd_qty    || 0,
+    min_price: Number(cumRow.min_price) || 0,
+    max_price: Number(cumRow.max_price) || 0,
+    avg_price: cumSoldQty > 0 ? round2(cumSoldAmt / cumSoldQty) : 0,
   };
 
   // ── Per-trade breakdown (one row per auction, newest first) ──
   // One query with a LEFT JOIN so auctions with zero lots still appear.
+  // sold_qty / wd_qty slice the qty total by lot code:
+  //   sold      = code present AND not 'WD'
+  //   withdrawn = code = 'WD'
+  // Min/Max/Avg derive from SOLD lots only (excludes WD + unsold) —
+  // withdrawn lots have no transacted price, including them would
+  // distort the bounds and the weighted average. Avg is computed in
+  // JS after the SQL aggregate so the divisor (sold_qty) is the same
+  // value the row reports — keeps the math auditable.
   const perTradeBreakdown = db.all(
     `SELECT a.id, a.ano, a.date, a.crop_type,
             COUNT(l.id) as lots,
             COALESCE(SUM(l.qty),0) as qty,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(l.code,''))) NOT IN ('','WD') THEN l.qty ELSE 0 END),0) as sold_qty,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(l.code,'')))  =  'WD'        THEN l.qty ELSE 0 END),0) as wd_qty,
             COALESCE(SUM(l.amount),0) as amount,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(l.code,''))) NOT IN ('','WD') AND l.amount > 0 THEN l.amount ELSE 0 END),0) as sold_amount,
+            COALESCE(MIN(CASE WHEN l.price > 0 AND l.amount > 0
+                               AND UPPER(TRIM(COALESCE(l.code,''))) NOT IN ('','WD')
+                              THEN l.price END),0) as min_price,
+            COALESCE(MAX(CASE WHEN l.price > 0 AND l.amount > 0
+                               AND UPPER(TRIM(COALESCE(l.code,''))) NOT IN ('','WD')
+                              THEN l.price END),0) as max_price,
             COALESCE(SUM(CASE WHEN l.amount > 0 THEN 1 ELSE 0 END),0) as priced,
             COALESCE(SUM(CASE WHEN l.invo IS NOT NULL AND l.invo != '' THEN 1 ELSE 0 END),0) as invoiced
      FROM auctions a
@@ -5862,7 +5901,11 @@ app.get('/api/stats', requireView, (req, res) => {
      GROUP BY a.id, a.ano, a.date, a.crop_type
      ORDER BY a.date DESC, a.id DESC
      LIMIT 50`
-  );
+  ).map(r => {
+    const soldQty = Number(r.sold_qty) || 0;
+    const soldAmt = Number(r.sold_amount) || 0;
+    return { ...r, avg_price: soldQty > 0 ? round2(soldAmt / soldQty) : 0 };
+  });
 
   // Pick: ?auction_id=N if provided
   //   - "all" (or no param) => dashboard shows cumulative view, no individual auction highlighted

@@ -2159,6 +2159,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <div class="kpi turmeric">
             <div class="kpi-label">Total Amount</div>
             <div class="kpi-value" id="lot-kpi-amount" style="font-size:18px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
+            <div class="kpi-meta" id="lot-kpi-amount-meta">Min ₹—<br>Max ₹—<br>Avg ₹—</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             </div>
@@ -2173,7 +2174,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <div class="kpi cardamom">
             <div class="kpi-label">Sold Lots</div>
             <div class="kpi-value" id="lot-kpi-sold-count">0</div>
-            <div class="kpi-meta" id="lot-kpi-sold-meta">— bags · — kg · ₹—</div>
+            <div class="kpi-meta" id="lot-kpi-sold-meta">Bags: —<br>Qty: —<br>Amount: ₹—</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M21 12v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h11"/></svg>
             </div>
@@ -2181,7 +2182,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <div class="kpi chili">
             <div class="kpi-label">Withdrawn Lots</div>
             <div class="kpi-value" id="lot-kpi-wd-count">0</div>
-            <div class="kpi-meta" id="lot-kpi-wd-meta">— bags · — kg · ₹—</div>
+            <div class="kpi-meta" id="lot-kpi-wd-meta">Bags: —<br>Qty: —<br>Amount: ₹—</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
             </div>
@@ -5094,6 +5095,13 @@ async function loadStats(auctionId){
     </div>
   ` : '';
 
+  // Per-kg price formatter — full Indian-grouping, integer rupees (no
+  // ".00" trailing zeros at this density), em-dash for "no sold lot
+  // yet" rows so the column doesn't print misleading ₹0.
+  const inrPrice = n => (Number(n) || 0) > 0
+    ? '₹' + Math.round(Number(n)).toLocaleString('en-IN')
+    : '<span style="color:var(--spice-text-hint)">—</span>';
+
   const ptHTML = isAllMode && PT.length ? `
     <div class="card" style="padding:0;margin-bottom:20px">
       <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center">
@@ -5109,7 +5117,12 @@ async function loadStats(auctionId){
               <th>Crop</th>
               <th class="num">Lots</th>
               <th class="num">Qty</th>
+              <th class="num" title="Lots with a buyer code (excludes WD)">Sold Qty</th>
+              <th class="num" title="Lots with code = WD">Withdrawn Qty</th>
               <th class="num">Amount</th>
+              <th class="num" title="Lowest sold price per kg">Min</th>
+              <th class="num" title="Highest sold price per kg">Max</th>
+              <th class="num" title="Σ amount ÷ Σ sold qty">Avg</th>
               <th class="num">Invoiced</th>
             </tr>
           </thead>
@@ -5122,7 +5135,12 @@ async function loadStats(auctionId){
                 <td>${esc(t.crop_type||'—')}</td>
                 <td class="num">${t.lots||0}</td>
                 <td class="num">${kg(t.qty)}</td>
+                <td class="num" style="color:var(--spice-cardamom-dk)">${kg(t.sold_qty)}</td>
+                <td class="num" style="color:${(t.wd_qty||0)>0?'#991B1B':'var(--spice-text-hint)'}">${kg(t.wd_qty)}</td>
                 <td class="num"><strong>${inrL(t.amount)}</strong></td>
+                <td class="num">${inrPrice(t.min_price)}</td>
+                <td class="num">${inrPrice(t.max_price)}</td>
+                <td class="num"><strong>${inrPrice(t.avg_price)}</strong></td>
                 <td class="num">
                   <span style="display:inline-flex;align-items:center;gap:6px">
                     <span style="width:40px;height:6px;background:var(--spice-line);border-radius:999px;overflow:hidden;display:inline-block">
@@ -5139,7 +5157,12 @@ async function loadStats(auctionId){
               <td colspan="3" style="padding:12px 22px">Totals</td>
               <td class="num">${CUM.lots||0}</td>
               <td class="num">${kg(CUM.qty)}</td>
+              <td class="num">${kg(CUM.sold_qty)}</td>
+              <td class="num">${kg(CUM.wd_qty)}</td>
               <td class="num">${inrL(CUM.amount)}</td>
+              <td class="num">${inrPrice(CUM.min_price)}</td>
+              <td class="num">${inrPrice(CUM.max_price)}</td>
+              <td class="num">${inrPrice(CUM.avg_price)}</td>
               <td></td>
             </tr>
           </tfoot>
@@ -10096,22 +10119,43 @@ async function loadLots(){const aid=document.getElementById('lot-auction').value
       // Sold / Withdrawn aggregates from the same lot list (no extra fetch).
       // Sold      = code present and not 'WD'
       // Withdrawn = code === 'WD'
+      // Min/Max/Avg are derived from SOLD lots only (excludes WD and
+      // unsold) — withdrawn lots have no transacted price, including
+      // them would skew the bounds and the weighted average.
       const agg = { sold:{n:0,bags:0,qty:0,amt:0}, wd:{n:0,bags:0,qty:0,amt:0} };
+      let priceMin = Infinity, priceMax = -Infinity;
       for (const l of arr) {
         const code = String(l.code || '').trim().toUpperCase();
         if (!code) continue;
         const bucket = (code === 'WD') ? agg.wd : agg.sold;
+        const qty = Number(l.qty) || 0;
+        const amt = Number(l.amount) || 0;
+        const price = Number(l.price) || 0;
         bucket.n   += 1;
         bucket.bags += Number(l.bags)   || 0;
-        bucket.qty  += Number(l.qty)    || 0;
-        bucket.amt  += Number(l.amount) || 0;
+        bucket.qty  += qty;
+        bucket.amt  += amt;
+        if (code !== 'WD' && price > 0 && amt > 0) {
+          if (price < priceMin) priceMin = price;
+          if (price > priceMax) priceMax = price;
+        }
       }
+      // Avg = weighted price across sold lots = Σ amount / Σ qty.
+      // Falls back to 0 when no sold lots exist (em-dash rendered then).
+      const priceAvg = agg.sold.qty > 0 ? (agg.sold.amt / agg.sold.qty) : 0;
+      const hasSold  = agg.sold.n > 0 && priceMin !== Infinity;
+
+      if ($('lot-kpi-amount-meta')) $('lot-kpi-amount-meta').innerHTML = hasSold
+        ? `Min ₹${fmtI(priceMin,2)}<br>Max ₹${fmtI(priceMax,2)}<br>Avg ₹${fmtI(priceAvg,2)}`
+        : 'Min ₹—<br>Max ₹—<br>Avg ₹—';
+
       if ($('lot-kpi-sold-count')) $('lot-kpi-sold-count').textContent = agg.sold.n;
       if ($('lot-kpi-sold-meta'))  $('lot-kpi-sold-meta').innerHTML =
-        `${fmtI(agg.sold.bags,0)} bags · ${fmtI(agg.sold.qty,0)} kg · ₹${fmtI(agg.sold.amt,0)}`;
+        `Bags: ${fmtI(agg.sold.bags,0)}<br>Qty: ${fmtI(agg.sold.qty,0)} kg<br>Amount: ₹${fmtI(agg.sold.amt,0)}`;
+
       if ($('lot-kpi-wd-count'))   $('lot-kpi-wd-count').textContent = agg.wd.n;
       if ($('lot-kpi-wd-meta'))    $('lot-kpi-wd-meta').innerHTML =
-        `${fmtI(agg.wd.bags,0)} bags · ${fmtI(agg.wd.qty,0)} kg · ₹${fmtI(agg.wd.amt,0)}`;
+        `Bags: ${fmtI(agg.wd.bags,0)}<br>Qty: ${fmtI(agg.wd.qty,0)} kg<br>Amount: ₹${fmtI(agg.wd.amt,0)}`;
 
       updateSummaryStats('lots',
         `<strong>${arr.length}</strong> lot${arr.length===1?'':'s'} · `

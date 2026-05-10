@@ -49,7 +49,7 @@ function _resolveSqlJsOpts() {
   return undefined;  // fall back to sql.js's default resolver
 }
 const crypto = require('crypto');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 
