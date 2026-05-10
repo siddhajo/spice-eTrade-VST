@@ -10552,16 +10552,17 @@ function confirmTyped(opts) {
     const o = opts || {};
     const expected = String(o.expected || 'CONFIRM');
 
-    // Build the modal as a fresh DOM tree on every call. Mirrors the
-    // working promptDispatchedThrough() pattern below — synchronous focus
-    // on a freshly-appended input is the only path that reliably wakes
-    // the keyboard on both Windows and macOS Chromium-Electron. The
-    // earlier static-modal-with-class-toggle approach left the input
-    // looking unhighlighted because focus() fires before layout when
-    // display flips from none → flex via a CSS class.
+    // Build the modal as a fresh DOM tree on every call, with PURE INLINE
+    // styling — NO `.modal-bg.show` class. That class triggers
+    // `animation: fadeIn .2s` which starts at opacity:0; on Windows
+    // Chromium-Electron focus() is silently dropped while the element
+    // is at opacity ~0, leaving the input visibly empty and unfocused.
+    // The promptDispatchedThrough() pattern further down this file uses
+    // this same inline-style approach and has worked in Windows builds.
     const root = document.createElement('div');
-    root.className = 'modal-bg show';
-    root.style.zIndex = '10000';
+    root.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,0.5);' +
+      'z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
     root.innerHTML =
       '<div class="modal" style="max-width:440px">' +
         '<h2 style="margin-bottom:6px"></h2>' +
@@ -10638,11 +10639,13 @@ function promptInput(opts) {
   return new Promise((resolve) => {
     const o = opts || {};
 
-    // Same dynamic-modal pattern as confirmTyped above — see the comment
-    // there for why we don't use a static modal + class toggle.
+    // Pure inline-style modal — see the long comment in confirmTyped for
+    // why the .modal-bg.show class is avoided (its fadeIn animation
+    // starts at opacity:0 and Windows Electron drops focus() during it).
     const root = document.createElement('div');
-    root.className = 'modal-bg show';
-    root.style.zIndex = '10000';
+    root.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,0.5);' +
+      'z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
     root.innerHTML =
       '<div class="modal" style="max-width:480px">' +
         '<h2 style="margin-bottom:6px"></h2>' +
