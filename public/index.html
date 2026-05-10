@@ -10573,7 +10573,10 @@ function confirmTyped(opts) {
           // Comparison is case-insensitive in JS so visual hints aren't
           // needed and they conflict with the IME composition layer
           // on Windows Chromium-Electron, swallowing the first keystroke.
-          '<input type="text" autocomplete="off" spellcheck="false">' +
+          // `autofocus` is the browser-native auto-focus path that runs
+          // BEFORE any JS focus call, animation frame, or layout race —
+          // most reliable for dynamically-inserted inputs in Electron.
+          '<input type="text" autocomplete="off" spellcheck="false" autofocus>' +
         '</div>' +
         '<div style="color:#c0392b;font-size:12px;margin:0 0 8px;display:none"></div>' +
         '<div class="actions">' +
@@ -10652,7 +10655,7 @@ function promptInput(opts) {
         '<p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;white-space:pre-line"></p>' +
         '<div class="fg">' +
           '<label style="font-size:11px"></label>' +
-          '<input type="text" autocomplete="off" spellcheck="false">' +
+          '<input type="text" autocomplete="off" spellcheck="false" autofocus>' +
         '</div>' +
         '<div class="actions">' +
           '<button class="btn btn-o">Cancel</button>' +
