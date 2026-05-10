@@ -10584,7 +10584,7 @@ function confirmTyped(opts) {
           // Plain text input — no autocapitalize/text-transform tricks.
           // `autofocus` is the browser-native auto-focus path that runs
           // before any JS focus call, animation frame, or layout race.
-          '<input class="__ct-input" type="text" autocomplete="off" spellcheck="false" autofocus>' +
+          '<input class="__ct-input" type="text" autocomplete="off" spellcheck="false">' +
         '</div>' +
         '<div style="color:#c0392b;font-size:12px;margin:0 0 8px;display:none"></div>' +
         '<div class="actions">' +
@@ -10658,20 +10658,12 @@ function promptInput(opts) {
       'position:fixed;inset:0;background:rgba(0,0,0,0.5);' +
       'z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
     root.innerHTML =
-      // Scoped style block — see comment in confirmTyped for why these
-      // !important focus visuals + explicit caret-color are necessary.
-      '<style>' +
-        '.__pi-input{caret-color:#000 !important;color:#000 !important}' +
-        '.__pi-input:focus{outline:2px solid var(--spice-saffron, #10B981) !important;' +
-        'outline-offset:1px !important;border-color:var(--spice-saffron, #10B981) !important;' +
-        'box-shadow:0 0 0 3px rgba(16,185,129,0.18) !important}' +
-      '</style>' +
       '<div class="modal" style="max-width:480px">' +
         '<h2 style="margin-bottom:6px"></h2>' +
         '<p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;white-space:pre-line"></p>' +
         '<div class="fg">' +
           '<label style="font-size:11px"></label>' +
-          '<input class="__pi-input" type="text" autocomplete="off" spellcheck="false" autofocus>' +
+          '<input type="text" autocomplete="off" spellcheck="false">' +
         '</div>' +
         '<div class="actions">' +
           '<button class="btn btn-o">Cancel</button>' +
