@@ -10605,7 +10605,7 @@ function confirmTyped(opts) {
     msgEl.textContent   = o.message || '';
     labelEl.textContent = `Type ${expected} to confirm`;
     okBtn.textContent   = o.okLabel || 'Confirm';
-
+    document.getElementsByClassName('__ct-input').autofocus;
     let done = false;
     const finish = (val) => {
       if (done) return; done = true;
