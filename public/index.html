@@ -10866,7 +10866,7 @@ async function revertAllInvoices(ev){
     const r=await fetch(B+`/api/invoices/revert-all/${aid}`,{method:'POST',headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||'Revert failed');
-    alert(`Reverted ${d.invoicesReverted} invoice(s), freed ${d.lotsFreed} lot(s).`);
+    toast(`Reverted ${d.invoicesReverted} invoice(s), freed ${d.lotsFreed} lot(s).`);
     loadInvoices();
     loadInvEligibleBuyers&&loadInvEligibleBuyers();
   }catch(e){showError(e)}
