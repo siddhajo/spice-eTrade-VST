@@ -2623,7 +2623,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
           <!-- Destructive group — pushed right -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
-            <button class="needs-invoice-revert btn" style="height:38px;padding:0 14px;background:var(--spice-turmeric);color:#fff;font-weight:600" onclick="revertAllInvoices()" title="Revert all invoices — deletes them and re-enables lots for re-invoicing">⟲ Revert All</button>
+            <button class="needs-invoice-revert btn" style="height:38px;padding:0 14px;background:var(--spice-turmeric);color:#fff;font-weight:600" onclick="revertAllInvoices(event)" title="Revert all invoices — deletes them and re-enables lots for re-invoicing">⟲ Revert All</button>
           </div>
         </div>
 
@@ -3532,7 +3532,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     </div>
   </div>
   <div id="gi-hint" style="font-size:11px;color:var(--text3);padding:4px 0"></div>
-  <div class="fg"><label>Starting Invoice No <span style="color:var(--text3);font-weight:400">— auto-increments for each selected buyer</span></label><input id="gi-invno" type="number" placeholder="e.g. 6"></div>
+  <div class="fg"><label>Starting Invoice No <span style="color:var(--text3);font-weight:400">— auto-increments for each selected buyer</span></label><input id="gi-invno" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 6"></div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-inv-modal')">Cancel</button>
     <button class="btn btn-a" onclick="previewInvoice('sales')">Preview</button>
@@ -3547,7 +3547,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <select id="gp-seller"><option value="">— Select seller —</option></select>
   </div>
   <div id="gp-hint" style="font-size:11px;color:var(--text3);padding:4px 0"></div>
-  <div class="fg"><label>Invoice No</label><input id="gp-invno" type="number"></div>
+  <div class="fg"><label>Invoice No</label><input id="gp-invno" type="text" inputmode="numeric" pattern="[0-9]*"></div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-pur-modal')">Cancel</button>
     <button class="btn btn-a" onclick="previewInvoice('purchase')">Preview</button>
@@ -3568,7 +3568,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <div style="font-size:11px;color:var(--text3);margin-top:4px">When set, only buyers whose default sale type matches are included.</div>
   </div>
   <div class="fg"><label>Starting Number</label>
-    <input id="ga-start" type="number" placeholder="e.g. 100">
+    <input id="ga-start" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 100">
     <div style="font-size:11px;color:var(--text3);margin-top:4px">Each generated invoice increments by 1 from here</div>
   </div>
   <div id="ga-preview" style="font-size:12px;color:var(--text2);background:var(--green-bg);border:1px solid var(--green-border);border-radius:8px;padding:10px;margin:6px 0;display:none"></div>
@@ -3589,7 +3589,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     </select>
   </div>
   <div class="fg"><label>Or enter seller name manually</label><input id="gb-seller" placeholder="Exact name as in lot"></div>
-  <div class="fg"><label>Bill No</label><input id="gb-billno" type="number"></div>
+  <div class="fg"><label>Bill No</label><input id="gb-billno" type="text" inputmode="numeric" pattern="[0-9]*"></div>
   <div id="gb-hint" style="font-size:11px;color:var(--text3);padding:8px 0"></div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-bill-modal')">Cancel</button>
@@ -3622,7 +3622,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
          the user's chosen counter — defaults to MAX(note_no)+1 from
          the server when the modal opens, but the user can override. -->
     <label>Debit Note # <span style="color:var(--text3);font-weight:400">(numeric)</span></label>
-    <input id="gd1-startno" type="number" min="1" autocomplete="off" placeholder="e.g. 100">
+    <input id="gd1-startno" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="e.g. 100">
   </div>
   <div id="gd1-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
   <div class="actions">
@@ -3648,7 +3648,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
          (start, start+1, start+2, …). Defaults to the next-available
          note_no fetched from the server; the user can override. -->
     <label>Starting Debit Note # <span style="color:var(--text3);font-weight:400">(numeric — increments by 1 per DN)</span></label>
-    <input id="gda-startno" type="number" min="1" autocomplete="off" placeholder="e.g. 100">
+    <input id="gda-startno" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="e.g. 100">
   </div>
   <div id="gda-preview" style="font-size:12px;color:var(--text2);max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px;background:#fafafa">
     <em>Loading eligible purchases…</em>
@@ -9219,15 +9219,15 @@ async function downloadTemplate(type){
 
 // ── Delete All (Item 3) ──────────────────────────────────
 // Double-confirm destructive action, then call /api/{resource}/delete-all
-async function deleteAll(resource,label){
-  const first=confirm(`Delete ALL ${label}?\n\nThis will permanently remove every record from the ${label.toLowerCase()} table. This action CANNOT be undone.\n\nClick OK to continue.`);
-  if(!first)return;
-  const ok = await confirmTyped({
-    title:    `Delete all ${label.toLowerCase()}?`,
-    message:  `Every row in ${label.toLowerCase()} will be permanently removed. Cannot be undone.`,
-    expected: 'DELETE',
-    okLabel:  'Delete All',
-  });
+async function deleteAll(resource,label,ev){
+  // Two-click confirm on the triggering button — first click arms with
+  // a red "click again" label, second click within 3s commits. See the
+  // confirmTwoClick docstring for why this replaces the typed-confirm
+  // modal on destructive actions in the desktop app.
+  const ok = await confirmTwoClick('deleteAll:'+resource,
+    ev && ev.currentTarget,
+    { confirmLabel: `⚠ Click again to DELETE ALL ${label} — cannot undo`,
+      fallbackMessage: `Delete ALL ${label}?\n\nThis will permanently remove every record from the ${label.toLowerCase()} table. Cannot be undone.` });
   if (!ok) return;
   try{
     const r=await fetch(B+`/api/${resource}/delete-all`,{method:'DELETE',headers:{'Authorization':'Bearer '+T}});
@@ -10595,6 +10595,75 @@ async function revertInvoice(id, buyerName, invLabel){
 // Returns Promise<boolean>. Resolves true only when the user types the
 // exact `expected` string (case-sensitive) and clicks Confirm.
 function confirmTyped(opts) {
+  return _confirmTypedImpl(opts);
+}
+
+// ─── Two-click confirm — preferred path for destructive actions ────
+// No modal, no input, no focus games. The triggering button itself
+// becomes the second-stage confirm: first click swaps its label to a
+// "click again" state and starts a 3-second timer. A second click on
+// the SAME button within that window confirms; expiry reverts the
+// button. Works identically in browser and Electron on every platform.
+//
+// Usage in a destructive handler:
+//   async function revertAllInvoices(ev) {
+//     if (!await confirmTwoClick('revertAll', ev && ev.currentTarget,
+//           { confirmLabel: '⚠ Click again to REVERT ALL' })) return;
+//     // …actual destructive work…
+//   }
+//
+// `key` is a short identifier so simultaneous arming of different
+// buttons doesn't cross-contaminate each other's state. Falls back to
+// a native confirm() dialog when no button element is supplied, so
+// programmatic callers still get a yes/no gate.
+const _twoClickArm = new Map();
+function confirmTwoClick(key, btn, opts) {
+  return new Promise((resolve) => {
+    const o = opts || {};
+    // Programmatic invocation without a button → fall back to native
+    // confirm(). Works in Electron too, no focus issues.
+    if (!btn) {
+      resolve(window.confirm(o.fallbackMessage ||
+        'This action cannot be undone. Click OK to proceed.'));
+      return;
+    }
+    const armed = _twoClickArm.get(key);
+    const ttl   = o.timeoutMs || 3000;
+    if (armed && (Date.now() - armed.at) < ttl) {
+      // Second click within window → CONFIRM.
+      clearTimeout(armed.timer);
+      armed.restore();
+      _twoClickArm.delete(key);
+      resolve(true);
+      return;
+    }
+    // First click → arm the button visually + start countdown.
+    const orig = {
+      html: btn.innerHTML,
+      bg:   btn.style.background,
+      color: btn.style.color,
+      ttl:  btn.title || '',
+    };
+    btn.innerHTML       = o.confirmLabel || '⚠ Click again to confirm';
+    btn.style.background = '#DC2626';
+    btn.style.color     = '#fff';
+    btn.title           = `Click again within ${Math.round(ttl/1000)}s to proceed, or wait to cancel`;
+    const restore = () => {
+      btn.innerHTML = orig.html;
+      btn.style.background = orig.bg;
+      btn.style.color = orig.color;
+      btn.title = orig.ttl;
+    };
+    const timer = setTimeout(() => {
+      restore();
+      _twoClickArm.delete(key);
+    }, ttl);
+    _twoClickArm.set(key, { at: Date.now(), timer, restore });
+    resolve(false);
+  });
+}
+
+function _confirmTypedImpl(opts) {
   return new Promise((resolve) => {
     const o = opts || {};
     const expected = String(o.expected || 'CONFIRM');
@@ -10774,16 +10843,17 @@ function promptInput(opts) {
   });
 }
 
-async function revertAllInvoices(){
+async function revertAllInvoices(ev){
   const aid=document.getElementById('inv-auction').value;
   if(!aid){alert('Select an auction first');return}
-  if(!confirm('Revert ALL invoices for this auction?\n\nEvery invoice in this auction will be deleted, and every lot will become eligible for re-invoicing. This cannot be undone.\n\nContinue?'))return;
-  const ok = await confirmTyped({
-    title:    'Revert all invoices?',
-    message:  'This deletes every invoice in this auction and re-enables every lot for invoicing. Cannot be undone.',
-    expected: 'REVERT',
-    okLabel:  'Revert All',
-  });
+  // Two-click confirm — first click arms the button (red label "click
+  // again to revert"), second click within 3s proceeds. Replaced the
+  // type-REVERT modal because Electron-Windows kept dropping focus on
+  // the input. No modal, no input, no focus problems.
+  const ok = await confirmTwoClick('revertAll',
+    ev && ev.currentTarget,
+    { confirmLabel: '⚠ Click again to REVERT ALL — cannot undo',
+      fallbackMessage: 'Revert ALL invoices in this trade?\n\nEvery invoice will be deleted and every lot re-enabled for invoicing. This cannot be undone.' });
   if (!ok) return;
   try{
     const r=await fetch(B+`/api/invoices/revert-all/${aid}`,{method:'POST',headers:{'Authorization':'Bearer '+T}});
@@ -12280,17 +12350,13 @@ function _resolveDnTrade() {
 // (this trade)" calls this — the action only ever wipes DNs in the
 // currently-selected trade, never globally. Server enforces the same
 // restriction (refuses without ?ano=).
-async function deleteAllDebitNotesForTrade() {
+async function deleteAllDebitNotesForTrade(ev) {
   const t = _resolveDnTrade();
   if (!t) { alert('Select a trade first'); return; }
-  const first = confirm(`Delete ALL debit notes in trade #${t.ano}?\n\nThis only affects this trade — other trades' debit notes are not touched. This action CANNOT be undone.`);
-  if (!first) return;
-  const ok = await confirmTyped({
-    title:    `Delete all debit notes in trade #${t.ano}?`,
-    message:  `Every debit note in trade #${t.ano} will be permanently deleted. Other trades are unaffected.`,
-    expected: 'DELETE',
-    okLabel:  'Delete All',
-  });
+  const ok = await confirmTwoClick('deleteAllDN:'+t.ano,
+    ev && ev.currentTarget,
+    { confirmLabel: `⚠ Click again to DELETE ALL DNs in trade #${t.ano}`,
+      fallbackMessage: `Delete ALL debit notes in trade #${t.ano}?\n\nOther trades are unaffected. Cannot be undone.` });
   if (!ok) return;
   try {
     const r = await fetch(B + `/api/debit-notes/delete-all?ano=${encodeURIComponent(t.ano)}`, {
