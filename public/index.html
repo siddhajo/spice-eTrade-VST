@@ -414,6 +414,13 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 .fg input[type="date"]{padding:0 12px}
 .fg input:not([type="checkbox"]):not([type="radio"]):focus,.fg select:focus,.fg textarea:focus{border-color:var(--spice-saffron);box-shadow:0 0 0 3px rgba(16,185,129,.20)}
 .fg select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='10'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%23666' fill='none' stroke-width='2'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
+/* Windows-Electron focus-paint fix for invoice/bill/DN number inputs.
+   Without this, after certain flows (e.g. Revert All → alert()) the input
+   IS focused but the caret + focus border don't render, so the user
+   sees no cursor and assumes the field is dead. Matches the recipe used
+   in confirmTyped/promptInput. */
+#gi-invno,#gp-invno,#ga-start,#gb-billno,#gd1-startno,#gda-startno{caret-color:#000 !important;color:#000 !important}
+#gi-invno:focus,#gp-invno:focus,#ga-start:focus,#gb-billno:focus,#gd1-startno:focus,#gda-startno:focus{outline:2px solid var(--spice-saffron,#10B981) !important;outline-offset:1px !important;border-color:var(--spice-saffron,#10B981) !important;box-shadow:0 0 0 3px rgba(16,185,129,.18) !important}
 
 /* ── Buttons ─────────────────────────────────────────────── */
 .btn{
