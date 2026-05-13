@@ -1588,7 +1588,13 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   display:none;position:fixed;top:80px;right:24px;
   padding:14px 22px;background:var(--green);color:#fff;
   border-radius:10px;font-weight:700;font-size:14px;z-index:99;
-  box-shadow:0 4px 16px rgba(13,124,95,.25);animation:slideIn .2s
+  box-shadow:0 4px 16px rgba(13,124,95,.25);animation:slideIn .2s;
+  /* alert() is overridden to use toast() because native window.alert
+     drops Windows-Electron renderer keyboard focus. Some alert messages
+     are multi-line — pre-line keeps \n breaks intact, max-width keeps
+     long failure lists readable, text-align:left prevents centering
+     looking weird on multi-line. */
+  white-space:pre-line;max-width:480px;text-align:left
 }
 @keyframes slideIn{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
 
@@ -3999,7 +4005,27 @@ function updateSyncIndicator(){
 }
 // Refresh the indicator's "Xs ago" text every 10s
 setInterval(updateSyncIndicator, 10000);
-function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3000)}
+function toast(m,ms){
+  const t=document.getElementById('toast');
+  const s=String(m==null?'':m);
+  t.textContent=s;
+  t.style.display='block';
+  // Scale dwell time with content length so long failure lists stay
+  // readable. 3s baseline, +30ms per char, capped at 12s.
+  const dur=Math.min(12000, Math.max(3000, ms || s.length*30));
+  clearTimeout(t._timer);
+  t._timer=setTimeout(()=>t.style.display='none',dur);
+}
+
+// Override window.alert globally. Native alert() opens a blocking OS
+// dialog; on Windows Electron the BrowserWindow renderer doesn't
+// reliably regain OS-level keyboard focus when it closes, so the user
+// sees the next typed field appear focused (activeElement matches) but
+// keystrokes go to nowhere. Routing alert through toast() avoids this
+// class of bug everywhere at once. confirm() is left alone because it
+// returns a synchronous boolean call sites depend on; empirically it
+// recovers focus more reliably than alert.
+window.alert = function(m){ toast(m); };
 
 // Show a user-friendly error. Uses the friendlyErr() mapping for HTTP/network
 // errors; falls back to the message string. Non-blocking — shows a red toast.
@@ -9240,7 +9266,7 @@ async function deleteAll(resource,label,ev){
     const r=await fetch(B+`/api/${resource}/delete-all`,{method:'DELETE',headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||'Delete failed');
-    alert(`Deleted ${d.deleted||0} ${label.toLowerCase()}.`);
+    toast(`Deleted ${d.deleted||0} ${label.toLowerCase()}.`);
     // Refresh the relevant list
     if(resource==='traders')searchTraders('');
     else if(resource==='buyers')searchBuyers('');
@@ -9857,11 +9883,11 @@ async function loadPurEligibleSellers(){
 }
 
 function openGenInvModal(){
-  if(!document.getElementById('inv-auction').value){alert('Select an auction first');return}
+  if(!document.getElementById('inv-auction').value){toast('Select an auction first');return}
   loadInvEligibleBuyers();showModal('gen-inv-modal');
 }
 function openGenPurModal(){
-  if(!document.getElementById('pur-auction').value){alert('Select an auction first');return}
+  if(!document.getElementById('pur-auction').value){toast('Select an auction first');return}
   loadPurEligibleSellers();showModal('gen-pur-modal');
 }
 
@@ -9871,7 +9897,7 @@ async function openGenAllModal(kind){
   _genAllKind=kind;
   const aidMap={invoices:'inv-auction',purchases:'pur-auction',bills:'bill-auction'};
   const aid=document.getElementById(aidMap[kind])?.value;
-  if(!aid){alert('Select an auction first');return}
+  if(!aid){toast('Select an auction first');return}
   const titles={invoices:'Generate Sales Invoices for All Buyers',purchases:'Generate Purchase Invoices for All Dealers',bills:'Generate Bills of Supply for All Agriculturists'};
   const descs={
     invoices:'Creates one invoice per unique buyer with lots in this auction. Already-invoiced lots are skipped.',
@@ -9965,7 +9991,7 @@ async function doGenerateAll(){
   const aidMap={invoices:'inv-auction',purchases:'pur-auction',bills:'bill-auction'};
   const aid=document.getElementById(aidMap[kind]).value;
   const start=document.getElementById('ga-start').value.trim();
-  if(!start||parseInt(start)<1){alert('Enter a starting number (positive integer)');return}
+  if(!start||parseInt(start)<1){toast('Enter a starting number (positive integer)');return}
   const body={};
   if(kind==='bills')body.startBillNo=start;
   else{body.startInvoiceNo=start;if(kind==='invoices')body.saleType=document.getElementById('ga-sale').value||''}
@@ -10366,13 +10392,13 @@ async function validateLots(){
 // ── Invoices ──────────────────────────────────────────────
 async function generateInvoice(){
   const aid=document.getElementById('inv-auction').value;
-  if(!aid){alert('Please select an auction first');return}
+  if(!aid){toast('Please select an auction first');return}
   const saleType=document.getElementById('gi-sale').value;
   const startInvNo=parseInt(document.getElementById('gi-invno').value.trim(),10);
-  if(!startInvNo||isNaN(startInvNo)||startInvNo<1){alert('Enter a valid starting invoice number');return}
+  if(!startInvNo||isNaN(startInvNo)||startInvNo<1){toast('Enter a valid starting invoice number');return}
   const list=document.getElementById('gi-buyer-list');
   const checked=Array.from(list?.querySelectorAll('.gi-cb:checked')||[]);
-  if(!checked.length){alert('Select at least one buyer');return}
+  if(!checked.length){toast('Select at least one buyer');return}
   const buyers=checked.map(cb=>cb.value);
 
   // Single buyer: keep old behavior (immediate feedback, quick)
@@ -11386,11 +11412,11 @@ async function delInvoice(id){if(!confirm('Delete this invoice? Related lots wil
 // ── Purchases ─────────────────────────────────────────────
 async function generatePurchase(){
   const aid=document.getElementById('pur-auction').value;
-  if(!aid){alert('Please select an auction first');return}
+  if(!aid){toast('Please select an auction first');return}
   const sellerName=document.getElementById('gp-seller').value.trim();
   const invoiceNo=document.getElementById('gp-invno').value.trim();
-  if(!sellerName){alert('Enter seller name');return}
-  if(!invoiceNo){alert('Enter invoice number');return}
+  if(!sellerName){toast('Enter seller name');return}
+  if(!invoiceNo){toast('Enter invoice number');return}
   try{
     const r=await fetch(B+`/api/purchases/generate/${aid}`,{
       method:'POST',
@@ -12232,10 +12258,10 @@ async function saveBillEdit(){
     hideModal('bill-edit-modal');toast('Bill updated');loadBills();
   }catch(e){showError(e)}}
 async function generateBill(){
-  const aid=document.getElementById('bill-auction').value;if(!aid){alert('Select auction');return}
+  const aid=document.getElementById('bill-auction').value;if(!aid){toast('Select auction');return}
   const sellerName=document.getElementById('gb-seller').value.trim();
   const billNo=document.getElementById('gb-billno').value.trim();
-  if(!sellerName||!billNo){alert('Enter seller name and bill no');return}
+  if(!sellerName||!billNo){toast('Enter seller name and bill no');return}
   try{
     const r=await fetch(B+`/api/bills/generate/${aid}`,{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},
@@ -12359,7 +12385,7 @@ function _resolveDnTrade() {
 // restriction (refuses without ?ano=).
 async function deleteAllDebitNotesForTrade(ev) {
   const t = _resolveDnTrade();
-  if (!t) { alert('Select a trade first'); return; }
+  if (!t) { toast('Select a trade first'); return; }
   const ok = await confirmTwoClick('deleteAllDN:'+t.ano,
     ev && ev.currentTarget,
     { confirmLabel: `⚠ Click again to DELETE ALL DNs in trade #${t.ano}`,
@@ -12372,7 +12398,7 @@ async function deleteAllDebitNotesForTrade(ev) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Delete failed');
-    alert(`Deleted ${d.deleted || 0} debit note${(d.deleted || 0) === 1 ? '' : 's'} in trade #${t.ano}.`);
+    toast(`Deleted ${d.deleted || 0} debit note${(d.deleted || 0) === 1 ? '' : 's'} in trade #${t.ano}.`);
     loadDebitNotes();
   } catch (e) { showError(e); }
 }
@@ -12383,7 +12409,7 @@ async function deleteAllDebitNotesForTrade(ev) {
 // to the selected trade.
 async function openGenDebitSingleModal(){
   const t = _resolveDnTrade();
-  if (!t) { alert('Select a trade first'); return; }
+  if (!t) { toast('Select a trade first'); return; }
   document.getElementById('gd1-trade-info').textContent = `Trade: ${t.label}`;
   document.getElementById('gd1-purchno').value = '';
   document.getElementById('gd1-startno').value = '';
@@ -12403,7 +12429,7 @@ async function openGenDebitSingleModal(){
 
 async function generateDebitNoteSingle(){
   const t = _resolveDnTrade();
-  if (!t) { alert('Select a trade first'); return; }
+  if (!t) { toast('Select a trade first'); return; }
   const purchno = (document.getElementById('gd1-purchno').value || '').trim();
   const startNoVal = (document.getElementById('gd1-startno').value || '').trim();
   const errEl = document.getElementById('gd1-err');
@@ -12444,7 +12470,7 @@ async function generateDebitNoteSingle(){
 // purchase IN THAT TRADE — never cross-trade.
 async function openGenDebitAllModal(){
   const t = _resolveDnTrade();
-  if (!t) { alert('Select a trade first'); return; }
+  if (!t) { toast('Select a trade first'); return; }
   document.getElementById('gda-trade-info').textContent = `Trade: ${t.label}`;
   document.getElementById('gda-err').style.display = 'none';
   document.getElementById('gda-startno').value = '';
@@ -12497,7 +12523,7 @@ async function loadGenDebitAllPreview(auctionId) {
 
 async function generateAllDebitNotesForTrade(){
   const t = _resolveDnTrade();
-  if (!t) { alert('Select a trade first'); return; }
+  if (!t) { toast('Select a trade first'); return; }
   const errEl = document.getElementById('gda-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
   errEl.style.display = 'none';
