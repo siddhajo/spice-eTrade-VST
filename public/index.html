@@ -4022,10 +4022,20 @@ function toast(m,ms){
 // reliably regain OS-level keyboard focus when it closes, so the user
 // sees the next typed field appear focused (activeElement matches) but
 // keystrokes go to nowhere. Routing alert through toast() avoids this
-// class of bug everywhere at once. confirm() is left alone because it
-// returns a synchronous boolean call sites depend on; empirically it
-// recovers focus more reliably than alert.
+// class of bug everywhere at once.
 window.alert = function(m){ toast(m); };
+
+// Wrap window.confirm to reclaim OS keyboard focus after the dialog
+// closes. Same underlying bug as alert, but confirm has a synchronous
+// boolean return that call sites depend on, so we can't replace it
+// outright — we just chase it with window.focus() to grab keyboard
+// input back for the renderer.
+const _nativeConfirm = window.confirm.bind(window);
+window.confirm = function(m){
+  const r = _nativeConfirm(m);
+  try { window.focus(); } catch(_){}
+  return r;
+};
 
 // Show a user-friendly error. Uses the friendlyErr() mapping for HTTP/network
 // errors; falls back to the message string. Non-blocking — shows a red toast.
@@ -4270,7 +4280,18 @@ if (document.readyState === 'loading') {
 } else {
   initSummaryPanels();
 }
-function showModal(id){document.getElementById(id).classList.add('show')}
+function showModal(id){
+  // Windows-Electron: after window.open() (PDF preview windows) the
+  // renderer can lose OS-level keyboard focus while mouse events keep
+  // working. Reclaim it before showing the modal so the first input
+  // click actually accepts keystrokes.
+  try { window.focus(); } catch(_){}
+  document.getElementById(id).classList.add('show');
+}
+// Safety net: any user click reclaims OS keyboard focus for the renderer.
+// Cheap (idempotent if already focused) and catches paths that bypass
+// showModal — e.g. inline modals built ad-hoc by promptInput/confirmTyped.
+document.addEventListener('mousedown', () => { try { window.focus(); } catch(_){} }, true);
 function hideModal(id){document.getElementById(id).classList.remove('show')}
 function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
 // ── Indian number formatter (lakhs grouping) ──────────────────
