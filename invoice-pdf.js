@@ -547,7 +547,7 @@ function generateCropReceiptPDF(lot, cfg) {
   // ── Logo (settings-driven; same file the sales invoice uses) ──
   const fsMod = require('fs');
   const pathMod = require('path');
-  const candidates = ['logo-ispl.png', 'logo-asp.png', 'logo_kj.png'];
+  const candidates = ['logo-ispl.png', 'logo_kj.png', 'logo-asp.png'];
   let logoDrawn = false;
   for (const f of candidates) {
     const p = pathMod.join(__dirname, 'public', f);
