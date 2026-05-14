@@ -547,7 +547,7 @@ function generateCropReceiptPDF(lot, cfg) {
   // ── Logo (settings-driven; same file the sales invoice uses) ──
   const fsMod = require('fs');
   const pathMod = require('path');
-  const candidates = ['logo-ispl.png', 'logo-asp.png'];
+  const candidates = ['logo-ispl.png', 'logo-asp.png', 'logo_kj.png'];
   let logoDrawn = false;
   for (const f of candidates) {
     const p = pathMod.join(__dirname, 'public', f);
@@ -847,8 +847,12 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const useASPLogo = !isPurchaseView
                   && false; // e-Trade-only build: no sister-company context
   const logoFile = useASPLogo ? 'logo-asp.png' : 'logo-ispl.png';
-  const logoPath = require('path').join(__dirname, 'public', logoFile);
   const fs = require('fs');
+  const _pathMod = require('path');
+  // Try the configured logo first; fall through to the bundled default
+  // (logo_kj.png) so invoices still get a logo before the user uploads.
+  let logoPath = _pathMod.join(__dirname, 'public', logoFile);
+  if (!fs.existsSync(logoPath)) logoPath = _pathMod.join(__dirname, 'public', 'logo_kj.png');
   let logoDrawn = false;
   if (fs.existsSync(logoPath)) {
     try {

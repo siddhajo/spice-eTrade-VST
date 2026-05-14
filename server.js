@@ -47,6 +47,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// When the user hasn't uploaded a custom logo, /logo-ispl.png falls
+// through to the bundled default (logo_kj.png). The upload widget still
+// writes to logo-ispl.png, and GET /api/company-settings/logo/ispl still
+// correctly returns exists:false until the user uploads, so the "Upload
+// your logo" UI state stays accurate.
+app.get('/logo-ispl.png', (req, res, next) => {
+  const userLogo = path.join(__dirname, 'public', 'logo-ispl.png');
+  if (fs.existsSync(userLogo)) return next();
+  res.sendFile(path.join(__dirname, 'public', 'logo_kj.png'));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Prevent browser/proxy caching of API responses so Refresh buttons actually
@@ -398,13 +409,15 @@ app.get('/api/branding', (req, res) => {
     const isKL = String(cfg.business_state || '').toUpperCase().includes('KERALA');
     const branch = (isKL ? cfg.kl_branch : cfg.tn_branch) || cfg.tn_branch || cfg.kl_branch || '';
     const gstin  = (isKL ? cfg.kl_gstin  : cfg.tn_gstin)  || cfg.tn_gstin  || cfg.kl_gstin  || '';
-    const logoFile = path.join(__dirname, 'public', 'logo-ispl.png');
+    // /logo-ispl.png is always served (falls through to logo_kj.png when
+    // the user hasn't uploaded a custom logo — see the route handler
+    // registered before the static middleware).
     res.json({
       tradeName: cfg.trade_name || cfg.short_name || '',
       shortName: cfg.short_name || cfg.trade_name || '',
       branch,
       gstin,
-      logoUrl: fs.existsSync(logoFile) ? '/logo-ispl.png' : null,
+      logoUrl: '/logo-ispl.png',
     });
   } catch (e) {
     res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null });

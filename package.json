@@ -75,7 +75,6 @@
         { "target": "zip", "arch": ["arm64", "x64"] }
       ],
       "category": "public.app-category.business",
-      "icon": "public/logo-ispl.png",
       "artifactName": "SpiceETrade-${version}-${arch}.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
@@ -90,7 +89,6 @@
           ]
         }
       ],
-      "icon": "public/logo-ispl.png",
       "artifactName": "SpiceETrade-Setup-${version}.${ext}"
     },
     "nsis": {
