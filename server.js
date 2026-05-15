@@ -738,49 +738,149 @@ app.post('/api/company-settings/import', requireSettingsWrite, (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // BULK DELETE ROUTES (DELETE ALL records from a given table)
 // ══════════════════════════════════════════════════════════════
-function makeDeleteAll(table) {
+// Every wipe is wrapped in three safeguards:
+//   1. Auto-backup — the live SQLite file is copied to data/backups/
+//      with a timestamped, resource-tagged filename BEFORE any DELETE
+//      runs. One stray click is recoverable by restoring the snapshot.
+//   2. Audit log — a row in delete_log captures who/when/what/how-many
+//      plus the backup path, so a wipe can be traced months later.
+//   3. Cascade-count preflight — the client can hit /preflight to show
+//      "About to delete 1,247 invoices…" with the real number before
+//      asking the operator to type DELETE.
+//
+// `requireDeleteAll` is still enforced by Express middleware on every
+// route below; these protections are layered on top of it, not in
+// place of it.
+
+// Map of resource → { table, cascade: [tables wiped alongside], scope }.
+// `scope` is 'global' (wipes the whole table) or 'trade' (requires
+// ?ano= and only deletes rows matching that ano).
+const DELETE_ALL_RESOURCES = {
+  traders:      { table: 'traders',     cascade: ['trader_banks'],                                          scope: 'global' },
+  buyers:       { table: 'buyers',      cascade: [],                                                        scope: 'global' },
+  invoices:     { table: 'invoices',    cascade: [],                                                        scope: 'global' },
+  purchases:    { table: 'purchases',   cascade: [],                                                        scope: 'global' },
+  bills:        { table: 'bills',       cascade: [],                                                        scope: 'global' },
+  auctions:     { table: 'auctions',    cascade: ['lots','invoices','purchases','bills','debit_notes','lot_allocations'], scope: 'global' },
+  'debit-notes': { table: 'debit_notes', cascade: [],                                                       scope: 'trade' },
+};
+
+// Snapshot the live SQLite file before any destructive operation.
+// Returns the absolute backup path so the audit row can point at it.
+// Failure is fatal — we'd rather refuse the wipe than do it without a
+// safety net.
+function _snapshotBackupBeforeDelete(resource) {
+  const backupDir = path.join(process.env.SPICE_DATA_DIR || path.join(__dirname, 'data'), 'backups');
+  try { fs.mkdirSync(backupDir, { recursive: true }); } catch (_) {}
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `before-delete-${resource}-${stamp}.db`;
+  const target = path.join(backupDir, filename);
+  // Persist any pending in-memory state first so the snapshot is consistent.
+  try { require('./db').flushSave(); } catch (_) {}
+  fs.copyFileSync(DB_PATH, target);
+  return target;
+}
+
+function _logDelete(db, { resource, deletedCount, cascadeCounts, backupPath, req }) {
+  try {
+    db.run(
+      `INSERT INTO delete_log (resource, deleted_count, cascade_counts, backup_path, user_id, username, ip)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        resource,
+        deletedCount,
+        JSON.stringify(cascadeCounts || {}),
+        backupPath || '',
+        (req.user && req.user.id) || null,
+        (req.user && req.user.username) || '',
+        String(req.ip || req.headers['x-forwarded-for'] || '').slice(0, 64),
+      ],
+    );
+  } catch (_) { /* best-effort */ }
+}
+
+// Count helper used both by the preflight endpoint and by the wipe
+// itself (so we record the exact row count being deleted).
+function _countDeleteAllImpact(db, resource, ano) {
+  const def = DELETE_ALL_RESOURCES[resource];
+  if (!def) return null;
+  const counts = {};
+  if (def.scope === 'trade') {
+    counts[def.table] = db.get(`SELECT COUNT(*) as c FROM ${def.table} WHERE ano = ?`, [ano || '']).c;
+  } else {
+    counts[def.table] = db.get(`SELECT COUNT(*) as c FROM ${def.table}`).c;
+    for (const t of def.cascade) {
+      try { counts[t] = db.get(`SELECT COUNT(*) as c FROM ${t}`).c; }
+      catch (_) { counts[t] = 0; }
+    }
+  }
+  return counts;
+}
+
+// GET /api/admin/delete-all/preflight?resource=invoices[&ano=16]
+// Returns the row count of the target table + each cascade table, so
+// the client can show "About to delete 1,247 invoices" before asking
+// for typed confirmation.
+app.get('/api/admin/delete-all/preflight', requireDeleteAll, (req, res) => {
+  const resource = String(req.query.resource || '').trim();
+  const def = DELETE_ALL_RESOURCES[resource];
+  if (!def) return res.status(400).json({ error: 'Unknown resource', available: Object.keys(DELETE_ALL_RESOURCES) });
+  if (def.scope === 'trade' && !String(req.query.ano || '').trim()) {
+    return res.status(400).json({ error: 'ano query param required for trade-scoped delete' });
+  }
+  const counts = _countDeleteAllImpact(getDb(), resource, req.query.ano);
+  res.json({ resource, scope: def.scope, counts });
+});
+
+// GET /api/admin/delete-log — recent Delete All audit entries.
+app.get('/api/admin/delete-log', requireDeleteAll, (req, res) => {
+  const rows = getDb().all(
+    `SELECT id, resource, deleted_count, cascade_counts, backup_path, username, ip, created_at
+       FROM delete_log ORDER BY id DESC LIMIT 200`
+  );
+  res.json(rows.map(r => ({
+    ...r,
+    cascade_counts: (() => { try { return JSON.parse(r.cascade_counts || '{}'); } catch (_) { return {}; } })(),
+  })));
+});
+
+function makeDeleteAll(resource) {
+  const def = DELETE_ALL_RESOURCES[resource];
   return (req, res) => {
     try {
       const db = getDb();
-      const before = db.get(`SELECT COUNT(*) as c FROM ${table}`).c;
-      db.run(`DELETE FROM ${table}`);
-      try { db.exec(`DELETE FROM sqlite_sequence WHERE name = '${table}'`); } catch(_) {}
-      res.json({ success: true, deleted: before });
+      // Snapshot first so the operator can always roll back. If this
+      // fails (disk full, permission), bail before touching any data.
+      let backupPath = '';
+      try { backupPath = _snapshotBackupBeforeDelete(resource); }
+      catch (e) {
+        return res.status(500).json({ error: 'Backup snapshot failed; refusing to delete: ' + (e.message || e) });
+      }
+      const counts = _countDeleteAllImpact(db, resource);
+      const before = counts[def.table] || 0;
+      for (const t of def.cascade) {
+        try { db.run(`DELETE FROM ${t}`); } catch (_) {}
+        try { db.exec(`DELETE FROM sqlite_sequence WHERE name = '${t}'`); } catch (_) {}
+      }
+      db.run(`DELETE FROM ${def.table}`);
+      try { db.exec(`DELETE FROM sqlite_sequence WHERE name = '${def.table}'`); } catch (_) {}
+      _logDelete(db, { resource, deletedCount: before, cascadeCounts: counts, backupPath, req });
+      res.json({ success: true, deleted: before, cascadeCounts: counts, backupPath });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   };
 }
-// Traders have a FK from trader_banks.trader_id → traders.id. A plain
-// DELETE FROM traders fails with "FOREIGN KEY constraint failed" whenever
-// any seller has a row in trader_banks. Wipe children first, then parents.
-app.delete('/api/traders/delete-all', requireDeleteAll, (req, res) => {
-  try {
-    const db = getDb();
-    const before = db.get('SELECT COUNT(*) as c FROM traders').c;
-    db.run('DELETE FROM trader_banks');
-    db.run('DELETE FROM traders');
-    try {
-      db.exec("DELETE FROM sqlite_sequence WHERE name = 'traders'");
-      db.exec("DELETE FROM sqlite_sequence WHERE name = 'trader_banks'");
-    } catch(_) {}
-    res.json({ success: true, deleted: before });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.delete('/api/traders/delete-all',     requireDeleteAll, makeDeleteAll('traders'));
 app.delete('/api/buyers/delete-all',      requireDeleteAll, makeDeleteAll('buyers'));
 app.delete('/api/invoices/delete-all',    requireDeleteAll, makeDeleteAll('invoices'));
 app.delete('/api/purchases/delete-all',   requireDeleteAll, makeDeleteAll('purchases'));
 app.delete('/api/bills/delete-all',       requireDeleteAll, makeDeleteAll('bills'));
+app.delete('/api/auctions/delete-all',    requireDeleteAll, makeDeleteAll('auctions'));
 // Delete All Debit Notes — TRADE-SCOPED.
-// Earlier this was wired to the generic makeDeleteAll('debit_notes') which
-// wiped EVERY debit note in the database regardless of trade. Per the
-// trade-wise model (each trade owns its own DN sequence), Delete All
-// must operate within the currently-selected trade only.
-//
-// Required query param: ?ano=<trade-number>. Without it, return 400 to
-// avoid accidental cross-trade wipes.
+// Each trade owns its own DN sequence, so Delete All must operate
+// within the currently-selected trade only. ?ano=<trade-number> is
+// required; without it we refuse the wipe.
 app.delete('/api/debit-notes/delete-all', requireDeleteAll, (req, res) => {
   try {
     const db = getDb();
@@ -790,35 +890,26 @@ app.delete('/api/debit-notes/delete-all', requireDeleteAll, (req, res) => {
         error: 'Trade number (ano) is required for Delete All. Refusing global wipe.',
       });
     }
+    let backupPath = '';
+    try { backupPath = _snapshotBackupBeforeDelete('debit-notes-' + ano); }
+    catch (e) {
+      return res.status(500).json({ error: 'Backup snapshot failed; refusing to delete: ' + (e.message || e) });
+    }
     const before = db.get(
       'SELECT COUNT(*) as c FROM debit_notes WHERE ano = ?',
       [ano]
     ).c;
     db.run('DELETE FROM debit_notes WHERE ano = ?', [ano]);
-    res.json({ success: true, deleted: before, ano });
+    _logDelete(db, {
+      resource: 'debit-notes',
+      deletedCount: before,
+      cascadeCounts: { ano, debit_notes: before },
+      backupPath,
+      req,
+    });
+    res.json({ success: true, deleted: before, ano, backupPath });
   } catch (e) {
     res.status(500).json({ error: 'Delete All failed: ' + (e.message || e) });
-  }
-});
-
-// Trades (auctions) bulk-delete — cascades through every child table that
-// references auction_id. Order matters: clear leaf rows first so foreign-
-// key dependencies don't block the parent delete. Wraps in a try/catch
-// per-table because some installs may not have every optional table.
-app.delete('/api/auctions/delete-all', requireDeleteAll, (req, res) => {
-  try {
-    const db = getDb();
-    const before = db.get('SELECT COUNT(*) as c FROM auctions').c;
-    const childTables = ['lots', 'invoices', 'purchases', 'bills', 'debit_notes', 'lot_allocations'];
-    for (const t of childTables) {
-      try { db.run(`DELETE FROM ${t}`); } catch(_) {}
-      try { db.exec(`DELETE FROM sqlite_sequence WHERE name = '${t}'`); } catch(_) {}
-    }
-    db.run('DELETE FROM auctions');
-    try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'auctions'"); } catch(_) {}
-    res.json({ success: true, deleted: before });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
   }
 });
 
@@ -922,22 +1013,58 @@ app.get('/api/traders', requireViewOrLotEntry, (req, res) => {
     for (const r of rows) r.banks = byTrader.get(r.id) || [];
     return rows;
   };
+
+  // ── Pagination ──────────────────────────────────────────────
+  // `?page=` (1-based) + `?pageSize=` cap page-window size.
+  //   • `?page=` or `?pageSize=` present  → paged response
+  //         { rows: [...], total: N, page: P, pageSize: S }
+  //   • Neither present                   → legacy plain-array response,
+  //         capped at 500 rows (back-compat for old UI / dropdowns)
+  //   • Legacy `?limit=` is preserved as an alias for `pageSize` so the
+  //         lot-entry seller picker (which sends `&limit=100`) keeps
+  //         working unchanged.
+  // Search filters apply BEFORE paging, so search hits the whole table —
+  // critical on 7,000-row masters where the legacy LIMIT 500 was hiding
+  // matches past row 500.
+  const page     = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || req.query.limit, 10) || 50));
+  const offset   = (page - 1) * pageSize;
+  const wantPaged = req.query.page != null || req.query.pageSize != null;
+
+  // Build WHERE clause once — shared by COUNT and page query so the
+  // total reported in the pager matches what'll appear when the user
+  // pages through.
+  let where = '';
+  let params = [];
   if (search) {
     const q = `%${search}%`;
+    where = 'WHERE name LIKE ? OR tel LIKE ? OR cr LIKE ? OR pan LIKE ? OR ppla LIKE ? OR aadhar LIKE ?';
+    params = [q, q, q, q, q, q];
+  }
+
+  // Dedupe-by-(name,CR) for legacy responses is intentionally NOT applied
+  // to paged responses: pagination needs stable row counts that match
+  // total, and the LIMIT/OFFSET windowing won't reach all rows reliably
+  // if we collapse duplicates client-side. Fixing legacy dupes is a
+  // separate data-cleanup task — see _maybeDedupeTradersByNameCR below.
+  if (wantPaged) {
+    const total = db.get(`SELECT COUNT(*) as c FROM traders ${where}`, params).c;
     const rows = db.all(
-      `SELECT * FROM traders
-       WHERE name LIKE ? OR tel LIKE ? OR cr LIKE ? OR pan LIKE ? OR ppla LIKE ? OR aadhar LIKE ?
-       ORDER BY name LIMIT ?`,
-      [q, q, q, q, q, q, parseInt(limit)||50]
+      `SELECT * FROM traders ${where} ORDER BY name LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
     );
-    // Dedupe by (uppercased name, normalised CR) so the lot-entry
-    // picker doesn't show the same seller twice when the traders
-    // table has accidental duplicates (legacy imports, two field
-    // staff adding the same person at the same time, etc.). When a
-    // collision happens we keep the row with the LATEST id (most-
-    // recently edited) and merge bank lists across the dropped rows
-    // before returning. Different GSTINs / branches of a real seller
-    // (different CR values) stay as separate rows.
+    return res.json({ rows: hydrateBanks(rows), total, page, pageSize });
+  }
+
+  // ── Legacy (un-paged) path — preserved for back-compat ──────
+  // For search: returns up to `pageSize` matches (default 50) but the
+  // dedupe-by-(name,CR) collapse still runs, matching the previous
+  // behaviour used by the lot-entry seller picker.
+  if (search) {
+    const rows = db.all(
+      `SELECT * FROM traders ${where} ORDER BY name LIMIT ?`,
+      [...params, pageSize]
+    );
     const normalize = (s) => String(s || '').trim().toUpperCase();
     const stripGstinPrefix = (s) => {
       let v = normalize(s);
@@ -1283,13 +1410,47 @@ app.get('/api/traders/template', requireExport, async (req, res) => {
 app.get('/api/buyers', requireView, (req, res) => {
   const { search } = req.query;
   const db = getDb();
+
+  // ── Three response modes ────────────────────────────────────
+  //   • `?all=1`                          → every buyer, no limit
+  //         (used by the lot-edit modal's multi-code picker to seed
+  //         its in-memory cache — needs >500 rows on installs with
+  //         large buyer masters)
+  //   • `?page=` + `?pageSize=`           → { rows, total, page, pageSize }
+  //   • neither                           → legacy plain-array, capped 500
+  const wantAll   = String(req.query.all || '') === '1';
+  const wantPaged = req.query.page != null || req.query.pageSize != null;
+
+  let where = '';
+  let params = [];
   if (search) {
     const q = `%${search}%`;
+    where = `WHERE buyer LIKE ? OR buyer1 LIKE ? OR tel LIKE ? OR gstin LIKE ? OR pan LIKE ? OR pla LIKE ? OR ti LIKE ? OR code LIKE ?`;
+    params = [q, q, q, q, q, q, q, q];
+  }
+
+  if (wantAll) {
+    // No LIMIT — caller takes responsibility for the row count.
+    return res.json(db.all(`SELECT * FROM buyers ${where} ORDER BY buyer1`, params));
+  }
+
+  if (wantPaged) {
+    const page     = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
+    const offset   = (page - 1) * pageSize;
+    const total = db.get(`SELECT COUNT(*) as c FROM buyers ${where}`, params).c;
+    const rows = db.all(
+      `SELECT * FROM buyers ${where} ORDER BY buyer1 LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+    return res.json({ rows, total, page, pageSize });
+  }
+
+  // Legacy plain-array response — capped to keep old UI fast.
+  if (search) {
     return res.json(db.all(
-      `SELECT * FROM buyers 
-       WHERE buyer LIKE ? OR buyer1 LIKE ? OR tel LIKE ? OR gstin LIKE ? OR pan LIKE ? OR pla LIKE ? OR ti LIKE ? OR code LIKE ?
-       ORDER BY buyer1 LIMIT 50`,
-      [q, q, q, q, q, q, q, q]
+      `SELECT * FROM buyers ${where} ORDER BY buyer1 LIMIT 50`,
+      params
     ));
   }
   res.json(db.all('SELECT * FROM buyers ORDER BY buyer1 LIMIT 500'));
@@ -1440,10 +1601,232 @@ app.get('/api/buyers/template', requireExport, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// BUYERS — lookup helpers used by the Lot edit modal so the operator
+// can pick from every buyer code that shares a trade name. The
+// `buyer1` column is the canonical "trade name"; multiple buyer rows
+// can share one — different GSTINs, different consignees, different
+// sale-type defaults — and after a Price List mapping the operator
+// needs to pick the right one per lot.
+// ══════════════════════════════════════════════════════════════
+app.get('/api/buyers/by-tradename', requireView, (req, res) => {
+  const name = String(req.query.name || '').trim();
+  if (!name) return res.json([]);
+  // Case-insensitive exact match on buyer1 (primary) OR buyer (the
+  // full buyer-code string can also be passed as a trade name from
+  // free-text fields). Sort by code so the picker is stable.
+  const rows = getDb().all(
+    `SELECT id, buyer, buyer1, code, ti, sale, gstin, pla
+       FROM buyers
+      WHERE UPPER(TRIM(buyer1)) = UPPER(TRIM(?))
+         OR UPPER(TRIM(buyer))  = UPPER(TRIM(?))
+      ORDER BY code, buyer`,
+    [name, name]
+  );
+  res.json(rows);
+});
+
+// ══════════════════════════════════════════════════════════════
+// PRICE LIST (BEFORE) — code mapping tool
+// ══════════════════════════════════════════════════════════════
+// Operator workflow:
+//   1. Export an empty Price List (Before) sheet (Exports tab)
+//   2. Print → buyers write their TRADE NAME (and prices) by hand
+//   3. Type the trade names back into the file
+//   4. Upload here → server resolves CODE from the buyers master
+//   5. Preview the matches; download the updated file
+//   6. Feed the downloaded file into Lots → Price Import
+//
+// Two endpoints share the same parsing/matching code:
+//   POST /api/price-list/map-preview  → JSON summary only
+//   POST /api/price-list/map-download → updated XLSX (Buffer)
+//
+// `ExcelJS` is used end-to-end so the brand header / total row /
+// column widths from the original export survive the round-trip.
+function _plLocateColumns(ws) {
+  // Find the header row containing both "TRADE NAME" and "CODE".
+  // Match is case-insensitive + whitespace-tolerant so renamed headers
+  // (e.g. "Trade Name", "trade_name") still resolve.
+  const normalize = s => String(s == null ? '' : s).trim().toUpperCase().replace(/[\s_\-]+/g, ' ');
+  let headerRow = 0, tradeCol = 0, codeCol = 0, anoCol = 0, dateCol = 0, lotCol = 0;
+  const maxRow = ws.rowCount || 0;
+  for (let r = 1; r <= maxRow; r++) {
+    const row = ws.getRow(r);
+    const cells = {};
+    row.eachCell({ includeEmpty: false }, (cell, col) => {
+      cells[normalize(cell.value)] = col;
+    });
+    if (cells['TRADE NAME'] && cells['CODE']) {
+      headerRow = r;
+      tradeCol = cells['TRADE NAME'];
+      codeCol = cells['CODE'];
+      anoCol = cells['AUCTION NO'] || cells['ANO'] || cells['TNO'] || 0;
+      dateCol = cells['DATE'] || 0;
+      lotCol = cells['LOT'] || cells['LOT NO'] || cells['LOTNO'] || 0;
+      break;
+    }
+  }
+  return { headerRow, tradeCol, codeCol, anoCol, dateCol, lotCol };
+}
+function _plBuildTradeIndex(db) {
+  // Pre-index every buyer by their trade name so a 1000-row file is one
+  // DB query, not 1000. We index BOTH buyer1 and buyer because operators
+  // sometimes write the full buyer-code string in the TRADE NAME column.
+  const buyers = db.all('SELECT id, buyer, buyer1, code, ti, sale, gstin FROM buyers');
+  const idx = new Map();
+  const push = (key, row) => {
+    if (!key) return;
+    const k = key.trim().toUpperCase();
+    if (!k) return;
+    if (!idx.has(k)) idx.set(k, []);
+    // Avoid duplicate entries when buyer === buyer1.
+    const arr = idx.get(k);
+    if (!arr.some(b => b.id === row.id)) arr.push(row);
+  };
+  for (const b of buyers) {
+    push(b.buyer1, b);
+    push(b.buyer, b);
+  }
+  return idx;
+}
+async function _plProcessFile(filePath) {
+  // Returns { wb, ws, cols, perRow: [{row, tradeName, status, pickedCode, candidates}], summary }
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error('Workbook has no worksheets.');
+  const cols = _plLocateColumns(ws);
+  if (!cols.headerRow || !cols.tradeCol || !cols.codeCol) {
+    throw new Error('Could not locate TRADE NAME and CODE columns. The sheet must have both headers.');
+  }
+  const idx = _plBuildTradeIndex(getDb());
+  const perRow = [];
+  let matched = 0, unmatched = 0, ambiguous = 0, blank = 0;
+  const maxRow = ws.rowCount || 0;
+  for (let r = cols.headerRow + 1; r <= maxRow; r++) {
+    const row = ws.getRow(r);
+    const tradeRaw = row.getCell(cols.tradeCol).value;
+    const tradeName = String(tradeRaw == null ? '' : tradeRaw).trim();
+    const entry = {
+      row: r,
+      tradeName,
+      currentCode: String(row.getCell(cols.codeCol).value || '').trim(),
+      ano:   cols.anoCol  ? String(row.getCell(cols.anoCol).value  || '').trim() : '',
+      date:  cols.dateCol ? String(row.getCell(cols.dateCol).value || '').trim() : '',
+      lot:   cols.lotCol  ? String(row.getCell(cols.lotCol).value  || '').trim() : '',
+      status: 'blank',
+      pickedCode: '',
+      candidates: [],
+    };
+    if (!tradeName) {
+      blank++;
+      perRow.push(entry);
+      continue;
+    }
+    const key = tradeName.toUpperCase();
+    const cands = idx.get(key) || [];
+    entry.candidates = cands.map(b => ({
+      id: b.id, code: b.code, buyer: b.buyer, buyer1: b.buyer1, sale: b.sale, gstin: b.gstin,
+    }));
+    if (cands.length === 0) {
+      entry.status = 'unmatched';
+      unmatched++;
+    } else if (cands.length === 1) {
+      entry.status = 'matched';
+      entry.pickedCode = cands[0].code || '';
+      matched++;
+    } else {
+      // Ambiguous — multiple buyers share this trade name. Pick the
+      // first by code-sort order (same order as /api/buyers/by-tradename
+      // so the UI and the file agree). Operator resolves per-lot later
+      // using the multi-code picker in the Lot edit modal.
+      entry.status = 'ambiguous';
+      // Prefer a candidate with a non-blank code; fall back to first.
+      const withCode = cands.find(c => c.code && String(c.code).trim());
+      entry.pickedCode = (withCode || cands[0]).code || '';
+      ambiguous++;
+    }
+    perRow.push(entry);
+  }
+  const summary = {
+    total: perRow.length,
+    matched, ambiguous, unmatched, blank,
+    uniqueTradeNames: Array.from(new Set(perRow.filter(p => p.tradeName).map(p => p.tradeName))).length,
+  };
+  return { wb, ws, cols, perRow, summary };
+}
+app.post('/api/price-list/map-preview', requireView, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const { perRow, summary } = await _plProcessFile(req.file.path);
+    res.json({ ...summary, rows: perRow });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  } finally {
+    if (req.file) fs.unlink(req.file.path, () => {});
+  }
+});
+app.post('/api/price-list/map-download', requireView, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const { wb, ws, cols, perRow } = await _plProcessFile(req.file.path);
+    // Write the resolved code back into each row's CODE cell. We
+    // explicitly set the cell value so the existing column-level numFmt
+    // (which Excel uses to right-pad short codes like "RSH") still
+    // applies — modifying `.value` keeps the format intact.
+    for (const entry of perRow) {
+      if (!entry.pickedCode) continue;
+      ws.getRow(entry.row).getCell(cols.codeCol).value = entry.pickedCode;
+    }
+    const buf = await wb.xlsx.writeBuffer();
+    const baseName = (req.file.originalname || 'price-list-before.xlsx')
+      .replace(/\.xlsx?$/i, '')
+      .replace(/[^A-Za-z0-9._-]+/g, '-');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${baseName}-mapped.xlsx"`);
+    res.send(Buffer.from(buf));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  } finally {
+    if (req.file) fs.unlink(req.file.path, () => {});
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
 // AUCTIONS
 // ══════════════════════════════════════════════════════════════
 app.get('/api/auctions', requireViewOrLotEntry, (req, res) => {
-  const rows = getDb().all('SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) as lot_count FROM auctions ORDER BY date DESC, ano DESC LIMIT 100');
+  const db = getDb();
+  const search   = String(req.query.search || '').trim();
+  const wantPaged = req.query.page != null || req.query.pageSize != null;
+
+  // Search filter — single-token match against the ano column. Trades
+  // are normally identified by trade number, so name/state/crop searches
+  // weren't valuable here. Add OR clauses if that ever changes.
+  let where = '';
+  let params = [];
+  if (search) {
+    where = 'WHERE ano LIKE ?';
+    params = [`%${search}%`];
+  }
+
+  // Lot count is computed as a correlated subquery so each row gets its
+  // current count without a separate round-trip. SQLite handles this in
+  // a single query plan.
+  const sel = `SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) as lot_count
+               FROM auctions ${where}
+               ORDER BY date DESC, ano DESC`;
+
+  if (wantPaged) {
+    const page     = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
+    const offset   = (page - 1) * pageSize;
+    const total = db.get(`SELECT COUNT(*) as c FROM auctions ${where}`, params).c;
+    const rows = db.all(sel + ' LIMIT ? OFFSET ?', [...params, pageSize, offset]);
+    return res.json({ rows: withFmtDate(rows), total, page, pageSize });
+  }
+
+  // Legacy plain-array response — capped at 100 like before.
+  const rows = db.all(sel + ' LIMIT 100', params);
   res.json(withFmtDate(rows));
 });
 app.post('/api/auctions', requireAuctionWrite, (req, res) => {
@@ -6188,6 +6571,659 @@ app.post('/api/system/restore', requireAdmin, restoreUpload.single('file'), asyn
     try { fs.unlinkSync(tmpPath); } catch(_) {}
   }
 });
+
+// ══════════════════════════════════════════════════════════════
+// IMPORT OLD DATA (Task 8) — unified upload + preview + run flow
+// ══════════════════════════════════════════════════════════════
+// Supports SalesInvoice / Purchase / Bills / DebitNotes / Payments /
+// Sellers / Buyers. Two endpoints:
+//   POST /api/import-old-data/preview   → header detection + first 50 rows
+//   POST /api/import-old-data/run       → validation + (optional dryRun) insert
+// Each run is recorded in `import_log` for the History panel.
+// Position: registered BEFORE the /api 404 catch-all below — otherwise
+// the catch-all wins and every request returns "Not Found".
+const IMPORT_MODULES = {
+  sales_invoice: {
+    label: 'Sales Invoices',
+    table: 'invoices',
+    keyCols: ['invo', 'sale'],
+    // auction_id is auto-derived from `ano` at import time so the
+    // imported rows show up under the matching trade in the Sales tab
+    // (the list filters by auction_id, not ano).
+    autoFillAuctionId: true,
+    fields: ['auction_id','ano','date','state','sale','invo','buyer','buyer1','gstin','place',
+             'bag','qty','amount','gunny','pava_hc','ins','cgst','sgst','igst','tcs','rund','tot'],
+    aliases: {
+      ano: ['ano','auction_no','trade'],
+      date: ['date','invoice_date','inv_date'],
+      sale: ['sale','sale_type','type'],
+      invo: ['invo','invoice','invoice_no','invno'],
+      buyer: ['buyer','buyer_code','code'],
+      buyer1: ['buyer1','buyer_name','name'],
+      gstin: ['gstin','gst','gst_no'],
+      place: ['place','city','pla'],
+      bag: ['bag','bags','no_of_bags'],
+      qty: ['qty','kilos','weight','kgs'],
+      amount: ['amount','cardamom','value'],
+      tot: ['tot','total','grand_total','invoice_amount'],
+    },
+  },
+  purchase: {
+    label: 'Purchase Invoices',
+    table: 'purchases',
+    keyCols: ['invo'],
+    autoFillAuctionId: true,
+    // Match the actual `purchases` schema. The legacy export's "cr"
+    // column maps to `gstin` here; "bag"/"refund" don't exist on the
+    // purchases table at all so they're absent from this list.
+    fields: ['auction_id','ano','date','state','br','name','add_line','place','gstin','invo',
+             'qty','amount','cgst','sgst','igst','rund','total','tds'],
+    aliases: {
+      invo:    ['invo','invoice','invoice_no'],
+      name:    ['name','seller','dealer'],
+      gstin:   ['gstin','gst','gst_no','cr','registration'],
+      place:   ['place','city','pla'],
+      add_line:['add_line','address','add','add1','address1'],
+      br:      ['br','branch'],
+      qty:     ['qty','kilos','weight','kgs'],
+      amount:  ['amount','cardamom','value'],
+      total:   ['total','grand_total','invoice_amount'],
+      rund:    ['rund','round','round_off'],
+      tds:     ['tds','tds_amount'],
+    },
+  },
+  bills: {
+    label: 'Bills of Supply',
+    table: 'bills',
+    keyCols: ['bil'],
+    // bills.auction_id is the field the Bills tab filters by — without
+    // it the imported rows are orphaned and don't show up under any trade.
+    autoFillAuctionId: true,
+    fields: ['auction_id','ano','date','state','br','crpt','bil','name','add_line','pla',
+             'pstate','st_code','crr','pan','qty','cost','igst','net'],
+    aliases: {
+      bil: ['bil','bill','bill_no'],
+      name: ['name','seller','planter'],
+      qty: ['qty','kilos','weight','kgs'],
+      cost: ['cost','amount','cardamom'],
+      net: ['net','nett','net_amount'],
+    },
+  },
+  debit_notes: {
+    label: 'Debit Notes',
+    table: 'debit_notes',
+    keyCols: ['note_no','ano'],
+    autoFillAuctionId: true,
+    fields: ['auction_id','ano','date','state','name','note_no','amount','cgst','sgst','igst','total'],
+    aliases: {
+      note_no: ['note_no','note','dn_no'],
+      name: ['name','dealer','buyer'],
+    },
+  },
+  // NOTE: a 'payments' module previously lived here but it pointed at
+  // the bills table while the Payments tab aggregates from lots — so
+  // imports never surfaced under Payments. It also had keyCols=['bil']
+  // with `bil` missing from fields, breaking dup-detection. Removed in
+  // favor of the dedicated `bills` module above (writes to the same
+  // table, with auction_id auto-fill).
+  sellers: {
+    label: 'Sellers',
+    table: 'traders',
+    keyCols: ['name','cr'],
+    fields: ['name','cr','pan','tel','aadhar','padd','ppla','pin','pstate','pst_code',
+             'ifsc','acctnum','holder_name'],
+    aliases: {
+      name: ['name','seller','planter','trader'],
+      cr: ['cr','gstin'],
+      padd: ['padd','address','add','add1','address1'],
+      ppla: ['ppla','place','pla','city'],
+      pin: ['pin','pincode','zip'],
+    },
+  },
+  buyers: {
+    label: 'Buyers',
+    table: 'buyers',
+    keyCols: ['buyer','code'],
+    fields: ['buyer','buyer1','code','sbl','add1','add2','pla','pin','state',
+             'st_code','gstin','pan','tel','ti','sale','email'],
+    aliases: {
+      buyer: ['buyer','buyer_code','code'],
+      buyer1: ['buyer1','buyer_name','name'],
+      pla: ['pla','place','city'],
+      pin: ['pin','pincode','zip'],
+    },
+  },
+};
+function _importMapHeaders(headers, moduleDef) {
+  const norm = s => String(s || '').trim().toLowerCase().replace(/[\s\-/]+/g, '_');
+  const out = {};
+  for (const field of moduleDef.fields) {
+    const aliases = (moduleDef.aliases && moduleDef.aliases[field]) || [field];
+    for (const h of headers) {
+      if (aliases.includes(norm(h))) { out[field] = h; break; }
+    }
+  }
+  return out;
+}
+app.post('/api/import-old-data/preview', requireAdmin, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const moduleKey = req.body.module;
+  const def = IMPORT_MODULES[moduleKey];
+  if (!def) {
+    if (req.file) fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Unknown module', available: Object.keys(IMPORT_MODULES) });
+  }
+  try {
+    const wb = XLSX.readFile(req.file.path);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) throw new Error('No worksheet found');
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    const headers = rows.length ? Object.keys(rows[0]) : [];
+    const mapping = _importMapHeaders(headers, def);
+    res.json({
+      module: moduleKey,
+      label: def.label,
+      total: rows.length,
+      headers,
+      // Full list of DB fields the client should expose in the mapping
+      // editor — without this the UI only shows auto-detected fields and
+      // the user can't add a mapping for any column that didn't auto-match.
+      fields:  def.fields,
+      // Required-for-dup-detection fields the client should highlight.
+      keyCols: def.keyCols,
+      // Whether auction_id is derived from ano at insert time (so the
+      // client can render "(from ano)" instead of a blank cell).
+      autoFillAuctionId: !!def.autoFillAuctionId,
+      detectedMapping: mapping,
+      missingFields: def.fields.filter(f => !mapping[f] && def.keyCols.includes(f)),
+      preview: rows.slice(0, 50),
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  } finally {
+    if (req.file) fs.unlink(req.file.path, () => {});
+  }
+});
+// Verify the file against the live database BEFORE writing anything.
+// Returns per-row status (new / duplicate / invalid), reasons for invalids,
+// the field-by-field diff vs. any existing row, and accurate summary counts
+// over the WHOLE file (not just the previewed slice). The detailed row
+// list is capped at `sampleLimit` to keep payloads bounded — counts are
+// always over the full file.
+//
+// Differs from /preview (which only does header mapping detection) and
+// /run (which actually writes): this endpoint does the same validation
+// /run does, against the same mapping the user chose, but without
+// touching the DB. Lets the operator catch wrong mappings, missing
+// trades, or accidental overwrites before they hit production data.
+app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const moduleKey = req.body.module;
+  const def = IMPORT_MODULES[moduleKey];
+  if (!def) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Unknown module' });
+  }
+  let userMapping = {};
+  if (req.body.mapping) {
+    try { userMapping = JSON.parse(req.body.mapping) || {}; } catch (_) {}
+  }
+  // Per-bucket sample cap. Each status (new / invalid / dupChanges) is
+  // collected up to this limit independently — that way a file whose
+  // first 100 rows happen to all be duplicates still surfaces concrete
+  // NEW rows in the UI sample. Counts are always over the WHOLE file.
+  const PER_BUCKET_LIMIT = 50;
+  const db = getDb();
+  try {
+    const wb = XLSX.readFile(req.file.path);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) throw new Error('No worksheet found');
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    const total = rows.length;
+    if (!total) {
+      fs.unlink(req.file.path, () => {});
+      return res.json({
+        module: moduleKey, label: def.label, total: 0,
+        fields: def.fields, keyCols: def.keyCols,
+        autoFillAuctionId: !!def.autoFillAuctionId,
+        sampleLimit: PER_BUCKET_LIMIT,
+        counts: { new: 0, duplicate: 0, duplicateChanged: 0, invalidAno: 0, invalidRequired: 0 },
+        samples: { new: [], invalid: [], dupChanges: [] },
+      });
+    }
+
+    const headers = Object.keys(rows[0]);
+    // Merge user overrides on top of auto-detected mapping, honouring
+    // explicit '' as a skip signal — identical to /run so verify counts
+    // reflect what /run would actually do.
+    const autoDetected = _importMapHeaders(headers, def);
+    const mapping = Object.assign({}, autoDetected, userMapping);
+    for (const k of Object.keys(userMapping || {})) {
+      const v = userMapping[k];
+      if (v === '' || v === null) delete mapping[k];
+    }
+    const fieldSources = def.fields.map(f => [f, mapping[f] || null]);
+    const auctionIdSlot = def.fields.indexOf('auction_id');
+
+    const auctionIdCache = new Map();
+    const resolveAuctionId = (ano) => {
+      const key = String(ano || '').trim();
+      if (!key) return null;
+      if (auctionIdCache.has(key)) return auctionIdCache.get(key);
+      const row = db.get('SELECT id FROM auctions WHERE ano = ? LIMIT 1', [key]);
+      const id  = row ? row.id : null;
+      auctionIdCache.set(key, id);
+      return id;
+    };
+
+    let cntNew = 0, cntDup = 0, cntDupChanged = 0, cntInvAno = 0, cntInvReq = 0;
+    // Four independent sample buckets so the client always has concrete
+    // rows from each non-empty status, regardless of where they sit in
+    // the file. Each bucket is capped at PER_BUCKET_LIMIT.
+    //   • new                — would be inserted
+    //   • invalid            — won't be inserted (missing required / no trade)
+    //   • dupChanges         — duplicate where the file row differs from DB
+    //   • dupIdentical       — duplicate where the file row matches DB exactly
+    // Identical dups are surfaced separately because they're the most
+    // confusing case for operators: the verify panel says "duplicates: N"
+    // but nothing is highlighted, so they can't tell WHICH existing rows
+    // are blocking. With this bucket we can show each one's primary key.
+    const sampleNew = [];
+    const sampleInvalid = [];
+    const sampleDupChanges = [];
+    const sampleDupIdentical = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const values = {};
+      for (const [f, src] of fieldSources) {
+        values[f] = src ? r[src] : '';
+      }
+
+      const reasons = [];
+
+      let anoResolutionFailed = false;
+      if (def.autoFillAuctionId && auctionIdSlot >= 0) {
+        const anoSrc = mapping.ano;
+        const anoVal = anoSrc ? r[anoSrc] : '';
+        const aid = resolveAuctionId(anoVal);
+        if (aid == null) {
+          anoResolutionFailed = true;
+          reasons.push('No trade found for ano="' + String(anoVal || '').trim() + '" — create the auction first or fix the mapping.');
+        } else {
+          values.auction_id = aid;
+        }
+      }
+
+      // Required-field check uses the same keyCols /run uses for dup
+      // detection. A row missing any of them can't be inserted (and
+      // can't be checked for duplicates).
+      const missingKeys = [];
+      for (const k of def.keyCols) {
+        const src = mapping[k];
+        const v = src ? r[src] : null;
+        if (v == null || String(v).trim() === '') missingKeys.push(k);
+      }
+      const requiredMissing = missingKeys.length > 0;
+      if (requiredMissing) {
+        reasons.push('Missing required value(s): ' + missingKeys.join(', '));
+      }
+
+      // Duplicate detection — only meaningful when all keyCols resolve
+      // to a non-blank value, matching /run's gate.
+      // SQLite's loose typing means a string "123" and an integer 123 both
+      // match `WHERE invo = ?` even though strict-equality would say no.
+      // That's actually what /run does too, so verify mirrors it.
+      let existing = null;
+      let diff = null;
+      if (!requiredMissing) {
+        const keyVals = def.keyCols.map(k => r[mapping[k]]);
+        const whereSql = def.keyCols.map(k => `${k} = ?`).join(' AND ');
+        existing = db.get(`SELECT * FROM ${def.table} WHERE ${whereSql} LIMIT 1`, keyVals);
+        if (existing) {
+          diff = {};
+          for (const f of def.fields) {
+            const newVal = values[f];
+            const oldVal = existing[f];
+            const a = oldVal == null ? '' : String(oldVal);
+            const b = newVal == null ? '' : String(newVal);
+            if (a !== b) {
+              diff[f] = {
+                old: oldVal == null ? '' : oldVal,
+                new: newVal == null ? '' : newVal,
+              };
+            }
+          }
+          if (Object.keys(diff).length === 0) diff = null;
+        }
+      }
+
+      let status;
+      if (requiredMissing) {
+        status = 'invalid';
+        cntInvReq++;
+      } else if (anoResolutionFailed) {
+        status = 'invalid';
+        cntInvAno++;
+      } else if (existing) {
+        status = 'duplicate';
+        cntDup++;
+        if (diff) cntDupChanged++;
+      } else {
+        status = 'new';
+        cntNew++;
+      }
+
+      const entry = {
+        row: i + 2,
+        status,
+        reasons,
+        values,
+        existing: existing || null,
+        diff,
+      };
+      if (status === 'new' && sampleNew.length < PER_BUCKET_LIMIT) {
+        sampleNew.push(entry);
+      } else if (status === 'invalid' && sampleInvalid.length < PER_BUCKET_LIMIT) {
+        sampleInvalid.push(entry);
+      } else if (status === 'duplicate' && diff && sampleDupChanges.length < PER_BUCKET_LIMIT) {
+        sampleDupChanges.push(entry);
+      } else if (status === 'duplicate' && !diff && sampleDupIdentical.length < PER_BUCKET_LIMIT) {
+        sampleDupIdentical.push(entry);
+      }
+    }
+
+    // Total row count + a quick "did the operator actually clear this
+    // table?" signal. Without this, when the user deletes invoices under
+    // a Sales-tab filter and then re-runs verify, "duplicates: N" is
+    // baffling — the UI shows 0 rows but the table still has N rows
+    // for other auctions/dates. Surfacing the actual count makes the
+    // discrepancy obvious.
+    let targetRowCount = 0;
+    try {
+      const r = db.get(`SELECT COUNT(*) as c FROM ${def.table}`);
+      targetRowCount = r ? Number(r.c || 0) : 0;
+    } catch (_) { /* table missing — leave at 0 */ }
+
+    fs.unlink(req.file.path, () => {});
+    res.json({
+      module: moduleKey,
+      label: def.label,
+      total,
+      fields: def.fields,
+      keyCols: def.keyCols,
+      autoFillAuctionId: !!def.autoFillAuctionId,
+      sampleLimit: PER_BUCKET_LIMIT,
+      // Pre-import state of the target table — surfaced so the operator
+      // can confirm the table really is empty before re-importing.
+      targetTable: def.table,
+      targetRowCount,
+      counts: {
+        new: cntNew,
+        duplicate: cntDup,
+        duplicateChanged: cntDupChanged,
+        invalidAno: cntInvAno,
+        invalidRequired: cntInvReq,
+      },
+      samples: {
+        new: sampleNew,
+        invalid: sampleInvalid,
+        dupChanges: sampleDupChanges,
+        dupIdentical: sampleDupIdentical,
+      },
+    });
+  } catch (e) {
+    if (req.file) fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: e.message });
+  }
+});
+app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const moduleKey = req.body.module;
+  const def = IMPORT_MODULES[moduleKey];
+  if (!def) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Unknown module' });
+  }
+  const dryRun  = String(req.body.dryRun || '').toLowerCase() === 'true';
+  // Allow the client to override the auto-detected mapping. Shape:
+  //   { mapping: { field: 'Source Column Name' } }   (JSON-encoded string)
+  let userMapping = {};
+  if (req.body.mapping) {
+    try { userMapping = JSON.parse(req.body.mapping) || {}; } catch (_) {}
+  }
+
+  const db = getDb();
+  let imported = 0, skipped = 0, failed = 0;
+  const errors = [];
+  let total = 0;
+  // Capture the primary-key id of every row this import inserts so the
+  // Undo button on the History panel can roll back this specific file.
+  // Declared OUTSIDE the parse/import try so it's still in scope for the
+  // audit-log INSERT further down — previously it lived inside the try
+  // and the INSERT threw `insertedIds is not defined`, which meant
+  // successful imports never made it into the history table at all.
+  const insertedIds = [];
+  try {
+    const wb = XLSX.readFile(req.file.path);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) throw new Error('No worksheet found');
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    total = rows.length;
+    if (!total) throw new Error('File is empty');
+
+    const headers  = Object.keys(rows[0]);
+    // User mapping overrides auto-detected. Two distinct user signals:
+    //   • field absent       → keep auto-detected (no opinion)
+    //   • field explicit ''  → SKIP this field (user picked "— skip —")
+    // The merge below honours the explicit-skip signal by deleting the
+    // entry after merging in user values. Without this, picking "— skip —"
+    // on an auto-detected field has no effect.
+    const autoDetected = _importMapHeaders(headers, def);
+    const mapping = Object.assign({}, autoDetected, userMapping);
+    for (const k of Object.keys(userMapping || {})) {
+      const v = userMapping[k];
+      if (v === '' || v === null) delete mapping[k];
+    }
+
+    // Field-list with backing source column (or null if no mapping).
+    const fieldSources = def.fields.map(f => [f, mapping[f] || null]);
+    const valuePlaceholders = def.fields.map(() => '?').join(',');
+    const insertSql = `INSERT INTO ${def.table} (${def.fields.join(',')}) VALUES (${valuePlaceholders})`;
+
+    // Cache `ano → auction_id` lookups for autoFillAuctionId modules.
+    // Without this every row of a large import would hit the DB once
+    // for the same trade number.
+    const auctionIdCache = new Map();
+    const resolveAuctionId = (ano) => {
+      const key = String(ano || '').trim();
+      if (!key) return null;
+      if (auctionIdCache.has(key)) return auctionIdCache.get(key);
+      const row = db.get('SELECT id FROM auctions WHERE ano = ? LIMIT 1', [key]);
+      const id  = row ? row.id : null;
+      auctionIdCache.set(key, id);
+      return id;
+    };
+    const auctionIdSlot = def.fields.indexOf('auction_id');
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        // Duplicate detection — skip if any keyCol value already exists.
+        const keyChecks = def.keyCols.map(k => mapping[k] ? r[mapping[k]] : null).filter(v => v != null && v !== '');
+        if (keyChecks.length === def.keyCols.length) {
+          const whereSql = def.keyCols.map(k => `${k} = ?`).join(' AND ');
+          const dup = db.get(`SELECT 1 FROM ${def.table} WHERE ${whereSql} LIMIT 1`, keyChecks);
+          if (dup) { skipped++; continue; }
+        }
+        // Build positional values from the source mapping. For
+        // autoFillAuctionId modules we derive auction_id from `ano` after
+        // the row is mapped — the auctions table is the source of truth
+        // for ano→id, and without this the imported invoices show up
+        // nowhere because the Sales tab filters by auction_id.
+        const values = fieldSources.map(([_, src]) => src ? r[src] : '');
+        if (def.autoFillAuctionId && auctionIdSlot >= 0) {
+          const anoSrc = mapping.ano;
+          const anoVal = anoSrc ? r[anoSrc] : '';
+          const aid    = resolveAuctionId(anoVal);
+          if (aid == null) {
+            failed++;
+            if (errors.length < 50) errors.push({
+              row: i + 2,
+              error: `No trade found for ano="${String(anoVal || '').trim()}" — create the auction first or fix the column.`
+            });
+            continue;
+          }
+          values[auctionIdSlot] = aid;
+        }
+        if (!dryRun) {
+          const info = db.run(insertSql, values);
+          if (info && info.lastInsertRowid != null) insertedIds.push(Number(info.lastInsertRowid));
+        }
+        imported++;
+      } catch (e) {
+        failed++;
+        if (errors.length < 50) errors.push({ row: i + 2, error: e.message });
+      }
+    }
+  } catch (e) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: e.message });
+  }
+
+  // Back-fill auction_id on any pre-existing rows the user imported
+  // *before* this fix landed. Idempotent — touches only NULL slots with
+  // a matching auctions.ano. Runs even on dryRun so the user gets the
+  // immediate fix without a second pass.
+  if (def.autoFillAuctionId) {
+    try {
+      getDb().run(
+        `UPDATE ${def.table}
+            SET auction_id = (SELECT id FROM auctions WHERE auctions.ano = ${def.table}.ano)
+          WHERE auction_id IS NULL
+            AND ano IS NOT NULL AND ano != ''
+            AND EXISTS (SELECT 1 FROM auctions WHERE auctions.ano = ${def.table}.ano)`
+      );
+    } catch (_) { /* non-fatal */ }
+  }
+
+  // Log this run regardless of outcome. `inserted_ids` is left blank on
+  // dry-runs (no rows were inserted) so the Undo button stays disabled
+  // for that entry. Log failures to the server console — silent
+  // best-effort hid a class of bugs where the column schema didn't
+  // match the INSERT and every run disappeared from History.
+  let importLogId = null;
+  try {
+    const info = db.run(`INSERT INTO import_log
+      (module, filename, dry_run, total, imported, skipped, failed, errors, inserted_ids, user_id, username)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [moduleKey, req.file.originalname || '', dryRun ? 1 : 0,
+       total, imported, skipped, failed, JSON.stringify(errors).slice(0, 4000),
+       dryRun ? '' : JSON.stringify(insertedIds),
+       (req.user && req.user.id) || null, (req.user && req.user.username) || '']);
+    if (info && info.lastInsertRowid != null) importLogId = Number(info.lastInsertRowid);
+    console.log('[import-old-data] Logged run id=' + importLogId +
+                ' module=' + moduleKey +
+                ' file="' + (req.file.originalname || '') + '"' +
+                ' imported=' + imported + ' skipped=' + skipped + ' failed=' + failed +
+                ' insertedIds=' + insertedIds.length);
+  } catch (e) {
+    console.error('[import-old-data] Failed to write import_log entry:', e && e.message ? e.message : e);
+  }
+
+  fs.unlink(req.file.path, () => {});
+  res.json({ success: true, module: moduleKey, dryRun, total, imported, skipped, failed, errors, importLogId });
+});
+app.get('/api/import-old-data/history', requireAdmin, (req, res) => {
+  // Force every request to hit the DB — without this, browsers
+  // heuristically cache the JSON for hours and the "View History" panel
+  // stays stuck on yesterday's data even after a fresh import lands.
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  const rows = getDb().all(
+    `SELECT id, module, filename, dry_run, total, imported, skipped, failed,
+            errors, inserted_ids, undone_at, username, created_at
+       FROM import_log ORDER BY id DESC LIMIT 200`
+  );
+  res.json(rows.map(r => {
+    const ids = r.inserted_ids ? safeJSON(r.inserted_ids) : [];
+    // Don't bloat the wire — the client only needs the count.
+    return {
+      id: r.id, module: r.module, filename: r.filename,
+      dry_run: !!r.dry_run, total: r.total, imported: r.imported,
+      skipped: r.skipped, failed: r.failed,
+      errors: r.errors ? safeJSON(r.errors) : [],
+      undone_at: r.undone_at || '',
+      // Undo is available iff this wasn't a dry-run, the import actually
+      // inserted rows, and it hasn't already been rolled back.
+      undoable: !r.dry_run && Array.isArray(ids) && ids.length > 0 && !r.undone_at,
+      inserted_count: Array.isArray(ids) ? ids.length : 0,
+      username: r.username, created_at: r.created_at,
+    };
+  }));
+});
+
+// Roll back a specific import: DELETE every row in the target table
+// whose primary key was captured in import_log.inserted_ids, after
+// snapshotting the live DB so the rollback itself is reversible.
+// Marks the log entry as undone with a timestamp so a second click is
+// a no-op and the History panel can disable the button.
+app.post('/api/import-old-data/undo/:id', requireAdmin, (req, res) => {
+  const db = getDb();
+  const logId = Number(req.params.id);
+  if (!Number.isFinite(logId)) return res.status(400).json({ error: 'Invalid import id' });
+  const logRow = db.get('SELECT * FROM import_log WHERE id = ?', [logId]);
+  if (!logRow) return res.status(404).json({ error: 'Import not found' });
+  if (logRow.undone_at) return res.status(400).json({ error: 'This import has already been undone at ' + logRow.undone_at });
+  if (logRow.dry_run)   return res.status(400).json({ error: 'Dry-run imports did not insert any rows — nothing to undo' });
+
+  const def = IMPORT_MODULES[logRow.module];
+  if (!def) return res.status(400).json({ error: 'Unknown module on this import — cannot resolve target table' });
+
+  let ids = [];
+  try { ids = JSON.parse(logRow.inserted_ids || '[]'); } catch (_) {}
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({
+      error: 'This import did not record its inserted row IDs (was it run before per-import Undo was added?). To clear it, use the Backup tab → Delete All for ' + def.table + '.',
+    });
+  }
+
+  // Snapshot before we delete — uses the same helper the Delete All
+  // routes use, so an Undo misclick is recoverable via Restore.
+  let backupPath = '';
+  try { backupPath = _snapshotBackupBeforeDelete('undo-import-' + logRow.module + '-' + logId); }
+  catch (e) {
+    return res.status(500).json({ error: 'Backup snapshot failed; refusing to undo: ' + (e.message || e) });
+  }
+
+  // Bulk-delete by id. SQLite limits parameter count per statement
+  // (default 999), so chunk for very large imports.
+  let deleted = 0;
+  const CHUNK = 500;
+  try {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK).filter(n => Number.isFinite(Number(n)));
+      if (!slice.length) continue;
+      const placeholders = slice.map(() => '?').join(',');
+      const info = db.run(`DELETE FROM ${def.table} WHERE id IN (${placeholders})`, slice);
+      if (info && typeof info.changes === 'number') deleted += info.changes;
+    }
+    db.run('UPDATE import_log SET undone_at = datetime("now","localtime") WHERE id = ?', [logId]);
+  } catch (e) {
+    return res.status(500).json({ error: 'Undo failed mid-way; partial deletions may have occurred. Backup at: ' + backupPath + ' — ' + (e.message || e) });
+  }
+
+  res.json({
+    success: true,
+    importLogId: logId,
+    module: logRow.module,
+    table: def.table,
+    requested: ids.length,
+    deleted,
+    backupPath,
+  });
+});
+function safeJSON(s){ try { return JSON.parse(s); } catch(_) { return []; } }
 
 // ── /api JSON-safety middleware ─────────────────────────────────
 // Every /api/* request must return JSON, never an HTML error page.

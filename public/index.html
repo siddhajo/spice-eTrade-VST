@@ -1302,6 +1302,11 @@ body[data-perm-export="1"]         .btn.needs-export{display:inline-flex !import
 /* Icon-only action buttons (per-row delete/revert) — restore to inline-flex */
 body[data-perm-delete="1"]         .icon-btn.needs-delete,
 body[data-perm-invoice-revert="1"] .icon-btn.needs-invoice-revert{display:inline-flex !important}
+/* Block-level containers gated by perms — `display:initial` above resolves
+   to `inline` on a div, which collapses borders/padding/margin and breaks
+   the boundary visualization. Restore block layout here. */
+body[data-perm-delete-all="1"]     div.needs-delete-all,
+body[data-perm-invoice-revert="1"] div.needs-invoice-revert{display:block !important}
 /* Sidebar entries for restricted sections */
 body[data-perm-user-manage="1"]    .side-item.needs-user-manage{display:flex !important}
 body[data-perm-settings-write="1"] .side-item.needs-settings-write{display:flex !important}
@@ -1857,6 +1862,18 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           To Tally
         </button>
+        <!-- Code-mapping tool: upload a hand-annotated Price List (Before)
+             sheet (with TRADE NAME filled in), match each trade name back
+             to a buyer code, then download the updated file for use in
+             Lots → Price Import. -->
+        <button class="side-item" data-tab="plmap" onclick="go('plmap')">
+          <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
+          Price List Mapping
+        </button>
+        <button class="side-item needs-user-manage" data-tab="importold" onclick="go('importold')">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 14l-5 5-5-5M12 19V3"/></svg>
+          Import Old Data
+        </button>
       </div>
     </aside>
 
@@ -1952,46 +1969,159 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
          which conflicts with the .tc tab-switching rules. -->
     <div class="tc" id="tc-backup">
       <div class="card">
-        <h2 style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-          <span style="width:36px;height:36px;border-radius:10px;background:#FEF3C7;display:inline-flex;align-items:center;justify-content:center;font-size:20px">💾</span>
-          Backup &amp; Restore
+        <h2 style="display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:8px">
+          <span style="width:36px;height:36px;border-radius:10px;background:#FEF3C7;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 36px">💾</span>
+          <span>Backup &amp; Restore</span>
         </h2>
-        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 18px;max-width:720px;line-height:1.5">
-          Download the entire database as a single <code style="background:var(--bg);padding:1px 4px;border-radius:3px">.db</code> file, or restore from one you saved earlier. A backup captures every auction, lot, invoice, payment, debit note, setting and user — bit-for-bit identical to what's running right now.
+        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 20px;max-width:720px;line-height:1.55">
+          Download the entire database as a single <code style="background:var(--bg);padding:1px 5px;border-radius:3px">.db</code> file, or restore from one you saved earlier. A backup captures every auction, lot, invoice, payment, debit note, setting and user — bit-for-bit identical to what's running right now.
         </p>
 
         <!-- ── Download ───────────────────────────────────────── -->
-        <div style="padding:16px 18px;border:1px solid var(--border);border-radius:10px;background:#fff;margin-bottom:14px">
-          <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap">
+        <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
             <div style="flex:1;min-width:260px">
               <div style="font-weight:700;color:var(--text);font-size:14px;margin-bottom:4px">Download Backup</div>
-              <div style="font-size:12px;color:var(--text3);line-height:1.5">
-                Saves a timestamped <code>spice-etrade-backup-YYYY-MM-DD…db</code> file to your downloads folder. Take one before any major change, or on a regular schedule.
+              <div style="font-size:12.5px;color:var(--text3);line-height:1.55">
+                Saves a timestamped <code style="background:var(--bg);padding:1px 4px;border-radius:3px">spice-etrade-backup-YYYY-MM-DD…db</code> file to your downloads folder. Take one before any major change, or on a regular schedule.
               </div>
             </div>
-            <button class="btn btn-g" onclick="downloadDbBackup()" style="height:42px;padding:0 18px;font-weight:600;display:inline-flex;align-items:center;gap:8px;flex:0 0 auto">
-              <span>⬇</span><span>Download Backup</span>
+            <button class="btn btn-g" onclick="downloadDbBackup()" style="height:40px;padding:0 18px;font-weight:600;display:inline-flex;align-items:center;gap:8px;flex:0 0 auto">
+              <span style="font-size:15px;line-height:1">⬇</span><span>Download Backup</span>
             </button>
           </div>
         </div>
 
         <!-- ── Restore ────────────────────────────────────────── -->
-        <div style="padding:16px 18px;border:1.5px solid #FCA5A5;border-radius:10px;background:#FEF2F2">
-          <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap">
+        <div style="padding:18px;border:1.5px solid #FCA5A5;border-radius:12px;background:#FEF2F2">
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
             <div style="flex:1;min-width:260px">
               <div style="font-weight:700;color:#991B1B;font-size:14px;margin-bottom:4px;display:flex;align-items:center;gap:6px">
                 <span>⚠️</span><span>Restore from Backup</span>
               </div>
-              <div style="font-size:12px;color:#7F1D1D;line-height:1.5">
+              <div style="font-size:12.5px;color:#7F1D1D;line-height:1.55">
                 Replaces <strong>ALL</strong> current data with the contents of the uploaded file. Anything not in the backup will be lost. Download a backup first if you want a recovery point.
               </div>
             </div>
-            <button class="btn" onclick="document.getElementById('db-restore-file').click()" style="height:42px;padding:0 18px;font-weight:600;display:inline-flex;align-items:center;gap:8px;background:#DC2626;color:#fff;border-color:#DC2626;flex:0 0 auto">
-              <span>⬆</span><span>Restore from File…</span>
+            <button class="btn" onclick="document.getElementById('db-restore-file').click()" style="height:40px;padding:0 18px;font-weight:600;display:inline-flex;align-items:center;gap:8px;background:#DC2626;color:#fff;border-color:#DC2626;flex:0 0 auto">
+              <span style="font-size:15px;line-height:1">⬆</span><span>Restore from File…</span>
             </button>
             <input type="file" id="db-restore-file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="restoreDbBackup(event)">
           </div>
         </div>
+
+        <!-- ── Danger Zone: Delete All ────────────────────────────
+             Sits inside the Backup card (not a top-level `.card`) so
+             the global `.card h2 { justify-content: space-between }`
+             rule doesn't break the title row. Same red-on-pink visual
+             rhythm as the Restore panel above.
+
+             Buttons use CSS grid (auto-fill, equal min-width) so they
+             align in a clean matrix regardless of viewport width.
+             Audit log is collapsed behind a `<details>` disclosure. -->
+        <div class="needs-delete-all" style="padding:18px;border:1.5px solid #FCA5A5;border-radius:12px;background:#FEF2F2;margin-top:12px">
+          <div style="font-weight:700;color:#991B1B;font-size:14px;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+            <span>🗑</span><span>Delete All — wipe an entire table</span>
+          </div>
+          <div style="font-size:12.5px;color:#7F1D1D;line-height:1.55;margin-bottom:14px">
+            Each button wipes <strong>every row</strong> from the named table (ignoring any filters elsewhere in the app). The server snapshots the database to <code style="background:#FEE2E2;padding:1px 5px;border-radius:3px;font-size:11px">data/backups/before-delete-…&lt;timestamp&gt;.db</code> first, so a misclick is recoverable via Restore above. Every wipe is audit-logged.
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px">
+            <button class="btn" onclick="deleteAll('invoices','Invoices',event)"   style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Invoices</button>
+            <button class="btn" onclick="deleteAll('purchases','Purchases',event)" style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Purchases</button>
+            <button class="btn" onclick="deleteAll('bills','Bills',event)"         style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Bills</button>
+            <button class="btn" onclick="deleteAll('buyers','Buyers',event)"       style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Buyers</button>
+            <button class="btn" onclick="deleteAll('traders','Sellers',event)"     style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Sellers</button>
+            <button class="btn" onclick="deleteAll('auctions','Auctions',event)"   style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px" title="Wipes EVERY auction AND cascades through lots, invoices, purchases, bills, debit notes, lot allocations">🗑 Auctions (full reset)</button>
+          </div>
+
+          <details style="margin-top:16px">
+            <summary style="cursor:pointer;font-size:12.5px;font-weight:600;color:#7F1D1D;padding:6px 0">
+              📜 Audit log — recent wipes
+            </summary>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 8px;flex-wrap:wrap">
+              <span style="font-size:11.5px;color:#7F1D1D;opacity:.85">Shows the 200 most recent Delete All actions.</span>
+              <button class="btn btn-o" onclick="loadDeleteLog()" style="height:30px;padding:0 14px;font-size:12px;font-weight:600">Refresh</button>
+            </div>
+            <div id="delete-log-host" style="overflow:auto;max-height:280px;border:1px solid #FCA5A5;border-radius:8px;background:#fff;font-size:12px">
+              <div style="padding:12px;color:#7F1D1D;font-style:italic">Click Refresh to load recent wipes.</div>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- PRICE LIST MAPPING — fills CODE from TRADE NAME on a Price
+         List (Before) sheet. Round-trips through ExcelJS so the
+         brand header / column widths / TOTAL row from the original
+         export survive. -->
+    <div class="tc" id="tc-plmap">
+      <div class="card">
+        <h2>Price List Mapping
+          <span style="font-weight:400;font-size:12px;color:var(--text3)">
+            Upload a Price List (Before) sheet with TRADE NAME filled in — server fills the CODE column from the Buyers master
+          </span>
+        </h2>
+        <div style="font-size:12px;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:10px 12px;margin:6px 0 14px 0">
+          <strong>Expected columns:</strong> AUCTION NO, DATE, LOT, BAG, QTY, <strong>CODE</strong>, <strong>TRADE NAME</strong> &nbsp;·&nbsp;
+          The matcher needs both <code>TRADE NAME</code> and <code>CODE</code> headers somewhere on the sheet. Extra columns are kept as-is.
+        </div>
+
+        <div class="sgrid" style="margin-bottom:14px">
+          <div class="fg"><label>File (.xlsx / .xls)</label>
+            <input type="file" id="pl-file" accept=".xls,.xlsx" onchange="plOnFileChange()">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+          <button class="btn btn-g" onclick="plPreview()">1. Preview Mapping</button>
+          <button class="btn btn-a" id="pl-download-btn" onclick="plDownload()" disabled>2. Download Updated File</button>
+        </div>
+
+        <div id="pl-result" style="margin-bottom:14px;font-size:12.5px;color:var(--text2)"></div>
+        <div id="pl-preview" style="overflow-x:auto;max-height:600px;border:1px solid var(--spice-line);border-radius:8px;padding:8px;background:#fff"></div>
+      </div>
+    </div>
+
+    <!-- IMPORT OLD DATA — re-imports legacy XLS/XLSX exports back into
+         the system. Used to migrate FoxPro/legacy data, or restore
+         specific tables from a backup file without restoring the
+         entire DB. Admin-only — sits behind requireUserManage perm
+         (same gate as the Users tab). -->
+    <div class="tc" id="tc-importold">
+      <div class="card">
+        <h2>Import Old Data <span style="font-weight:400;font-size:12px;color:var(--text3)">Upload legacy XLS/XLSX exports back into the system</span></h2>
+        <div class="sgrid" style="margin-bottom:14px">
+          <div class="fg"><label>Module</label>
+            <select id="imp-module">
+              <option value="sales_invoice">Sales Invoices</option>
+              <option value="purchase">Purchase Invoices</option>
+              <option value="bills">Bills of Supply</option>
+              <option value="debit_notes">Debit Notes</option>
+              <option value="sellers">Sellers</option>
+              <option value="buyers">Buyers</option>
+            </select>
+          </div>
+          <div class="fg"><label>File (.xlsx / .xls)</label>
+            <input type="file" id="imp-file" accept=".xls,.xlsx">
+          </div>
+          <div class="fg" style="display:flex;align-items:end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+              <input type="checkbox" id="imp-dryrun" checked> Dry-run (validate only, do not write)
+            </label>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+          <button class="btn btn-g" onclick="impPreview()">1. Preview &amp; Detect Mapping</button>
+          <button class="btn btn-a" onclick="impVerify()">2. Verify Against Database</button>
+          <button class="btn btn-a" onclick="impRun()">3. Run Import</button>
+          <button class="btn btn-o" onclick="impLoadHistory()">View History</button>
+        </div>
+        <div id="imp-result" style="margin-bottom:14px;font-size:12.5px;color:var(--text2)"></div>
+        <div id="imp-preview" style="overflow-x:auto;max-height:300px;border:1px solid var(--spice-line);border-radius:8px;padding:8px;background:#fff;margin-bottom:14px"></div>
+        <div id="imp-verify" style="overflow-x:auto;max-height:520px;border:1px solid var(--spice-line);border-radius:8px;padding:8px;background:#fff;margin-bottom:14px;display:none"></div>
+        <div id="imp-history" style="overflow-x:auto;max-height:300px;border:1px solid var(--spice-line);border-radius:8px;padding:8px;background:#fff"></div>
       </div>
     </div>
 
@@ -2100,7 +2230,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div class="card">
         <h2>Sellers / Poolers <button class="needs-trader-write btn btn-g" onclick="openTraderAdd()">+ Add Seller</button></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:end">
-          <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by name, phone, GSTIN, PAN, place..." oninput="searchTraders(this.value)"></div>
+          <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search across all sellers — name, phone, GSTIN, PAN, place, Aadhar…" oninput="searchTradersDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="document.getElementById('imp-traders').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('traders')">Download Template</button>
           <button id="seller-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('seller')">🗑 Delete Selected <span id="seller-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
@@ -2108,6 +2238,9 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
         <div id="trader-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Name</th><th>CR/GSTIN</th><th>PAN</th><th>Phone</th><th>Place · State</th><th>Bank</th><th>Actions</th></tr></thead><tbody id="traders-list"></tbody></table></div>
+        <!-- Pager — caption "Showing X–Y of N" on the left, First/Prev/page-input/Next/Last on the right.
+             flex-wrap so it stacks gracefully on narrow viewports. -->
+        <div id="traders-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2116,7 +2249,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div class="card">
         <h2>Buyers / Dealers <button class="needs-buyer-write btn btn-g" onclick="openBuyerAdd()">+ Add Buyer</button></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:end">
-          <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by name, phone, GSTIN, PAN, TI..." oninput="searchBuyers(this.value)"></div>
+          <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search across all buyers — name, code, GSTIN, PAN, TI, place…" oninput="searchBuyersDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="document.getElementById('imp-buyers').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('buyers')">Download Template</button>
           <button id="buyer-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('buyer')">🗑 Delete Selected <span id="buyer-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
@@ -2124,6 +2257,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
         <div id="buyer-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>BUYER</th><th>Code</th><th>Trade Name</th><th>GSTIN</th><th>PAN</th><th>Phone</th><th>TI</th><th>Place · State</th><th>Sale</th><th>Actions</th></tr></thead><tbody id="buyers-list"></tbody></table></div>
+        <div id="buyers-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2132,12 +2266,16 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
       <div class="card">
         <h2>Trades <button class="btn btn-g" onclick="openAuctionAdd()">+ New Trade</button></h2>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+          <!-- Trade-number search lives in the same row as the import / delete buttons.
+               Filters server-side against the `ano` column; debounced 200ms. -->
+          <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by trade number…" oninput="searchAuctionsDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="openImportAuctionModal()">Import Lots from XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('auctions')">Download Template</button>
           <button id="trade-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('trade')">🗑 Delete Selected <span id="trade-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
         </div>
         <div id="auction-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Trade No</th><th>Date</th><th>Type</th><th>Lots</th><th>Actions</th></tr></thead><tbody id="auctions-list"></tbody></table></div>
+        <div id="auctions-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2219,6 +2357,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Lot</th><th>Name</th><th>Branch</th><th>Bags</th><th>Qty</th><th>Price</th><th>Amount</th><th>Buyer</th><th>PurAmt</th><th>Payable</th><th>Actions</th></tr></thead><tbody id="lots-list"></tbody></table></div>
+        <div id="lots-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2642,6 +2781,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Sale</th><th>Inv#</th><th>Lorry</th><th>Distance (km)</th><th>Code</th><th>Trade Name</th><th>Qty</th><th>Amount</th><th>Gunny</th><th>Insurance</th><th>Transport</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="invoices-list"></tbody></table></div>
+        <div id="invoices-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2708,6 +2848,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Inv#</th><th>Name</th><th>Qty</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>TDS</th><th>Total</th><th>Actions</th></tr></thead><tbody id="purchases-list"></tbody></table></div>
+        <div id="purchases-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2792,6 +2933,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="overflow-x:auto"><table><thead><tr><th>Seller</th><th>Lots</th><th>Qty</th><th>Amount</th><th>Purchase</th><th>Discount</th><th>GST 5%</th><th>Payable</th><th>Actions</th></tr></thead><tbody id="payments-list"></tbody></table></div>
+        <div id="payments-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -2980,6 +3122,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         </div>
 
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Bill#</th><th>Date</th><th>Name</th><th>Place</th><th>Qty</th><th>Cost</th><th>Net</th><th>Actions</th></tr></thead><tbody id="bills-list"></tbody></table></div>
+        <div id="bills-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -3010,6 +3153,7 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
           <button id="dn-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedDebitNotes()" title="Delete all ticked debit notes">🗑 Delete Selected</button>
         </div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
+        <div id="debit-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -3509,7 +3653,23 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
     <div class="fg"><label>Amount (₹)</label><input id="l-amount" type="number" step="0.01"></div>
     <div class="fg"><label>Buyer Code</label><input id="l-buyer"></div>
     <div class="fg"><label>Buyer Name</label><input id="l-buyer1"></div>
-    <div class="fg"><label>Code</label><input id="l-code"></div>
+    <div class="fg">
+      <label>Code
+        <span id="l-code-hint" style="margin-left:6px;font-weight:400;font-size:11px;color:var(--text3)"></span>
+      </label>
+      <!-- Custom type-ahead autocomplete. Native <datalist> filters its
+           suggestions against both the option's value AND its displayed
+           text — typing "HR" surfaced ASF2 because the buyer name
+           "ASHRAF" contains "HR". A custom dropdown gives strict
+           code-only matching while still showing buyer name, sale type,
+           and place next to each suggestion. Anchored to a relative
+           wrapper so the absolute-positioned panel sits flush under
+           the input. -->
+      <div style="position:relative">
+        <input id="l-code" autocomplete="off">
+        <div id="l-code-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;max-height:240px;overflow-y:auto;background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:12.5px"></div>
+      </div>
+    </div>
     <div class="fg"><label>Sale Type</label>
       <select id="l-sale"><option value=""></option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option></select>
     </div>
@@ -4825,7 +4985,16 @@ function go(tab){
   const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
-    bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,tally:loadTallyAuctions};
+    bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,tally:loadTallyAuctions,
+    // Lazy-load the Delete All audit log when Backup opens so the
+    // <details> drawer shows fresh data on first expand (loadDeleteLog
+    // is idempotent — re-running it just re-renders the table).
+    backup: () => { if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
+    // Import Old Data has its own History panel; pre-load on tab open
+    // so the operator sees recent imports without clicking the button.
+    importold: () => { if (typeof impLoadHistory === 'function') impLoadHistory(); },
+    // Price List Mapping has no auto-load (waits for file upload).
+    plmap: () => {}};
   if(loaders[tab]){
     try{
       const r=loaders[tab]();
@@ -9066,7 +9235,137 @@ const T_FIELDS=['name','cr','pan','tel','aadhar','padd','ppla','pstate','pst_cod
 const T_IDS={name:'t-name',cr:'t-cr',pan:'t-pan',tel:'t-tel',aadhar:'t-aadhar',padd:'t-padd',ppla:'t-ppla',
   pstate:'t-pstate',pst_code:'t-pstcode',pin:'t-pin'};
 
-async function searchTraders(q){const d=await j(`/api/traders?search=${encodeURIComponent(q)}&limit=100`);
+// ── Shared pagination renderer ──────────────────────────────────────
+// Used by sellers, buyers, auctions (and reusable for any future paged
+// list). Caption "Showing X–Y of N · matching 'q'" on the left; First /
+// Prev / Page input / Next / Last on the right. Hides itself entirely
+// when there's only one page so small datasets aren't cluttered.
+//
+// `gotoFn` is the per-list goto function (e.g. gotoTradersPage). Its
+// `.name` is interpolated into the button's onclick attribute, so the
+// function MUST be at module scope (not an arrow / closure) for the
+// inline handlers to resolve.
+function renderPager(hostId, state, gotoFn, query){
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const { page, pageSize, total, totalPages } = state;
+  if (!total) {
+    host.innerHTML = query
+      ? '<span style="color:var(--text3)">No matches for &ldquo;'+esc(query)+'&rdquo;.</span>'
+      : '';
+    return;
+  }
+  const from = (page - 1) * pageSize + 1;
+  const to   = Math.min(total, page * pageSize);
+  const fmt  = n => Number(n).toLocaleString();
+  const caption = '<span>Showing <b>'+fmt(from)+'–'+fmt(to)+'</b> of <b>'+fmt(total)+'</b>' +
+                  (query ? ' &middot; matching &ldquo;<i>'+esc(query)+'</i>&rdquo;' : '') + '</span>';
+  if (totalPages <= 1) {
+    host.innerHTML = caption;
+    return;
+  }
+  // Page input lets the user jump to any page directly — vital for
+  // 7,000-row masters where clicking Next 140 times is unworkable.
+  const btnStyle = 'height:30px;padding:0 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer';
+  const btnDisabled = ';opacity:.4;cursor:not-allowed';
+  const mk = (label, target, disabled) =>
+    '<button type="button" style="'+btnStyle+(disabled?btnDisabled:'')+'"' +
+      (disabled ? ' disabled' : ' onclick="'+gotoFn.name+'('+target+')"') + '>'+label+'</button>';
+  host.innerHTML =
+    '<div>'+caption+'</div>' +
+    '<div style="display:flex;align-items:center;gap:6px">' +
+      mk('« First', 1, page <= 1) +
+      mk('‹ Prev',  page - 1, page <= 1) +
+      '<span>Page <input type="number" min="1" max="'+totalPages+'" value="'+page+'" ' +
+        'style="width:60px;height:30px;padding:0 6px;border:1px solid var(--border);border-radius:6px;text-align:center;font-size:12px;font-weight:600" ' +
+        'onkeydown="if(event.key===\'Enter\'){'+gotoFn.name+'(this.value);this.blur()}" ' +
+        'onblur="'+gotoFn.name+'(this.value)"> of <b>'+fmt(totalPages)+'</b></span>' +
+      mk('Next ›', page + 1, page >= totalPages) +
+      mk('Last »', totalPages, page >= totalPages) +
+    '</div>';
+}
+
+// ── Client-side pagination helper ──────────────────────────────────
+// Used by trade-scoped lists (invoices, lots, purchases, bills, debit
+// notes, payments) where the loader fetches the whole filtered set and
+// computes KPI strips / charts / summary panels over it. We can't
+// paginate at the server because the page-window aggregates would lie;
+// instead we slice the in-memory array AFTER the KPIs have been computed.
+//
+// Returns the page-window slice. Side effect: mutates `pager` (total,
+// totalPages) and renders the pager DOM. Call BEFORE DataTable.mount —
+// pass the slice as the data argument so only one page renders.
+//
+//   const slice = applyClientSidePagination(_invoicesPager, 'invoices-pager',
+//                                            gotoInvoicesPage, arr);
+//   DataTable.mount('invoices-list', slice, { ... });
+//
+// `pager.page` is clamped to the new total so a delete that shrinks
+// the list below the current page leaves the user on the last page
+// rather than an empty one.
+function applyClientSidePagination(pager, pagerHostId, gotoFn, rows){
+  const arr = Array.isArray(rows) ? rows : [];
+  pager.total = arr.length;
+  pager.totalPages = Math.max(1, Math.ceil(arr.length / pager.pageSize));
+  if (pager.page > pager.totalPages) pager.page = pager.totalPages;
+  if (pager.page < 1) pager.page = 1;
+  renderPager(pagerHostId, pager, gotoFn, '');
+  return arr.slice((pager.page - 1) * pager.pageSize, pager.page * pager.pageSize);
+}
+
+// Paginated traders (sellers) list. Module-scope state tracks the
+// current page + last query so the pager buttons can re-request the
+// same query at a different page without reading the input field.
+// Searches run server-side against the FULL table, not just the
+// current page — fixes the "search hits only the first 500" gap on
+// 7,000+-row masters.
+const _tradersPager = { page: 1, pageSize: 50, query: '', total: 0, totalPages: 0, fetchToken: 0 };
+
+function gotoTradersPage(page){
+  const p = Math.max(1, Math.min(_tradersPager.totalPages || 1, page|0));
+  _tradersPager.page = p;
+  searchTraders(_tradersPager.query, { page: p });
+}
+
+// Debounced search: every keystroke would otherwise fire a fresh
+// LIKE-COUNT + LIKE-page round trip against the traders table. 200 ms
+// is short enough to feel live and long enough to coalesce typing.
+let _tradersSearchTimer = null;
+function searchTradersDebounced(q){
+  clearTimeout(_tradersSearchTimer);
+  _tradersSearchTimer = setTimeout(() => searchTraders(q, { page: 1 }), 200);
+}
+
+async function searchTraders(q, opts){
+  // `opts.page` overrides the current page; otherwise we reset to 1 on
+  // a fresh query and keep the existing page when the same query is
+  // re-fired by a pager click.
+  const query = (q == null ? _tradersPager.query : String(q)).trim();
+  const reset = query !== _tradersPager.query;
+  _tradersPager.query = query;
+  if (reset) _tradersPager.page = 1;
+  if (opts && opts.page) _tradersPager.page = opts.page;
+  const page = _tradersPager.page;
+  const pageSize = _tradersPager.pageSize;
+
+  // Race guard — if the user types fast, multiple in-flight requests
+  // can resolve out of order. Tag each request and only honour the
+  // newest one when it returns.
+  const myToken = ++_tradersPager.fetchToken;
+  const url = `/api/traders?search=${encodeURIComponent(query)}&page=${page}&pageSize=${pageSize}`;
+  const payload = await j(url);
+  if (myToken !== _tradersPager.fetchToken) return;
+
+  // Server returns { rows, total, page, pageSize } for paged requests.
+  // Plain-array fallback kept for robustness against legacy responses.
+  const rows = Array.isArray(payload) ? payload : (payload && payload.rows) || [];
+  const total = Array.isArray(payload) ? rows.length : (payload && payload.total) || rows.length;
+  _tradersPager.total = total;
+  _tradersPager.totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  renderPager('traders-pager', _tradersPager, gotoTradersPage, query);
+
+  const d = rows;
   DataTable.mount('traders-list', d, {
     columns: [
       BulkActions.column('seller'),
@@ -9269,8 +9568,38 @@ async function downloadTemplate(type){
   a.href=URL.createObjectURL(blob);a.download=type+'-template.xlsx';a.click()}
 
 // ── Delete All (Item 3) ──────────────────────────────────
-// Double-confirm destructive action, then call /api/{resource}/delete-all
+// Three-stage safety:
+//   1. PREFLIGHT — fetch real row counts (target + cascade) so the
+//      confirm prompt shows "1,247 invoices" not a generic warning.
+//   2. TWO-CLICK CONFIRM — first click on the button arms it with a
+//      red "click again to DELETE" label; second click within 3s
+//      commits. confirmTwoClick falls through to a JS confirm() with
+//      the full row breakdown if the button isn't available.
+//   3. SERVER — snapshots the DB to data/backups/ before the wipe and
+//      records the action in delete_log.
 async function deleteAll(resource,label,ev){
+  // 1) Preflight — get concrete row counts to show in the confirm.
+  //    Failure here is non-fatal; we fall back to a generic prompt.
+  let counts = null;
+  try {
+    const r = await fetch(B + '/api/admin/delete-all/preflight?resource=' + encodeURIComponent(resource), {
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const d = await r.json();
+    if (r.ok) counts = d.counts || {};
+  } catch (_) { /* preflight failed; fall through to generic confirm */ }
+
+  let breakdown = '';
+  if (counts) {
+    const entries = Object.entries(counts);
+    if (!entries.length || entries.every(([, n]) => !n)) {
+      breakdown = '\n\nThe target table is already empty.';
+    } else {
+      breakdown = '\n\nRows that will be wiped:\n' +
+        entries.map(([t, n]) => '• ' + (n || 0).toLocaleString() + ' from ' + t).join('\n');
+    }
+  }
+
   // Two-click confirm on the triggering button — first click arms with
   // a red "click again" label, second click within 3s commits. See the
   // confirmTwoClick docstring for why this replaces the typed-confirm
@@ -9278,13 +9607,16 @@ async function deleteAll(resource,label,ev){
   const ok = await confirmTwoClick('deleteAll:'+resource,
     ev && ev.currentTarget,
     { confirmLabel: `⚠ Click again to DELETE ALL ${label} — cannot undo`,
-      fallbackMessage: `Delete ALL ${label}?\n\nThis will permanently remove every record from the ${label.toLowerCase()} table. Cannot be undone.` });
+      fallbackMessage: `Delete ALL ${label}?${breakdown}\n\nThe server will snapshot the database to data/backups/ first, then permanently remove these rows.\nA misclick can be recovered by restoring the snapshot (Backup tab → Restore from File).\n\nContinue?` });
   if (!ok) return;
   try{
     const r=await fetch(B+`/api/${resource}/delete-all`,{method:'DELETE',headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||'Delete failed');
-    toast(`Deleted ${d.deleted||0} ${label.toLowerCase()}.`);
+    // Confirmation toast — includes the backup filename so the operator
+    // knows exactly where the snapshot landed.
+    const bp = d.backupPath ? ' · snapshot: ' + String(d.backupPath).split('/').pop() : '';
+    toast(`Deleted ${d.deleted||0} ${label.toLowerCase()}.${bp}`);
     // Refresh the relevant list
     if(resource==='traders')searchTraders('');
     else if(resource==='buyers')searchBuyers('');
@@ -9292,7 +9624,65 @@ async function deleteAll(resource,label,ev){
     else if(resource==='purchases')loadPurchases&&loadPurchases();
     else if(resource==='bills')loadBills&&loadBills();
     else if(resource==='debit-notes')loadDebitNotes&&loadDebitNotes();
+    else if(resource==='auctions')loadAuctions&&loadAuctions();
+    // Refresh the audit log if it's visible so the operator can see
+    // their own action recorded.
+    if (typeof loadDeleteLog === 'function') loadDeleteLog();
   }catch(e){showError(e)}
+}
+
+// Pull the most recent Delete All actions and render them as a table.
+// Each row shows when, who, the resource, how many rows went away, the
+// per-table cascade breakdown, the snapshot path, and the client IP.
+async function loadDeleteLog(){
+  const host = document.getElementById('delete-log-host');
+  if (!host) return;
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  host.innerHTML = '<div style="padding:12px;color:#7F1D1D;font-style:italic">Loading…</div>';
+  try {
+    const r = await fetch(B + '/api/admin/delete-log', {
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || 'Failed to load audit log');
+    }
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows.length) {
+      host.innerHTML = '<div style="padding:12px;color:#7F1D1D;font-style:italic">No Delete All actions recorded yet.</div>';
+      return;
+    }
+    let html = '<table style="width:100%;border-collapse:collapse">' +
+      '<thead><tr style="background:#FECACA"><th style="text-align:left;padding:6px 10px;border-bottom:1px solid #FCA5A5">When</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid #FCA5A5">User</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid #FCA5A5">Resource</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:1px solid #FCA5A5">Deleted</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid #FCA5A5">Cascade detail</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid #FCA5A5">Snapshot</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid #FCA5A5">IP</th></tr></thead><tbody>';
+    for (const rw of rows) {
+      const cascade = rw.cascade_counts || {};
+      const detail = Object.entries(cascade)
+        .filter(([, n]) => Number(n) > 0)
+        .map(([t, n]) => _esc(t) + ': ' + n)
+        .join(' · ') || '—';
+      const bp = rw.backup_path || '';
+      const bpName = bp ? bp.split('/').pop() : '—';
+      html += '<tr>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2;white-space:nowrap">' + _esc(rw.created_at || '') + '</td>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2">' + _esc(rw.username || '—') + '</td>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2"><code>' + _esc(rw.resource || '') + '</code></td>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2;text-align:right;font-family:monospace;font-weight:700">' + (rw.deleted_count || 0) + '</td>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2;font-size:11px">' + detail + '</td>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2;font-family:monospace;font-size:11px" title="' + _esc(bp) + '">' + _esc(bpName) + '</td>' +
+        '<td style="padding:5px 10px;border-bottom:1px solid #FEE2E2;font-family:monospace;font-size:11px">' + _esc(rw.ip || '—') + '</td>' +
+        '</tr>';
+    }
+    html += '</tbody></table>';
+    host.innerHTML = html;
+  } catch (e) {
+    host.innerHTML = '<div style="padding:12px;color:#7F1D1D">' + _esc(e.message || String(e)) + '</div>';
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -9494,7 +9884,43 @@ const B_IDS={buyer:'b-buyer',buyer1:'b-buyer1',code:'b-code',sbl:'b-sbl',add1:'b
   state:'b-state',st_code:'b-stcode',gstin:'b-gstin',pan:'b-pan',tel:'b-tel',ti:'b-ti',sale:'b-sale',email:'b-email',
   cbuyer1:'b-cbuyer1',cadd1:'b-cadd1',cadd2:'b-cadd2',cpla:'b-cpla',cpin:'b-cpin',cstate:'b-cstate',cst_code:'b-cstcode',cgstin:'b-cgstin'};
 
-async function searchBuyers(q){const d=await j(`/api/buyers?search=${encodeURIComponent(q)}`);
+// Paginated buyers list — same shape as _tradersPager.
+const _buyersPager = { page: 1, pageSize: 50, query: '', total: 0, totalPages: 0, fetchToken: 0 };
+
+function gotoBuyersPage(page){
+  const p = Math.max(1, Math.min(_buyersPager.totalPages || 1, page|0));
+  _buyersPager.page = p;
+  searchBuyers(_buyersPager.query, { page: p });
+}
+
+let _buyersSearchTimer = null;
+function searchBuyersDebounced(q){
+  clearTimeout(_buyersSearchTimer);
+  _buyersSearchTimer = setTimeout(() => searchBuyers(q, { page: 1 }), 200);
+}
+
+async function searchBuyers(q, opts){
+  const query = (q == null ? _buyersPager.query : String(q)).trim();
+  const reset = query !== _buyersPager.query;
+  _buyersPager.query = query;
+  if (reset) _buyersPager.page = 1;
+  if (opts && opts.page) _buyersPager.page = opts.page;
+  const page = _buyersPager.page;
+  const pageSize = _buyersPager.pageSize;
+
+  const myToken = ++_buyersPager.fetchToken;
+  const url = `/api/buyers?search=${encodeURIComponent(query)}&page=${page}&pageSize=${pageSize}`;
+  const payload = await j(url);
+  if (myToken !== _buyersPager.fetchToken) return;
+
+  const rows = Array.isArray(payload) ? payload : (payload && payload.rows) || [];
+  const total = Array.isArray(payload) ? rows.length : (payload && payload.total) || rows.length;
+  _buyersPager.total = total;
+  _buyersPager.totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  renderPager('buyers-pager', _buyersPager, gotoBuyersPage, query);
+
+  const d = rows;
   const saleMap={L:'Local',I:'Inter-state',E:'Export'};
   DataTable.mount('buyers-list', d, {
     emptyState: { icon: 'buyers', title: "No buyers yet", body: "Register buyers to generate sales invoices. Use Add Buyer above or import from a template." }, 
@@ -9628,7 +10054,48 @@ async function importBuyers(e){
   }catch(err){status.style.background='var(--red-bg)';status.style.color='var(--red)';status.textContent='Error: '+err.message}}
 
 // ── Auctions ──────────────────────────────────────────────
-async function loadAuctions(){const d=await j('/api/auctions');
+// Paginated auctions (trades) list.
+const _auctionsPager = { page: 1, pageSize: 50, query: '', total: 0, totalPages: 0, fetchToken: 0 };
+
+function gotoAuctionsPage(page){
+  const p = Math.max(1, Math.min(_auctionsPager.totalPages || 1, page|0));
+  _auctionsPager.page = p;
+  loadAuctions({ page: p });
+}
+
+let _auctionsSearchTimer = null;
+function searchAuctionsDebounced(q){
+  clearTimeout(_auctionsSearchTimer);
+  _auctionsSearchTimer = setTimeout(() => loadAuctions({ query: q, page: 1 }), 200);
+}
+
+async function loadAuctions(opts){
+  // Auctions accept both a search query (matches trade number) and a
+  // page hint. Calling loadAuctions() with no args (the original
+  // signature) defaults to "current state, page 1, no search reset".
+  if (opts && typeof opts.query !== 'undefined') {
+    const q = String(opts.query || '').trim();
+    if (q !== _auctionsPager.query) _auctionsPager.page = 1;
+    _auctionsPager.query = q;
+  }
+  if (opts && opts.page) _auctionsPager.page = opts.page;
+  const page = _auctionsPager.page;
+  const pageSize = _auctionsPager.pageSize;
+  const query = _auctionsPager.query;
+
+  const myToken = ++_auctionsPager.fetchToken;
+  const url = `/api/auctions?search=${encodeURIComponent(query)}&page=${page}&pageSize=${pageSize}`;
+  const payload = await j(url);
+  if (myToken !== _auctionsPager.fetchToken) return;
+
+  const rows = Array.isArray(payload) ? payload : (payload && payload.rows) || [];
+  const total = Array.isArray(payload) ? rows.length : (payload && payload.total) || rows.length;
+  _auctionsPager.total = total;
+  _auctionsPager.totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  renderPager('auctions-pager', _auctionsPager, gotoAuctionsPage, query);
+
+  const d = rows;
   DataTable.mount('auctions-list', d, {
     emptyState: { icon: 'auctions', title: "No auctions yet", body: "Create your first auction (trade) from the Add Auction button to start entering lots." }, 
     columns: [
@@ -10139,7 +10606,22 @@ async function refreshLots(btn){
   }
 }
 
-async function loadLots(){const aid=document.getElementById('lot-auction').value;if(!aid)return;
+// ── Lots: client-side pagination ─────────────────────────────────
+// Trade-scoped list (filtered by `lot-auction` selector). The loader
+// fetches the full set so KPI strips + Sold/WD aggregates compute
+// correctly; only the table render is page-windowed.
+const _lotsPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
+
+function gotoLotsPage(p){
+  const max = _lotsPager.totalPages || 1;
+  _lotsPager.page = Math.max(1, Math.min(max, p|0));
+  loadLots({ keepPage: true });
+}
+
+async function loadLots(opts){const aid=document.getElementById('lot-auction').value;if(!aid)return;
+  // Pager: fresh loads reset to page 1; only pager-driven navigation
+  // sets {keepPage:true} to preserve the user's current page.
+  if (!opts || !opts.keepPage) _lotsPager.page = 1;
   // Cache-buster ensures the browser actually hits the server (otherwise Refresh
   // may return stale cached JSON and nothing visibly changes)
   const d=await j(`/api/lots/${aid}?_=${Date.now()}`);
@@ -10295,7 +10777,10 @@ async function loadLots(){const aid=document.getElementById('lot-auction').value
     ...(isAuction ? auctionCols : filteredTradeCols),
     ...filteredTaxCols,
   ];
-  DataTable.mount('lots-list', d, {
+  // Client-side pagination. KPIs above are computed over the FULL `arr`
+  // so they stay accurate; only the rendered table is windowed.
+  const _lotsPagedSlice = applyClientSidePagination(_lotsPager, 'lots-pager', gotoLotsPage, arr);
+  DataTable.mount('lots-list', _lotsPagedSlice, {
     emptyState: { icon: 'lots', title: "No lots in this auction yet", body: "Add your first lot using the form on the left — enter Lot #, Name, Qty, and Price to get started." },  columns });
 }
 
@@ -10322,12 +10807,23 @@ function openLotEdit(l){
       const code = (codeEl.value || '').trim().toUpperCase();
       if (!code) return;
       try {
-        const buyers = await j('/api/buyers');
-        // Match preference: exact code → exact ti → exact buyer
-        const u = code;
-        const match = buyers.find(b => String(b.code||'').trim().toUpperCase() === u)
-          || buyers.find(b => String(b.ti||'').trim().toUpperCase() === u)
-          || buyers.find(b => String(b.buyer||'').trim().toUpperCase() === u);
+        // First try the in-memory cache populated when the modal opened.
+        // Fall back to a code-specific server search only if the cache
+        // is somehow stale — covers the edge case of a buyer added in
+        // another tab between modal open and Code field commit.
+        let match = (_lotBuyerCache || []).find(b => b.codeUp === code);
+        if (!match) {
+          const fresh = await j('/api/buyers?search=' + encodeURIComponent(code));
+          const b = (fresh || []).find(x => String(x.code||'').trim().toUpperCase() === code);
+          if (b) match = b;
+        }
+        if (!match) {
+          // As a last resort, try matching by ti or full buyer string
+          const buyers = await j('/api/buyers');
+          const u = code;
+          match = buyers.find(b => String(b.ti||'').trim().toUpperCase() === u)
+               || buyers.find(b => String(b.buyer||'').trim().toUpperCase() === u);
+        }
         if (!match) {
           if (typeof toast === 'function') toast(`No buyer found for code '${code}'`);
           return;
@@ -10357,7 +10853,192 @@ function openLotEdit(l){
   if (qtyEl   && !qtyEl._wiredRecalc)   { qtyEl._wiredRecalc   = true; qtyEl.addEventListener('input', recalcAmount); }
   if (priceEl && !priceEl._wiredRecalc) { priceEl._wiredRecalc = true; priceEl.addEventListener('input', recalcAmount); }
 
+  // Multi-code picker — when the lot's trade name maps to more than one
+  // buyer in the master, the price-import resolution had to guess. We
+  // populate a dropdown next to the Code input so the operator can swap
+  // to a different candidate per-lot without leaving the modal.
+  //
+  // Refresh trigger: opening the modal AND any later edit of Buyer Name
+  // (which is what the price-mapping tool keys off of).
+  const buyer1El = document.getElementById('l-buyer1');
+  if (buyer1El && !buyer1El._wiredCodePicker) {
+    buyer1El._wiredCodePicker = true;
+    buyer1El.addEventListener('change', () => lotRefreshCodePicker(buyer1El.value, codeEl ? codeEl.value : ''));
+  }
+  lotRefreshCodePicker(l.buyer1, l.code);
+
   showModal('lot-modal');
+}
+
+// Cached buyer master for the Code dropdown. Refreshed on every modal
+// open so freshly-added buyers appear without a page reload, but kept
+// in module scope so input-event filtering doesn't refetch on every
+// keystroke.
+let _lotBuyerCache = [];
+
+// Refresh the buyer cache and wire up the custom code-autocomplete the
+// first time the modal opens. Also shows a hint when the lot's current
+// trade name maps to more than one code in the master.
+async function lotRefreshCodePicker(tradeName, currentCode){
+  const hint = document.getElementById('l-code-hint');
+  if (hint) hint.textContent = '';
+
+  // 1) Refresh the buyer cache that drives the custom dropdown.
+  //    `?all=1` lifts the 500-row default cap so codes past that
+  //    boundary in alphabetical-by-buyer1 order still appear in the
+  //    dropdown and the post-change lookup.
+  try {
+    const buyers = await j('/api/buyers?all=1');
+    const seen = new Set();
+    _lotBuyerCache = [];
+    for (const b of (Array.isArray(buyers) ? buyers : [])) {
+      const code = String(b.code || '').trim();
+      if (!code) continue;
+      const key = code.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      _lotBuyerCache.push({
+        code,
+        codeUp: key,
+        buyer: b.buyer || '',
+        buyer1: b.buyer1 || '',
+        sale: b.sale || '',
+        pla: b.pla || '',
+        // Needed by the change-handler's auto-fill so the CR/GSTIN
+        // field gets populated from the cache without a server round-trip.
+        gstin: b.gstin || '',
+        cr: b.cr || '',
+      });
+    }
+    // Sort alphabetically by code so the dropdown is predictable.
+    _lotBuyerCache.sort((a, b) => a.codeUp.localeCompare(b.codeUp));
+  } catch (_) { /* non-fatal — leaves cache as-is */ }
+
+  // 2) Wire input / focus / blur / keydown handlers exactly once.
+  _lotWireCodeAutocomplete();
+
+  // 3) Hint when the current trade name maps to >1 code, so the
+  //    operator knows there's a disambiguation choice to make.
+  const name = String(tradeName || '').trim();
+  if (!name || !hint) return;
+  try {
+    const r = await fetch(B + '/api/buyers/by-tradename?name=' + encodeURIComponent(name), {
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    if (!r.ok) return;
+    const buyers = await r.json();
+    if (!Array.isArray(buyers) || buyers.length === 0) {
+      hint.textContent = '(no buyer matches this trade name)';
+      return;
+    }
+    if (buyers.length > 1) {
+      const codes = buyers.map(b => String(b.code || '').trim()).filter(Boolean).join(', ');
+      hint.textContent = '(' + buyers.length + ' codes share this trade name: ' + codes + ')';
+    }
+  } catch (_) { /* non-fatal */ }
+}
+
+// Wire input/focus/blur/keydown on the Code input exactly once.
+// Behaviour:
+//   • focus / non-empty input → opens dropdown with matches
+//   • input event           → re-filters (strictly by code)
+//   • click on a row        → fills l-code, fires change, hides
+//   • blur (with delay)     → hides (delay so click-on-row registers)
+//   • Esc                   → hides
+//   • Arrow down / up + Enter → keyboard nav (basic)
+function _lotWireCodeAutocomplete(){
+  const codeEl = document.getElementById('l-code');
+  const ddl    = document.getElementById('l-code-dropdown');
+  if (!codeEl || !ddl || codeEl._wiredAutocomplete) return;
+  codeEl._wiredAutocomplete = true;
+
+  const _escAttr = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+  let activeIdx = -1;  // currently-highlighted row in the rendered list
+
+  const render = () => {
+    const q = String(codeEl.value || '').trim().toUpperCase();
+    // Strict code match — startsWith first, then contains as a fallback
+    // so a typo in the middle ("J0" → "JP0") still surfaces something.
+    // Whitespace is ignored on both sides.
+    const starts = [];
+    const contains = [];
+    for (const b of _lotBuyerCache) {
+      if (!q) { starts.push(b); continue; }
+      if (b.codeUp.startsWith(q)) starts.push(b);
+      else if (b.codeUp.includes(q)) contains.push(b);
+    }
+    const matches = starts.concat(contains).slice(0, 50);
+    if (!matches.length) {
+      ddl.innerHTML = '<div style="padding:8px 12px;color:#888;font-style:italic">No code matches.</div>';
+      ddl.style.display = 'block';
+      activeIdx = -1;
+      return;
+    }
+    activeIdx = 0;
+    ddl.innerHTML = matches.map((b, i) => {
+      const ctxParts = [b.buyer, b.sale ? '['+b.sale+']' : '', b.pla].filter(Boolean);
+      const ctx = ctxParts.join(' · ');
+      return '<div class="lc-row" data-code="'+_escAttr(b.code)+'" data-idx="'+i+'" '+
+        'style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f1f1f1;display:flex;gap:10px;align-items:baseline'+
+        (i === activeIdx ? ';background:#ecfdf5' : '')+'">'+
+        '<span style="font-weight:700;color:#15803d;min-width:60px">'+_escAttr(b.code)+'</span>'+
+        '<span style="flex:1;color:#444">'+_escAttr(ctx)+'</span>'+
+        '</div>';
+    }).join('');
+    ddl.style.display = 'block';
+  };
+
+  const hide = () => { ddl.style.display = 'none'; activeIdx = -1; };
+
+  const choose = (code) => {
+    if (code == null) return;
+    codeEl.value = code;
+    hide();
+    // Fire change so the existing handler resolves buyer/buyer1/sale.
+    codeEl.dispatchEvent(new Event('change'));
+  };
+
+  codeEl.addEventListener('focus', render);
+  codeEl.addEventListener('input', render);
+  codeEl.addEventListener('blur', () => {
+    // Defer so a mousedown-then-click on a row still registers.
+    setTimeout(hide, 150);
+  });
+  codeEl.addEventListener('keydown', (e) => {
+    if (ddl.style.display === 'none') return;
+    const rows = ddl.querySelectorAll('.lc-row');
+    if (e.key === 'Escape') { hide(); return; }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!rows.length) return;
+      activeIdx = (activeIdx + 1) % rows.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!rows.length) return;
+      activeIdx = (activeIdx - 1 + rows.length) % rows.length;
+    } else if (e.key === 'Enter') {
+      if (activeIdx >= 0 && rows[activeIdx]) {
+        e.preventDefault();
+        choose(rows[activeIdx].getAttribute('data-code'));
+        return;
+      }
+    } else {
+      return;
+    }
+    rows.forEach((r, i) => {
+      r.style.background = (i === activeIdx) ? '#ecfdf5' : '';
+    });
+    if (rows[activeIdx]) rows[activeIdx].scrollIntoView({ block: 'nearest' });
+  });
+
+  // mousedown (not click) so the row commits BEFORE blur fires.
+  ddl.addEventListener('mousedown', (e) => {
+    const row = e.target.closest('.lc-row');
+    if (!row) return;
+    e.preventDefault();   // keep focus on the input so change fires cleanly
+    choose(row.getAttribute('data-code'));
+  });
 }
 async function saveLot(){
   const id=document.getElementById('l-id').value;
@@ -10473,7 +11154,15 @@ async function generateInvoice(){
   }catch(e){showError(e)}
 }
 
-async function loadInvoices(){
+// ── Invoices: client-side pagination ─────────────────────────────
+const _invoicesPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
+function gotoInvoicesPage(p){
+  const max = _invoicesPager.totalPages || 1;
+  _invoicesPager.page = Math.max(1, Math.min(max, p|0));
+  loadInvoices({ keepPage: true });
+}
+async function loadInvoices(opts){
+  if (!opts || !opts.keepPage) _invoicesPager.page = 1;
   const aid=document.getElementById('inv-auction')?.value;
   const url=aid?`/api/invoices?auction_id=${aid}`:'/api/invoices';
   const d=await j(url);
@@ -10514,7 +11203,9 @@ async function loadInvoices(){
     }
   }
 
-  DataTable.mount('invoices-list', d, {
+  // Paginate the table render only — KPIs above already used the full arr.
+  const _invSlice = applyClientSidePagination(_invoicesPager, 'invoices-pager', gotoInvoicesPage, arr);
+  DataTable.mount('invoices-list', _invSlice, {
     emptyState: { icon: 'invoices', title: "No invoices yet", body: "Once you have calculated lots for a buyer, use Generate Invoice to create one." }, 
     columns: [
       { key:'_select', label:'', labelHTML:'<input type="checkbox" id="inv-select-all" onclick="event.stopPropagation();toggleAllInvoices(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">', sortable:false, searchable:false,
@@ -11459,7 +12150,15 @@ async function generatePurchase(){
     loadPurchases();
   }catch(e){showError(e)}}
 
-async function loadPurchases(){
+// ── Purchases: client-side pagination ────────────────────────────
+const _purchasesPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
+function gotoPurchasesPage(p){
+  const max = _purchasesPager.totalPages || 1;
+  _purchasesPager.page = Math.max(1, Math.min(max, p|0));
+  loadPurchases({ keepPage: true });
+}
+async function loadPurchases(opts){
+  if (!opts || !opts.keepPage) _purchasesPager.page = 1;
   const aid=document.getElementById('pur-auction')?.value;
   const url=aid?`/api/purchases?auction_id=${aid}`:'/api/purchases';
   const d=await j(url);
@@ -11488,7 +12187,8 @@ async function loadPurchases(){
     }
   }
 
-  DataTable.mount('purchases-list', d, {
+  const _purSlice = applyClientSidePagination(_purchasesPager, 'purchases-pager', gotoPurchasesPage, arr);
+  DataTable.mount('purchases-list', _purSlice, {
     emptyState: { icon: 'invoices', title: "No purchase invoices yet", body: "Once lots are calculated, generate purchase invoices for sellers using + Generate Purchase or the Generate for All Dealers button." },
     columns: [
       { key:'_select', label:'',
@@ -11934,7 +12634,15 @@ async function deleteSelectedPayments() {
   }
 }
 
-async function loadPayments(){
+// ── Payments: client-side pagination ─────────────────────────────
+const _paymentsPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
+function gotoPaymentsPage(p){
+  const max = _paymentsPager.totalPages || 1;
+  _paymentsPager.page = Math.max(1, Math.min(max, p|0));
+  loadPayments({ keepPage: true });
+}
+async function loadPayments(opts){
+  if (!opts || !opts.keepPage) _paymentsPager.page = 1;
   const aid=document.getElementById('pay-auction').value;
   const body=document.getElementById('payments-list');
   if(!aid){body.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Select an auction above</td></tr>';return}
@@ -11990,7 +12698,11 @@ async function loadPayments(){
       }
     }
 
-    DataTable.mount('payments-list', d, {
+    // Paginate the table render. Chart below still uses the full `arr`
+    // so "Top sellers" reflects every seller in the trade, not just
+    // the current page.
+    const _paySlice = applyClientSidePagination(_paymentsPager, 'payments-pager', gotoPaymentsPage, arr);
+    DataTable.mount('payments-list', _paySlice, {
       emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this auction to see per-seller payable amounts here." },
       columns: [
         // Selection column for bulk actions. Click on a checkbox toggles
@@ -12214,7 +12926,15 @@ async function loadEligibleSellers(){
       `<option value="${esc(s.name)}">${esc(s.name)} — ${s.lot_count} lot(s), ₹${(s.total_amount||0).toFixed(2)}</option>`).join('');
     document.getElementById('gb-hint').textContent=`${sellers.length} eligible seller(s) available`;
   }catch(e){console.warn(e)}}
-async function loadBills(){
+// ── Bills: client-side pagination ────────────────────────────────
+const _billsPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
+function gotoBillsPage(p){
+  const max = _billsPager.totalPages || 1;
+  _billsPager.page = Math.max(1, Math.min(max, p|0));
+  loadBills({ keepPage: true });
+}
+async function loadBills(opts){
+  if (!opts || !opts.keepPage) _billsPager.page = 1;
   const aid=document.getElementById('bill-auction')?.value;
   const url=aid?`/api/bills?auction_id=${aid}`:'/api/bills';
   const d=await j(url);
@@ -12241,7 +12961,8 @@ async function loadBills(){
     }
   }
 
-  DataTable.mount('bills-list', d, {
+  const _billsSlice = applyClientSidePagination(_billsPager, 'bills-pager', gotoBillsPage, arr);
+  DataTable.mount('bills-list', _billsSlice, {
     emptyState: { icon: 'invoices', title: "No agri bills yet", body: "Generate agriculturist purchase bills for eligible sellers using the form above." }, 
     columns: [
       { key:'_select', label:'',
@@ -12319,10 +13040,18 @@ function loadDnAuctions() {
   fillAucSelect('dn-auction').then(() => loadDebitNotes());
 }
 
+// ── Debit Notes: client-side pagination ──────────────────────────
+const _debitPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
+function gotoDebitPage(p){
+  const max = _debitPager.totalPages || 1;
+  _debitPager.page = Math.max(1, Math.min(max, p|0));
+  loadDebitNotes({ keepPage: true });
+}
 // loadDebitNotes — list view. Filters by the dn-auction dropdown's
 // selected trade ID (resolved to its `ano`) so users only see DNs for
 // the trade they're currently working on. With no selection, shows all.
-async function loadDebitNotes(){
+async function loadDebitNotes(opts){
+  if (!opts || !opts.keepPage) _debitPager.page = 1;
   const aid = document.getElementById('dn-auction')?.value || '';
   // Resolve trade id → ano. The DN table stores `ano` (the trade
   // number string) rather than the auction id FK, so filtering happens
@@ -12334,7 +13063,10 @@ async function loadDebitNotes(){
   }
   const all = await j('/api/debit-notes');
   const d = filterAno ? all.filter(n => String(n.ano) === filterAno) : all;
-  DataTable.mount('debit-list', d, {
+  // Paginate AFTER the ano filter so the page count reflects what the
+  // user actually sees, not the whole DN table.
+  const _dnSlice = applyClientSidePagination(_debitPager, 'debit-pager', gotoDebitPage, d);
+  DataTable.mount('debit-list', _dnSlice, {
     columns: [
       { key:'_select', label:'',
         labelHTML:'<input type="checkbox" id="dn-select-all" onclick="event.stopPropagation();toggleAllDn(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
@@ -13679,6 +14411,831 @@ if (document.readyState === 'loading') {
     });
   }
 })();
+
+/* ══════════════════════════════════════════════════════════════════════
+   IMPORT OLD DATA — frontend (state, preview, verify, run, history, undo)
+   Calls /api/import-old-data/* — admin-only (requireAdmin on server)
+   ══════════════════════════════════════════════════════════════════════ */
+let _impLastMapping = null;
+let _impLastHeaders = [];
+// State for the live "projected DB rows" preview — re-rendered every
+// time the user edits a mapping so they can see how the file actually
+// lands in each DB column before clicking Run Import.
+let _impLastFields  = [];
+let _impLastKeyCols = [];
+let _impLastRows    = [];
+let _impLastAutoFillAuctionId = false;
+
+async function impPreview(){
+  const fileEl = document.getElementById('imp-file');
+  const moduleKey = document.getElementById('imp-module').value;
+  const result = document.getElementById('imp-result');
+  const preview = document.getElementById('imp-preview');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  result.innerHTML = 'Reading file…';
+  preview.innerHTML = '';
+  // Drop any prior verification result — the mapping may change after
+  // preview, which would invalidate it. Forces the operator to re-verify
+  // (and re-see the "ready to import" signal) after touching the mapping.
+  _impLastVerify = null;
+  const vhost = document.getElementById('imp-verify');
+  if (vhost) { vhost.innerHTML = ''; vhost.style.display = 'none'; }
+  const fd = new FormData();
+  fd.append('file', fileEl.files[0]);
+  fd.append('module', moduleKey);
+  try {
+    const r = await fetch(B + '/api/import-old-data/preview', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.innerHTML = '<span style="color:#c00">Error: '+escAttr(data.error||'preview failed')+'</span>';
+      return;
+    }
+    _impLastMapping = Object.assign({}, data.detectedMapping || {});
+    _impLastHeaders = data.headers || [];
+    _impLastRows    = Array.isArray(data.preview) ? data.preview : [];
+    _impLastFields  = Array.isArray(data.fields) ? data.fields : [];
+    _impLastKeyCols = Array.isArray(data.keyCols) ? data.keyCols : [];
+    _impLastAutoFillAuctionId = !!data.autoFillAuctionId;
+    const missing  = data.missingFields || [];
+    // Prefer the full field list from the server (added so we can show
+    // EVERY DB column, not just the auto-detected ones — otherwise the
+    // user can't add a mapping for any column that didn't auto-match).
+    const allFields = _impLastFields.length
+      ? _impLastFields
+      : Array.from(new Set([...(Object.keys(_impLastMapping)), ...missing]));
+    const keyCols  = new Set(_impLastKeyCols);
+    let html = '<div><b>'+escAttr(data.label||moduleKey)+'</b> — '+data.total+' rows · '+(data.headers||[]).length+' columns</div>';
+    if (missing.length) html += '<div style="color:#c80;margin-top:4px">⚠ Missing required field mapping for: '+missing.map(escAttr).join(', ')+'</div>';
+    result.innerHTML = html;
+
+    // Mapping editor — one row per DB field. Auto-detected source col is
+    // pre-selected; user can pick any header from the file (or — skip —)
+    // and the override is sent verbatim on Run Import.
+    let mapHtml = '<div style="margin:8px 0"><b>Mapping</b> <span style="color:#999;font-size:11px">(edit if needed before Run — required fields marked with *)</span></div>';
+    mapHtml += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4">'+
+      '<th style="text-align:left;padding:4px 6px;border:1px solid #ddd">DB Field</th>'+
+      '<th style="text-align:left;padding:4px 6px;border:1px solid #ddd">Source Column</th></tr></thead><tbody>';
+    allFields.forEach(f => {
+      const cur = _impLastMapping[f] || '';
+      const req = keyCols.has(f);
+      let opts = '<option value="">— skip —</option>';
+      _impLastHeaders.forEach(h => {
+        opts += '<option value="'+escAttr(h)+'"'+(h===cur?' selected':'')+'>'+escAttr(h)+'</option>';
+      });
+      mapHtml += '<tr><td style="padding:3px 6px;border:1px solid #ddd"><code>'+escAttr(f)+'</code>'+(req?'<span style="color:#c00;font-weight:700"> *</span>':'')+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #ddd"><select data-impfield="'+escAttr(f)+'" onchange="_impMapChange(this)">'+opts+'</select></td></tr>';
+    });
+    mapHtml += '</tbody></table>';
+
+    // Raw rows from the file — collapsible because the projected view
+    // below is usually the one the operator wants.
+    if (_impLastRows.length) {
+      mapHtml += '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Raw file rows (first '+_impLastRows.length+')</summary>';
+      mapHtml += '<table style="width:100%;border-collapse:collapse;font-size:11.5px;margin-top:4px"><thead><tr style="background:#fafafa">';
+      _impLastHeaders.forEach(h => { mapHtml += '<th style="text-align:left;padding:3px 6px;border:1px solid #eee;white-space:nowrap">'+escAttr(h)+'</th>'; });
+      mapHtml += '</tr></thead><tbody>';
+      _impLastRows.forEach(row => {
+        mapHtml += '<tr>';
+        _impLastHeaders.forEach(h => {
+          const v = row[h]; const t = (v==null?'':String(v));
+          mapHtml += '<td style="padding:2px 6px;border:1px solid #f0f0f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px">'+escAttr(t)+'</td>';
+        });
+        mapHtml += '</tr>';
+      });
+      mapHtml += '</tbody></table></details>';
+    }
+
+    // Anchor for the live "projected DB rows" view — rebuilt by
+    // _impRenderProjected() on every mapping change.
+    mapHtml += '<div id="imp-projected" style="margin-top:14px"></div>';
+
+    preview.innerHTML = mapHtml;
+    _impRenderProjected();
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">Error: '+escAttr(e.message||String(e))+'</span>';
+  }
+}
+
+// Render the "this is how it will land in the DB" table. Reads the
+// raw rows already returned by /preview and projects them through the
+// CURRENT _impLastMapping so the operator can verify each cell before
+// pressing Run Import. Re-rendered after every mapping change.
+function _impRenderProjected(){
+  const host = document.getElementById('imp-projected');
+  if (!host) return;
+  if (!_impLastFields.length || !_impLastRows.length) { host.innerHTML = ''; return; }
+  const keyCols = new Set(_impLastKeyCols);
+  let html = '<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap">'+
+    '<b style="font-size:13px">Projected DB rows</b>'+
+    '<span style="font-size:11px;color:#666">' +
+      'how each row will land in the database with your current mapping · '+
+      'required fields marked with <span style="color:#c00;font-weight:700">*</span>'+
+    '</span></div>';
+  html += '<div style="overflow:auto;max-height:300px;border:1px solid var(--border);border-radius:6px">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">';
+  _impLastFields.forEach(f => {
+    const req = keyCols.has(f);
+    html += '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd;white-space:nowrap;font-weight:700"><code>'+escAttr(f)+'</code>'+(req?'<span style="color:#c00"> *</span>':'')+'</th>';
+  });
+  html += '</tr></thead><tbody>';
+  _impLastRows.forEach((row, rowIdx) => {
+    html += '<tr style="background:'+(rowIdx % 2 ? '#fafafa' : '#fff')+'">';
+    _impLastFields.forEach(f => {
+      const src = _impLastMapping[f];
+      let val, cellStyle = '';
+      if (f === 'auction_id' && _impLastAutoFillAuctionId) {
+        // auction_id is derived from ano at insert time; show a hint
+        // referencing the (current) ano value so the user can sanity-check.
+        const anoSrc = _impLastMapping['ano'];
+        const ano = anoSrc ? row[anoSrc] : '';
+        val = ano ? '↻ from ano="'+String(ano).trim()+'"' : '↻ from ano (missing!)';
+        cellStyle = ano ? 'color:#0369a1;font-style:italic' : 'color:#c00;font-style:italic';
+      } else if (!src) {
+        val = '— skipped —';
+        cellStyle = 'color:#9ca3af;font-style:italic';
+        if (keyCols.has(f)) cellStyle = 'color:#c00;font-weight:700;background:#fee2e2'; // required + skipped = bad
+      } else {
+        const v = row[src];
+        val = (v == null) ? '' : String(v);
+        if (!val.trim() && keyCols.has(f)) {
+          cellStyle = 'color:#c00;background:#fee2e2'; // required but blank
+        }
+      }
+      html += '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;'+cellStyle+'">'+escAttr(val)+'</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  // Validation summary — counts rows the server would reject because a
+  // required cell is blank. Acts as a "ready to import?" signal.
+  let badRows = 0;
+  for (const row of _impLastRows) {
+    for (const f of _impLastKeyCols) {
+      const src = _impLastMapping[f];
+      const v   = src ? row[src] : null;
+      if (v == null || String(v).trim() === '') { badRows++; break; }
+    }
+  }
+  if (badRows) {
+    html += '<div style="margin-top:6px;font-size:11.5px;color:#c00"><b>⚠ '+badRows+' of '+_impLastRows.length+'</b> preview rows are missing one or more required values — they will be skipped or fail on import. Fix the mapping or the source file.</div>';
+  } else {
+    html += '<div style="margin-top:6px;font-size:11.5px;color:#15803d">✓ All required fields are populated for the previewed rows.</div>';
+  }
+  host.innerHTML = html;
+}
+
+function _impMapChange(sel){
+  const field = sel.getAttribute('data-impfield');
+  const v = sel.value;
+  _impLastMapping = _impLastMapping || {};
+  // Always set the value (including '' for skip) so the server sees an
+  // explicit override rather than falling back to its auto-detection.
+  _impLastMapping[field] = v;
+  // Refresh the projected DB preview so the user sees the consequence
+  // of the mapping change immediately.
+  _impRenderProjected();
+  // Any prior verification was computed against the old mapping and is
+  // now stale — drop it so the operator must re-verify before importing.
+  if (_impLastVerify) {
+    _impLastVerify = null;
+    const vhost = document.getElementById('imp-verify');
+    if (vhost) {
+      vhost.innerHTML = '<em style="color:#a16207">Mapping changed — click "Verify Against Database" again to refresh.</em>';
+    }
+    const r = document.getElementById('imp-result');
+    if (r) r.innerHTML = '<span style="color:#a16207">Mapping changed — re-verify before importing.</span>';
+  }
+}
+// Last verify result — drives the "are you sure?" confirm on Run Import
+// (a confirm with concrete numbers is far more useful than a generic
+// "this will INSERT rows" prompt) and surfaces "you haven't verified
+// yet" guidance.
+let _impLastVerify = null;
+
+// Ask the server to dry-resolve the file against the live DB using the
+// CURRENT mapping. Renders a per-row breakdown (new / duplicate /
+// invalid), a diff vs. existing rows for duplicates, and accurate
+// totals so the operator can see EXACTLY how the file will land before
+// committing.
+async function impVerify(){
+  const fileEl = document.getElementById('imp-file');
+  const moduleKey = document.getElementById('imp-module').value;
+  const result = document.getElementById('imp-result');
+  const host = document.getElementById('imp-verify');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  // Verify is only meaningful AFTER Preview — the projected-rows table
+  // shows which mapping is in effect, and that's the mapping verify
+  // will use. Without it the user has no way to influence the mapping.
+  if (!_impLastFields.length) {
+    result.innerHTML = '<span style="color:#c00">Click "Preview &amp; Detect Mapping" first.</span>';
+    return;
+  }
+  result.innerHTML = 'Verifying against database…';
+  host.style.display = 'block';
+  host.innerHTML = '<em>Loading…</em>';
+  const fd = new FormData();
+  fd.append('file', fileEl.files[0]);
+  fd.append('module', moduleKey);
+  if (_impLastMapping) fd.append('mapping', JSON.stringify(_impLastMapping));
+  try {
+    const r = await fetch(B + '/api/import-old-data/verify', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.innerHTML = '<span style="color:#c00">Verify failed: '+escAttr(data.error||'unknown error')+'</span>';
+      host.innerHTML = '';
+      _impLastVerify = null;
+      return;
+    }
+    _impLastVerify = data;
+    _impRenderVerify(data);
+    const c = data.counts || {};
+    const totalInvalid = (c.invalidAno||0) + (c.invalidRequired||0);
+    result.innerHTML = '<b>Verification complete</b> · total='+data.total+
+      ' · new='+ (c.new||0) +
+      ' · duplicates='+ (c.duplicate||0) +
+      (c.duplicateChanged ? ' ('+c.duplicateChanged+' with changes)' : '') +
+      ' · invalid='+ totalInvalid +
+      ' &nbsp;<span style="color:'+(totalInvalid?'#c00':'#15803d')+'">'+
+        (totalInvalid ? '⚠ Fix invalid rows or adjust mapping before importing.' : '✓ Ready to import.')+
+      '</span>';
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">Verify failed: '+escAttr(e.message||String(e))+'</span>';
+    host.innerHTML = '';
+    _impLastVerify = null;
+  }
+}
+
+// Render the rich verification panel. Three sections, each collapsible:
+//   1. Summary cards
+//   2. Per-row breakdown with status badge + reasons
+//   3. Duplicates with field-by-field diffs (only when there are any)
+function _impRenderVerify(data){
+  const host = document.getElementById('imp-verify');
+  if (!host) return;
+  const c = data.counts || {};
+  // Read the bucketed samples if the server provides them; otherwise
+  // fall back to filtering the legacy single `rows` array (so a running
+  // server that hasn't been restarted after the response-shape change
+  // still surfaces something useful).
+  const samples = data.samples || null;
+  const legacyRows = Array.isArray(data.rows) ? data.rows : [];
+  const newRows     = samples && Array.isArray(samples.new)        ? samples.new        : legacyRows.filter(rw => rw.status === 'new');
+  const invalidRows = samples && Array.isArray(samples.invalid)    ? samples.invalid    : legacyRows.filter(rw => rw.status === 'invalid');
+  const dupChanges   = samples && Array.isArray(samples.dupChanges)   ? samples.dupChanges   : legacyRows.filter(rw => rw.status === 'duplicate' && rw.diff && Object.keys(rw.diff).length);
+  const dupIdentical = samples && Array.isArray(samples.dupIdentical) ? samples.dupIdentical : legacyRows.filter(rw => rw.status === 'duplicate' && (!rw.diff || !Object.keys(rw.diff || {}).length));
+  const fields = Array.isArray(data.fields) ? data.fields : [];
+  const keyCols = new Set(Array.isArray(data.keyCols) ? data.keyCols : []);
+  const card = (label, value, color) =>
+    '<div style="flex:1;min-width:120px;padding:10px 12px;border:1px solid '+color+';border-radius:8px;background:'+color+'1a">'+
+      '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.4px">'+label+'</div>'+
+      '<div style="font-size:22px;font-weight:700;color:'+color+'">'+value+'</div>'+
+    '</div>';
+
+  // Pre-flight diagnostic: how many rows actually live in the target
+  // table right now? This is the answer to "I deleted everything, why
+  // is it still finding duplicates?" — Sales / Purchases tabs are
+  // filtered (by auction, branch, date) and zero visible rows ≠ zero
+  // rows in the table.
+  let html = '';
+  if (data.targetTable && typeof data.targetRowCount === 'number') {
+    const expected = (c.duplicate || 0);
+    const stale = data.targetRowCount > 0 && expected > 0;
+    html += '<div style="margin:0 0 10px 0;font-size:12px;background:'+(stale?'#fff7ed':'#f5f5f5')+
+      ';border:1px solid '+(stale?'#fed7aa':'#e5e7eb')+';border-radius:6px;padding:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
+      '<span style="font-weight:700">'+(stale?'⚠ ':'')+'Target table:</span> '+
+      '<code>'+escAttr(data.targetTable)+'</code> currently holds '+
+      '<b>'+data.targetRowCount+'</b> row(s) in the database.';
+    if (stale) {
+      html += ' <span style="color:#9a3412">If you expected zero, the Sales / Purchases / Bills tab is hiding rows behind a filter (auction / branch / date) — "Delete Selected" only deletes what\'s ticked. Use the dark-red <b>🗑 Delete All</b> button in that tab\'s toolbar to wipe the whole table (admin only).</span>';
+    }
+    html += '</div>';
+  }
+
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+    card('Total rows', data.total, '#374151')+
+    card('Will insert', c.new||0, '#15803d')+
+    card('Duplicates (skip)', c.duplicate||0, '#a16207')+
+    card('Invalid', (c.invalidAno||0)+(c.invalidRequired||0), '#c00')+
+    '</div>';
+
+  if (c.duplicateChanged) {
+    html += '<div style="margin:0 0 10px 0;font-size:12px;color:#a16207;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px">'+
+      '<b>⚠ '+c.duplicateChanged+' duplicate row(s)</b> have different values than what\'s already in the database. '+
+      'These will be SKIPPED — not updated. If you want to overwrite, delete the existing rows first or adjust the source file.'+
+      '</div>';
+  }
+  if (c.invalidAno) {
+    html += '<div style="margin:0 0 10px 0;font-size:12px;color:#c00;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px">'+
+      '<b>✗ '+c.invalidAno+' row(s)</b> reference an <code>ano</code> with no matching trade in the database. Create those auctions first.'+
+      '</div>';
+  }
+  if (c.invalidRequired) {
+    html += '<div style="margin:0 0 10px 0;font-size:12px;color:#c00;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px">'+
+      '<b>✗ '+c.invalidRequired+' row(s)</b> are missing a required value — those won\'t be inserted. Check the mapping for the columns marked <span style="color:#c00">*</span>.'+
+      '</div>';
+  }
+
+  // Primary table — ONLY rows that will actually be inserted. The
+  // server returns up to `sampleLimit` NEW rows independent of the
+  // first-100-rows window, so a file whose first chunk happens to be
+  // all duplicates still surfaces real NEW rows here.
+  const totalNew = c.new || 0;
+  const headerNote = totalNew > newRows.length
+    ? ' <span style="font-size:11px;color:#666">(showing first '+newRows.length+' of '+totalNew+')</span>'
+    : '';
+  html += '<details open style="margin-top:6px"><summary style="cursor:pointer;font-weight:600;color:#15803d">Rows that will be inserted ('+totalNew+')'+headerNote+'</summary>';
+  if (!newRows.length) {
+    html += '<div style="padding:10px;color:#666;font-style:italic">'+
+      (totalNew === 0
+        ? 'No rows will be inserted — every row in the file is either a duplicate or invalid.'
+        : 'No sample available.')+
+      '</div>';
+  } else {
+    html += '<div style="overflow:auto;max-height:320px;border:1px solid #bbf7d0;border-radius:6px;margin-top:6px">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#ecfdf5;position:sticky;top:0">';
+    html += '<th style="text-align:left;padding:4px 8px;border:1px solid #bbf7d0;white-space:nowrap">Row</th>';
+    fields.forEach(f => {
+      const req = keyCols.has(f);
+      html += '<th style="text-align:left;padding:4px 8px;border:1px solid #bbf7d0;white-space:nowrap"><code>'+escAttr(f)+'</code>'+(req?'<span style="color:#c00"> *</span>':'')+'</th>';
+    });
+    html += '</tr></thead><tbody>';
+    newRows.forEach(rw => {
+      html += '<tr>'+
+        '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+rw.row+'</td>';
+      fields.forEach(f => {
+        const v = rw.values && rw.values[f];
+        const t = v == null ? '' : String(v);
+        html += '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">'+escAttr(t)+'</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</details>';
+
+  // Invalid rows — kept in their own collapsible so the operator can
+  // find and fix them without polluting the "will be inserted" view.
+  if (invalidRows.length) {
+    const totalInvalid = (c.invalidAno||0) + (c.invalidRequired||0);
+    const invNote = totalInvalid > invalidRows.length
+      ? ' <span style="font-size:11px;color:#666">(showing first '+invalidRows.length+' of '+totalInvalid+')</span>'
+      : '';
+    html += '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600;color:#c00">Invalid rows ('+totalInvalid+') — won\'t be inserted'+invNote+'</summary>';
+    html += '<div style="overflow:auto;max-height:280px;border:1px solid #fecaca;border-radius:6px;margin-top:6px">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#fef2f2;position:sticky;top:0">'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fecaca;white-space:nowrap">Row</th>'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fecaca">Why it\'s invalid</th>'+
+      '</tr></thead><tbody>';
+    invalidRows.forEach(rw => {
+      const detail = (rw.reasons && rw.reasons.length) ? rw.reasons.map(escAttr).join(' · ') : '(no reason)';
+      html += '<tr>'+
+        '<td style="padding:3px 8px;border:1px solid #fff;font-family:monospace;background:#fef2f2">'+rw.row+'</td>'+
+        '<td style="padding:3px 8px;border:1px solid #fff;background:#fef2f2;color:#7f1d1d">'+detail+'</td>'+
+        '</tr>';
+    });
+    html += '</tbody></table></div></details>';
+  }
+
+  // Diff table — only rows with diffs against an existing record.
+  // Surfaces what would be lost by skipping the dup.
+  if (dupChanges.length) {
+    const totalDupChanged = c.duplicateChanged || 0;
+    const dupNote = totalDupChanged > dupChanges.length
+      ? ' <span style="font-size:11px;color:#666">(showing first '+dupChanges.length+' of '+totalDupChanged+')</span>'
+      : '';
+    html += '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600;color:#a16207">Duplicates with changes — what would be overwritten if you imported these ('+totalDupChanged+')'+dupNote+'</summary>';
+    html += '<div style="overflow:auto;max-height:320px;border:1px solid #fed7aa;border-radius:6px;margin-top:6px">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#fff7ed;position:sticky;top:0">'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa;white-space:nowrap">Row</th>'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa;white-space:nowrap">Field</th>'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa">In database (kept)</th>'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa">In file (discarded)</th>'+
+      '</tr></thead><tbody>';
+    dupChanges.forEach(rw => {
+      const diffFields = Object.keys(rw.diff);
+      diffFields.forEach((f, idx) => {
+        const d = rw.diff[f];
+        html += '<tr>'+
+          '<td style="padding:3px 8px;border:1px solid #fff;font-family:monospace;background:#fffbeb">'+(idx===0?rw.row:'')+'</td>'+
+          '<td style="padding:3px 8px;border:1px solid #fff;background:#fffbeb"><code>'+escAttr(f)+'</code></td>'+
+          '<td style="padding:3px 8px;border:1px solid #fff;background:#ecfdf5;color:#065f46">'+escAttr(d.old==null?'':String(d.old))+'</td>'+
+          '<td style="padding:3px 8px;border:1px solid #fff;background:#fef2f2;color:#7f1d1d;text-decoration:line-through">'+escAttr(d.new==null?'':String(d.new))+'</td>'+
+          '</tr>';
+      });
+    });
+    html += '</tbody></table></div></details>';
+  }
+
+  // Identical duplicates — same key, same data. These are the most
+  // confusing case ("I deleted everything, why is it still duplicate?")
+  // so we list each row with the existing DB row's primary key so the
+  // operator can confirm the matching row really exists.
+  if (dupIdentical.length) {
+    const totalDupIdentical = (c.duplicate || 0) - (c.duplicateChanged || 0);
+    const idNote = totalDupIdentical > dupIdentical.length
+      ? ' <span style="font-size:11px;color:#666">(showing first '+dupIdentical.length+' of '+totalDupIdentical+')</span>'
+      : '';
+    html += '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600;color:#a16207">Identical duplicates — already in the database ('+totalDupIdentical+')'+idNote+'</summary>';
+    html += '<div style="overflow:auto;max-height:280px;border:1px solid #fed7aa;border-radius:6px;margin-top:6px">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#fff7ed;position:sticky;top:0">'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa;white-space:nowrap">File row</th>'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa;white-space:nowrap">DB id</th>'+
+      '<th style="text-align:left;padding:4px 8px;border:1px solid #fed7aa">Matching key values</th>'+
+      '</tr></thead><tbody>';
+    dupIdentical.forEach(rw => {
+      const keyParts = [];
+      (Array.isArray(data.keyCols) ? data.keyCols : []).forEach(k => {
+        const v = rw.existing && rw.existing[k];
+        keyParts.push('<code>'+escAttr(k)+'</code>=<b>'+escAttr(v==null?'':String(v))+'</b>');
+      });
+      const dbId = rw.existing && rw.existing.id != null ? rw.existing.id : '—';
+      html += '<tr>'+
+        '<td style="padding:3px 8px;border:1px solid #fff;font-family:monospace;background:#fffbeb">'+rw.row+'</td>'+
+        '<td style="padding:3px 8px;border:1px solid #fff;font-family:monospace;background:#fffbeb">'+escAttr(String(dbId))+'</td>'+
+        '<td style="padding:3px 8px;border:1px solid #fff;background:#fffbeb">'+(keyParts.join(' · ') || '<i>(no key cols)</i>')+'</td>'+
+        '</tr>';
+    });
+    html += '</tbody></table></div></details>';
+  }
+
+  host.innerHTML = html;
+}
+
+async function impRun(){
+  const fileEl = document.getElementById('imp-file');
+  const moduleKey = document.getElementById('imp-module').value;
+  const dryRun = document.getElementById('imp-dryrun').checked;
+  const result = document.getElementById('imp-result');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  // Make the confirm specific: show what verify found if available, and
+  // warn loudly if the user didn't verify at all (the whole point of
+  // adding verify was to remove "blind insert" surprises).
+  if (!dryRun) {
+    let msg;
+    if (_impLastVerify) {
+      const c = _impLastVerify.counts || {};
+      const inv = (c.invalidAno||0) + (c.invalidRequired||0);
+      msg = 'About to INSERT into the database:\n' +
+        '  • ' + (c.new||0) + ' new row(s)\n' +
+        '  • ' + (c.duplicate||0) + ' duplicate(s) will be skipped\n' +
+        '  • ' + inv + ' invalid row(s) will fail';
+      if (inv > 0) msg += '\n\n⚠ You have invalid rows. They will be reported as failures.';
+      msg += '\n\nContinue?';
+    } else {
+      msg = 'You have not run "Verify Against Database" yet.\n\nWithout verification you can\'t see how the file will land in the DB. Continue anyway?';
+    }
+    if (!confirm(msg)) return;
+  }
+  result.innerHTML = (dryRun?'Validating…':'Importing…');
+  const fd = new FormData();
+  fd.append('file', fileEl.files[0]);
+  fd.append('module', moduleKey);
+  fd.append('dryRun', dryRun ? 'true' : 'false');
+  if (_impLastMapping) fd.append('mapping', JSON.stringify(_impLastMapping));
+  try {
+    const r = await fetch(B + '/api/import-old-data/run', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.innerHTML = '<span style="color:#c00">Error: '+escAttr(data.error||'import failed')+'</span>';
+      return;
+    }
+    let h = '<div style="padding:8px;background:'+(dryRun?'#fff8e1':'#e8f5e9')+';border-radius:6px">';
+    h += '<b>'+(dryRun?'Dry-run complete':'Import complete')+'</b> · ';
+    h += 'total='+data.total+' · imported='+data.imported+' · skipped(dup)='+data.skipped+' · failed='+data.failed;
+    h += '</div>';
+    if (data.errors && data.errors.length) {
+      h += '<div style="margin-top:8px"><b>Errors (first '+data.errors.length+'):</b><ul style="margin:4px 0 0 18px;font-size:12px">';
+      data.errors.forEach(e => { h += '<li>Row '+e.row+': '+escAttr(e.error)+'</li>'; });
+      h += '</ul></div>';
+    }
+    result.innerHTML = h;
+    // Always refresh history — dry-runs are logged too, and the
+    // operator usually wants to confirm "did my last run land in the
+    // log?" without an extra click.
+    impLoadHistory();
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">Error: '+escAttr(e.message||String(e))+'</span>';
+  }
+}
+async function impLoadHistory(){
+  const box = document.getElementById('imp-history');
+  box.innerHTML = 'Loading…';
+  try {
+    // Cache-bust + no-store so a stale 304 from any intermediary can't
+    // hide a freshly-logged import. The user explicitly clicked
+    // "View History" or just ran an import — they want the truth.
+    const r = await fetch(B + '/api/import-old-data/history?_=' + Date.now(), {
+      headers: { 'Authorization': 'Bearer ' + T },
+      cache: 'no-store',
+    });
+    const rows = await r.json();
+    const stamp = new Date().toLocaleTimeString();
+    if (!Array.isArray(rows) || !rows.length) {
+      box.innerHTML = '<i>No imports yet.</i> <span style="color:#999;font-size:11px">(loaded at '+stamp+')</span>';
+      return;
+    }
+    let h = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4">'+
+      '<th style="text-align:left;padding:4px 6px;border:1px solid #ddd">When</th>'+
+      '<th style="text-align:left;padding:4px 6px;border:1px solid #ddd">User</th>'+
+      '<th style="text-align:left;padding:4px 6px;border:1px solid #ddd">Module</th>'+
+      '<th style="text-align:left;padding:4px 6px;border:1px solid #ddd">File</th>'+
+      '<th style="text-align:right;padding:4px 6px;border:1px solid #ddd">Total</th>'+
+      '<th style="text-align:right;padding:4px 6px;border:1px solid #ddd">Imported</th>'+
+      '<th style="text-align:right;padding:4px 6px;border:1px solid #ddd">Skipped</th>'+
+      '<th style="text-align:right;padding:4px 6px;border:1px solid #ddd">Failed</th>'+
+      '<th style="text-align:center;padding:4px 6px;border:1px solid #ddd">Dry?</th>'+
+      '<th style="text-align:center;padding:4px 6px;border:1px solid #ddd">Action</th>'+
+      '</tr></thead><tbody>';
+    rows.forEach(r => {
+      // Action cell — concrete reason in every non-Undo case so the
+      // operator can tell WHY a row isn't undoable:
+      //   • undoable                         → red "Undo" button
+      //   • already undone                   → muted "Undone" label
+      //   • dry-run                          → "Dry-run"
+      //   • imported but no IDs recorded     → "Pre-update" (old import
+      //                                         that ran before the
+      //                                         per-import-undo feature
+      //                                         tracked rowids)
+      //   • zero rows inserted               → "—"
+      let action;
+      if (r.undone_at) {
+        action = '<span style="color:#888;font-style:italic" title="Rolled back at '+escAttr(r.undone_at)+'">↶ Undone</span>';
+      } else if (r.undoable) {
+        action = '<button class="btn" style="height:24px;padding:0 10px;font-size:11px;font-weight:600;background:#7F1D1D;color:#fff;border-color:#7F1D1D" '+
+          'onclick="impUndo('+r.id+', '+JSON.stringify(r.filename||'').replace(/"/g,'&quot;')+', '+JSON.stringify(r.module||'').replace(/"/g,'&quot;')+', '+(r.inserted_count||0)+')" '+
+          'title="Delete the '+(r.inserted_count||0)+' row(s) this import created">↶ Undo ('+(r.inserted_count||0)+')</button>';
+      } else if (r.dry_run) {
+        action = '<span style="color:#bbb" title="Dry-run inserts no rows">Dry-run</span>';
+      } else if ((r.imported || 0) > 0 && (r.inserted_count || 0) === 0) {
+        action = '<span style="color:#a16207;cursor:help" title="This import ran before per-import Undo was added. Row IDs weren\'t recorded. To clear it, use Backup → Delete All for the target table.">Pre-update</span>';
+      } else {
+        action = '<span style="color:#bbb" title="No rows were inserted by this run">—</span>';
+      }
+      h += '<tr'+(r.undone_at?' style="opacity:.55"':'')+'>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;white-space:nowrap">'+escAttr(r.created_at||'')+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee">'+escAttr(r.username||'')+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee">'+escAttr(r.module||'')+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee">'+escAttr(r.filename||'')+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;text-align:right">'+(r.total||0)+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;text-align:right;color:#080">'+(r.imported||0)+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;text-align:right;color:#888">'+(r.skipped||0)+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;text-align:right;color:'+(r.failed?'#c00':'#888')+'">'+(r.failed||0)+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;text-align:center">'+(r.dry_run?'✓':'')+'</td>'+
+        '<td style="padding:3px 6px;border:1px solid #eee;text-align:center;white-space:nowrap">'+action+'</td>'+
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    h = '<div style="font-size:11px;color:#999;margin-bottom:6px">Showing '+rows.length+' most recent imports — loaded at '+stamp+'</div>' + h;
+    box.innerHTML = h;
+  } catch (e) {
+    box.innerHTML = '<span style="color:#c00">Error: '+escAttr(e.message||String(e))+'</span>';
+  }
+}
+
+// Undo a single import — wipes the rows that import inserted from the
+// target table. Double-confirms with concrete numbers + the filename,
+// then asks for typed DELETE. Server snapshots the DB before deleting,
+// so the rollback itself is recoverable via the Backup tab → Restore.
+async function impUndo(logId, filename, moduleKey, insertedCount){
+  const labelFile = filename || 'this import';
+  const msg = 'Undo import "' + labelFile + '"?\n\n' +
+    'The server will snapshot the database first, then DELETE the ' +
+    insertedCount + ' row(s) inserted by this run from the target table of "' + moduleKey + '".\n\n' +
+    'Rows inserted by OTHER imports stay untouched. The snapshot lets you Restore if needed.\n\n' +
+    'Continue?';
+  if (!confirm(msg)) return;
+  const typed = prompt('Type DELETE (in capitals) to confirm:');
+  if (typed !== 'DELETE') { alert('Cancelled.'); return; }
+  try {
+    const r = await fetch(B + '/api/import-old-data/undo/' + encodeURIComponent(logId), {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Undo failed');
+    const bp = d.backupPath ? '\n\nSnapshot: ' + d.backupPath : '';
+    alert('Undone — deleted ' + (d.deleted || 0) + ' of ' + (d.requested || 0) + ' row(s) from ' + (d.table || moduleKey) + '.' + bp);
+    impLoadHistory();
+  } catch (e) {
+    if (typeof showError === 'function') showError(e);
+    else alert('Error: ' + (e.message || String(e)));
+  }
+}
+function escAttr(s){ return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+/* ─── PRICE LIST MAPPING — round-trip trade-name → buyer-code ──────── */
+// State for the "Download Updated File" button. We only enable it after
+// a successful preview, otherwise downloads can race ahead of the
+// user's review.
+let _plLastSummary = null;
+
+function plOnFileChange(){
+  // Picking a new file invalidates the previous preview, so reset the
+  // download gate. Without this, the user could upload File A, preview
+  // it, swap to File B, and download File B's mapping without seeing
+  // its preview first.
+  _plLastSummary = null;
+  const btn = document.getElementById('pl-download-btn');
+  if (btn) btn.disabled = true;
+  const result = document.getElementById('pl-result');
+  const host = document.getElementById('pl-preview');
+  if (result) result.innerHTML = '';
+  if (host) host.innerHTML = '';
+}
+
+async function plPreview(){
+  const fileEl = document.getElementById('pl-file');
+  const result = document.getElementById('pl-result');
+  const host   = document.getElementById('pl-preview');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  result.innerHTML = 'Reading & matching…';
+  host.innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', fileEl.files[0]);
+  try {
+    const r = await fetch(B + '/api/price-list/map-preview', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.innerHTML = '<span style="color:#c00">Error: '+escAttr(data.error||'preview failed')+'</span>';
+      _plLastSummary = null;
+      document.getElementById('pl-download-btn').disabled = true;
+      return;
+    }
+    _plLastSummary = data;
+    document.getElementById('pl-download-btn').disabled = false;
+    _plRenderPreview(data);
+    const blocked = data.unmatched > 0 || data.ambiguous > 0;
+    const summaryLine = '<b>Total rows:</b> '+data.total+
+      ' · <b style="color:#15803d">matched:</b> '+data.matched+
+      ' · <b style="color:#a16207">ambiguous:</b> '+data.ambiguous+
+      ' · <b style="color:#c00">unmatched:</b> '+data.unmatched+
+      (data.blank ? ' · <b style="color:#888">blank:</b> '+data.blank : '');
+    result.innerHTML = summaryLine + ' &nbsp;<span style="color:'+(blocked?'#a16207':'#15803d')+'">'+
+      (blocked
+        ? '⚠ Some rows need attention before this file is ready for Price Import.'
+        : '✓ Every row maps to one code — ready to download.')+
+      '</span>';
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">Error: '+escAttr(e.message||String(e))+'</span>';
+    _plLastSummary = null;
+    document.getElementById('pl-download-btn').disabled = true;
+  }
+}
+
+function _plRenderPreview(data){
+  const host = document.getElementById('pl-preview');
+  if (!host) return;
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+
+  // Card summary on top — same idiom as the Import Old Data verify panel.
+  const card = (label, value, color) =>
+    '<div style="flex:1;min-width:120px;padding:10px 12px;border:1px solid '+color+';border-radius:8px;background:'+color+'1a">'+
+      '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.4px">'+label+'</div>'+
+      '<div style="font-size:22px;font-weight:700;color:'+color+'">'+value+'</div>'+
+    '</div>';
+  let html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+    card('Total rows', data.total||0, '#374151')+
+    card('Matched',    data.matched||0, '#15803d')+
+    card('Ambiguous',  data.ambiguous||0, '#a16207')+
+    card('Unmatched',  data.unmatched||0, '#c00')+
+    '</div>';
+
+  // Per-row table. We hide rows the user can't act on (blank trade name)
+  // because they pad the table without giving feedback — the summary
+  // card carries the count.
+  const visible = rows.filter(rw => rw.status !== 'blank');
+  if (!visible.length) {
+    html += '<div style="padding:12px;color:#666;font-style:italic">No rows with a TRADE NAME to map. Fill the TRADE NAME column and re-upload.</div>';
+    host.innerHTML = html;
+    return;
+  }
+  html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Row</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lot</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Trade name (from file)</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Status</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Picked CODE</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Candidates</th>'+
+    '</tr></thead><tbody>';
+  for (const rw of visible) {
+    const bg = rw.status === 'unmatched' ? '#fef2f2'
+             : rw.status === 'ambiguous' ? '#fff7ed'
+             : '#fff';
+    const badge = _plStatusBadge(rw.status);
+    const cands = (rw.candidates || []).map(c =>
+      '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+
+      '<b>'+escAttr(c.code||'(no code)')+'</b>' +
+      ' · ' + escAttr(c.buyer||'') +
+      (c.sale ? ' · <span style="color:#666">'+escAttr(c.sale)+'</span>' : '')+
+      '</span>'
+    ).join('');
+    html += '<tr style="background:'+bg+'">'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+rw.row+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+escAttr(rw.lot||'')+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.tradeName||'')+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:'+(rw.pickedCode?'700':'400')+';color:'+(rw.pickedCode?'#15803d':'#c00')+'">'+
+        escAttr(rw.pickedCode || '— none —')+
+      '</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
+    '</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  if (data.ambiguous) {
+    html += '<div style="margin-top:10px;font-size:12px;color:#a16207;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px">'+
+      '<b>⚠ '+data.ambiguous+' row(s) are ambiguous</b> — the downloaded file uses the first candidate code. '+
+      'Switch a specific lot to a different code from the candidates by editing the lot after Price Import (the lot edit screen now lists every code that shares a trade name).'+
+    '</div>';
+  }
+  if (data.unmatched) {
+    html += '<div style="margin-top:10px;font-size:12px;color:#c00;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px">'+
+      '<b>✗ '+data.unmatched+' row(s) have no matching buyer</b> — those CODE cells will be left blank. Add the missing trade names to the Buyers master first.'+
+    '</div>';
+  }
+  host.innerHTML = html;
+}
+
+function _plStatusBadge(status){
+  if (status === 'matched')   return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#dcfce7;color:#15803d;font-weight:700;font-size:11px">MATCHED</span>';
+  if (status === 'ambiguous') return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#fed7aa;color:#9a3412;font-weight:700;font-size:11px">AMBIGUOUS</span>';
+  if (status === 'unmatched') return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#fecaca;color:#991b1b;font-weight:700;font-size:11px">UNMATCHED</span>';
+  return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">BLANK</span>';
+}
+
+async function plDownload(){
+  const fileEl = document.getElementById('pl-file');
+  const result = document.getElementById('pl-result');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  if (!_plLastSummary) {
+    result.innerHTML = '<span style="color:#c00">Run "Preview Mapping" first so you can see what will change.</span>';
+    return;
+  }
+  const btn = document.getElementById('pl-download-btn');
+  const origLabel = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Building file…';
+  try {
+    const fd = new FormData();
+    fd.append('file', fileEl.files[0]);
+    const r = await fetch(B + '/api/price-list/map-download', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    if (!r.ok) {
+      // Server returns JSON errors on failure (since the success path
+      // is binary, we can't blindly .json() — but on error the
+      // Content-Type is JSON, so this is safe).
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || ('Download failed ('+r.status+')'));
+    }
+    const blob = await r.blob();
+    // Pull the filename out of Content-Disposition so the user gets the
+    // "-mapped" suffix the server added; fall back to a generated name.
+    let filename = 'price-list-mapped.xlsx';
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^";]+)"?/i.exec(cd);
+    if (m) filename = m[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    if (typeof toast === 'function') toast('Mapped file downloaded ✓');
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">'+escAttr(e.message||String(e))+'</span>';
+  } finally {
+    btn.disabled = false; btn.textContent = origLabel;
+  }
+}
 
 </script>
 </body>

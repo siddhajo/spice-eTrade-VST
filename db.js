@@ -424,6 +424,42 @@ async function initDb() {
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
+  // Forensic record of every "Delete All" wipe. Captures the operator,
+  // the affected resource, how many rows actually went away, where the
+  // pre-wipe backup landed, and the client IP — so a misclick can be
+  // traced and recovered from the snapshot.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS delete_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource TEXT NOT NULL,
+    deleted_count INTEGER DEFAULT 0,
+    cascade_counts TEXT DEFAULT '',
+    backup_path TEXT DEFAULT '',
+    user_id INTEGER,
+    username TEXT DEFAULT '',
+    ip TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // Audit trail for the Import Old Data tool. One row per upload (preview
+  // or run, dry-run or live). `inserted_ids` / `undone_at` power the
+  // per-import Undo button on the History panel.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS import_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module TEXT NOT NULL,
+    filename TEXT DEFAULT '',
+    dry_run INTEGER DEFAULT 0,
+    total INTEGER DEFAULT 0,
+    imported INTEGER DEFAULT 0,
+    skipped INTEGER DEFAULT 0,
+    failed INTEGER DEFAULT 0,
+    errors TEXT DEFAULT '',
+    inserted_ids TEXT DEFAULT '',
+    undone_at TEXT DEFAULT '',
+    user_id INTEGER,
+    username TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
   // ── INDEXES ────────────────────────────────────────────────
   const indexes = [
     'CREATE INDEX IF NOT EXISTS idx_traders_name ON traders(name)',
@@ -441,11 +477,23 @@ async function initDb() {
     'CREATE INDEX IF NOT EXISTS idx_buyers_buyer ON buyers(buyer)',
     'CREATE INDEX IF NOT EXISTS idx_buyers_buyer1 ON buyers(buyer1)',
     'CREATE INDEX IF NOT EXISTS idx_lot_alloc_auction ON lot_allocations(auction_id)',
+    // FK child-side index. SQLite auto-indexes the parent side of a FK
+    // (traders.id is PK) but not the child column, so every DELETE FROM
+    // traders triggers a full scan of trader_banks to check for orphans.
+    // Without this, bulk seller deletion is O(N·M) — quadratic.
+    'CREATE INDEX IF NOT EXISTS idx_trader_banks_trader ON trader_banks(trader_id)',
   ];
   for (const idx of indexes) { try { wrapped.exec(idx); } catch (e) {} }
 
   // ── MIGRATIONS (for existing databases created before schema changes) ──
   const migrations = [
+    // Per-import undo: existing DBs need the two new columns added so
+    // the Undo button on the History panel can find inserted rows and
+    // mark the entry as rolled back. CREATE TABLE above already has
+    // these; these ALTERs only matter on installs whose import_log was
+    // created by an earlier build.
+    "ALTER TABLE import_log ADD COLUMN inserted_ids TEXT DEFAULT ''",
+    "ALTER TABLE import_log ADD COLUMN undone_at TEXT DEFAULT ''",
     'ALTER TABLE purchases ADD COLUMN auction_id INTEGER',
     'ALTER TABLE invoices ADD COLUMN auction_id INTEGER',
     'ALTER TABLE bills ADD COLUMN auction_id INTEGER',
