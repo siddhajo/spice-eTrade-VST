@@ -400,11 +400,44 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
   .login-hero-tagline{display:none}
 }
 .fg{margin-bottom:14px}
-.fg label{display:block;font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
+.fg label{
+  display:block;
+  /* Colored label badge — uses the install's primary theme color so
+     it inherits each customer's branding (Bluehill blue label,
+     Western Ghats teal label, etc.). Labels and inputs can no longer
+     be confused: the label is now a vibrant colored line above a
+     plain box, not two boring grey-ish lines stacked together. */
+  font-size:13px;
+  font-weight:700;
+  color:var(--spice-cardamom);
+  text-transform:none;
+  letter-spacing:0;
+  margin-bottom:6px
+}
 .fg input:not([type="checkbox"]):not([type="radio"]),.fg select,.fg textarea{
-  width:100%;height:44px;padding:0 14px;border:1.5px solid var(--spice-line);border-radius:10px;
-  font-size:15px;font-family:inherit;background:#fff;outline:none;transition:all .15s;
+  width:100%;height:44px;padding:0 14px;
+  /* Filled background (not pure white) so the slot itself reads as
+     "this is where you type". The contrast between the cream label
+     area and the slightly-tinted input box gives the eye a clear
+     "here's the label, here's the value" anchor without needing to
+     parse text styles. */
+  background:var(--spice-cream,#F8FAFC);
+  border:1.5px solid var(--spice-line);border-radius:10px;
+  /* Larger value text + medium weight so the typed value reads as
+     emphatically as a label. */
+  font-size:15.5px;
+  font-weight:500;
+  color:var(--spice-text-main);
+  font-family:inherit;outline:none;transition:all .15s;
   -webkit-appearance:none;appearance:none
+}
+/* Hover gives a subtle hint that the box is interactive without
+   shouting. Useful for older eyes scanning a long settings form. */
+.fg input:not([type="checkbox"]):not([type="radio"]):hover:not(:focus),
+.fg select:hover:not(:focus),
+.fg textarea:hover:not(:focus){
+  border-color:var(--spice-line-strong,#94A3B8);
+  background:#fff
 }
 /* Checkboxes & radios inside forms should keep their native size (not stretched to 100%) */
 .fg input[type="checkbox"],.fg input[type="radio"]{
@@ -412,7 +445,7 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 }
 .fg textarea{height:auto;padding:10px 14px;min-height:60px}
 .fg input[type="date"]{padding:0 12px}
-.fg input:not([type="checkbox"]):not([type="radio"]):focus,.fg select:focus,.fg textarea:focus{border-color:var(--spice-saffron);box-shadow:0 0 0 3px rgba(16,185,129,.20)}
+.fg input:not([type="checkbox"]):not([type="radio"]):focus,.fg select:focus,.fg textarea:focus{border-color:var(--spice-saffron);box-shadow:0 0 0 3px rgba(16,185,129,.20);background:#fff}
 .fg select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='10'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%23666' fill='none' stroke-width='2'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
 /* Windows-Electron focus-paint fix. Without these the input IS focused
    (activeElement confirms) but the caret + focus border don't render
@@ -753,7 +786,39 @@ tr:hover td{background:var(--spice-cream)}
 #lot-kpis .kpi-value{font-size:22px}
 #lot-kpis .kpi-icon{width:28px;height:28px;right:10px;top:10px;border-radius:8px}
 #lot-kpis .kpi-icon svg{width:14px;height:14px}
-#lot-kpis .kpi-meta{font-size:11px;color:var(--spice-text-mute);margin-top:4px;line-height:1.35;font-weight:500}
+#lot-kpis .kpi-meta{
+  /* Mini-table layout — label on the left (muted, small), value on
+     the right (tabular numerals, slightly weightier). Adds a thin
+     divider above to separate the breakdown from the headline number.
+     Without this the meta lines look like a footnote stack rather than
+     structured information. */
+  margin-top:10px;
+  padding-top:8px;
+  border-top:1px solid var(--spice-line);
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:3px 12px;
+  font-size:11.5px;
+  line-height:1.4
+}
+#lot-kpis .kpi-meta .lbl{
+  color:var(--spice-text-mute);
+  font-weight:500;
+  letter-spacing:.1px
+}
+#lot-kpis .kpi-meta .val{
+  text-align:right;
+  font-weight:600;
+  color:var(--spice-text-main);
+  font-variant-numeric:tabular-nums
+}
+/* Currency-symbol prefix lighter than the digits — matches the friendly
+   "value with unit" treatment used in the main KPI numbers. */
+#lot-kpis .kpi-meta .val .ccy{
+  color:var(--spice-text-hint);
+  font-weight:500;
+  margin-right:2px
+}
 
 /* Row layout — 2fr / 1fr grid */
 .dash-row{display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px}
@@ -1197,6 +1262,26 @@ tr:hover td{background:var(--spice-cream)}
   display:flex;gap:14px;align-items:center;flex-wrap:wrap
 }
 .summary-head .stats-line strong{color:var(--spice-cardamom-dk);font-weight:700}
+/* ── Progress bar shown next to stats-line ──────────────────
+   Visual at-a-glance signal of "how complete is this trade?" — the
+   loaders pass a percent (0–100) and a short label. The fill color
+   shifts amber → green → dark green as the percent climbs, so the
+   bar stays useful even when the operator just glances at it.
+   Hidden until updateSummaryProgress is called with a real number. */
+.summary-head .summary-progress{
+  display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px;color:var(--spice-text-mute);
+  min-width:140px
+}
+.summary-head .summary-progress-bar{
+  flex:1;display:inline-block;height:6px;background:var(--spice-cream,#F4F1E8);
+  border-radius:3px;overflow:hidden;min-width:60px;max-width:120px
+}
+.summary-head .summary-progress-fill{
+  display:block;height:100%;background:var(--spice-saffron);
+  border-radius:3px;transition:width .3s ease-out,background .2s
+}
+.summary-head .summary-progress-label{font-weight:600;color:var(--spice-text-main);white-space:nowrap}
+
 .summary-body{padding:18px;border-top:1px solid var(--spice-line)}
 .summary-panel[data-collapsed="1"] .summary-body{display:none}
 .summary-panel[data-collapsed="1"] .summary-head{background:#fff}
@@ -1655,6 +1740,77 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   .qa-grid{grid-template-columns:1fr}
   .content{padding:18px 16px}
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   Visual polish layer — softer shadows, smoother hovers,
+   refined table rows, sentence-case label conversion. Applied last
+   so it overrides earlier rules without modifying them. All values
+   derive from existing CSS variables so the 13 themes inherit it.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Slightly softer card shadow on hover. The old shadow was usable but
+   felt heavy — this is gentler, more "lift" than "drop". */
+.card{transition:box-shadow .25s cubic-bezier(.4,0,.2,1),border-color .25s}
+.card:hover{box-shadow:0 4px 16px rgba(31,25,21,.06),0 1px 3px rgba(31,25,21,.04)}
+
+/* KPI labels: drop UPPERCASE in favor of sentence case + tighter tracking.
+   Visual difference vs old version: less shouting, more readable at a
+   glance, plays well on the cream-paper canvas. */
+.kpi-label{text-transform:none !important;letter-spacing:.2px !important;font-size:12px !important;font-weight:600 !important}
+
+/* Refined table hover state — uses the theme's lightest tint instead of
+   a hardcoded gray, so it tracks the customer's brand color (Bluehill's
+   blue table hover, Western Ghats' teal hover, etc.). */
+table tbody tr{transition:background-color .12s}
+table tbody tr:hover td{background:var(--spice-cardamom-lt,#DCFCE7) !important}
+
+/* Tabular numerics for any column showing currency/qty — eyes can scan
+   columns of money cleanly when digits align. Applied as a utility
+   class so loaders that want it can opt in (most existing tables will
+   benefit automatically because the cells contain raw numbers). */
+.tabnum,table td:where(.qty,.amount,.total,.price){font-variant-numeric:tabular-nums}
+
+/* Inputs: gentler focus ring (5% larger but softer alpha) — matches
+   the friendly preview without being garish. */
+.fg input:not([type="checkbox"]):not([type="radio"]):focus,
+.fg select:focus,.fg textarea:focus,
+input[type="search"]:focus{
+  box-shadow:0 0 0 4px rgba(16,185,129,.15) !important;
+  outline:none !important;
+}
+
+/* Status pills: round to full pill, tighten padding so they feel less
+   like rectangles. Hits .kpi-delta + any other 999px-radius elements. */
+.kpi-delta{padding:3px 11px}
+
+/* Sidebar active item: add a 3px primary-colored bar on the left edge,
+   so the user always knows where they are. Doesn't touch the existing
+   active background. */
+.side-item.active{position:relative}
+.side-item.active::before{
+  content:'';position:absolute;left:0;top:8px;bottom:8px;width:3px;
+  background:var(--spice-cardamom);border-radius:0 3px 3px 0
+}
+
+/* Pager: slightly larger touch targets + match the soft-button style.
+   Renders the renderPager() output more comfortably on tablet. */
+[id$="-pager"] button{transition:background-color .15s,border-color .15s}
+[id$="-pager"] button:hover:not(:disabled){background:var(--spice-cardamom-lt) !important;border-color:var(--spice-cardamom) !important;color:var(--spice-cardamom-dk) !important}
+
+/* Friendly: avatar tiles in seller/buyer rows. If a future render
+   wants the friendly preview look, this provides the utility class. */
+.f-avatar{
+  width:32px;height:32px;border-radius:10px;
+  background:var(--spice-cardamom-lt);color:var(--spice-cardamom);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-weight:600;font-size:12px;flex-shrink:0;letter-spacing:.5px
+}
+
+/* Per-trade breakdown table on dashboard: zebra stripe so long lists
+   are easier to scan. Scoped tight via the parent container so other
+   tables don't shift. */
+#tc-dash .card table tbody tr:nth-child(even):not(:hover) td{background:#FBFAF5}
+
 </style>
 <!-- Chart.js for dashboard + payments charts. Loaded from cdnjs to keep
      the app fully self-contained on Railway (no build step needed).
@@ -1932,6 +2088,12 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             <span id="dark-mode-icon">🌓</span>
             <span id="dark-mode-label">Dark</span>
           </button>
+        </div>
+        <!-- Help line — clarifies that the chosen theme is saved with this
+             installation (not just this browser), so every device using
+             this install shows the same branding. -->
+        <div style="margin-top:10px;font-size:11.5px;color:var(--text3);line-height:1.5">
+          Pick a theme or your own primary color. Your choice is saved with this installation, so every staff member sees the same colors on every device.
         </div>
       </div>
 
@@ -2302,16 +2464,16 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             </div>
           </div>
           <div class="kpi">
-            <div class="kpi-label">Total Quantity</div>
+            <div class="kpi-label">Total quantity</div>
             <div class="kpi-value" id="lot-kpi-qty">0<span class="kpi-unit">kg</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M5 3h14l-1 9H6z"/><line x1="6" y1="20" x2="18" y2="20"/></svg>
             </div>
           </div>
           <div class="kpi turmeric">
-            <div class="kpi-label">Total Amount</div>
+            <div class="kpi-label">Total amount</div>
             <div class="kpi-value" id="lot-kpi-amount" style="font-size:18px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
-            <div class="kpi-meta" id="lot-kpi-amount-meta">Min ₹—<br>Max ₹—<br>Avg ₹—</div>
+            <div class="kpi-meta" id="lot-kpi-amount-meta"><span class="lbl">Min</span><span class="val">—</span><span class="lbl">Max</span><span class="val">—</span><span class="lbl">Avg</span><span class="val">—</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             </div>
@@ -2324,17 +2486,17 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             </div>
           </div>
           <div class="kpi cardamom">
-            <div class="kpi-label">Sold Lots</div>
+            <div class="kpi-label">Sold lots</div>
             <div class="kpi-value" id="lot-kpi-sold-count">0</div>
-            <div class="kpi-meta" id="lot-kpi-sold-meta">Bags: —<br>Qty: —<br>Amount: ₹—</div>
+            <div class="kpi-meta" id="lot-kpi-sold-meta"><span class="lbl">Bags</span><span class="val">—</span><span class="lbl">Qty</span><span class="val">—</span><span class="lbl">Amount</span><span class="val">—</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M21 12v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h11"/></svg>
             </div>
           </div>
           <div class="kpi chili">
-            <div class="kpi-label">Withdrawn Lots</div>
+            <div class="kpi-label">Withdrawn lots</div>
             <div class="kpi-value" id="lot-kpi-wd-count">0</div>
-            <div class="kpi-meta" id="lot-kpi-wd-meta">Bags: —<br>Qty: —<br>Amount: ₹—</div>
+            <div class="kpi-meta" id="lot-kpi-wd-meta"><span class="lbl">Bags</span><span class="val">—</span><span class="lbl">Qty</span><span class="val">—</span><span class="lbl">Amount</span><span class="val">—</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
             </div>
@@ -2343,6 +2505,14 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="lot-auction" onchange="loadLots()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Branch filter — populated from the lots actually present in the
+               selected auction (deduplicated). Filtering is server-side
+               (`/api/lots/:aid?branch=…`) so the KPI strip + table stay in
+               sync. "All branches" passes no filter. -->
+          <select id="lot-branch-filter" onchange="loadLots()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:140px" title="Filter by branch">
+            <option value="">All branches</option>
+          </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="refreshLots(this)" title="Reload the lots table from the server">🔄 Refresh</button>
@@ -2729,21 +2899,21 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             </div>
           </div>
           <div class="kpi">
-            <div class="kpi-label">Total Quantity</div>
+            <div class="kpi-label">Total quantity</div>
             <div class="kpi-value" id="inv-kpi-qty">0<span class="kpi-unit">kg</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M5 3h14l-1 9H6z"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="6" y1="20" x2="18" y2="20"/></svg>
             </div>
           </div>
           <div class="kpi turmeric">
-            <div class="kpi-label">Taxable Amount</div>
+            <div class="kpi-label">Taxable amount</div>
             <div class="kpi-value" id="inv-kpi-amount" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             </div>
           </div>
           <div class="kpi chili">
-            <div class="kpi-label">Grand Total (incl. tax)</div>
+            <div class="kpi-label">Grand total (incl. tax)</div>
             <div class="kpi-value" id="inv-kpi-total" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -2754,6 +2924,16 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <!-- ── Action toolbar — grouped: Auction selector / Create / Print / Manage ── -->
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="inv-auction" onchange="loadInvoices();loadInvEligibleBuyers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Sale-type filter (L/I/E). Filters the visible invoices to
+               local / inter-state / export only. Server-side via
+               `/api/invoices?sale=`. Empty option means no filter. -->
+          <select id="inv-sale-filter" onchange="loadInvoices()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:140px" title="Filter by sale type">
+            <option value="">All sale types</option>
+            <option value="L">Local (L)</option>
+            <option value="I">Inter-state (I)</option>
+            <option value="E">Export (E)</option>
+          </select>
 
           <!-- Create group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
@@ -2800,28 +2980,28 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
         <!-- KPI strip — shown after first data load -->
         <div id="pur-kpis" class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;display:none">
           <div class="kpi cardamom">
-            <div class="kpi-label">Purchase Invoices</div>
+            <div class="kpi-label">Purchase invoices</div>
             <div class="kpi-value" id="pur-kpi-count">0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>
             </div>
           </div>
           <div class="kpi">
-            <div class="kpi-label">Total Quantity</div>
+            <div class="kpi-label">Total quantity</div>
             <div class="kpi-value" id="pur-kpi-qty">0<span class="kpi-unit">kg</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M5 3h14l-1 9H6z"/><line x1="6" y1="20" x2="18" y2="20"/></svg>
             </div>
           </div>
           <div class="kpi turmeric">
-            <div class="kpi-label">Taxable Amount</div>
+            <div class="kpi-label">Taxable amount</div>
             <div class="kpi-value" id="pur-kpi-amount" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             </div>
           </div>
           <div class="kpi chili">
-            <div class="kpi-label">Grand Total (incl. tax)</div>
+            <div class="kpi-label">Grand total (incl. tax)</div>
             <div class="kpi-value" id="pur-kpi-total" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -2831,6 +3011,17 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="pur-auction" onchange="loadPurchases();loadPurEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Sale-type filter for purchases. Server-side derives the type
+               from each row's GST split (CGST/SGST vs IGST) since purchases
+               don't have a sale column. See the comment block on the
+               /api/purchases handler in server.js for the exact rules. -->
+          <select id="pur-sale-filter" onchange="loadPurchases()" title="Filter purchase invoices by dealer sale type" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:140px">
+            <option value="">All sale types</option>
+            <option value="L">Local (L)</option>
+            <option value="I">Inter-state (I)</option>
+            <option value="E">Export (E)</option>
+          </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="needs-invoice-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenPurModal()">+ Generate Purchase</button>
@@ -2874,21 +3065,21 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             </div>
           </div>
           <div class="kpi">
-            <div class="kpi-label">Total Quantity</div>
+            <div class="kpi-label">Total quantity</div>
             <div class="kpi-value" id="pay-kpi-qty">0<span class="kpi-unit">kg</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M5 3h14l-1 9H6z"/><line x1="6" y1="20" x2="18" y2="20"/></svg>
             </div>
           </div>
           <div class="kpi turmeric">
-            <div class="kpi-label">Total Discount</div>
+            <div class="kpi-label">Total discount</div>
             <div class="kpi-value" id="pay-kpi-discount" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>
             </div>
           </div>
           <div class="kpi chili">
-            <div class="kpi-label">Total Payable</div>
+            <div class="kpi-label">Total payable</div>
             <div class="kpi-value" id="pay-kpi-payable" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
@@ -3089,14 +3280,14 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
             </div>
           </div>
           <div class="kpi">
-            <div class="kpi-label">Total Quantity</div>
+            <div class="kpi-label">Total quantity</div>
             <div class="kpi-value" id="bill-kpi-qty">0<span class="kpi-unit">kg</span></div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><path d="M5 3h14l-1 9H6z"/><line x1="6" y1="20" x2="18" y2="20"/></svg>
             </div>
           </div>
           <div class="kpi turmeric">
-            <div class="kpi-label">Net Amount</div>
+            <div class="kpi-label">Net amount</div>
             <div class="kpi-value" id="bill-kpi-net" style="font-size:24px"><span class="kpi-unit" style="margin-right:4px">₹</span>0</div>
             <div class="kpi-icon">
               <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
@@ -3106,6 +3297,14 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="bill-auction" onchange="loadBills();loadEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Branch filter — populated from Settings → Branches & Contacts.
+               Server-side matches against bills.br when populated, else
+               infers via the underlying lot's branch. Both paths handled
+               by the OR clause on /api/bills?branch=. -->
+          <select id="bill-branch-filter" onchange="loadBills()" title="Filter bills of supply by branch" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:140px">
+            <option value="">All branches</option>
+          </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('gen-bill-modal')">+ Generate Bill</button>
@@ -4375,6 +4574,10 @@ function wrapSummaryPanel(spec){
       ${esc(spec.label)}
     </span>
     <span class="stats-line" id="summary-stats-${spec.key}"></span>
+    <span class="summary-progress" id="summary-progress-${spec.key}" style="display:none">
+      <span class="summary-progress-bar"><span class="summary-progress-fill" id="summary-progress-fill-${spec.key}" style="width:0%"></span></span>
+      <span class="summary-progress-label" id="summary-progress-label-${spec.key}"></span>
+    </span>
   `;
   head.addEventListener('click', () => {
     const cur = panel.dataset.collapsed === '1';
@@ -4423,6 +4626,35 @@ function updateSummaryStats(key, statsText){
   if (el) el.innerHTML = statsText;
   const panel = document.getElementById('summary-panel-' + key);
   if (panel) panel.style.display = ''; // reveal the panel now that data exists
+}
+
+// Show a small progress bar in the summary head — useful for indicating
+// "how complete is this trade?" at a glance. Percent 0–100. Label is
+// a short string like "9 of 12 invoiced" rendered next to the bar.
+// Passing percent === null (or undefined) hides the progress widget,
+// so loaders can omit it when not applicable (e.g., empty list).
+//
+// The bar color shifts subtly with the percentage so the user gets a
+// quick visual signal without reading the label:
+//   <60%   amber  (still early, attention may be needed)
+//   60–95% green  (on track)
+//   ≥95%   cardamom dark (effectively complete)
+function updateSummaryProgress(key, percent, label){
+  const wrap = document.getElementById('summary-progress-' + key);
+  if (!wrap) return;
+  if (percent == null || isNaN(percent)) { wrap.style.display = 'none'; return; }
+  const pct = Math.max(0, Math.min(100, Math.round(percent)));
+  const fill = document.getElementById('summary-progress-fill-' + key);
+  const lbl  = document.getElementById('summary-progress-label-' + key);
+  if (fill) {
+    fill.style.width = pct + '%';
+    // Threshold-based color. Inline so it overrides the default CSS fill.
+    if (pct >= 95)       fill.style.background = 'var(--spice-cardamom-dk, #14532D)';
+    else if (pct >= 60)  fill.style.background = 'var(--spice-saffron, #10B981)';
+    else                 fill.style.background = 'var(--spice-turmeric, #F59E0B)';
+  }
+  if (lbl) lbl.textContent = label || (pct + '%');
+  wrap.style.display = '';
 }
 
 // Hide a summary panel entirely (e.g., empty list).
@@ -5325,7 +5557,7 @@ async function loadStats(auctionId){
   const ptHTML = isAllMode && PT.length ? `
     <div class="card" style="padding:0;margin-bottom:20px">
       <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center">
-        <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Per-Trade Breakdown</h2>
+        <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Per-trade breakdown</h2>
         <span style="font-size:12px;color:var(--spice-text-hint)">${PT.length} trade${PT.length===1?'':'s'} · click a row to drill in</span>
       </div>
       <div style="padding:0 4px;overflow-x:auto">
@@ -5440,15 +5672,15 @@ async function loadStats(auctionId){
         <p>Here's what's happening today, ${today}</p>
       </div>
       <div style="display:flex;gap:10px">
-        <button class="btn btn-o" onclick="go('lots')">Import Data</button>
-        <button class="btn btn-a" onclick="go('auctions')">+ New Trade</button>
+        <button class="btn btn-o" onclick="go('lots')">Import data</button>
+        <button class="btn btn-a" onclick="go('auctions')">+ New trade</button>
       </div>
     </div>
 
     <div class="kpi-grid">
       <div class="kpi">
         <div class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M8 13v5M13 9v9M18 6v12"/></svg></div>
-        <div class="kpi-label">${isAllMode ? 'Total Volume' : 'Trade Volume'}</div>
+        <div class="kpi-label">${isAllMode ? 'Total volume' : 'Trade volume'}</div>
         <div class="kpi-value">${isAllMode
           ? inrL(CUM.amount).replace('₹','').replace('L','')
           : inrL(A ? A.totalAmt : 0).replace('₹','').replace('L','')}<span class="kpi-unit">${isAllMode
@@ -5460,7 +5692,7 @@ async function loadStats(auctionId){
       </div>
       <div class="kpi cardamom">
         <div class="kpi-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg></div>
-        <div class="kpi-label">${isAllMode ? 'Total Lots' : 'Active Lots'}</div>
+        <div class="kpi-label">${isAllMode ? 'Total lots' : 'Active lots'}</div>
         <div class="kpi-value">${isAllMode ? (CUM.lots||0) : (K.activeLots||0)}</div>
         <span class="kpi-delta neutral">${isAllMode
           ? `across all trades`
@@ -5468,7 +5700,7 @@ async function loadStats(auctionId){
       </div>
       <div class="kpi turmeric">
         <div class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg></div>
-        <div class="kpi-label">Pending Invoices</div>
+        <div class="kpi-label">Pending invoices</div>
         <div class="kpi-value">${K.pendingInvoices||0}</div>
         <span class="kpi-delta ${K.pendingInvoices>0?'down':'neutral'}">${K.pendingInvoices>0
           ? (isAllMode ? 'Across all trades' : 'Buyers awaiting')
@@ -5476,9 +5708,31 @@ async function loadStats(auctionId){
       </div>
       <div class="kpi chili">
         <div class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg></div>
-        <div class="kpi-label">Revenue This Month</div>
+        <div class="kpi-label">Revenue this month</div>
         <div class="kpi-value">${inrL(K.monthRevenue).replace('₹','').replace('L','')}<span class="kpi-unit">${(K.monthRevenue||0)>=100000?'L':''}</span></div>
         ${revPill}
+      </div>
+    </div>
+
+    <div class="card" id="dash-revenue-trend-card" style="padding:0;margin-bottom:20px">
+      <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+          <h2 style="font-size:17px;font-weight:700;margin:0 0 2px;color:var(--spice-text-main)">Revenue · last 7 days</h2>
+          <p style="margin:0;font-size:12.5px;color:var(--spice-text-mute)">Total invoiced per day (incl. GST &amp; round-off)</p>
+        </div>
+        <div style="display:flex;gap:6px" id="dash-rev-range">
+          <button type="button" class="btn btn-o" data-days="7"  onclick="setRevenueTrendRange(7)"  style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">7 days</button>
+          <button type="button" class="btn btn-o" data-days="14" onclick="setRevenueTrendRange(14)" style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">14 days</button>
+          <button type="button" class="btn btn-o" data-days="30" onclick="setRevenueTrendRange(30)" style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">30 days</button>
+        </div>
+      </div>
+      <div style="padding:14px 22px 18px">
+        <div id="dash-rev-empty" style="display:none;padding:30px 10px;text-align:center;color:var(--spice-text-mute);font-size:13px">
+          No invoices yet in this range.
+        </div>
+        <div style="position:relative;height:200px" id="dash-rev-canvas-wrap">
+          <canvas id="dash-rev-chart" role="img" aria-label="Line chart of daily invoiced revenue over the selected period"></canvas>
+        </div>
       </div>
     </div>
 
@@ -5486,23 +5740,23 @@ async function loadStats(auctionId){
       ${aHTML}
       <div class="card" style="padding:0">
         <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center">
-          <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Quick Actions</h2>
+          <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Quick actions</h2>
         </div>
         <div style="padding:16px 22px 22px">
           <div class="qa-grid">
             <button class="qa" onclick="go('invoices')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg></div>
-              <div class="qa-label">Generate Invoices</div>
+              <div class="qa-label">Generate invoices</div>
               <div class="qa-sub">For all buyers</div>
             </button>
             <button class="qa" onclick="go('exports')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
-              <div class="qa-label">Export Data</div>
+              <div class="qa-label">Export data</div>
               <div class="qa-sub">XLSX or PDF</div>
             </button>
             <button class="qa" onclick="go('auctions')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div>
-              <div class="qa-label">New Trade</div>
+              <div class="qa-label">New trade</div>
               <div class="qa-sub">Start today's trade</div>
             </button>
             <button class="qa" onclick="go('payments')">
@@ -5524,14 +5778,14 @@ async function loadStats(auctionId){
     <div class="dash-row-eq">
       <div class="card" style="padding:0">
         <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center">
-          <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Recent Invoices</h2>
+          <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Recent invoices</h2>
           <a href="#" onclick="go('invoices');return false" style="font-size:13px;color:var(--spice-saffron);font-weight:600;text-decoration:none">View all →</a>
         </div>
         <div style="padding:0 4px">${invoicesHTML}</div>
       </div>
       <div class="card" style="padding:0">
         <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center">
-          <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Top Sellers</h2>
+          <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Top sellers</h2>
           <span style="font-size:12px;color:var(--spice-text-hint)">Last 7 days</span>
         </div>
         <div style="padding:4px 22px 18px">${sellersHTML}</div>
@@ -5614,6 +5868,149 @@ async function loadStats(auctionId){
         }
       });
     });
+  }
+
+  // Render the 7-day (or 14/30) revenue trend line chart. Fetched from
+  // /api/stats/revenue-trend which returns a complete zero-filled series
+  // — so the X axis is continuous even on quiet days. Range buttons in
+  // the card header call setRevenueTrendRange() which re-invokes us.
+  renderRevenueTrendChart();
+}
+
+// Range tracker for the revenue-trend chart. Default 7 days; changed by
+// the 7/14/30 buttons on the card header.
+let _dashRevTrendDays = 7;
+function setRevenueTrendRange(days){
+  _dashRevTrendDays = Math.max(1, Math.min(90, parseInt(days, 10) || 7));
+  // Reflect the active button visually
+  const wrap = document.getElementById('dash-rev-range');
+  if (wrap) {
+    wrap.querySelectorAll('button[data-days]').forEach(b => {
+      b.classList.toggle('btn-a', Number(b.dataset.days) === _dashRevTrendDays);
+      b.classList.toggle('btn-o', Number(b.dataset.days) !== _dashRevTrendDays);
+    });
+  }
+  renderRevenueTrendChart();
+}
+async function renderRevenueTrendChart(){
+  // Defer until DOM updates from the loadStats render are committed so
+  // the canvas element exists and has a measured size.
+  if (typeof Chart === 'undefined') return;
+  try {
+    const d = await j(`/api/stats/revenue-trend?days=${_dashRevTrendDays}`);
+    const series = (d && d.series) || [];
+    const canvas = document.getElementById('dash-rev-chart');
+    const empty  = document.getElementById('dash-rev-empty');
+    const wrap   = document.getElementById('dash-rev-canvas-wrap');
+    if (!canvas) return;
+    const totalRevenue = series.reduce((a, p) => a + (Number(p.total) || 0), 0);
+    if (totalRevenue === 0) {
+      // Show the empty state and hide the canvas — Chart.js complains
+      // about all-zero data on a logarithmic axis but a line chart at
+      // y=0 across a week just looks broken either way.
+      if (empty) empty.style.display = 'block';
+      if (wrap)  wrap.style.display  = 'none';
+      if (canvas._chart) { canvas._chart.destroy(); canvas._chart = null; }
+      // Reflect active range button on first render (so the default
+      // 7-day button looks active without the user clicking it).
+      const rangeWrap = document.getElementById('dash-rev-range');
+      if (rangeWrap) {
+        rangeWrap.querySelectorAll('button[data-days]').forEach(b => {
+          b.classList.toggle('btn-a', Number(b.dataset.days) === _dashRevTrendDays);
+          b.classList.toggle('btn-o', Number(b.dataset.days) !== _dashRevTrendDays);
+        });
+      }
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (wrap)  wrap.style.display  = '';
+
+    // Format labels — for ≤14 days show "Mon 15", for 30 days show
+    // "15 Nov" to avoid X-axis crowding.
+    const fmtLabel = (iso) => {
+      const dt = new Date(iso);
+      if (_dashRevTrendDays <= 14) {
+        return dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
+      }
+      return dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    };
+    const labels = series.map(p => fmtLabel(p.date));
+    const data   = series.map(p => Number(p.total) || 0);
+
+    if (canvas._chart) { canvas._chart.destroy(); canvas._chart = null; }
+    const ctx = canvas.getContext('2d');
+    // Soft gradient fill under the line
+    const grad = ctx.createLinearGradient(0, 0, 0, 200);
+    grad.addColorStop(0, 'rgba(22, 101, 52, 0.18)');
+    grad.addColorStop(1, 'rgba(22, 101, 52, 0.02)');
+    canvas._chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Revenue',
+          data,
+          borderColor: '#166534',
+          backgroundColor: grad,
+          borderWidth: 2.5,
+          pointBackgroundColor: '#166534',
+          pointRadius: _dashRevTrendDays <= 14 ? 4 : 0,
+          pointHoverRadius: 6,
+          fill: true,
+          tension: 0.35,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#0F172A',
+            padding: 10,
+            titleFont: { weight: '600' },
+            callbacks: {
+              title: (items) => {
+                const p = series[items[0].dataIndex];
+                if (!p) return items[0].label;
+                const dt = new Date(p.date);
+                return dt.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
+              },
+              label: (ctx) => {
+                const v = ctx.parsed.y;
+                const p = series[ctx.dataIndex];
+                const cnt = p ? p.count : 0;
+                const formatted = v >= 100000 ? `₹${(v/100000).toFixed(2)}L` : `₹${Math.round(v).toLocaleString('en-IN')}`;
+                return `${formatted}  ·  ${cnt} invoice${cnt===1?'':'s'}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#94A3B8', maxRotation: 0 } },
+          y: {
+            beginAtZero: true,
+            grid: { color: '#E2E8F0', drawBorder: false },
+            ticks: {
+              font: { size: 11 }, color: '#94A3B8',
+              callback: (v) => v >= 100000 ? `₹${(v/100000).toFixed(1)}L` : `₹${(v/1000).toFixed(0)}k`,
+            },
+          },
+        },
+      },
+    });
+
+    // Reflect active button on first render
+    const rangeWrap = document.getElementById('dash-rev-range');
+    if (rangeWrap) {
+      rangeWrap.querySelectorAll('button[data-days]').forEach(b => {
+        b.classList.toggle('btn-a', Number(b.dataset.days) === _dashRevTrendDays);
+        b.classList.toggle('btn-o', Number(b.dataset.days) !== _dashRevTrendDays);
+      });
+    }
+  } catch (e) {
+    // Silent fail — chart is non-essential. Surface in console for debugging.
+    console.warn('Revenue trend chart failed:', e);
   }
 }
 
@@ -5855,6 +6252,19 @@ function getDefaultCropType(){
 function getDefaultBusinessState(){
   const f = (_sdata.mode||[]).find(x => x.key === 'business_state');
   return (f && f.value) ? String(f.value).toUpperCase() : 'TAMIL NADU';
+}
+
+// Returns the configured branch names from Settings → Branches & Contacts.
+// Reads br1..br9 keys; empty/whitespace values are skipped. Used to
+// populate branch-filter dropdowns on the Lots tab (and any future
+// tab that needs a branch picker). Returns in br1..br9 order so the
+// dropdown matches what the user sees in Settings.
+function getConfiguredBranches(){
+  const branches = (_sdata.branches || []).filter(f => /^br[1-9]$/.test(f.key));
+  return branches
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map(f => (f.value || '').trim())
+    .filter(v => v.length > 0);
 }
 
 // Update sidebar labels based on business_mode setting.
@@ -10622,9 +11032,23 @@ async function loadLots(opts){const aid=document.getElementById('lot-auction').v
   // Pager: fresh loads reset to page 1; only pager-driven navigation
   // sets {keepPage:true} to preserve the user's current page.
   if (!opts || !opts.keepPage) _lotsPager.page = 1;
+  // Refresh the branch-filter dropdown options each load so any new
+  // branch added in Settings shows up here. The currently-selected
+  // branch survives a reload — selectedIndex is preserved via the
+  // value string match.
+  const branchSel = document.getElementById('lot-branch-filter');
+  if (branchSel) {
+    const current = branchSel.value;
+    const branches = getConfiguredBranches();
+    branchSel.innerHTML = '<option value="">All branches</option>'
+      + branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+    if (current && branches.includes(current)) branchSel.value = current;
+  }
+  const branchFilter = branchSel ? branchSel.value : '';
+  const branchParam = branchFilter ? `&branch=${encodeURIComponent(branchFilter)}` : '';
   // Cache-buster ensures the browser actually hits the server (otherwise Refresh
   // may return stale cached JSON and nothing visibly changes)
-  const d=await j(`/api/lots/${aid}?_=${Date.now()}`);
+  const d=await j(`/api/lots/${aid}?_=${Date.now()}${branchParam}`);
   const arr = Array.isArray(d) ? d : [];
 
   // Update KPI strip — count, qty, amount, calculated %
@@ -10678,17 +11102,30 @@ async function loadLots(opts){const aid=document.getElementById('lot-auction').v
       const priceAvg = agg.sold.qty > 0 ? (agg.sold.amt / agg.sold.qty) : 0;
       const hasSold  = agg.sold.n > 0 && priceMin !== Infinity;
 
+      // Helper to build the label/value mini-grid that fills the
+      // kpi-meta containers. Each row is "label" + "value" cells
+      // matching the grid-template-columns:auto 1fr CSS, so the
+      // values right-align cleanly and rupee symbols dim to match
+      // the friendly "value with unit" treatment used elsewhere.
+      const metaRow = (lbl, val) => `<span class="lbl">${lbl}</span><span class="val">${val}</span>`;
+      const ccy = (n) => `<span class="ccy">₹</span>${fmtI(n,2)}`;
+      const ccyInt = (n) => `<span class="ccy">₹</span>${fmtI(n,0)}`;
+
       if ($('lot-kpi-amount-meta')) $('lot-kpi-amount-meta').innerHTML = hasSold
-        ? `Min ₹${fmtI(priceMin,2)}<br>Max ₹${fmtI(priceMax,2)}<br>Avg ₹${fmtI(priceAvg,2)}`
-        : 'Min ₹—<br>Max ₹—<br>Avg ₹—';
+        ? metaRow('Min', ccy(priceMin)) + metaRow('Max', ccy(priceMax)) + metaRow('Avg', ccy(priceAvg))
+        : metaRow('Min', '—') + metaRow('Max', '—') + metaRow('Avg', '—');
 
       if ($('lot-kpi-sold-count')) $('lot-kpi-sold-count').textContent = agg.sold.n;
       if ($('lot-kpi-sold-meta'))  $('lot-kpi-sold-meta').innerHTML =
-        `Bags: ${fmtI(agg.sold.bags,0)}<br>Qty: ${fmtI(agg.sold.qty,0)} kg<br>Amount: ₹${fmtI(agg.sold.amt,0)}`;
+        metaRow('Bags', fmtI(agg.sold.bags, 0))
+        + metaRow('Qty', `${fmtI(agg.sold.qty, 0)} kg`)
+        + metaRow('Amount', ccyInt(agg.sold.amt));
 
       if ($('lot-kpi-wd-count'))   $('lot-kpi-wd-count').textContent = agg.wd.n;
       if ($('lot-kpi-wd-meta'))    $('lot-kpi-wd-meta').innerHTML =
-        `Bags: ${fmtI(agg.wd.bags,0)}<br>Qty: ${fmtI(agg.wd.qty,0)} kg<br>Amount: ₹${fmtI(agg.wd.amt,0)}`;
+        metaRow('Bags', fmtI(agg.wd.bags, 0))
+        + metaRow('Qty', `${fmtI(agg.wd.qty, 0)} kg`)
+        + metaRow('Amount', ccyInt(agg.wd.amt));
 
       updateSummaryStats('lots',
         `<strong>${arr.length}</strong> lot${arr.length===1?'':'s'} · `
@@ -10697,6 +11134,15 @@ async function loadLots(opts){const aid=document.getElementById('lot-auction').v
         + `<strong>${pct}%</strong> calculated · `
         + `<strong>${agg.sold.n}</strong> sold · `
         + `<strong>${agg.wd.n}</strong> WD`);
+      // Progress: % of lots sold (excludes withdrawn from the denominator
+      // since WD lots aren't pending — they're just out). A 95%+ rate
+      // means a good auction; <60% suggests poor conditions or pricing
+      // mismatch. Memory note: withdrawal rate is the primary signal of
+      // auction health, so we surface its inverse — sold percentage —
+      // visually here.
+      const tradableLots = agg.sold.n + (arr.length - agg.sold.n - agg.wd.n);
+      const soldPct = tradableLots > 0 ? (agg.sold.n / tradableLots) * 100 : 0;
+      updateSummaryProgress('lots', soldPct, `${agg.sold.n} of ${tradableLots} sold`);
     }
   }
 
@@ -11164,7 +11610,14 @@ function gotoInvoicesPage(p){
 async function loadInvoices(opts){
   if (!opts || !opts.keepPage) _invoicesPager.page = 1;
   const aid=document.getElementById('inv-auction')?.value;
-  const url=aid?`/api/invoices?auction_id=${aid}`:'/api/invoices';
+  // Sale-type filter — empty means no filter. Read live each load so a
+  // dropdown change re-fires loadInvoices() and the URL picks up the
+  // new value without needing a separate state variable.
+  const saleFilter = document.getElementById('inv-sale-filter')?.value || '';
+  const params = [];
+  if (aid) params.push(`auction_id=${aid}`);
+  if (saleFilter) params.push(`sale=${encodeURIComponent(saleFilter)}`);
+  const url = '/api/invoices' + (params.length ? '?' + params.join('&') : '');
   const d=await j(url);
   // Invoice count badge
   const badge=document.getElementById('inv-count-badge');
@@ -12160,7 +12613,14 @@ function gotoPurchasesPage(p){
 async function loadPurchases(opts){
   if (!opts || !opts.keepPage) _purchasesPager.page = 1;
   const aid=document.getElementById('pur-auction')?.value;
-  const url=aid?`/api/purchases?auction_id=${aid}`:'/api/purchases';
+  // Sale-type filter for purchases — same pattern as invoices.
+  // Server derives the type from the row's GST columns since
+  // purchases don't carry a sale column directly.
+  const saleFilter = document.getElementById('pur-sale-filter')?.value || '';
+  const params = [];
+  if (aid) params.push(`auction_id=${aid}`);
+  if (saleFilter) params.push(`sale=${encodeURIComponent(saleFilter)}`);
+  const url = '/api/purchases' + (params.length ? '?' + params.join('&') : '');
   const d=await j(url);
   const arr = Array.isArray(d) ? d : [];
 
@@ -12935,8 +13395,24 @@ function gotoBillsPage(p){
 }
 async function loadBills(opts){
   if (!opts || !opts.keepPage) _billsPager.page = 1;
+  // Populate the branch dropdown from Settings → Branches & Contacts so
+  // every configured branch shows up (even ones with no bills yet).
+  // Done on every load so new branches added in Settings appear
+  // automatically without app reload.
+  const billBranchSel = document.getElementById('bill-branch-filter');
+  if (billBranchSel) {
+    const cur = billBranchSel.value;
+    const branches = getConfiguredBranches();
+    billBranchSel.innerHTML = '<option value="">All branches</option>'
+      + branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+    if (cur && branches.includes(cur)) billBranchSel.value = cur;
+  }
   const aid=document.getElementById('bill-auction')?.value;
-  const url=aid?`/api/bills?auction_id=${aid}`:'/api/bills';
+  const branchFilter = billBranchSel ? billBranchSel.value : '';
+  const params = [];
+  if (aid) params.push(`auction_id=${aid}`);
+  if (branchFilter) params.push(`branch=${encodeURIComponent(branchFilter)}`);
+  const url = '/api/bills' + (params.length ? '?' + params.join('&') : '');
   const d=await j(url);
   const arr = Array.isArray(d) ? d : [];
 
@@ -14281,11 +14757,37 @@ function renderPreview(inv,type){
 }
 
 // ── Theme switcher ─────────────────────────────────────────
+// Theme + custom color are persisted in TWO places:
+//   1. localStorage — for instant apply on the next page load (no
+//      network round-trip flicker), and as a fallback when the
+//      /api/branding fetch is slow or fails on first load.
+//   2. The server's company_settings table (keys `theme` and
+//      `theme_custom_color`) — so EVERY device on this install
+//      shows the same branding. Without server-side persistence,
+//      Customer A's "Indigo" choice on the office laptop would not
+//      follow them to a different machine, and a fresh install would
+//      show generic green to every user until each one re-picks.
+//
+// Save is fire-and-forget — we don't await it because the UI has
+// already applied the theme locally and the user shouldn't wait for
+// a network round trip to see their click take effect. Errors are
+// swallowed: localStorage still has the value, so we won't lose it.
 const _THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','custom'];
+function _persistBrandingSetting(payload){
+  if (!T) return; // Not logged in yet — will be saved on next click after login
+  try {
+    fetch(B + '/api/branding', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + T },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch (_) {}
+}
 function setTheme(t){
   if (!_THEMES.includes(t)) t = 'emerald';
   document.body.setAttribute('data-theme', t);
   try { localStorage.setItem('theme', t); } catch(e){}
+  _persistBrandingSetting({ theme: t });
   // Update active state on swatches (and on the legacy chip-large
   // selector, in case any old cached page still has them).
   document.querySelectorAll('.theme-swatch, .theme-chip, .theme-chip-large').forEach(c=>{
@@ -14297,14 +14799,19 @@ function setTheme(t){
 // we set --spice-custom-base on body and switch the active theme to
 // 'custom'. The CSS rule body[data-theme="custom"] derives the full
 // color palette from this single base color via color-mix(). Choice
-// persists across reloads via localStorage.
+// persists across reloads via localStorage AND server settings.
 function setCustomColor(hex){
   if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return;
   document.body.style.setProperty('--spice-custom-base', hex);
   try { localStorage.setItem('themeCustomColor', hex); } catch(e){}
+  _persistBrandingSetting({ themeCustomColor: hex, theme: 'custom' });
   setTheme('custom');
 }
-// Apply saved theme on load (including custom color if previously set)
+// Apply saved theme on load (including custom color if previously set).
+// Order: localStorage first for instant visual feedback (no flash of
+// default theme), then re-apply from /api/branding once it returns so
+// a different machine seeing this install for the first time inherits
+// the customer's branding choices instead of seeing default emerald.
 (function(){
   let saved = 'emerald';
   let custom = null;
@@ -14316,6 +14823,37 @@ function setCustomColor(hex){
     document.body.style.setProperty('--spice-custom-base', custom);
   }
   document.body.setAttribute('data-theme', saved);
+
+  // Async: pull server-side branding and override localStorage if the
+  // install's admin has picked a different theme. Runs in parallel with
+  // the rest of page init — first paint already used localStorage so
+  // there's no flicker; this just upgrades to the canonical install-
+  // wide value as soon as the network call returns.
+  fetch(B + '/api/branding')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (!d) return;
+      // Server's chosen theme wins. If empty, leave the localStorage
+      // value in place (covers fresh installs where the admin hasn't
+      // touched Settings → Appearance yet).
+      const srvTheme = String(d.theme || '').trim();
+      const srvCustom = String(d.themeCustomColor || '').trim();
+      if (srvCustom && /^#[0-9a-fA-F]{6}$/.test(srvCustom)) {
+        document.body.style.setProperty('--spice-custom-base', srvCustom);
+        try { localStorage.setItem('themeCustomColor', srvCustom); } catch(_){}
+        const inp = document.getElementById('custom-color-input');
+        if (inp) inp.value = srvCustom;
+      }
+      if (srvTheme && _THEMES.includes(srvTheme) && srvTheme !== saved) {
+        document.body.setAttribute('data-theme', srvTheme);
+        try { localStorage.setItem('theme', srvTheme); } catch(_){}
+        // Re-sync swatch active-state
+        document.querySelectorAll('.theme-swatch').forEach(c=>{
+          c.classList.toggle('active', c.dataset.t === srvTheme);
+        });
+      }
+    })
+    .catch(()=>{}); // network failure is fine — localStorage already applied
 })();
 // Highlight active chip + sync dark-mode label whenever the Settings tab renders.
 // Settings uses go('settings') which switches tabs without re-rendering markup,

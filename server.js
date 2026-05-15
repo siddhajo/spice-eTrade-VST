@@ -403,6 +403,10 @@ const requireExport        = requirePermission('export');
 // Public branding (no auth) — login screen / topbar pulls company
 // name + logo from settings. Returns only the safe-to-expose subset:
 // trade name, short name, branch, GSTIN, and a logo URL when present.
+// Theme + theme_custom_color are also exposed so the per-install
+// branding (which customer this is) is applied BEFORE login — gives
+// every device on this install the same look-and-feel even before
+// the user signs in.
 app.get('/api/branding', (req, res) => {
   try {
     const cfg = getSettingsFlat(getDb());
@@ -418,9 +422,57 @@ app.get('/api/branding', (req, res) => {
       branch,
       gstin,
       logoUrl: '/logo-ispl.png',
+      // Per-install branding choices — empty string when the admin
+      // hasn't picked one yet (frontend then falls back to localStorage
+      // and finally to 'emerald').
+      theme: cfg.theme || '',
+      themeCustomColor: cfg.theme_custom_color || '',
     });
   } catch (e) {
-    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null });
+    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '' });
+  }
+});
+
+// Persist per-install branding (theme + custom color). Upserts directly
+// into company_settings — bypasses updateSettings() which only UPDATEs
+// existing rows (and these two keys may not be in DEFAULTS yet on
+// installs that pre-date the branding feature).
+//
+// Whitelisted to ONLY these two keys so a misbehaving client can't
+// write arbitrary settings through this endpoint. Larger settings
+// changes still go through PUT /api/company-settings.
+app.put('/api/branding', requireSettingsWrite, (req, res) => {
+  try {
+    const db = getDb();
+    const body = req.body || {};
+    const allowed = {};
+    if (typeof body.theme === 'string') {
+      // Validate against the same theme list the frontend uses
+      const THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','custom'];
+      if (THEMES.includes(body.theme)) allowed.theme = body.theme;
+    }
+    if (typeof body.themeCustomColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(body.themeCustomColor)) {
+      allowed.theme_custom_color = body.themeCustomColor;
+    }
+    if (!Object.keys(allowed).length) {
+      return res.status(400).json({ error: 'No valid branding fields supplied' });
+    }
+    // INSERT OR REPLACE so the row is created on first write and
+    // updated on subsequent writes. category='branding' so the row
+    // is grouped sensibly if it ever lands in the Settings categories
+    // view (currently appearance lives in its own card).
+    const stmt = db.prepare(
+      `INSERT INTO company_settings (key, value, category, label, field_type)
+       VALUES (?, ?, 'branding', ?, 'text')
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    );
+    const labels = { theme: 'Theme', theme_custom_color: 'Custom primary color' };
+    for (const [k, v] of Object.entries(allowed)) {
+      stmt.run(k, String(v), labels[k] || k);
+    }
+    res.json({ success: true, updated: Object.keys(allowed).length });
+  } catch (e) {
+    res.status(500).json({ error: 'Branding save failed: ' + (e.message || e) });
   }
 });
 
@@ -2715,7 +2767,7 @@ app.get('/api/lots/validate/:auctionId', requireViewOrLotEntry, (req, res) => {
 // INVOICES — Sales (GSTIN.PRG / KGSTIN.PRG)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/invoices', requireView, (req, res) => {
-  const { ano, auction_id, from, to } = req.query;
+  const { ano, auction_id, from, to, sale } = req.query;
   const db = getDb();
   const cfg = getSettingsFlat(db);
   // Filter list by active business context: when state=KERALA show only
@@ -2727,6 +2779,14 @@ app.get('/api/invoices', requireView, (req, res) => {
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
+  // Sale-type filter — L=Local, I=Inter-state, E=Export. Whitelisted
+  // to those three values; anything else is ignored (so a malformed
+  // client doesn't poison the WHERE clause). The `sale` column is
+  // populated at invoice generation from the underlying lots.
+  if (sale && ['L','I','E'].includes(String(sale).toUpperCase())) {
+    q += ' AND UPPER(sale) = ?';
+    p.push(String(sale).toUpperCase());
+  }
   // e-Trade-only build: every invoice belongs to the single company
   // (ISP), regardless of what's stamped in the `state` column. The
   // original Spice Config app used `state` to split rows between ISP
@@ -3626,11 +3686,40 @@ app.post('/api/invoices/purchase-pdf-bulk', requireView, async (req, res) => {
 // PURCHASES (GSTKBILT.PRG — registered dealer invoices)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/purchases', requireView, (req, res) => {
-  const { auction_id, ano, from, to } = req.query;
+  const { auction_id, ano, from, to, sale } = req.query;
   let q = 'SELECT * FROM purchases WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
+  // Sale-type filter (L / I / E). Purchases don't carry a sale column,
+  // but the GST split on each row is deterministic:
+  //   • L (Local / intra-state)  → CGST + SGST > 0, IGST = 0
+  //   • I (Inter-state)          → IGST > 0, CGST = SGST = 0
+  //   • E (Export)               → IGST > 0 AND dealer has ≥1 lot
+  //                                tagged sale='E' in the same auction
+  // Inferring directly from lots.sale would fail because that column
+  // is blank on most installs — L would match everything, I nothing.
+  // The GST-column approach is data-driven and always correct.
+  const saleNorm = String(sale || '').trim().toUpperCase();
+  if (saleNorm === 'L') {
+    q += ' AND COALESCE(igst,0) = 0 AND (COALESCE(cgst,0) > 0 OR COALESCE(sgst,0) > 0)';
+  } else if (saleNorm === 'I') {
+    q += ' AND COALESCE(igst,0) > 0';
+    q += ` AND NOT EXISTS (
+            SELECT 1 FROM lots l
+             WHERE l.auction_id = purchases.auction_id
+               AND UPPER(TRIM(COALESCE(l.name,''))) = UPPER(TRIM(COALESCE(purchases.name,'')))
+               AND UPPER(TRIM(COALESCE(l.sale,''))) = 'E'
+          )`;
+  } else if (saleNorm === 'E') {
+    q += ' AND COALESCE(igst,0) > 0';
+    q += ` AND EXISTS (
+            SELECT 1 FROM lots l
+             WHERE l.auction_id = purchases.auction_id
+               AND UPPER(TRIM(COALESCE(l.name,''))) = UPPER(TRIM(COALESCE(purchases.name,'')))
+               AND UPPER(TRIM(COALESCE(l.sale,''))) = 'E'
+          )`;
+  }
   q += ' ORDER BY date DESC LIMIT 500';
   res.json(getDb().all(q, p));
 });
@@ -3974,11 +4063,34 @@ app.post('/api/purchases/pdf-bulk', requireView, async (req, res) => {
 // BILLS — Agriculturist Bills of Supply (GSTKBILP/GSTBILP)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/bills', requireView, (req, res) => {
-  const { auction_id, ano, from, to } = req.query;
+  const { auction_id, ano, from, to, branch } = req.query;
   let q = 'SELECT * FROM bills WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
+  // Branch filter — bills.br may not be set on legacy/auto-generated
+  // rows (this codebase inserts it as empty), so the match must ALSO
+  // infer the branch via the underlying lot rows for the same seller.
+  //   bills.br = branch         (when populated)  OR
+  //   lots.branch via JOIN      (auction_id + seller name match)
+  // Both paths case-insensitive + trim-tolerant so legacy data with
+  // mixed casing still matches.
+  const branchFilter = String(branch || '').trim();
+  if (branchFilter) {
+    q += ` AND (
+            UPPER(TRIM(COALESCE(br,''))) = UPPER(TRIM(?))
+            OR EXISTS (
+              SELECT 1 FROM lots l
+               WHERE l.auction_id = COALESCE(
+                       bills.auction_id,
+                       (SELECT a.id FROM auctions a WHERE a.ano = bills.ano LIMIT 1)
+                     )
+                 AND UPPER(TRIM(COALESCE(l.name,''))) = UPPER(TRIM(COALESCE(bills.name,'')))
+                 AND UPPER(TRIM(COALESCE(l.branch,''))) = UPPER(TRIM(?))
+            )
+          )`;
+    p.push(branchFilter, branchFilter);
+  }
   q += ' ORDER BY date DESC, bil DESC LIMIT 500';
   res.json(withFmtDate(getDb().all(q, p)));
 });
@@ -6460,6 +6572,61 @@ app.get('/api/stats', requireView, (req, res) => {
       lastMonthRevenue: lastMonthTot,
     }
   });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Dashboard: revenue trend (line chart data)
+// ──────────────────────────────────────────────────────────────
+// Returns daily invoice totals for the last N days (default 7).
+// Used by the dashboard line chart card. Days with zero invoices
+// still appear in the result with `total: 0` so the X-axis is
+// continuous — easier to read than a jagged sparse line. Counted
+// from invoices.tot which already includes GST + round; the chart
+// shows what the customer actually billed each day.
+//
+// The cache-busting header matches /api/stats — the dashboard
+// reloads this on every visit and must reflect freshly-saved
+// invoices without browser-cached responses.
+app.get('/api/stats/revenue-trend', requireView, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  // Clamp days to 1–90; the chart space only fits ~30 cleanly,
+  // but 90 is allowed for power users who want a longer view.
+  // `parseInt` returns NaN for non-numeric → use 7 as the default;
+  // a valid 0 should clamp UP to 1, so Number.isFinite check first.
+  const raw = parseInt(req.query.days, 10);
+  const days = Math.max(1, Math.min(90, Number.isFinite(raw) ? raw : 7));
+  const db = getDb();
+  // SQLite: aggregate by date(date) so a stray time-component
+  // doesn't break the group. COALESCE handles NULL totals.
+  const rows = db.all(
+    `SELECT date(date) as day, COALESCE(SUM(tot), 0) as total, COUNT(*) as count
+       FROM invoices
+      WHERE date IS NOT NULL AND date != ''
+        AND date(date) >= date('now', '-' || ? || ' days')
+        AND date(date) <= date('now')
+      GROUP BY date(date)
+      ORDER BY day ASC`,
+    [days - 1]
+  );
+  // Build a complete day series (zero-fill missing days). The DB
+  // result is sparse — if no invoices on a day, it's missing. We
+  // emit a flat array of exactly `days` entries so the client
+  // doesn't have to do date math.
+  const byDay = new Map(rows.map(r => [r.day, r]));
+  const series = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().slice(0, 10);
+    const hit = byDay.get(iso);
+    series.push({
+      date: iso,
+      total: hit ? Number(hit.total) || 0 : 0,
+      count: hit ? Number(hit.count) || 0 : 0,
+    });
+  }
+  res.json({ days, series });
 });
 
 // ══════════════════════════════════════════════════════════════
