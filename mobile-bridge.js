@@ -598,12 +598,19 @@ function mountMobile(app, deps) {
   // PWA's app.html does `const trades = d.auctions || [];` so it expects
   // an envelope object, not the flat array spice-config returns natively.
   // Wrap the native array in {auctions: [...]} for the mobile client.
+  // Errors are caught and surfaced as JSON so the mobile client sees
+  // an actual diagnostic instead of a generic "Failed to load".
   app.get('/api/mobile/auctions', requireAuth, (_req, res) => {
-    const rows = getDb().all(
-      `SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) AS lot_count
-       FROM auctions ORDER BY date DESC, ano DESC LIMIT 100`
-    );
-    res.json({ auctions: rows });
+    try {
+      const rows = getDb().all(
+        `SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) AS lot_count
+         FROM auctions ORDER BY date DESC, ano DESC LIMIT 100`
+      );
+      res.json({ auctions: rows });
+    } catch (e) {
+      console.error('[/api/mobile/auctions] failed:', e && (e.stack || e.message || e));
+      res.status(500).json({ error: e && (e.message || String(e)) || 'Failed to load auctions' });
+    }
   });
 
   // ── 4. STATUS ALIAS ─────────────────────────────────────────────
@@ -612,12 +619,16 @@ function mountMobile(app, deps) {
   app.get('/api/status', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
   // ── 5. LOGO ALIAS ───────────────────────────────────────────────
-  // PWA loads the brand logo from /api/logo. spice-config serves it via
-  // /api/company-settings/logo/isp (or asp). Redirect to /api/branding
-  // which returns the configured logo path / data URI.
+  // PWA loads the brand logo via `<img src="/api/logo">`, which means
+  // the response MUST be a raw image, not JSON. Redirect to the
+  // /logo-ispl.png path — server.js has a route handler that falls
+  // through to the bundled default (logo_kj.png) when the user hasn't
+  // uploaded a custom logo, so this works for both fresh installs and
+  // ones with a custom upload. The previous redirect to /api/branding
+  // returned JSON, which the <img> tag couldn't decode and showed as
+  // a broken-image placeholder.
   app.get('/api/logo', (req, res) => {
-    // 302 to spice-config's branding endpoint; the client will follow.
-    res.redirect(302, '/api/branding');
+    res.redirect(302, '/logo-ispl.png');
   });
 
   // ── 6. LOTS — query-string filter form ──────────────────────────
