@@ -704,6 +704,12 @@ body:not([data-feat-debit-notes="1"]) .feat-debit-notes{display:none !important}
    Lots toolbar are tagged .feat-price-list-mapping so this single
    rule hides both when the flag is OFF. */
 body:not([data-feat-price-list-mapping="1"]) .feat-price-list-mapping{display:none !important}
+/* "Set Grade 1" bulk-action button on the Lots screen — only useful
+   when flag_discount_in_prate is ON, because that's the only mode
+   where Grade 1 calculates differently. With the flag OFF the
+   button would silently re-stamp grades without any user-visible
+   effect, so we hide it entirely. */
+body:not([data-feat-discount-in-prate="1"]) .feat-discount-in-prate{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -2544,10 +2550,16 @@ input[type="search"]:focus{
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
-            <!-- Bulk-grade button — only visible when at least one lot is
-                 ticked. Shares the same show/hide trigger as Delete
-                 Selected (BulkActions._sync flips display when count > 0). -->
-            <button id="lot-bulk-grade" class="needs-lot-write btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1'">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <!-- Bulk-grade button — only visible when at least one lot
+                 is ticked AND flag_discount_in_prate is ON. With the
+                 flag OFF, Grade 1 doesn't calculate differently from
+                 ungraded lots, so re-stamping grades would have no
+                 user-visible effect. Two gates:
+                   - .feat-discount-in-prate hides the whole button
+                     based on the flag (CSS rule above).
+                   - BulkActions._sync flips display:none/inline based
+                     on whether any lots are ticked. -->
+            <button id="lot-bulk-grade" class="needs-lot-write feat-discount-in-prate btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Sister tool to Price Import. Opens the Price List Mapping
                  tab where the user can fill the CODE column on a Price
@@ -5229,6 +5241,12 @@ async function applyFeatureFlags() {
   document.body.setAttribute('data-feat-bills',       featOn('flag_bills') ? '1' : '0');
   document.body.setAttribute('data-feat-debit-notes', featOn('flag_debit_notes') ? '1' : '0');
   document.body.setAttribute('data-feat-price-list-mapping', featOn('flag_price_list_mapping') ? '1' : '0');
+  // flag_discount_in_prate defaults to OFF (not ON) — it's a niche
+  // calculation mode, not a baseline feature, so the "Set Grade 1"
+  // button stays hidden until the admin explicitly enables it.
+  const dipOn = cfg && (cfg.flag_discount_in_prate === true
+    || String(cfg.flag_discount_in_prate || '').toLowerCase() === 'true');
+  document.body.setAttribute('data-feat-discount-in-prate', dipOn ? '1' : '0');
 }
 
 // Public branding (no auth) — drives the login + topbar from settings.
