@@ -174,6 +174,10 @@ const DEFAULTS = [
   // don't use this workflow can hide the Debit Notes tab + Generate
   // Debit Note flow with this flag.
   { key: 'flag_debit_notes',   value: 'true',         category: 'flags',     label: 'Debit Notes',              type: 'boolean' },
+  // Price List Mapping — sister tool of the Lots → Price Import
+  // flow. Installs that don't use the mapping workflow can hide the
+  // sidebar entry AND the Lots-toolbar button with this flag.
+  { key: 'flag_price_list_mapping', value: 'true',    category: 'flags',     label: 'Price List Mapping',       type: 'boolean' },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't

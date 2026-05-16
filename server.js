@@ -203,7 +203,15 @@ function withFmtDate(rows, field = 'date') {
 // (admin OR regular user) should be able to hit (GET list endpoints mostly).
 // Endpoints reachable while a user is in the forced-password-change state.
 // Anything outside this set returns 403 until they rotate their password.
-const FORCED_CHANGE_ALLOWED = new Set(['/api/me', '/api/me/password']);
+// Endpoints reachable while a user is in the forced-password-change
+// state. Includes both desktop (/api/me*) and mobile (/api/auth/*)
+// paths — without /api/auth/change-password here, mobile users with
+// must_change_password=1 get a 403 on every endpoint INCLUDING the
+// one they need to clear the flag, leaving them permanently stuck.
+const FORCED_CHANGE_ALLOWED = new Set([
+  '/api/me', '/api/me/password',
+  '/api/auth/me', '/api/auth/change-password', '/api/auth/logout',
+]);
 
 function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');

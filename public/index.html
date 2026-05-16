@@ -700,6 +700,10 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
    tab content, delete-all button) with one settings toggle. */
 body:not([data-feat-bills="1"]) .feat-bills{display:none !important}
 body:not([data-feat-debit-notes="1"]) .feat-debit-notes{display:none !important}
+/* Price List Mapping — sidebar entry AND the link button on the
+   Lots toolbar are tagged .feat-price-list-mapping so this single
+   rule hides both when the flag is OFF. */
+body:not([data-feat-price-list-mapping="1"]) .feat-price-list-mapping{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -1978,8 +1982,9 @@ input[type="search"]:focus{
         <!-- Price List Mapping — sister tool of the Lots screen's Price
              Import button. Fills the CODE column on a Price List (Before)
              sheet from TRADE NAME values so the resulting file is ready
-             for re-import via Lots → Price Import. -->
-        <button class="side-item" data-tab="plmap" onclick="go('plmap')">
+             for re-import via Lots → Price Import. Behind the
+             flag_price_list_mapping feature toggle. -->
+        <button class="side-item feat-price-list-mapping" data-tab="plmap" onclick="go('plmap')">
           <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
           Price List Mapping
         </button>
@@ -2542,8 +2547,9 @@ input[type="search"]:focus{
             <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Sister tool to Price Import. Opens the Price List Mapping
                  tab where the user can fill the CODE column on a Price
-                 List (Before) sheet before re-importing it here. -->
-            <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="go('plmap')" title="Fill the CODE column on a Price List sheet from TRADE NAME">🗺 Price List Mapping</button>
+                 List (Before) sheet before re-importing it here. Behind
+                 the flag_price_list_mapping feature toggle. -->
+            <button class="btn btn-o feat-price-list-mapping" style="height:38px;padding:0 16px;font-weight:600" onclick="go('plmap')" title="Fill the CODE column on a Price List sheet from TRADE NAME">🗺 Price List Mapping</button>
             <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('price-import-modal')">📥 Price Import</button>
           </div>
         </div>
@@ -5218,6 +5224,7 @@ async function applyFeatureFlags() {
   const featOn = (key) => !cfg || cfg[key] == null || on(cfg[key]);
   document.body.setAttribute('data-feat-bills',       featOn('flag_bills') ? '1' : '0');
   document.body.setAttribute('data-feat-debit-notes', featOn('flag_debit_notes') ? '1' : '0');
+  document.body.setAttribute('data-feat-price-list-mapping', featOn('flag_price_list_mapping') ? '1' : '0');
 }
 
 // Public branding (no auth) — drives the login + topbar from settings.

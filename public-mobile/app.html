@@ -585,7 +585,26 @@ async function loadAvailableTrades(){
   info.textContent='';
   try{
     var r=await fetch(B+'/api/mobile/auctions',{headers:{'Authorization':'Bearer '+token}});
-    if(!r.ok){sel.innerHTML='<option value="">Failed to load</option>';return}
+    if(!r.ok){
+      // Server gates every non-auth endpoint behind must_change_password
+      // when the user's password hasn't been rotated yet. Surface the
+      // change-password modal instead of a useless "Failed to load".
+      try {
+        var errBody = await r.json();
+        if (r.status === 403 && errBody && errBody.must_change_password) {
+          sel.innerHTML = '<option value="">Change password to continue</option>';
+          var info = document.getElementById('ss-trade-info');
+          if (info) info.textContent = 'You must change your password before loading trades.';
+          var errEl = document.getElementById('app-cp-err');
+          if (errEl) errEl.innerHTML = '<div class="eb">Your password must be changed before you can use the app.</div>';
+          ['app-cp-current','app-cp-new','app-cp-confirm'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+          document.getElementById('cp-modal').classList.add('show');
+          return;
+        }
+      } catch(_){ /* response wasn't JSON */ }
+      sel.innerHTML='<option value="">Failed to load</option>';
+      return;
+    }
     var d=await r.json();
     var trades=d.auctions||[];
     sel.innerHTML='<option value="">Select a trade...</option>';
