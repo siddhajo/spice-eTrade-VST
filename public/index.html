@@ -1975,6 +1975,14 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           Lots
         </button>
+        <!-- Price List Mapping — sister tool of the Lots screen's Price
+             Import button. Fills the CODE column on a Price List (Before)
+             sheet from TRADE NAME values so the resulting file is ready
+             for re-import via Lots → Price Import. -->
+        <button class="side-item" data-tab="plmap" onclick="go('plmap')">
+          <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
+          Price List Mapping
+        </button>
         <!-- Lot Entry — fast desktop entry form for the auction-hall
              workflow (one row per lot, seller search, save & next).
              Uses the existing /api/traders + /api/lots endpoints so
@@ -2029,14 +2037,6 @@ input[type="search"]:focus{
         <button class="side-item" data-tab="tally" onclick="go('tally')">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           To Tally
-        </button>
-        <!-- Code-mapping tool: upload a hand-annotated Price List (Before)
-             sheet (with TRADE NAME filled in), match each trade name back
-             to a buyer code, then download the updated file for use in
-             Lots → Price Import. -->
-        <button class="side-item" data-tab="plmap" onclick="go('plmap')">
-          <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
-          Price List Mapping
         </button>
         <button class="side-item needs-user-manage" data-tab="importold" onclick="go('importold')">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 14l-5 5-5-5M12 19V3"/></svg>
@@ -2540,6 +2540,10 @@ input[type="search"]:focus{
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
             <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <!-- Sister tool to Price Import. Opens the Price List Mapping
+                 tab where the user can fill the CODE column on a Price
+                 List (Before) sheet before re-importing it here. -->
+            <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="go('plmap')" title="Fill the CODE column on a Price List sheet from TRADE NAME">🗺 Price List Mapping</button>
             <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('price-import-modal')">📥 Price Import</button>
           </div>
         </div>
