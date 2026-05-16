@@ -506,7 +506,14 @@ function mountMobile(app, deps) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
     const newHash = await hashPassword(new_password);
-    db.run('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);
+    // Clear must_change_password alongside the hash update — without
+    // this the user stays gated behind the forced-change wall even
+    // after a successful change. The desktop endpoint (/api/me/password
+    // in server.js) does the same in one UPDATE.
+    db.run(
+      'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+      [newHash, user.id]
+    );
     // Kill all OTHER sessions of this user
     db.run('DELETE FROM sessions WHERE user_id = ? AND token != ?', [user.id, req.session.token]);
     res.json({ success: true });

@@ -1615,6 +1615,15 @@ async function appChangePassword() {
     if (r.ok) {
       document.getElementById('cp-modal').classList.remove('show');
       toast('Password changed!', false);
+      // If the user was gated behind must_change_password and the
+      // trade dropdown was showing the placeholder, reload it now so
+      // they don't have to refresh the page manually. Also clear the
+      // inline warning under the dropdown.
+      var info = document.getElementById('ss-trade-info');
+      if (info) info.innerHTML = '';
+      if (typeof loadAvailableTrades === 'function') {
+        try { loadAvailableTrades(); } catch(_){}
+      }
     } else {
       er.innerHTML = '<div class="eb">' + (d.error || 'Failed') + '</div>';
     }
