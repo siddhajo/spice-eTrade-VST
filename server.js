@@ -330,6 +330,35 @@ function userHas(role, capability) {
   return perms.has(capability);
 }
 
+// ══════════════════════════════════════════════════════════════
+// MOBILE PWA MOUNT
+// ══════════════════════════════════════════════════════════════
+// Field-user lot entry UI ships as a Progressive Web App at /mobile/
+// (installable to phone home screen via the manifest in public-mobile/).
+// The PWA was originally a standalone app with its own server; the
+// `mobile-bridge` module is a compatibility shim that exposes the API
+// surface the PWA's app.html expects (/api/auth/*, /api/config,
+// /api/lots query-string form, trader-bank CRUD, etc.) while sharing
+// the SAME SQLite database as this admin server.
+//
+// All deltas (~30 endpoints + the static mount) live in one file
+// (`mobile-bridge.js`) so the boundary is easy to audit. The shim's
+// auth uses verifyPassword/hashPassword — same bcrypt flow as desktop
+// /api/login — so a user can log in to either UI with the same creds.
+//
+// Mounted BEFORE the admin's own routes so /mobile and /api/auth/* are
+// claimed first; path-pattern collisions (e.g. /api/lots/print-batch
+// vs /api/lots/:auctionId) win the bridge's specific handler.
+const { mountMobile } = require('./mobile-bridge');
+mountMobile(app, {
+  getDb,
+  requireAuth,
+  verifyPassword,
+  hashPassword,
+  isLegacyHash,
+  ROLE_PERMISSIONS,
+});
+
 // Middleware factory: returns an Express middleware that requires the
 // authenticated user to have a specific capability.
 //
@@ -2031,17 +2060,27 @@ app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
     }
   }
 
-  // Refuse to remove an allocation that still has saved lots in its range
+  // Safety: every lot that's already been entered must remain covered
+  // by SOME allocation in the new set. Previously the guard checked
+  // "is this old allocation still in the new set by id?" which falsely
+  // rejected the marked-for-delete chunk-emit flow — splitting one
+  // alloc into two smaller ones (around dropped chips) doesn't lose
+  // any used lots, but the old guard treated it as a removal.
+  //
+  // New rule: for every used lot, find a matching alloc in the
+  // incoming `allocations` list. If none, the save would orphan that
+  // lot — refuse.
   const existing = db.all('SELECT * FROM lot_allocations WHERE auction_id = ?', [auctionId]);
-  for (const ex of existing) {
-    const kept = allocations.find(a => a.id === ex.id);
-    if (!kept) {
-      const lots = db.all('SELECT lot_no FROM lots WHERE auction_id = ?', [auctionId]);
-      const lotsInRange = lots.filter(l => isLotInRange(l.lot_no, ex.start_lot, ex.end_lot));
-      if (lotsInRange.length > 0) {
-        return res.status(400).json({ error: `Cannot remove ${ex.branch} (${ex.start_lot}-${ex.end_lot}): ${lotsInRange.length} lots already entered` });
-      }
-    }
+  const usedLots = db.all('SELECT lot_no, branch FROM lots WHERE auction_id = ?', [auctionId]);
+  const orphans = [];
+  for (const ul of usedLots) {
+    const covered = allocations.some(a => isLotInRange(ul.lot_no, a.start_lot, a.end_lot));
+    if (!covered) orphans.push(ul.lot_no);
+  }
+  if (orphans.length > 0) {
+    return res.status(400).json({
+      error: `Cannot save — ${orphans.length} entered lot${orphans.length === 1 ? '' : 's'} would be orphaned: ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? '…' : ''}`
+    });
   }
 
   db.run('DELETE FROM lot_allocations WHERE auction_id = ?', [auctionId]);
@@ -2068,8 +2107,23 @@ app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) 
     'SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot',
     [auctionId]
   );
-  const lots = db.all('SELECT lot_no, branch FROM lots WHERE auction_id = ?', [auctionId]);
-  const usedSet = new Set(lots.map(l => l.lot_no));
+  // Pull seller + amount alongside lot_no so the tile UI can show who
+  // booked each lot and color "booked" (amount > 0) vs "allocated"
+  // (entered but not booked) differently. Ports the per-tile state
+  // model from spice-config-merged-with-pwa source.
+  const lots = db.all(
+    'SELECT lot_no, branch, name, amount FROM lots WHERE auction_id = ?',
+    [auctionId]
+  );
+  // lot_no → { branch, seller, booked } — O(1) lookup while building the grid.
+  const lotInfo = {};
+  for (const l of lots) {
+    lotInfo[l.lot_no] = {
+      branch: l.branch || '',
+      seller: l.name   || '',
+      booked: Number(l.amount) > 0,
+    };
+  }
 
   const stats = {};
   for (const a of allocations) {
@@ -2085,7 +2139,25 @@ app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) 
     if (s && e) {
       for (let n = s.num; n <= e.num; n++) {
         const lotNo = buildLotNo(s.prefix, n, s.padLen);
-        lotGrid.push({ lot: lotNo, used: usedSet.has(lotNo) });
+        const info = lotInfo[lotNo];
+        // State machine:
+        //   booked    — present in lots table AND has a sale amount
+        //               (a real bid landed on this lot — can't reassign)
+        //   allocated — present in lots table, amount=0
+        //               (lot row created but not yet sold — still locked
+        //                because the field user has committed this number)
+        //   free      — not in lots table at all (safe to reassign / delete)
+        let state = 'free';
+        if (info && info.booked) state = 'booked';
+        else if (info)           state = 'allocated';
+        lotGrid.push({
+          lot: lotNo,
+          used: !!info,
+          booked: !!(info && info.booked),
+          seller: info ? info.seller : '',
+          branch: a.branch,
+          state,
+        });
       }
     }
     stats[a.branch].ranges.push({

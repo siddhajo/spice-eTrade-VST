@@ -3755,7 +3755,7 @@ input[type="search"]:focus{
          another (splits the source allocation around the moved range)
      Opened from the Auctions tab "🗂️" action button per row.
      ════════════════════════════════════════════════════════════ -->
-<div class="modal-bg" id="alloc-modal"><div class="modal" style="max-width:560px">
+<div class="modal-bg" id="alloc-modal"><div class="modal" style="max-width:720px">
   <h2 style="margin-bottom:6px">Lot Allocations — Trade #<span id="alloc-modal-ano"></span></h2>
 
   <div style="display:flex;gap:0;margin-bottom:14px;border-bottom:2px solid var(--border)">
@@ -3763,10 +3763,27 @@ input[type="search"]:focus{
     <button id="alloc-tab-reassign" type="button" onclick="switchAllocTab('reassign')" style="flex:1;padding:8px 0;font-size:13px;font-weight:600;border:none;background:none;cursor:pointer;color:var(--text3);border-bottom:2px solid transparent;margin-bottom:-2px">↔ Reassign Lots</button>
   </div>
 
-  <!-- Edit panel — list of branch/start/end rows + summary -->
+  <!-- Edit panel — chip-based mark-for-delete UX, one card per range. -->
   <div id="alloc-panel-edit">
-    <div id="alloc-edit-list" style="margin-bottom:10px"></div>
-    <button type="button" class="btn btn-g" style="height:30px;padding:0 14px;font-size:12px;font-weight:600;margin-bottom:12px" onclick="addAllocRow('alloc-edit')">+ Add Branch</button>
+    <p style="font-size:12px;color:var(--text3);margin:0 0 12px;line-height:1.4">
+      Click any <b>free</b> chip to mark it for deletion. <b>Used</b> (entered) chips are locked.
+      To add a new range, use <b style="color:var(--green)">+ Add Branch</b>.
+    </p>
+
+    <!-- Per-range cards (rendered by renderAllocEditCards) -->
+    <div id="alloc-edit-cards"></div>
+
+    <!-- Hidden alloc-edit-list kept for backward compat with helpers
+         (addAllocRow / getAllocRows / populateAllocRows) that other call
+         sites still use. The new UX doesn't surface it. -->
+    <div id="alloc-edit-list" style="display:none"></div>
+
+    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+      <button type="button" class="btn btn-g" style="height:30px;padding:0 14px;font-size:12px;font-weight:600" onclick="openAllocAddBranch()" title="Add a brand-new branch range">+ Add Branch</button>
+      <button type="button" class="btn btn-o" style="height:30px;padding:0 14px;font-size:12px;font-weight:600" onclick="openAllocAddLots()" title="Quick-append a range to an existing branch">+ Add Extra Lots</button>
+      <span id="alloc-edit-marked-count" style="margin-left:auto;font-size:11px;color:var(--text3);align-self:center"></span>
+    </div>
+
     <div id="alloc-edit-summary" style="font-size:11px;color:var(--text3);margin-bottom:10px"></div>
     <div id="alloc-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
     <div class="actions">
@@ -3777,8 +3794,19 @@ input[type="search"]:focus{
 
   <!-- Reassign panel -->
   <div id="alloc-panel-reassign" style="display:none">
-    <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Move unused lot numbers from one branch to another. Only empty (not yet entered) lots can be reassigned.</p>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Move unused lot numbers from one branch to another. Click tiles to select. Booked lots (with sellers) cannot be reassigned.</p>
     <div id="alloc-reassign-status" style="margin-bottom:14px"></div>
+
+    <!-- Tile legend so the user knows what each color means at a glance -->
+    <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:11px;margin-bottom:10px;padding:8px 10px;background:#fafafa;border:1px solid #eee;border-radius:6px">
+      <span><span style="display:inline-block;width:12px;height:12px;background:#E5E7EB;border:1px solid #cbd5e1;border-radius:3px;vertical-align:middle"></span> Free</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#DBEAFE;border:1px solid #93c5fd;border-radius:3px;vertical-align:middle"></span> Allocated</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#FCA5A5;border:1px solid #ef4444;border-radius:3px;vertical-align:middle"></span> Booked</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#10B981;border:1px solid #047857;border-radius:3px;vertical-align:middle"></span> Selected</span>
+    </div>
+
+    <!-- Tile grid — grouped by branch, scrollable when content overflows -->
+    <div id="ra-tile-grid" style="max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;margin-bottom:12px"></div>
 
     <div style="background:#fff8f0;border:1px solid #f0d8c0;border-radius:10px;padding:14px">
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end;margin-bottom:10px">
@@ -3795,11 +3823,11 @@ input[type="search"]:focus{
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <div>
           <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">START LOT</div>
-          <input type="text" id="ra-start" placeholder="e.g. 051" style="width:100%;height:34px;padding:0 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px">
+          <input type="text" id="ra-start" placeholder="e.g. 051" oninput="raSyncSelectionFromInputs()" style="width:100%;height:34px;padding:0 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px">
         </div>
         <div>
           <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">END LOT</div>
-          <input type="text" id="ra-end" placeholder="e.g. 100" style="width:100%;height:34px;padding:0 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px">
+          <input type="text" id="ra-end" placeholder="e.g. 100" oninput="raSyncSelectionFromInputs()" style="width:100%;height:34px;padding:0 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px">
         </div>
       </div>
       <div id="ra-preview" style="font-size:11px;color:var(--text3);margin-bottom:10px;min-height:14px"></div>
@@ -6738,6 +6766,11 @@ async function loadLotEntry(){
     }
     // Restore collapsed/expanded state of the widget cards.
     leRestoreCollapseState();
+    // Begin polling for mobile-entered lots from another device. Cheap
+    // — single COUNT query every 6s. Polling auto-suppresses when the
+    // tab isn't visible, the document is hidden, or the user is mid-
+    // typing into an input on the entry form.
+    leStartAutoRefresh();
   } catch (e) {
     console.error('Lot Entry: failed to load auctions', e);
     toast('Could not load auctions');
@@ -7357,6 +7390,144 @@ async function leLoadMoreRecent(){
   }
 }
 
+// ── Auto-refresh the recent panel ────────────────────────────────
+// Polls a cheap COUNT-only summary endpoint every 6s. When the count
+// changes (i.e., another device — usually the field user's phone —
+// has added or removed a lot) we reload the recent panel + allocation
+// bar so the admin sees fresh data without a manual refresh.
+//
+// Polling is suppressed when:
+//   • Lot Entry tab isn't active (other tabs don't need this signal)
+//   • Document is hidden (browser is in background or tab is inactive)
+//   • The user is mid-typing into an entry field — we'd rather not
+//     yank focus or surprise them with a re-render while they're
+//     entering values
+function leAutoRefreshTick(){
+  const onTab = document.getElementById('tc-lotentry')?.classList.contains('active');
+  if (!onTab) return;
+  if (typeof document.hidden === 'boolean' && document.hidden) return;
+  const aid = document.getElementById('le-auction')?.value;
+  if (!aid) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && ae.closest('#tc-lotentry')) return;
+  fetch(`${B}/api/lots/${aid}?summary=1`, { headers: { Authorization: 'Bearer ' + T } })
+    .then(r => r.ok ? r.json() : null)
+    .then(s => {
+      if (!s) return;
+      const n = Number(s.n) || 0;
+      if (window._leLastCount == null) { window._leLastCount = n; return; }
+      if (n !== window._leLastCount) {
+        window._leLastCount = n;
+        // Reload the recent panel from the top — new mobile-entered lots
+        // arrive at the head of the list (lot_no DESC). Also refresh
+        // the allocation bar since lot counts changing usually means
+        // chips need to update.
+        if (typeof loadLeRecent === 'function') loadLeRecent();
+        if (typeof leLoadAllocBar === 'function') leLoadAllocBar();
+        if (typeof leUpdateStats === 'function') leUpdateStats();
+      }
+    })
+    .catch(() => { /* network blip — try again next tick */ });
+}
+function leStartAutoRefresh(){
+  leStopAutoRefresh();
+  window._leLastCount = null;
+  window._leAutoTimer = setInterval(leAutoRefreshTick, 6000);
+}
+function leStopAutoRefresh(){
+  if (window._leAutoTimer) { clearInterval(window._leAutoTimer); window._leAutoTimer = null; }
+}
+// Pause / resume on visibility change so a hidden tab doesn't keep
+// polling forever. Also fires an immediate tick on visibility return,
+// so a tab that comes back into focus picks up freshly-entered lots
+// without waiting for the next 6-second interval.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (window._leAutoTimer) leAutoRefreshTick();
+});
+
+// ── Sort the recent panel ────────────────────────────────────────
+// Two complementary entry points:
+//   • leOnSortChange / leSetSort — driven by an optional <select> at
+//     #le-recent-sort. Today there's no such control in the markup,
+//     but the helpers stay generic so a future dropdown drops in cleanly.
+//   • leSortByColumn — driven by a click on a header cell in the
+//     recent-list grid. Toggles direction on repeat click of the
+//     same column; switches column resets direction to ascending.
+// The chosen sort is persisted in localStorage so a refresh keeps
+// the field user's preferred ordering.
+function leGetSortMode(){
+  try {
+    const sel = document.getElementById('le-recent-sort');
+    if (sel) {
+      const saved = localStorage.getItem('le_recent_sort');
+      if (saved && Array.from(sel.options).some(o => o.value === saved)) sel.value = saved;
+      return sel.value || 'recent';
+    }
+    return localStorage.getItem('le_recent_sort') || 'recent';
+  } catch (_) { return 'recent'; }
+}
+function leGetSortDir(){
+  try { return localStorage.getItem('le_recent_sort_dir') || 'asc'; } catch(_) { return 'asc'; }
+}
+function leSetSort(mode, dir){
+  try {
+    localStorage.setItem('le_recent_sort', mode);
+    if (dir) localStorage.setItem('le_recent_sort_dir', dir);
+  } catch(_) {}
+  const sel = document.getElementById('le-recent-sort');
+  if (sel && Array.from(sel.options).some(o => o.value === mode)) sel.value = mode;
+  renderLeRecent();
+}
+function leOnSortChange(){
+  const sel = document.getElementById('le-recent-sort');
+  if (sel) {
+    try { localStorage.setItem('le_recent_sort', sel.value); } catch(_) {}
+  }
+  renderLeRecent();
+}
+// Click a column header to sort by that column. Clicking the same column
+// again flips direction (asc ↔ desc).
+function leSortByColumn(mode){
+  const curMode = leGetSortMode();
+  const curDir  = leGetSortDir();
+  // Same column → toggle direction. Different column → reset to asc
+  // (except 'recent' which is always desc / server order).
+  const dir = (curMode === mode) ? (curDir === 'asc' ? 'desc' : 'asc') : 'asc';
+  leSetSort(mode, dir);
+}
+// Sort a copy of the currently-loaded recent lots. Lot_no is compared
+// numerically when both rows parse as integers, lexicographically
+// otherwise. Direction = asc | desc.
+function leSortRecent(rows, mode, dir){
+  const arr = rows.slice();
+  const sign = (dir === 'desc') ? -1 : 1;
+  const cmpStr = (a, b) => String(a||'').localeCompare(String(b||''));
+  const cmpNum = (a, b) => (Number(a)||0) - (Number(b)||0);
+  const cmpLot = (a, b) => {
+    const ai = parseInt(a.lot_no, 10), bi = parseInt(b.lot_no, 10);
+    if (Number.isFinite(ai) && Number.isFinite(bi) && String(ai) === String(a.lot_no) && String(bi) === String(b.lot_no)) {
+      return ai - bi;
+    }
+    return cmpStr(a.lot_no, b.lot_no);
+  };
+  switch (mode) {
+    case 'lot_no': arr.sort((a,b) => sign * cmpLot(a,b)); break;
+    case 'date':   arr.sort((a,b) => sign * cmpStr(a.created_at || a.date, b.created_at || b.date)); break;
+    case 'name':   arr.sort((a,b) => sign * cmpStr(a.name, b.name)); break;
+    case 'branch': arr.sort((a,b) => sign * (cmpStr(a.branch, b.branch) || cmpLot(a,b))); break;
+    case 'bags':   arr.sort((a,b) => sign * cmpNum(a.bags, b.bags)); break;
+    case 'litre':  arr.sort((a,b) => sign * cmpStr(a.litre || a.lit, b.litre || b.lit)); break;
+    case 'qty':    arr.sort((a,b) => sign * cmpNum(a.qty, b.qty)); break;
+    case 'recent':
+    default:
+      // Server returns lot_no DESC ≈ "recently added". When the user
+      // explicitly picks Recently Added, leave the server's order alone.
+      break;
+  }
+  return arr;
+}
+
 function renderLeRecent(){
   const host = document.getElementById('le-recent-list');
   const count = document.getElementById('le-recent-count');
@@ -7369,8 +7540,17 @@ function renderLeRecent(){
   // Server-side pagination: rows arrive in lot_no DESC order already, and
   // the server tells us the true total (`_le.recentTotal`). Render every
   // currently-loaded row; the "Load more" button appears whenever there
-  // are more rows on the server than locally cached.
-  const visible   = _le.recentLots;
+  // are more rows on the server than locally cached. The selected sort
+  // mode (column-header click) re-orders the visible window.
+  const sortMode  = leGetSortMode();
+  const sortDir   = leGetSortDir();
+  const visible   = leSortRecent(_le.recentLots, sortMode, sortDir);
+  // Direction arrow + per-header style helper. Active column shows in
+  // the primary theme color so the field user can see at a glance how
+  // the list is currently ordered.
+  const arrow = (col) => sortMode === col ? (sortDir === 'desc' ? ' ▼' : ' ▲') : '';
+  const hdrStyle = (col, extra) => 'cursor:pointer;user-select:none;' + (extra||'') +
+        (sortMode === col ? 'color:var(--green);' : '');
   const total     = _le.recentTotal != null ? _le.recentTotal : visible.length;
   const remaining = Math.max(0, total - visible.length);
   if (count) count.textContent = `Showing ${visible.length} of ${total}`;
@@ -7390,7 +7570,13 @@ function renderLeRecent(){
   host.innerHTML = `
     <div style="display:grid;${COLS};gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:1">
       <div style="text-align:center"><input type="checkbox" id="le-recent-select-all" onchange="leToggleSelectAll(this.checked)" title="Select all visible" style="cursor:pointer"></div>
-      <div>Lot</div><div>Seller</div><div>Branch</div><div style="text-align:right">Bags</div><div style="text-align:right">Litre</div><div style="text-align:right">Qty (kg)</div><div></div>
+      <div onclick="leSortByColumn('lot_no')" title="Sort by Lot No" style="${hdrStyle('lot_no')}">Lot${arrow('lot_no')}</div>
+      <div onclick="leSortByColumn('name')"   title="Sort by Seller" style="${hdrStyle('name')}">Seller${arrow('name')}</div>
+      <div onclick="leSortByColumn('branch')" title="Sort by Branch" style="${hdrStyle('branch')}">Branch${arrow('branch')}</div>
+      <div onclick="leSortByColumn('bags')"   title="Sort by Bags"   style="${hdrStyle('bags','text-align:right;')}">Bags${arrow('bags')}</div>
+      <div onclick="leSortByColumn('litre')"  title="Sort by Litre"  style="${hdrStyle('litre','text-align:right;')}">Litre${arrow('litre')}</div>
+      <div onclick="leSortByColumn('qty')"    title="Sort by Qty"    style="${hdrStyle('qty','text-align:right;')}">Qty (kg)${arrow('qty')}</div>
+      <div></div>
     </div>
     <div id="le-recent-scroll" style="max-height:360px;overflow-y:auto">
       ${visible.map(l => {
@@ -7560,6 +7746,312 @@ async function populateAllocRows(prefix, allocs) {
 
 let _allocEditAuctionId = null;
 
+// ══════════════════════════════════════════════════════════════════
+// TILE-BASED ALLOCATION UI — ported from spice-config-merged-with-pwa
+// ══════════════════════════════════════════════════════════════════
+// Two coordinated views inside the alloc modal:
+//   • Edit Allocations tab — per-range CARDS with clickable lot chips.
+//     Each chip is color-coded (used / free / marked-for-delete). The
+//     user clicks free chips to mark them for delete, then Save
+//     re-emits the allocations as contiguous chunks around the marks.
+//   • Reassign Lots tab — a TILE GRID grouped by branch. Click tiles
+//     to select a range; selection auto-fills the start/end inputs.
+//     Selected tiles span across the FROM branch only.
+//
+// State is in module-level vars so the two views share the same
+// snapshot of stats while the modal is open. Reset on every open.
+let _raAllocStats = [];                  // from /allocation-stats
+let _raSelected   = new Set();           // selected lot_no's in Reassign tile grid
+let _allocMarked  = new Set();           // lots marked-for-delete in Edit cards (key: branch::lot)
+let _allocHidden  = new Set();           // collapsed cards (key: branch::start-end)
+let _addLotsCtx   = null;                // { aid, source: 'le'|'alloc' } — set when add-lots-modal opens
+
+function _allocCardKey(branch, range) { return `${branch}::${range.start}-${range.end}`; }
+function _allocMarkKey(branch, lot)   { return `${branch}::${lot}`; }
+
+// ── Edit Allocations: per-range cards with lot chips ─────────────
+function renderAllocEditCards(stats) {
+  const host = document.getElementById('alloc-edit-cards');
+  if (!host) return;
+  if (!Array.isArray(stats) || !stats.length) {
+    host.innerHTML = '<div style="padding:18px;text-align:center;font-size:12px;color:var(--text3);background:#fafafa;border:1px dashed var(--border);border-radius:8px">No allocations yet. Click <b>+ Add Branch</b> below to create the first range.</div>';
+    _updateAllocMarkedCount();
+    return;
+  }
+  // Flatten into per-range cards — one card per allocation row so
+  // each branch+range gets its own chips + actions.
+  const cards = [];
+  for (const s of stats) {
+    for (const r of (s.ranges || [])) {
+      cards.push({ branch: s.branch, range: r });
+    }
+  }
+  // Stable sort: by branch, then by numeric start lot.
+  cards.sort((a, b) => {
+    const bn = String(a.branch).localeCompare(String(b.branch));
+    if (bn) return bn;
+    const am = String(a.range.start).match(/(\d+)$/);
+    const bm = String(b.range.start).match(/(\d+)$/);
+    return (am ? +am[1] : 0) - (bm ? +bm[1] : 0);
+  });
+
+  host.innerHTML = cards.map(({ branch, range }) => {
+    const cardKey = _allocCardKey(branch, range);
+    const hidden = _allocHidden.has(cardKey);
+    const lots   = range.lots || [];
+    const usedCt = lots.filter(l => l.used).length;
+    const free   = lots.filter(l => !l.used);
+    const marked = free.filter(l => _allocMarked.has(_allocMarkKey(branch, l.lot))).length;
+    const keeping = lots.length - usedCt - marked;
+    const chips = lots.map(l => {
+      const isUsed = !!l.used;
+      const mkKey  = _allocMarkKey(branch, l.lot);
+      const isMark = _allocMarked.has(mkKey);
+      // Style per state. "Used" chips are visually struck-through grey
+      // and not clickable; "marked" chips are green-bordered to call
+      // out the pending deletion before the user hits Save.
+      let style;
+      if (isUsed) {
+        style = 'background:#f3f4f6;color:#9ca3af;border:1px solid #e5e7eb;text-decoration:line-through;cursor:not-allowed';
+      } else if (isMark) {
+        style = 'background:#dcfce7;color:#15803d;border:1.5px solid #16a34a;font-weight:700;cursor:pointer';
+      } else {
+        style = 'background:#fff;color:#374151;border:1px solid #d1d5db;cursor:pointer';
+      }
+      const click = isUsed ? '' : ` onclick="_allocChipClick('${esc(branch)}','${esc(l.lot)}')"`;
+      const title = isUsed
+        ? `Lot ${l.lot} — already entered${l.seller ? ' by ' + l.seller : ''} (locked)`
+        : (isMark ? `Lot ${l.lot} — marked for delete (click to unmark)` : `Lot ${l.lot} — free (click to mark for delete)`);
+      return `<span data-lot="${esc(l.lot)}" title="${esc(title)}" style="${style};display:inline-flex;align-items:center;justify-content:center;min-width:46px;height:28px;padding:0 8px;border-radius:6px;font-size:12px;font-family:monospace;user-select:none"${click}>${esc(l.lot)}</span>`;
+    }).join('');
+
+    return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.04)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${hidden ? '0' : '10px'};flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:700;color:var(--green);letter-spacing:.3px">${esc(branch)}</span>
+          <span style="font-family:monospace;font-size:13px;color:var(--text2);font-weight:600">${esc(range.start)}–${esc(range.end)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text3)">
+          <span>${usedCt} used · ${free.length - marked} free${marked ? ` · <b style="color:#16a34a">${marked} marked</b>` : ''} · keeping ${keeping}</span>
+          <button type="button" class="btn btn-o" style="height:24px;padding:0 10px;font-size:11px;font-weight:600" onclick="_allocToggleHide('${esc(cardKey)}')">${hidden ? 'Show' : 'Hide'}</button>
+        </div>
+      </div>
+      ${hidden ? '' : `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${chips || '<span style="font-size:11px;color:var(--text3)">empty range</span>'}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-o" style="height:26px;padding:0 12px;font-size:11px;font-weight:600" onclick="_allocMarkAllFree('${esc(branch)}','${esc(range.start)}','${esc(range.end)}')">Mark all free for delete</button>
+        <button type="button" class="btn btn-o" style="height:26px;padding:0 12px;font-size:11px;font-weight:600" onclick="_allocClearMarks('${esc(branch)}','${esc(range.start)}','${esc(range.end)}')">Clear marks</button>
+      </div>`}
+    </div>`;
+  }).join('');
+  _updateAllocMarkedCount();
+}
+function _updateAllocMarkedCount() {
+  const el = document.getElementById('alloc-edit-marked-count');
+  if (!el) return;
+  el.textContent = _allocMarked.size
+    ? `${_allocMarked.size} lot${_allocMarked.size === 1 ? '' : 's'} marked for delete — click Save Allocations to apply`
+    : '';
+}
+function _allocChipClick(branch, lot) {
+  const k = _allocMarkKey(branch, lot);
+  if (_allocMarked.has(k)) _allocMarked.delete(k);
+  else _allocMarked.add(k);
+  renderAllocEditCards(_raAllocStats);
+}
+function _allocToggleHide(cardKey) {
+  if (_allocHidden.has(cardKey)) _allocHidden.delete(cardKey);
+  else _allocHidden.add(cardKey);
+  renderAllocEditCards(_raAllocStats);
+}
+function _allocMarkAllFree(branch, rStart, rEnd) {
+  const s = (_raAllocStats || []).find(x => x.branch === branch);
+  if (!s) return;
+  const r = (s.ranges || []).find(x => x.start === rStart && x.end === rEnd);
+  if (!r) return;
+  for (const l of (r.lots || [])) if (!l.used) _allocMarked.add(_allocMarkKey(branch, l.lot));
+  renderAllocEditCards(_raAllocStats);
+}
+function _allocClearMarks(branch, rStart, rEnd) {
+  const s = (_raAllocStats || []).find(x => x.branch === branch);
+  if (!s) return;
+  const r = (s.ranges || []).find(x => x.start === rStart && x.end === rEnd);
+  if (!r) return;
+  for (const l of (r.lots || [])) _allocMarked.delete(_allocMarkKey(branch, l.lot));
+  renderAllocEditCards(_raAllocStats);
+}
+
+// ── Reassign Lots: tile grid ─────────────────────────────────────
+function renderReassignTiles() {
+  const grid = document.getElementById('ra-tile-grid');
+  if (!grid) return;
+  if (!_raAllocStats || !_raAllocStats.length) {
+    grid.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:14px;text-align:center">No allocations yet</div>';
+    return;
+  }
+  // Per-tile color is driven by `state` (free / allocated / booked) plus
+  // an override for "selected". Booked tiles are non-clickable because
+  // they can't be reassigned without first deleting the lot row.
+  const stateStyle = (st, selected) => {
+    if (selected) return 'background:#10B981;color:#fff;border:1px solid #047857';
+    switch (st) {
+      case 'booked':     return 'background:#FCA5A5;color:#7f1d1d;border:1px solid #ef4444;cursor:not-allowed';
+      case 'allocated':  return 'background:#DBEAFE;color:#1e3a8a;border:1px solid #93c5fd';
+      default:           return 'background:#E5E7EB;color:#1f2937;border:1px solid #cbd5e1';
+    }
+  };
+  let html = '';
+  for (const s of _raAllocStats) {
+    const branch = s.branch;
+    html += `<div style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+        <span>📍 ${esc(branch)}</span>
+        <span style="font-weight:500;color:var(--text3);text-transform:none;letter-spacing:0">${s.used}/${s.total} used</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">`;
+    for (const r of (s.ranges || [])) {
+      for (const t of (r.lots || [])) {
+        const selected = _raSelected.has(t.lot);
+        const dis = (t.state === 'booked');
+        const tip = t.booked
+          ? `Booked: ${t.seller || '—'}`
+          : `Free for reassign`;
+        html += `<div title="${esc(tip)}" data-lot="${esc(t.lot)}" data-branch="${esc(branch)}" data-state="${esc(t.state)}" ${dis?'':`onclick="raToggleTile(this)"`} style="${stateStyle(t.state, selected)};padding:4px 6px;border-radius:4px;font-size:11px;font-family:monospace;min-width:42px;text-align:center;${dis?'opacity:.85':'cursor:pointer'};user-select:none">${esc(t.lot)}</div>`;
+      }
+    }
+    html += `</div></div>`;
+  }
+  grid.innerHTML = html;
+  updateRangeInputsFromSelection();
+}
+function raToggleTile(el) {
+  const lot = el.getAttribute('data-lot');
+  const branch = el.getAttribute('data-branch');
+  if (!lot) return;
+  // If the user clicks a tile from a different branch, treat that as
+  // switching the FROM branch — clear prior selection so a stale
+  // multi-branch range can't accidentally get submitted.
+  const fromSel = document.getElementById('ra-from');
+  if (fromSel.value && fromSel.value !== branch) _raSelected.clear();
+  if (fromSel.value !== branch) {
+    fromSel.value = branch;
+    loadReassignPreview();
+  }
+  if (_raSelected.has(lot)) _raSelected.delete(lot);
+  else _raSelected.add(lot);
+  renderReassignTiles();
+}
+// Sync start/end inputs from the current selection — gives the user
+// a typed-range fallback while keeping the tile UI as the primary picker.
+function updateRangeInputsFromSelection() {
+  const startEl = document.getElementById('ra-start');
+  const endEl   = document.getElementById('ra-end');
+  if (!startEl || !endEl) return;
+  const sel = Array.from(_raSelected);
+  if (!sel.length) { startEl.value = ''; endEl.value = ''; return; }
+  const parsed = sel.map(l => {
+    const m = l.match(/^(\D*)(\d+)$/);
+    return m ? { lot: l, prefix: m[1] || '', num: parseInt(m[2], 10), padLen: m[2].length } : null;
+  }).filter(Boolean).sort((a, b) => a.num - b.num);
+  if (!parsed.length) return;
+  startEl.value = parsed[0].lot;
+  endEl.value   = parsed[parsed.length - 1].lot;
+}
+// Reverse direction — user types start/end manually → sync selection
+// state so the tile grid lights up to match.
+function raSyncSelectionFromInputs() {
+  const startEl = document.getElementById('ra-start');
+  const endEl   = document.getElementById('ra-end');
+  const start = (startEl && startEl.value || '').trim();
+  const end   = (endEl   && endEl.value   || '').trim();
+  if (!start || !end) return;
+  const sm = start.match(/^(\D*)(\d+)$/);
+  const em = end.match(/^(\D*)(\d+)$/);
+  if (!sm || !em || sm[1] !== em[1]) return;
+  const pad = sm[2].length;
+  const a = parseInt(sm[2], 10), b = parseInt(em[2], 10);
+  if (a > b) return;
+  _raSelected.clear();
+  for (let n = a; n <= b; n++) {
+    _raSelected.add(sm[1] + String(n).padStart(pad, '0'));
+  }
+  renderReassignTiles();
+}
+
+// ── + Add Branch / + Add Extra Lots — sub-modal flow ─────────────
+// Both surface the same add-lots-modal; the only difference is the
+// preselected branch (none for "Add Branch", current FROM-branch for
+// "Add Extra Lots").
+async function openAllocAddBranch() {
+  // Same modal, no preselect — user explicitly picks a branch.
+  return _openAddLotsModal(_allocEditAuctionId, 'alloc', '');
+}
+async function openAllocAddLots() {
+  const preBranch = (document.getElementById('ra-from')?.value || '').trim();
+  return _openAddLotsModal(_allocEditAuctionId, 'alloc', preBranch);
+}
+async function _openAddLotsModal(aid, source, preselectBranch) {
+  if (!aid) { toast('Select a Trade first'); return; }
+  _addLotsCtx = { aid, source };
+  const branches = getConfiguredBranches();
+  const sel = document.getElementById('add-lots-branch');
+  sel.innerHTML = branches.length
+    ? '<option value="">— select —</option>' + branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')
+    : '<option value="">— configure branches in Settings —</option>';
+  const pre = String(preselectBranch || '').trim();
+  if (pre && branches.includes(pre)) sel.value = pre;
+  document.getElementById('add-lots-start').value = '';
+  document.getElementById('add-lots-end').value = '';
+  const err = document.getElementById('add-lots-err');
+  err.style.display = 'none'; err.textContent = '';
+  showModal('add-lots-modal');
+}
+async function saveQuickAddLots() {
+  const ctx = _addLotsCtx;
+  if (!ctx) { hideModal('add-lots-modal'); return; }
+  const branch = document.getElementById('add-lots-branch').value;
+  const start  = document.getElementById('add-lots-start').value.trim();
+  const end    = document.getElementById('add-lots-end').value.trim();
+  const err    = document.getElementById('add-lots-err');
+  const showErr = (m) => { err.textContent = m; err.style.display = 'block'; };
+  err.style.display = 'none';
+
+  if (!branch) return showErr('Select a branch');
+  if (!start || !end) return showErr('Enter start and end lot numbers');
+
+  try {
+    // POST /api/auctions/:id/allocations is a bulk-replace endpoint —
+    // we must re-send the FULL existing set with the new range appended.
+    const d1 = await j(`/api/auctions/${ctx.aid}/allocations`);
+    const existing = d1.allocations || [];
+    existing.push({ branch, start_lot: start, end_lot: end });
+    await j(`/api/auctions/${ctx.aid}/allocations`, {
+      method: 'POST',
+      body: JSON.stringify({ allocations: existing })
+    });
+    hideModal('add-lots-modal');
+    toast(`Added ${branch} ${start}-${end} ✓`);
+    // Refresh whichever surface opened this modal.
+    if (ctx.source === 'alloc') {
+      try {
+        const statsData = await j(`/api/auctions/${ctx.aid}/allocation-stats`);
+        const stats = statsData.stats || [];
+        _raAllocStats = stats;
+        _raSelected.clear();
+        renderReassignTiles();
+        renderAllocEditCards(stats);
+      } catch (_) { /* non-fatal */ }
+      if (typeof leLoadAllocBar === 'function') leLoadAllocBar();
+    } else {
+      if (typeof leLoadAllocBar === 'function') leLoadAllocBar();
+    }
+    if (typeof loadAuctions === 'function') loadAuctions();
+  } catch (e) {
+    showErr(e.message || 'Failed to add');
+  } finally {
+    _addLotsCtx = null;
+  }
+}
+
 function switchAllocTab(tab) {
   document.getElementById('alloc-panel-edit').style.display     = tab === 'edit'     ? 'block' : 'none';
   document.getElementById('alloc-panel-reassign').style.display = tab === 'reassign' ? 'block' : 'none';
@@ -7626,6 +8118,14 @@ async function openAllocModal(auctionId, ano) {
     } else {
       statusEl.innerHTML = '<div style="font-size:11px;color:var(--text3)">No allocations yet</div>';
     }
+    // Snapshot stats + reset all per-modal-session state so leftover
+    // marks / selections from a previous trade don't bleed across.
+    _raAllocStats = stats;
+    _raSelected.clear();
+    _allocMarked.clear();
+    _allocHidden.clear();
+    renderReassignTiles();
+    renderAllocEditCards(stats);
     showModal('alloc-modal');
   } catch (e) {
     toast(e.message || 'Failed to load allocations');
@@ -7685,23 +8185,62 @@ async function executeReassign() {
 }
 
 async function saveAllocations() {
-  const rows = getAllocRows('alloc-edit');
   const errEl = document.getElementById('alloc-err');
   errEl.style.display = 'none';
-  if (!rows.length) {
-    errEl.textContent = 'Add at least one allocation';
+  if (!_raAllocStats || !_raAllocStats.length) {
+    errEl.textContent = 'No allocations to save. Add a branch first.';
     errEl.style.display = 'block';
     return;
   }
+  // Walk each (branch, range) and emit the surviving contiguous chunks
+  // around any chips marked for deletion. A "kept" lot is one that is
+  // either used (locked, can't delete) OR not in the mark set. The
+  // chunker walks the lot list once and starts a new chunk on every gap.
+  // This is what makes the chip-click UX work: clicking free chips and
+  // pressing Save splits the original range into smaller surviving ones.
+  const next = [];
+  for (const s of _raAllocStats) {
+    for (const r of (s.ranges || [])) {
+      const keep = [];
+      for (const l of (r.lots || [])) {
+        const marked = !l.used && _allocMarked.has(_allocMarkKey(s.branch, l.lot));
+        if (!marked) keep.push(l.lot);
+      }
+      if (!keep.length) continue;
+      // Group consecutive lot numbers (same prefix + sequential num).
+      let chunk = [keep[0]];
+      const flush = () => {
+        next.push({ branch: s.branch, start_lot: chunk[0], end_lot: chunk[chunk.length - 1] });
+      };
+      for (let i = 1; i < keep.length; i++) {
+        const prev = chunk[chunk.length - 1];
+        const pm = String(prev   ).match(/^(\D*)(\d+)$/);
+        const cm = String(keep[i]).match(/^(\D*)(\d+)$/);
+        const seq = pm && cm && pm[1] === cm[1] && (parseInt(cm[2], 10) === parseInt(pm[2], 10) + 1);
+        if (seq) chunk.push(keep[i]);
+        else { flush(); chunk = [keep[i]]; }
+      }
+      flush();
+    }
+  }
+  if (!next.length) {
+    errEl.textContent = 'Saving this would leave the auction with no allocations. Unmark at least one lot.';
+    errEl.style.display = 'block';
+    return;
+  }
+  const droppedCt = _allocMarked.size;
+  if (droppedCt && !confirm(`Delete ${droppedCt} marked lot${droppedCt === 1 ? '' : 's'} from the allocations?`)) return;
   try {
     await j(`/api/auctions/${_allocEditAuctionId}/allocations`, {
       method: 'POST',
-      body: JSON.stringify({ allocations: rows })
+      body: JSON.stringify({ allocations: next })
     });
     hideModal('alloc-modal');
-    toast('Allocations saved ✓');
+    toast(droppedCt
+      ? `Deleted ${droppedCt} lot${droppedCt === 1 ? '' : 's'} · allocations saved ✓`
+      : 'Allocations saved ✓');
     if (typeof loadAuctions === 'function') loadAuctions();
-    leLoadAllocBar();
+    if (typeof leLoadAllocBar === 'function') leLoadAllocBar();
   } catch (e) {
     errEl.textContent = e.message || 'Failed to save';
     errEl.style.display = 'block';
@@ -7709,55 +8248,20 @@ async function saveAllocations() {
 }
 
 // ── + Add Extra Lots — quick-append range to current trade ──────
+// Lot Entry's "+ Add Extra" button. Sets _addLotsCtx with source='le'
+// so the unified _openAddLotsModal + saveQuickAddLots (defined above)
+// refresh the right surface after save.
 async function leOpenAddLots() {
   const aid = document.getElementById('le-auction').value;
   if (!aid) { toast('Select a trade first'); return; }
-  const branches = await getAllocBranches();
-  const sel = document.getElementById('add-lots-branch');
-  sel.innerHTML = branches.length
-    ? branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')
-    : '<option value="">— configure branches in Settings —</option>';
-  // Pre-select the user's current Lot Entry branch if any
-  const cur = (document.getElementById('le-branch').value || '').trim().toUpperCase();
-  if (cur && branches.includes(cur)) sel.value = cur;
-  document.getElementById('add-lots-start').value = '';
-  document.getElementById('add-lots-end').value = '';
-  const err = document.getElementById('add-lots-err');
-  err.style.display = 'none'; err.textContent = '';
-  showModal('add-lots-modal');
+  const cur = (document.getElementById('le-branch')?.value || '').trim();
+  return _openAddLotsModal(aid, 'le', cur);
 }
 
-async function saveQuickAddLots() {
-  const aid    = document.getElementById('le-auction').value;
-  const branch = document.getElementById('add-lots-branch').value;
-  const start  = document.getElementById('add-lots-start').value.trim();
-  const end    = document.getElementById('add-lots-end').value.trim();
-  const err    = document.getElementById('add-lots-err');
-  const showErr = (m) => { err.textContent = m; err.style.display = 'block'; };
-  err.style.display = 'none';
-
-  if (!aid)    return showErr('No trade selected');
-  if (!branch) return showErr('Select a branch');
-  if (!start || !end) return showErr('Enter start and end lot numbers');
-
-  try {
-    // Append to existing allocations (full set must be re-sent because
-    // POST /api/auctions/:id/allocations is a bulk-replace endpoint).
-    const d1 = await j(`/api/auctions/${aid}/allocations`);
-    const existing = d1.allocations || [];
-    existing.push({ branch, start_lot: start, end_lot: end });
-    await j(`/api/auctions/${aid}/allocations`, {
-      method: 'POST',
-      body: JSON.stringify({ allocations: existing })
-    });
-    hideModal('add-lots-modal');
-    toast(`Added ${branch} ${start}-${end} ✓`);
-    leLoadAllocBar();
-    if (typeof loadAuctions === 'function') loadAuctions();
-  } catch (e) {
-    showErr(e.message || 'Failed to add');
-  }
-}
+// (saveQuickAddLots — the unified context-aware version — lives next
+//  to the other tile-UI helpers above. It refreshes the alloc modal's
+//  tile + card views when source='alloc', or the Lot Entry status bar
+//  when source='le'.)
 
 // ── Lot Entry status bar ─────────────────────────────────────────
 // Refreshed on auction change, branch change, save, and delete.
