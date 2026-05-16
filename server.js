@@ -3687,6 +3687,7 @@ app.post('/api/invoices/purchase-pdf-bulk', requireView, async (req, res) => {
 // ══════════════════════════════════════════════════════════════
 app.get('/api/purchases', requireView, (req, res) => {
   const { auction_id, ano, from, to, sale } = req.query;
+  console.log('[/api/purchases] query=', JSON.stringify(req.query));
   let q = 'SELECT * FROM purchases WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
@@ -3721,7 +3722,10 @@ app.get('/api/purchases', requireView, (req, res) => {
           )`;
   }
   q += ' ORDER BY date DESC LIMIT 500';
-  res.json(getDb().all(q, p));
+  console.log('[/api/purchases] SQL=', q, 'params=', p);
+  const rows = getDb().all(q, p);
+  console.log('[/api/purchases] returned', rows.length, 'rows');
+  res.json(rows);
 });
 
 app.post('/api/purchases/generate/:auctionId', requireInvoiceWrite, (req, res) => {

@@ -12621,7 +12621,9 @@ async function loadPurchases(opts){
   if (aid) params.push(`auction_id=${aid}`);
   if (saleFilter) params.push(`sale=${encodeURIComponent(saleFilter)}`);
   const url = '/api/purchases' + (params.length ? '?' + params.join('&') : '');
+  console.log('[purchases-filter] saleFilter=', JSON.stringify(saleFilter), 'aid=', aid, 'url=', url);
   const d=await j(url);
+  console.log('[purchases-filter] got', Array.isArray(d) ? d.length : '?', 'rows for sale=', saleFilter);
   const arr = Array.isArray(d) ? d : [];
 
   // Update KPI strip (same pattern as loadInvoices)
