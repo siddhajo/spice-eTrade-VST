@@ -93,10 +93,19 @@ function calculateLot(lot, cfg) {
   // Single-company P_Rate / PurAmt:
   //   Grade 2 → deduction2 (Dealer)
   //   else    → deduction1 (Pooler)
+  // When flag_discount_in_prate is ON the deduction values come from
+  // the discount-inclusive variants (deduction*_inclusive). In that
+  // mode the per-lot Discount is forced to 0 further down because it's
+  // baked into the rate.
   const gradeStr = String(lot.grade || '').trim();
-  const deduction = (gradeStr === '2')
-    ? Number(cfg.deduction2 || 0)
-    : Number(cfg.deduction1 || 0);
+  const discInPrate = cfg.flag_discount_in_prate === true
+    || String(cfg.flag_discount_in_prate || '').toLowerCase() === 'true';
+  let deduction;
+  if (gradeStr === '2') {
+    deduction = Number((discInPrate ? cfg.deduction2_inclusive : cfg.deduction2) || 0);
+  } else {
+    deduction = Number((discInPrate ? cfg.deduction1_inclusive : cfg.deduction1) || 0);
+  }
   const rawRate = (lot.price || 0) * (1 - deduction / 100);
   result.prate = round0(rawRate);
   // PurAmt = P_Qty × P_Rate (sample refund INCLUDED — direct purchase)
@@ -137,20 +146,28 @@ function calculateLot(lot, cfg) {
   // Days source depends on seller type:
   //   GSTIN present (registered dealer) → cfg.dealer_days
   //   no GSTIN (CR / agriculturist)     → cfg.discount_days
+  // SKIPPED when flag_discount_in_prate is ON — the discount is
+  // already baked into P_Rate via deduction*_inclusive, so a separate
+  // refund value would double-count it. GST on Discount is also
+  // skipped for the same reason.
   const sellerHasGstin = sellerGstState !== '';
-  const days    = sellerHasGstin
-    ? (Number(cfg.dealer_days) || 0)
-    : (Number(cfg.discount_days) || 0);
-  const discPct = Number(cfg.discount_pct)  || 0;
-  result.refund = round0((result.puramt / 1000) * days * discPct);
+  if (discInPrate) {
+    result.refund = 0;
+  } else {
+    const days    = sellerHasGstin
+      ? (Number(cfg.dealer_days) || 0)
+      : (Number(cfg.discount_days) || 0);
+    const discPct = Number(cfg.discount_pct)  || 0;
+    result.refund = round0((result.puramt / 1000) * days * discPct);
 
-  // GST on the Discount only when flag_disc_gst is ON.
-  if (cfg.flag_disc_gst && result.refund > 0) {
-    if (isIntra) {
-      result.cgst = round2(result.refund * halfRate / 100);
-      result.sgst = round2(result.refund * halfRate / 100);
-    } else {
-      result.igst = round2(result.refund * discRate / 100);
+    // GST on the Discount only when flag_disc_gst is ON.
+    if (cfg.flag_disc_gst && result.refund > 0) {
+      if (isIntra) {
+        result.cgst = round2(result.refund * halfRate / 100);
+        result.sgst = round2(result.refund * halfRate / 100);
+      } else {
+        result.igst = round2(result.refund * discRate / 100);
+      }
     }
   }
 
