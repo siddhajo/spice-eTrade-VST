@@ -695,6 +695,11 @@ html.sidebar-collapsed .sidebar .sb-collapse-btn svg{transform:rotate(180deg)}
    declarative gate driven by applyFeatureFlags() at boot/save. */
 body:not([data-feat-whatsapp="1"]) .i-whatsapp,
 body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
+/* Same pattern for Bills of Supply and Debit Notes — installs that
+   don't need these modules can hide the entire surface (sidebar tab,
+   tab content, delete-all button) with one settings toggle. */
+body:not([data-feat-bills="1"]) .feat-bills{display:none !important}
+body:not([data-feat-debit-notes="1"]) .feat-debit-notes{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -1314,10 +1319,17 @@ input[type="search"]::-webkit-search-cancel-button:hover{opacity:1}
    it. */
 input[type="search"],
 input.dt-search{
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23166534' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
-  background-repeat:no-repeat;
-  background-position:10px center;
-  background-size:16px 16px;
+  /* !important on background-image so the icon survives even when a
+     parent rule sets `background:` shorthand (which would otherwise
+     reset background-image to none). Specifically the `.fg input`
+     rules use `background:` for the cream fill / hover / focus
+     states — without this the magnifying-glass disappears on every
+     search input that lives inside a .fg form group (sellers,
+     buyers, settings). */
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23166534' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>") !important;
+  background-repeat:no-repeat !important;
+  background-position:10px center !important;
+  background-size:16px 16px !important;
   padding-left:32px !important;
 }
 
@@ -1983,11 +1995,11 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg>
           Purchases
         </button>
-        <button class="side-item" data-tab="bills" onclick="go('bills')">
+        <button class="side-item feat-bills" data-tab="bills" onclick="go('bills')">
           <svg viewBox="0 0 24 24"><path d="M20 14v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8z"/><path d="M14 2v6h6M9 15h4M9 18h6M9 12h2"/></svg>
           Bills of Supply
         </button>
-        <button class="side-item" data-tab="debit" onclick="go('debit')">
+        <button class="side-item feat-debit-notes" data-tab="debit" onclick="go('debit')">
           <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h2M12 15h2"/></svg>
           Debit Notes
         </button>
@@ -2189,13 +2201,14 @@ input[type="search"]:focus{
             Each button wipes <strong>every row</strong> from the named table (ignoring any filters elsewhere in the app). The server snapshots the database to <code style="background:#FEE2E2;padding:1px 5px;border-radius:3px;font-size:11px">data/backups/before-delete-…&lt;timestamp&gt;.db</code> first, so a misclick is recoverable via Restore above. Every wipe is audit-logged.
           </div>
 
-          <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px">
-            <button class="btn" onclick="deleteAll('invoices','Invoices',event)"   style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Invoices</button>
-            <button class="btn" onclick="deleteAll('purchases','Purchases',event)" style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Purchases</button>
-            <button class="btn" onclick="deleteAll('bills','Bills',event)"         style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Bills</button>
-            <button class="btn" onclick="deleteAll('buyers','Buyers',event)"       style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Buyers</button>
-            <button class="btn" onclick="deleteAll('traders','Sellers',event)"     style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Sellers</button>
-            <button class="btn" onclick="deleteAll('auctions','Auctions',event)"   style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px" title="Wipes EVERY auction AND cascades through lots, invoices, purchases, bills, debit notes, lot allocations">🗑 Auctions (full reset)</button>
+          <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px">
+            <button class="btn" onclick="deleteAll('invoices','Invoices',event)"     style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Invoices</button>
+            <button class="btn" onclick="deleteAll('purchases','Purchases',event)"   style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Purchases</button>
+            <button class="btn feat-bills" onclick="deleteAll('bills','Bills',event)"           style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Bills</button>
+            <button class="btn feat-debit-notes" onclick="deleteAll('debit-notes','Debit Notes',event)" style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Debit Notes</button>
+            <button class="btn" onclick="deleteAll('buyers','Buyers',event)"         style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Buyers</button>
+            <button class="btn" onclick="deleteAll('traders','Sellers',event)"       style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px">🗑 Sellers</button>
+            <button class="btn" onclick="deleteAll('auctions','Auctions',event)"     style="height:44px;padding:0 14px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D;display:inline-flex;align-items:center;justify-content:center;gap:6px" title="Wipes EVERY auction AND cascades through lots, invoices, purchases, bills, debit notes, lot allocations">🗑 Auctions (full reset)</button>
           </div>
 
           <details style="margin-top:16px">
@@ -2226,7 +2239,7 @@ input[type="search"]:focus{
           </span>
         </h2>
         <div style="font-size:12px;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:10px 12px;margin:6px 0 14px 0">
-          <strong>Expected columns:</strong> AUCTION NO, DATE, LOT, BAG, QTY, <strong>CODE</strong>, <strong>TRADE NAME</strong> &nbsp;·&nbsp;
+          <strong>Expected columns:</strong> TRADE NO, DATE, LOT, BAG, QTY, <strong>CODE</strong>, <strong>TRADE NAME</strong> &nbsp;·&nbsp;
           The matcher needs both <code>TRADE NAME</code> and <code>CODE</code> headers somewhere on the sheet. Extra columns are kept as-is.
         </div>
 
@@ -2505,6 +2518,11 @@ input[type="search"]:focus{
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="lot-auction" onchange="loadLots()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Within-trade search across lot no, seller name, buyer
+               code/trade name, invoice no, branch for the selected
+               auction. Bypasses client-side pagination when active. -->
+          <input type="search" id="lot-search" placeholder="Search lot no, seller, buyer…" oninput="searchLotsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
 
           <!-- Branch filter — populated from the lots actually present in the
                selected auction (deduplicated). Filtering is server-side
@@ -2925,6 +2943,11 @@ input[type="search"]:focus{
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="inv-auction" onchange="loadInvoices();loadInvEligibleBuyers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
+          <!-- Within-trade search across pages. Matches invo, buyer
+               code, trade name and GSTIN for the selected auction.
+               Bypasses client-side pagination when active. -->
+          <input type="search" id="inv-search" placeholder="Search invoice no, buyer, GSTIN…" oninput="searchInvoicesDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
+
           <!-- Sale-type filter (L/I/E). Filters the visible invoices to
                local / inter-state / export only. Server-side via
                `/api/invoices?sale=`. Empty option means no filter. -->
@@ -3012,6 +3035,9 @@ input[type="search"]:focus{
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="pur-auction" onchange="loadPurchases();loadPurEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
+          <!-- Within-trade search across invoice no, seller name, GSTIN -->
+          <input type="search" id="pur-search" placeholder="Search invoice no, seller, GSTIN…" oninput="searchPurchasesDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
+
           <!-- Sale-type filter for purchases. Server-side derives the type
                from each row's GST split (CGST/SGST vs IGST) since purchases
                don't have a sale column. See the comment block on the
@@ -3089,6 +3115,11 @@ input[type="search"]:focus{
 
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="pay-auction" onchange="loadPayments()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Within-trade search across seller name. Filters the
+               payments summary client-side because /api/payments
+               returns aggregated seller rollups, not raw rows. -->
+          <input type="search" id="pay-search" placeholder="Search seller…" oninput="searchPaymentsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="loadPayments()">↻ Reload</button>
@@ -3298,6 +3329,9 @@ input[type="search"]:focus{
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
           <select id="bill-auction" onchange="loadBills();loadEligibleSellers()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
 
+          <!-- Within-trade search across bill no, seller name -->
+          <input type="search" id="bill-search" placeholder="Search bill no, seller…" oninput="searchBillsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
+
           <!-- Branch filter — populated from Settings → Branches & Contacts.
                Server-side matches against bills.br when populated, else
                infers via the underlying lot's branch. Both paths handled
@@ -3334,6 +3368,9 @@ input[type="search"]:focus{
                list view filters by it; both Generate buttons inherit it
                so neither action can ever cross trade boundaries. -->
           <select id="dn-auction" onchange="loadDebitNotes()" style="padding:0 14px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:180px"></select>
+
+          <!-- Within-trade search across note no, seller name -->
+          <input type="search" id="dn-search" placeholder="Search note no, seller…" oninput="searchDebitNotesDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
 
           <!-- Generate Debit Note (single): inputs = trade (dropdown) +
                purchase invoice number (modal). Generates ONE DN for the
@@ -5171,6 +5208,12 @@ async function applyFeatureFlags() {
   // Default OFF when settings haven't loaded yet — safer than showing
   // dead controls. Re-runs after login + after save to reconcile.
   document.body.setAttribute('data-feat-whatsapp', cfg && on(cfg.flag_whatsapp) ? '1' : '0');
+  // Bills of Supply and Debit Notes default ON when the setting is
+  // missing (legacy installs that don't have these flags should keep
+  // their existing UI). Set explicitly to 'false' in settings to hide.
+  const featOn = (key) => !cfg || cfg[key] == null || on(cfg[key]);
+  document.body.setAttribute('data-feat-bills',       featOn('flag_bills') ? '1' : '0');
+  document.body.setAttribute('data-feat-debit-notes', featOn('flag_debit_notes') ? '1' : '0');
 }
 
 // Public branding (no auth) — drives the login + topbar from settings.
@@ -10217,8 +10260,20 @@ function renderPager(hostId, state, gotoFn, query){
 // `pager.page` is clamped to the new total so a delete that shrinks
 // the list below the current page leaves the user on the last page
 // rather than an empty one.
-function applyClientSidePagination(pager, pagerHostId, gotoFn, rows){
+function applyClientSidePagination(pager, pagerHostId, gotoFn, rows, skip){
   const arr = Array.isArray(rows) ? rows : [];
+  // `skip` short-circuits paging — used by the per-tab search where
+  // the user wants every match visible at once, not 50-rows-per-page.
+  // We still update pager.total so any KPI/count UI stays accurate,
+  // then clear the pager controls and return the full array.
+  if (skip) {
+    pager.total = arr.length;
+    pager.totalPages = 1;
+    pager.page = 1;
+    const host = document.getElementById(pagerHostId);
+    if (host) host.innerHTML = '';
+    return arr;
+  }
   pager.total = arr.length;
   pager.totalPages = Math.max(1, Math.ceil(arr.length / pager.pageSize));
   if (pager.page > pager.totalPages) pager.page = pager.totalPages;
@@ -10248,6 +10303,41 @@ let _tradersSearchTimer = null;
 function searchTradersDebounced(q){
   clearTimeout(_tradersSearchTimer);
   _tradersSearchTimer = setTimeout(() => searchTraders(q, { page: 1 }), 200);
+}
+
+// Cross-trade per-tab search debouncers. Each one just delays a
+// reload — the load function reads the input value live and appends
+// `search=…` to the API URL, which the server uses to skip the
+// auction filter and search across every trade.
+let _invSearchTimer = null;
+function searchInvoicesDebounced(_q){
+  clearTimeout(_invSearchTimer);
+  _invSearchTimer = setTimeout(() => loadInvoices(), 200);
+}
+let _purSearchTimer = null;
+function searchPurchasesDebounced(_q){
+  clearTimeout(_purSearchTimer);
+  _purSearchTimer = setTimeout(() => loadPurchases(), 200);
+}
+let _billSearchTimer = null;
+function searchBillsDebounced(_q){
+  clearTimeout(_billSearchTimer);
+  _billSearchTimer = setTimeout(() => loadBills(), 200);
+}
+let _dnSearchTimer = null;
+function searchDebitNotesDebounced(_q){
+  clearTimeout(_dnSearchTimer);
+  _dnSearchTimer = setTimeout(() => loadDebitNotes(), 200);
+}
+let _lotSearchTimer = null;
+function searchLotsDebounced(_q){
+  clearTimeout(_lotSearchTimer);
+  _lotSearchTimer = setTimeout(() => loadLots(), 200);
+}
+let _paySearchTimer = null;
+function searchPaymentsDebounced(_q){
+  clearTimeout(_paySearchTimer);
+  _paySearchTimer = setTimeout(() => loadPayments(), 200);
 }
 
 async function searchTraders(q, opts){
@@ -11532,7 +11622,9 @@ function gotoLotsPage(p){
   loadLots({ keepPage: true });
 }
 
-async function loadLots(opts){const aid=document.getElementById('lot-auction').value;if(!aid)return;
+async function loadLots(opts){
+  const aid=document.getElementById('lot-auction').value;
+  if(!aid)return;
   // Pager: fresh loads reset to page 1; only pager-driven navigation
   // sets {keepPage:true} to preserve the user's current page.
   if (!opts || !opts.keepPage) _lotsPager.page = 1;
@@ -11550,9 +11642,12 @@ async function loadLots(opts){const aid=document.getElementById('lot-auction').v
   }
   const branchFilter = branchSel ? branchSel.value : '';
   const branchParam = branchFilter ? `&branch=${encodeURIComponent(branchFilter)}` : '';
+  // Search filters within the currently-selected trade.
+  const searchTerm = (document.getElementById('lot-search')?.value || '').trim();
+  const searchParam = searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : '';
   // Cache-buster ensures the browser actually hits the server (otherwise Refresh
   // may return stale cached JSON and nothing visibly changes)
-  const d=await j(`/api/lots/${aid}?_=${Date.now()}${branchParam}`);
+  const d=await j(`/api/lots/${aid}?_=${Date.now()}${branchParam}${searchParam}`);
   const arr = Array.isArray(d) ? d : [];
 
   // Update KPI strip — count, qty, amount, calculated %
@@ -11729,7 +11824,8 @@ async function loadLots(opts){const aid=document.getElementById('lot-auction').v
   ];
   // Client-side pagination. KPIs above are computed over the FULL `arr`
   // so they stay accurate; only the rendered table is windowed.
-  const _lotsPagedSlice = applyClientSidePagination(_lotsPager, 'lots-pager', gotoLotsPage, arr);
+  // Bypass client paging when searching so every match is visible at once.
+  const _lotsPagedSlice = applyClientSidePagination(_lotsPager, 'lots-pager', gotoLotsPage, arr, !!searchTerm);
   DataTable.mount('lots-list', _lotsPagedSlice, {
     emptyState: { icon: 'lots', title: "No lots in this auction yet", body: "Add your first lot using the form on the left — enter Lot #, Name, Qty, and Price to get started." },  columns });
 }
@@ -12118,9 +12214,14 @@ async function loadInvoices(opts){
   // dropdown change re-fires loadInvoices() and the URL picks up the
   // new value without needing a separate state variable.
   const saleFilter = document.getElementById('inv-sale-filter')?.value || '';
+  // Search filters within the currently-selected trade. Both filters
+  // are sent together so the server narrows by auction first, then by
+  // the search term on top.
+  const searchTerm = (document.getElementById('inv-search')?.value || '').trim();
   const params = [];
   if (aid) params.push(`auction_id=${aid}`);
   if (saleFilter) params.push(`sale=${encodeURIComponent(saleFilter)}`);
+  if (searchTerm) params.push(`search=${encodeURIComponent(searchTerm)}`);
   const url = '/api/invoices' + (params.length ? '?' + params.join('&') : '');
   const d=await j(url);
   // Invoice count badge
@@ -12161,7 +12262,9 @@ async function loadInvoices(opts){
   }
 
   // Paginate the table render only — KPIs above already used the full arr.
-  const _invSlice = applyClientSidePagination(_invoicesPager, 'invoices-pager', gotoInvoicesPage, arr);
+  // When a search term is present we bypass client paging so every match is
+  // visible at once instead of hidden across pages.
+  const _invSlice = applyClientSidePagination(_invoicesPager, 'invoices-pager', gotoInvoicesPage, arr, !!searchTerm);
   DataTable.mount('invoices-list', _invSlice, {
     emptyState: { icon: 'invoices', title: "No invoices yet", body: "Once you have calculated lots for a buyer, use Generate Invoice to create one." }, 
     columns: [
@@ -13121,13 +13224,14 @@ async function loadPurchases(opts){
   // Server derives the type from the row's GST columns since
   // purchases don't carry a sale column directly.
   const saleFilter = document.getElementById('pur-sale-filter')?.value || '';
+  // Search filters within the currently-selected trade.
+  const searchTerm = (document.getElementById('pur-search')?.value || '').trim();
   const params = [];
   if (aid) params.push(`auction_id=${aid}`);
   if (saleFilter) params.push(`sale=${encodeURIComponent(saleFilter)}`);
+  if (searchTerm) params.push(`search=${encodeURIComponent(searchTerm)}`);
   const url = '/api/purchases' + (params.length ? '?' + params.join('&') : '');
-  console.log('[purchases-filter] saleFilter=', JSON.stringify(saleFilter), 'aid=', aid, 'url=', url);
   const d=await j(url);
-  console.log('[purchases-filter] got', Array.isArray(d) ? d.length : '?', 'rows for sale=', saleFilter);
   const arr = Array.isArray(d) ? d : [];
 
   // Update KPI strip (same pattern as loadInvoices)
@@ -13153,7 +13257,8 @@ async function loadPurchases(opts){
     }
   }
 
-  const _purSlice = applyClientSidePagination(_purchasesPager, 'purchases-pager', gotoPurchasesPage, arr);
+  // Bypass client paging when searching so every match is visible at once.
+  const _purSlice = applyClientSidePagination(_purchasesPager, 'purchases-pager', gotoPurchasesPage, arr, !!searchTerm);
   DataTable.mount('purchases-list', _purSlice, {
     emptyState: { icon: 'invoices', title: "No purchase invoices yet", body: "Once lots are calculated, generate purchase invoices for sellers using + Generate Purchase or the Generate for All Dealers button." },
     columns: [
@@ -13639,7 +13744,13 @@ async function loadPayments(opts){
     // can't return a stale response when the user just generated DNs
     // in another tab and clicks Reload.
     const d=await j(`/api/payments/${aid}?_=${Date.now()}`);
-    const arr = Array.isArray(d) ? d : [];
+    const allArr = Array.isArray(d) ? d : [];
+    // Within-trade search — /api/payments returns aggregated seller
+    // rollups, so the filter is applied client-side on the seller name.
+    const searchTerm = (document.getElementById('pay-search')?.value || '').trim().toLowerCase();
+    const arr = searchTerm
+      ? allArr.filter(r => String(r.name || '').toLowerCase().includes(searchTerm))
+      : allArr;
 
     // Update KPI strip
     const kpiStrip = document.getElementById('pay-kpis');
@@ -13666,8 +13777,9 @@ async function loadPayments(opts){
 
     // Paginate the table render. Chart below still uses the full `arr`
     // so "Top sellers" reflects every seller in the trade, not just
-    // the current page.
-    const _paySlice = applyClientSidePagination(_paymentsPager, 'payments-pager', gotoPaymentsPage, arr);
+    // the current page. Pagination is bypassed when searching so every
+    // match is visible at once.
+    const _paySlice = applyClientSidePagination(_paymentsPager, 'payments-pager', gotoPaymentsPage, arr, !!searchTerm);
     DataTable.mount('payments-list', _paySlice, {
       emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this auction to see per-seller payable amounts here." },
       columns: [
@@ -13915,9 +14027,12 @@ async function loadBills(opts){
   }
   const aid=document.getElementById('bill-auction')?.value;
   const branchFilter = billBranchSel ? billBranchSel.value : '';
+  // Search filters within the currently-selected trade.
+  const searchTerm = (document.getElementById('bill-search')?.value || '').trim();
   const params = [];
   if (aid) params.push(`auction_id=${aid}`);
   if (branchFilter) params.push(`branch=${encodeURIComponent(branchFilter)}`);
+  if (searchTerm) params.push(`search=${encodeURIComponent(searchTerm)}`);
   const url = '/api/bills' + (params.length ? '?' + params.join('&') : '');
   const d=await j(url);
   const arr = Array.isArray(d) ? d : [];
@@ -13943,7 +14058,8 @@ async function loadBills(opts){
     }
   }
 
-  const _billsSlice = applyClientSidePagination(_billsPager, 'bills-pager', gotoBillsPage, arr);
+  // Bypass client paging when searching so every match is visible at once.
+  const _billsSlice = applyClientSidePagination(_billsPager, 'bills-pager', gotoBillsPage, arr, !!searchTerm);
   DataTable.mount('bills-list', _billsSlice, {
     emptyState: { icon: 'invoices', title: "No agri bills yet", body: "Generate agriculturist purchase bills for eligible sellers using the form above." }, 
     columns: [
@@ -14035,19 +14151,22 @@ function gotoDebitPage(p){
 async function loadDebitNotes(opts){
   if (!opts || !opts.keepPage) _debitPager.page = 1;
   const aid = document.getElementById('dn-auction')?.value || '';
-  // Resolve trade id → ano. The DN table stores `ano` (the trade
-  // number string) rather than the auction id FK, so filtering happens
-  // client-side after fetch. Cheap because DN counts are small.
+  // Search filters within the currently-selected trade. The trade
+  // filter still applies client-side (debit_notes has no auction_id
+  // column — only `ano`, which we resolve from the dropdown option).
+  const searchTerm = (document.getElementById('dn-search')?.value || '').trim();
   let filterAno = '';
   if (aid) {
     const opt = document.querySelector(`#dn-auction option[value="${aid}"]`);
     if (opt) filterAno = (opt.textContent || '').split('—')[0].trim();
   }
-  const all = await j('/api/debit-notes');
+  const url = searchTerm ? `/api/debit-notes?search=${encodeURIComponent(searchTerm)}` : '/api/debit-notes';
+  const all = await j(url);
   const d = filterAno ? all.filter(n => String(n.ano) === filterAno) : all;
   // Paginate AFTER the ano filter so the page count reflects what the
   // user actually sees, not the whole DN table.
-  const _dnSlice = applyClientSidePagination(_debitPager, 'debit-pager', gotoDebitPage, d);
+  // Bypass client paging when searching so every match is visible at once.
+  const _dnSlice = applyClientSidePagination(_debitPager, 'debit-pager', gotoDebitPage, d, !!searchTerm);
   DataTable.mount('debit-list', _dnSlice, {
     columns: [
       { key:'_select', label:'',

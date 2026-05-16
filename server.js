@@ -958,37 +958,39 @@ app.delete('/api/invoices/delete-all',    requireDeleteAll, makeDeleteAll('invoi
 app.delete('/api/purchases/delete-all',   requireDeleteAll, makeDeleteAll('purchases'));
 app.delete('/api/bills/delete-all',       requireDeleteAll, makeDeleteAll('bills'));
 app.delete('/api/auctions/delete-all',    requireDeleteAll, makeDeleteAll('auctions'));
-// Delete All Debit Notes — TRADE-SCOPED.
-// Each trade owns its own DN sequence, so Delete All must operate
-// within the currently-selected trade only. ?ano=<trade-number> is
-// required; without it we refuse the wipe.
+// Delete All Debit Notes — two modes:
+//   • Trade-scoped:  ?ano=<trade-number> deletes only that trade's DNs
+//     (preferred for the per-trade "Delete All" button in the DN tab)
+//   • Global:        no ?ano= wipes EVERY debit note across all trades
+//     (used by the Backup → Delete All admin page, like other resources)
+// Both modes snapshot the DB first so a misclick is recoverable.
 app.delete('/api/debit-notes/delete-all', requireDeleteAll, (req, res) => {
   try {
     const db = getDb();
     const ano = String(req.query.ano || '').trim();
-    if (!ano) {
-      return res.status(400).json({
-        error: 'Trade number (ano) is required for Delete All. Refusing global wipe.',
-      });
-    }
+    const scope = ano ? ('debit-notes-' + ano) : 'debit-notes';
     let backupPath = '';
-    try { backupPath = _snapshotBackupBeforeDelete('debit-notes-' + ano); }
+    try { backupPath = _snapshotBackupBeforeDelete(scope); }
     catch (e) {
       return res.status(500).json({ error: 'Backup snapshot failed; refusing to delete: ' + (e.message || e) });
     }
-    const before = db.get(
-      'SELECT COUNT(*) as c FROM debit_notes WHERE ano = ?',
-      [ano]
-    ).c;
-    db.run('DELETE FROM debit_notes WHERE ano = ?', [ano]);
+    let before;
+    if (ano) {
+      before = db.get('SELECT COUNT(*) as c FROM debit_notes WHERE ano = ?', [ano]).c;
+      db.run('DELETE FROM debit_notes WHERE ano = ?', [ano]);
+    } else {
+      before = db.get('SELECT COUNT(*) as c FROM debit_notes').c;
+      db.run('DELETE FROM debit_notes');
+      try { db.exec(`DELETE FROM sqlite_sequence WHERE name = 'debit_notes'`); } catch (_) {}
+    }
     _logDelete(db, {
       resource: 'debit-notes',
       deletedCount: before,
-      cascadeCounts: { ano, debit_notes: before },
+      cascadeCounts: ano ? { ano, debit_notes: before } : { debit_notes: before },
       backupPath,
       req,
     });
-    res.json({ success: true, deleted: before, ano, backupPath });
+    res.json({ success: true, deleted: before, ano: ano || null, backupPath });
   } catch (e) {
     res.status(500).json({ error: 'Delete All failed: ' + (e.message || e) });
   }
@@ -2593,7 +2595,7 @@ app.get('/api/auctions/template', requireExport, async (req, res) => {
 // LOTS (CPA1.DBF — main data)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
-  const { branch, name, buyer, limit, offset, paginated, summary } = req.query;
+  const { branch, name, buyer, limit, offset, paginated, summary, search } = req.query;
   const db = getDb();
   // Correlated subquery (not LEFT JOIN) to avoid any risk of row duplication
   // if the same buyer code exists multiple times in the buyers table.
@@ -2605,6 +2607,21 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
   if (branch) { q += ' AND lots.branch = ?'; p.push(branch); }
   if (name)   { q += ' AND lots.name LIKE ?'; p.push(`%${name}%`); }
   if (buyer)  { q += ' AND lots.buyer = ?'; p.push(buyer); }
+  // Free-text search within the trade — lot no, seller name, buyer
+  // code/trade name, invoice no, branch.
+  const searchTerm = String(search || '').trim();
+  if (searchTerm) {
+    const wild = `%${searchTerm}%`;
+    q += ` AND (
+            COALESCE(lots.lot_no,'') LIKE ?
+            OR COALESCE(lots.name,'')   LIKE ?
+            OR COALESCE(lots.buyer,'')  LIKE ?
+            OR COALESCE(lots.buyer1,'') LIKE ?
+            OR COALESCE(lots.invo,'')   LIKE ?
+            OR COALESCE(lots.branch,'') LIKE ?
+          )`;
+    p.push(wild, wild, wild, wild, wild, wild);
+  }
 
   // Summary mode — returns aggregate counts only (cheap, no row data).
   // Used by the Lot Entry stats badge so it shows true totals even when
@@ -2839,7 +2856,7 @@ app.get('/api/lots/validate/:auctionId', requireViewOrLotEntry, (req, res) => {
 // INVOICES — Sales (GSTIN.PRG / KGSTIN.PRG)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/invoices', requireView, (req, res) => {
-  const { ano, auction_id, from, to, sale } = req.query;
+  const { ano, auction_id, from, to, sale, search } = req.query;
   const db = getDb();
   const cfg = getSettingsFlat(db);
   // Filter list by active business context: when state=KERALA show only
@@ -2850,6 +2867,20 @@ app.get('/api/invoices', requireView, (req, res) => {
   let q = 'SELECT * FROM invoices WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
+  // Free-text search within the selected trade — invoice no, buyer
+  // code, trade name, GSTIN. Trade no isn't included because the user
+  // already picked one in the auction dropdown.
+  const searchTerm = String(search || '').trim();
+  if (searchTerm) {
+    const wild = `%${searchTerm}%`;
+    q += ` AND (
+            COALESCE(invo,'')   LIKE ?
+            OR COALESCE(buyer,'')  LIKE ?
+            OR COALESCE(buyer1,'') LIKE ?
+            OR COALESCE(gstin,'')  LIKE ?
+          )`;
+    p.push(wild, wild, wild, wild);
+  }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
   // Sale-type filter — L=Local, I=Inter-state, E=Export. Whitelisted
   // to those three values; anything else is ignored (so a malformed
@@ -3758,11 +3789,22 @@ app.post('/api/invoices/purchase-pdf-bulk', requireView, async (req, res) => {
 // PURCHASES (GSTKBILT.PRG — registered dealer invoices)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/purchases', requireView, (req, res) => {
-  const { auction_id, ano, from, to, sale } = req.query;
-  console.log('[/api/purchases] query=', JSON.stringify(req.query));
+  const { auction_id, ano, from, to, sale, search } = req.query;
   let q = 'SELECT * FROM purchases WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
+  // Free-text search within the selected trade — invoice no, seller
+  // name, GSTIN.
+  const searchTerm = String(search || '').trim();
+  if (searchTerm) {
+    const wild = `%${searchTerm}%`;
+    q += ` AND (
+            COALESCE(invo,'')  LIKE ?
+            OR COALESCE(name,'')  LIKE ?
+            OR COALESCE(gstin,'') LIKE ?
+          )`;
+    p.push(wild, wild, wild);
+  }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
   // Sale-type filter (L / I / E). Purchases don't carry a sale column,
   // but the GST split on each row is deterministic:
@@ -3794,10 +3836,7 @@ app.get('/api/purchases', requireView, (req, res) => {
           )`;
   }
   q += ' ORDER BY date DESC LIMIT 500';
-  console.log('[/api/purchases] SQL=', q, 'params=', p);
-  const rows = getDb().all(q, p);
-  console.log('[/api/purchases] returned', rows.length, 'rows');
-  res.json(rows);
+  res.json(getDb().all(q, p));
 });
 
 app.post('/api/purchases/generate/:auctionId', requireInvoiceWrite, (req, res) => {
@@ -4139,10 +4178,20 @@ app.post('/api/purchases/pdf-bulk', requireView, async (req, res) => {
 // BILLS — Agriculturist Bills of Supply (GSTKBILP/GSTBILP)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/bills', requireView, (req, res) => {
-  const { auction_id, ano, from, to, branch } = req.query;
+  const { auction_id, ano, from, to, branch, search } = req.query;
   let q = 'SELECT * FROM bills WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
+  // Free-text search within the selected trade — bill no, seller name.
+  const searchTerm = String(search || '').trim();
+  if (searchTerm) {
+    const wild = `%${searchTerm}%`;
+    q += ` AND (
+            COALESCE(bil,'')  LIKE ?
+            OR COALESCE(name,'') LIKE ?
+          )`;
+    p.push(wild, wild);
+  }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
   // Branch filter — bills.br may not be set on legacy/auto-generated
   // rows (this codebase inserts it as empty), so the match must ALSO
@@ -4417,10 +4466,22 @@ app.put('/api/bills/:id', requireInvoiceWrite, (req, res) => {
 // DEBIT NOTES (for discounts/adjustments)
 // ══════════════════════════════════════════════════════════════
 app.get('/api/debit-notes', requireView, (req, res) => {
-  const { auction_id, ano, from, to } = req.query;
+  const { auction_id, ano, from, to, search } = req.query;
   let q = 'SELECT * FROM debit_notes WHERE 1=1'; const p = [];
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
+  // Free-text search within the selected trade — note no, seller name.
+  // The trade filter is applied client-side in loadDebitNotes (by ano)
+  // since debit_notes has no auction_id column.
+  const searchTerm = String(search || '').trim();
+  if (searchTerm) {
+    const wild = `%${searchTerm}%`;
+    q += ` AND (
+            COALESCE(note_no,'') LIKE ?
+            OR COALESCE(name,'')    LIKE ?
+          )`;
+    p.push(wild, wild);
+  }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
   q += ' ORDER BY date DESC, note_no DESC LIMIT 500';
   res.json(withFmtDate(getDb().all(q, p)));

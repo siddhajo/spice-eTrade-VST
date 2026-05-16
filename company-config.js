@@ -152,6 +152,14 @@ const DEFAULTS = [
   // entirely so users on installs without WhatsApp Business / Web
   // access don't see dead controls.
   { key: 'flag_whatsapp',   value: 'false',          category: 'flags',     label: 'WhatsApp Share Buttons',   type: 'boolean' },
+  // Bills of Supply (no-GST seller invoices) — installs that only deal
+  // with GST-registered dealers can hide the entire Bills tab + Generate
+  // Bill flow with this flag.
+  { key: 'flag_bills',         value: 'true',         category: 'flags',     label: 'Bills of Supply',          type: 'boolean' },
+  // Debit Notes — adjustment notes against purchases. Installs that
+  // don't use this workflow can hide the Debit Notes tab + Generate
+  // Debit Note flow with this flag.
+  { key: 'flag_debit_notes',   value: 'true',         category: 'flags',     label: 'Debit Notes',              type: 'boolean' },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
