@@ -10831,15 +10831,17 @@ const BulkActions = (function(){
 
 // Bulk-set the grade column on every ticked lot to '1'. Confirms via
 // the two-click pattern so a misclick doesn't silently rewrite data,
-// then POSTs a single bulk request to /api/lots/bulk-grade and
-// refreshes the lots view.
+// then POSTs a single bulk request to /api/lots/bulk-grade. After
+// the grade update we ALSO trigger Calculate so P_Rate / Discount /
+// Payable refresh immediately — otherwise users see stale values
+// computed against the old grade and think the change didn't take.
 async function lotBulkSetGrade1(){
   const ids = BulkActions.getTickedIds('lot');
   if (!ids.length) { toast('Tick one or more lots first'); return; }
   const btn = document.getElementById('lot-bulk-grade');
   const ok = await confirmTwoClick('lotBulkGrade1', btn, {
     confirmLabel: `⚠ Click again to set Grade 1 on ${ids.length} lot${ids.length === 1 ? '' : 's'}`,
-    fallbackMessage: `Set Grade = 1 on ${ids.length} lot${ids.length === 1 ? '' : 's'}? This rewrites the grade column for those rows.`
+    fallbackMessage: `Set Grade = 1 on ${ids.length} lot${ids.length === 1 ? '' : 's'}? This rewrites the grade column AND recalculates those rows.`
   });
   if (!ok) return;
   try {
@@ -10847,7 +10849,15 @@ async function lotBulkSetGrade1(){
       method: 'POST',
       body: JSON.stringify({ ids, grade: '1' })
     });
-    toast(`Grade set to 1 on ${r.updated || ids.length} lot${(r.updated || ids.length) === 1 ? '' : 's'}`);
+    const n = r.updated || ids.length;
+    // Recalculate the current auction so the deduction-inclusive
+    // P_Rate + zeroed Discount take effect immediately. Without this
+    // step the table still shows the previous calculation snapshot.
+    const aid = document.getElementById('lot-auction')?.value;
+    if (aid) {
+      try { await j(`/api/lots/calculate/${aid}`, { method: 'POST' }); } catch(_){}
+    }
+    toast(`Grade set to 1 on ${n} lot${n === 1 ? '' : 's'} — recalculated`);
     if (typeof loadLots === 'function') loadLots();
   } catch (e) {
     showError(e);
