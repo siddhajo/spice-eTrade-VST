@@ -594,11 +594,18 @@ async function loadAvailableTrades(){
         if (r.status === 403 && errBody && errBody.must_change_password) {
           sel.innerHTML = '<option value="">Change password to continue</option>';
           var info = document.getElementById('ss-trade-info');
-          if (info) info.textContent = 'You must change your password before loading trades.';
+          // Inline message includes a clickable link so the user can
+          // re-open the change-password modal after dismissing it.
+          // Without this they'd be stuck looking at the warning with
+          // no obvious way back to the form.
+          if (info) {
+            info.innerHTML = 'You must change your password before loading trades. <a href="#" onclick="event.preventDefault();showChangePassword();" style="color:var(--green,#0E8A5F);font-weight:600;text-decoration:underline">Change password now →</a>';
+          }
+          showChangePassword();
+          // Pre-fill the error banner inside the modal so it's clear
+          // why the modal popped up.
           var errEl = document.getElementById('app-cp-err');
           if (errEl) errEl.innerHTML = '<div class="eb">Your password must be changed before you can use the app.</div>';
-          ['app-cp-current','app-cp-new','app-cp-confirm'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
-          document.getElementById('cp-modal').classList.add('show');
           return;
         }
       } catch(_){ /* response wasn't JSON */ }
