@@ -93,18 +93,22 @@ function calculateLot(lot, cfg) {
   // Single-company P_Rate / PurAmt:
   //   Grade 2 → deduction2 (Dealer)
   //   else    → deduction1 (Pooler)
-  // When flag_discount_in_prate is ON the deduction values come from
-  // the discount-inclusive variants (deduction*_inclusive). In that
-  // mode the per-lot Discount is forced to 0 further down because it's
-  // baked into the rate.
+  // The flag_discount_in_prate roll-in applies ONLY to Grade 1 lots —
+  // Grade 2 and ungraded lots keep the original deduction/discount
+  // behaviour regardless of the flag. When the flag is ON AND the lot
+  // is Grade 1, deduction1_inclusive is used and the per-lot Discount
+  // is forced to 0 further down because it's baked into the rate.
   const gradeStr = String(lot.grade || '').trim();
-  const discInPrate = cfg.flag_discount_in_prate === true
+  const discInPrateFlag = cfg.flag_discount_in_prate === true
     || String(cfg.flag_discount_in_prate || '').toLowerCase() === 'true';
+  const applyRollIn = discInPrateFlag && gradeStr === '1';
   let deduction;
   if (gradeStr === '2') {
-    deduction = Number((discInPrate ? cfg.deduction2_inclusive : cfg.deduction2) || 0);
+    deduction = Number(cfg.deduction2 || 0);
+  } else if (applyRollIn) {
+    deduction = Number(cfg.deduction1_inclusive || 0);
   } else {
-    deduction = Number((discInPrate ? cfg.deduction1_inclusive : cfg.deduction1) || 0);
+    deduction = Number(cfg.deduction1 || 0);
   }
   const rawRate = (lot.price || 0) * (1 - deduction / 100);
   result.prate = round0(rawRate);
@@ -146,12 +150,14 @@ function calculateLot(lot, cfg) {
   // Days source depends on seller type:
   //   GSTIN present (registered dealer) → cfg.dealer_days
   //   no GSTIN (CR / agriculturist)     → cfg.discount_days
-  // SKIPPED when flag_discount_in_prate is ON — the discount is
-  // already baked into P_Rate via deduction*_inclusive, so a separate
-  // refund value would double-count it. GST on Discount is also
-  // skipped for the same reason.
+  // SKIPPED when the roll-in is in effect for THIS lot (flag ON AND
+  // Grade 1) — the discount is already baked into P_Rate via
+  // deduction1_inclusive, so a separate refund value would double-
+  // count it. GST on Discount is skipped for the same reason.
+  // Grade 2 / ungraded lots fall through to the normal discount calc
+  // even when the flag is ON.
   const sellerHasGstin = sellerGstState !== '';
-  if (discInPrate) {
+  if (applyRollIn) {
     result.refund = 0;
   } else {
     const days    = sellerHasGstin

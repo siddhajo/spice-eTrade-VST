@@ -70,14 +70,15 @@ const DEFAULTS = [
   { key: 'hpc',             value: '10',             category: 'rates',     label: 'Handling %',               type: 'number' },
   { key: 'deduction1',      value: '1.25',           category: 'rates',     label: 'Deduction (Pooler)',       type: 'number' },
   { key: 'deduction2',      value: '1.25',           category: 'rates',     label: 'Deduction (Dealer)',       type: 'number' },
-  // Used by flag_discount_in_prate. When the flag is ON, P_Rate is
-  // computed against these "discount-inclusive" deduction values
-  // instead of the plain deduction1/2 above, and the per-lot Discount
-  // (refund) is forced to 0 because it's already baked into the rate.
-  // Stored separately so toggling the flag back never loses the
-  // original deduction percentages.
-  { key: 'deduction1_inclusive', value: '1.25',      category: 'rates',     label: 'Deduction (Pooler) — discount-inclusive', type: 'number' },
-  { key: 'deduction2_inclusive', value: '1.25',      category: 'rates',     label: 'Deduction (Dealer) — discount-inclusive', type: 'number' },
+  // Used by flag_discount_in_prate — applies ONLY to Grade 1 lots.
+  // When the flag is ON, Grade 1 P_Rate is computed against this
+  // "discount-inclusive" deduction value instead of plain deduction1
+  // above, and the per-lot Discount (refund) is forced to 0 because
+  // it's already baked into the rate. Grade 2 and ungraded lots keep
+  // the original deduction1/2 + separate discount behaviour. Stored
+  // separately so toggling the flag back never loses the original
+  // deduction1 percentage.
+  { key: 'deduction1_inclusive', value: '1.25',      category: 'rates',     label: 'Deduction (Pooler) — discount-inclusive (Grade 1 only)', type: 'number' },
   { key: 'refund',          value: '1.9',            category: 'rates',     label: 'Sample Refund (Kgs)',      type: 'number' },
   { key: 'sb_refund',       value: '2.85',           category: 'rates',     label: 'SB Sample Refund (Kgs)',   type: 'number' },
   { key: 'gst_goods',       value: '5',              category: 'rates',     label: 'GST Goods Rate %',         type: 'number' },
@@ -151,11 +152,11 @@ const DEFAULTS = [
   { key: 'flag_wgst',       value: 'false',          category: 'flags',     label: 'TDS on Full Invoice Amount', type: 'boolean' },
   { key: 'flag_disc_gst',   value: 'false',          category: 'flags',     label: 'Discount includes GST',    type: 'boolean' },
   // When ON, the per-lot Discount (refund) is rolled into P_Rate via
-  // the deduction1_inclusive / deduction2_inclusive percentages above
-  // and the separate Discount value is forced to 0. When OFF, the
-  // original behaviour applies — P_Rate uses deduction1/2 and the
-  // Discount is computed as round(PurAmt/1000 × days × discount_pct).
-  { key: 'flag_discount_in_prate', value: 'false',   category: 'flags',     label: 'Roll Discount into P_Rate', type: 'boolean' },
+  // the deduction1_inclusive percentage above — but ONLY for Grade 1
+  // lots. Grade 2 and ungraded lots keep the original behaviour
+  // (deduction1/2 + separate Discount) regardless of this flag.
+  // When OFF, every lot follows the original behaviour.
+  { key: 'flag_discount_in_prate', value: 'false',   category: 'flags',     label: 'Roll Discount into P_Rate (Grade 1 only)', type: 'boolean' },
   { key: 'flag_debit_note', value: 'false',          category: 'flags',     label: 'Debit Note for Discount',  type: 'boolean' },
   { key: 'flag_invoice_stripe', value: 'true',       category: 'flags',     label: 'Alternate Row Stripe in Invoice', type: 'boolean' },
   { key: 'flag_dummy',      value: 'true',           category: 'flags',     label: 'Allow Dummy Invoices',     type: 'boolean' },

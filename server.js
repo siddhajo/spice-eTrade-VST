@@ -2860,6 +2860,35 @@ app.get('/api/lots/validate/:auctionId', requireViewOrLotEntry, (req, res) => {
   res.json(rows);
 });
 
+// Bulk grade update — paired with the Lots-screen "Set Grade" button.
+// Body: { ids: [1, 2, …], grade: '1' }
+// Grade is whitelisted to a short fixed set so a malformed client can't
+// poison the column. Empty grade is allowed (clears it). Returns the
+// count of updated rows.
+app.post('/api/lots/bulk-grade', requireLotWrite, (req, res) => {
+  try {
+    const { ids, grade } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids[] is required' });
+    }
+    const validGrades = new Set(['', '1', '2', '3']);
+    const g = String(grade == null ? '' : grade).trim();
+    if (!validGrades.has(g)) {
+      return res.status(400).json({ error: `grade must be one of: ${[...validGrades].map(v => v || '(blank)').join(', ')}` });
+    }
+    const numericIds = ids.map(x => Number(x)).filter(Number.isFinite);
+    if (!numericIds.length) {
+      return res.status(400).json({ error: 'ids[] contains no valid numeric ids' });
+    }
+    const db = getDb();
+    const placeholders = numericIds.map(() => '?').join(',');
+    db.run(`UPDATE lots SET grade = ? WHERE id IN (${placeholders})`, [g, ...numericIds]);
+    res.json({ success: true, updated: numericIds.length, grade: g });
+  } catch (e) {
+    res.status(500).json({ error: 'Bulk grade update failed: ' + (e.message || e) });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════
 // INVOICES — Sales (GSTIN.PRG / KGSTIN.PRG)
 // ══════════════════════════════════════════════════════════════

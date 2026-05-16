@@ -2544,6 +2544,10 @@ input[type="search"]:focus{
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
+            <!-- Bulk-grade button — only visible when at least one lot is
+                 ticked. Shares the same show/hide trigger as Delete
+                 Selected (BulkActions._sync flips display when count > 0). -->
+            <button id="lot-bulk-grade" class="needs-lot-write btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1'">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Sister tool to Price Import. Opens the Price List Mapping
                  tab where the user can fill the CODE column on a Price
@@ -10761,6 +10765,13 @@ const BulkActions = (function(){
     const counter = document.getElementById(`${id}-sel-count`);
     if (delBtn)  delBtn.style.display  = ticked > 0 ? '' : 'none';
     if (counter) counter.textContent   = ticked > 0 ? `(${ticked})` : '';
+    // Lots also have a "Set Grade 1" bulk button — same visibility
+    // rule. Other resources don't have these elements so the
+    // getElementById calls below return null and we no-op silently.
+    const gradeBtn = document.getElementById(`${id}-bulk-grade`);
+    const gradeCounter = document.getElementById(`${id}-bulk-grade-count`);
+    if (gradeBtn)     gradeBtn.style.display  = ticked > 0 ? '' : 'none';
+    if (gradeCounter) gradeCounter.textContent = ticked > 0 ? `(${ticked})` : '';
   }
   function toggleAll(id, state){
     getVisibleCheckboxes(id).forEach(cb => { cb.checked = state; });
@@ -10817,6 +10828,31 @@ const BulkActions = (function(){
     },
   };
 })();
+
+// Bulk-set the grade column on every ticked lot to '1'. Confirms via
+// the two-click pattern so a misclick doesn't silently rewrite data,
+// then POSTs a single bulk request to /api/lots/bulk-grade and
+// refreshes the lots view.
+async function lotBulkSetGrade1(){
+  const ids = BulkActions.getTickedIds('lot');
+  if (!ids.length) { toast('Tick one or more lots first'); return; }
+  const btn = document.getElementById('lot-bulk-grade');
+  const ok = await confirmTwoClick('lotBulkGrade1', btn, {
+    confirmLabel: `⚠ Click again to set Grade 1 on ${ids.length} lot${ids.length === 1 ? '' : 's'}`,
+    fallbackMessage: `Set Grade = 1 on ${ids.length} lot${ids.length === 1 ? '' : 's'}? This rewrites the grade column for those rows.`
+  });
+  if (!ok) return;
+  try {
+    const r = await j('/api/lots/bulk-grade', {
+      method: 'POST',
+      body: JSON.stringify({ ids, grade: '1' })
+    });
+    toast(`Grade set to 1 on ${r.updated || ids.length} lot${(r.updated || ids.length) === 1 ? '' : 's'}`);
+    if (typeof loadLots === 'function') loadLots();
+  } catch (e) {
+    showError(e);
+  }
+}
 
 // ── GST Portal Lookup (Item 4) ───────────────────────────
 // Reads the GSTIN field (prefix='t' for Seller, 'b' for Buyer),
