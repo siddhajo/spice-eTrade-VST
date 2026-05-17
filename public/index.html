@@ -1950,8 +1950,13 @@ input[type="search"]:focus{
         <!-- Formulas reference: read-only summary of every calculation
              that runs on lots, payments, and sales invoices. Helps the
              user verify the math against their spec without digging
-             through code. -->
-        <button class="side-item" data-tab="formulas" onclick="go('formulas')">
+             through code.
+             Dev-only — hidden by default. Reveal for the current browser
+             by running `spiceDev(true)` in the JS console. Persists in
+             localStorage so a reload keeps it visible. Hide again with
+             `spiceDev(false)`. Server-side knows nothing about this flag,
+             so other users on the same install never see the menu item. -->
+        <button id="side-formulas" class="side-item" data-tab="formulas" onclick="go('formulas')" style="display:none">
           <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><path d="M14.5 19.5l2 2 4-4"/></svg>
           Formulas
         </button>
@@ -5305,6 +5310,40 @@ applyBranding();
 // Track the most recently activated tab so the topbar Refresh button
 // knows what to re-load. Updated on every go() call.
 window._currentTab = 'dash';
+
+// ── Dev-only sidebar items (Formulas) ────────────────────
+// The Formulas tab is a reference page for verifying calculation
+// formulas during development — useful for the engineer auditing
+// math against the spec, but noise for the end user (Vinoth's father
+// shouldn't see "Formulas" in his sidebar). Hidden by default; reveal
+// for the current browser only via the console:
+//
+//   spiceDev(true)   → show Formulas + persist the flag
+//   spiceDev(false)  → hide it + clear the flag
+//
+// State lives in localStorage so a reload keeps the choice. Server
+// knows nothing about it — different users / browsers / devices each
+// have their own setting. Safe for customer installs: the menu stays
+// hidden unless someone deliberately runs the console toggle.
+function _applySpiceDevMenu(){
+  const on = localStorage.getItem('spice_dev') === '1';
+  const el = document.getElementById('side-formulas');
+  if (el) el.style.display = on ? '' : 'none';
+}
+window.spiceDev = function(on){
+  if (on) localStorage.setItem('spice_dev', '1');
+  else    localStorage.removeItem('spice_dev');
+  _applySpiceDevMenu();
+  // If the user is currently viewing Formulas and turns dev off, send
+  // them to the dashboard so they can't keep looking at the hidden page.
+  if (!on && window._currentTab === 'formulas') go('dash');
+  return 'spiceDev → ' + (on ? 'ON' : 'OFF');
+};
+// Apply on page load. The button is `display:none` in markup so it's
+// hidden during parse; this only runs once the DOM is ready in case a
+// dev has the flag set and wants it visible immediately.
+document.addEventListener('DOMContentLoaded', _applySpiceDevMenu);
+
 function go(tab){
   window._currentTab = tab;
   document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
