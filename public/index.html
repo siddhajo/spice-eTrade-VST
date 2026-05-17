@@ -6,6 +6,12 @@
 <title>Admin Console</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+/* Per-tenant fonts — loaded once, picked via body[data-font] below.
+   Only the active font's glyphs actually render; the rest are cached
+   but unused. ~30kb extra per tenant install — acceptable for the
+   white-label distinctiveness this enables. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
   /* ═══ DEFAULT (Emerald) — overridden by body[data-theme] rules below ═══ */
@@ -59,8 +65,187 @@
   letter-spacing:-.01em;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   TENANT PRESET LAYERS — font + density + preset personality
+   ══════════════════════════════════════════════════════════════════
+   Three attribute-driven layers, all set at boot from /api/branding:
+
+     body[data-font]     → typography
+     body[data-density]  → spacing + radii + heights (Option A)
+     body[data-preset]   → preset-specific personality (Option B)
+
+   Two installs with different presets feel visually distinct: not
+   just a color swap, but different proportions, different shapes,
+   different sense of "weight" and "polish".
+   ══════════════════════════════════════════════════════════════════ */
+body[data-font="jakarta"]{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,system-ui,sans-serif}
+body[data-font="inter"]  {font-family:'Inter',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;letter-spacing:-.005em}
+body[data-font="outfit"] {font-family:'Outfit',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;letter-spacing:-.015em}
+body[data-font="system"] {font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif;letter-spacing:0}
+
+/* ─────────────────────────────────────────────────────────────────
+   DENSITY (Option A) — comprehensive coverage
+   ─────────────────────────────────────────────────────────────────
+   Density swaps a coordinated set of design tokens, then applies
+   them to the 20+ surfaces that visibly differ between dense and
+   roomy: sidebar items, cards, modals, inputs, buttons, tables,
+   tabs, KPIs, page padding, headings. The goal is that an install
+   on `compact` and another on `spacious` look like different apps.
+   ───────────────────────────────────────────────────────────────── */
+
+/* COMPACT — tight spacing, sharp 4-8px radii, smaller fonts.
+   Reads as "professional / utility" — Bluehill, Slate. */
+body[data-density="compact"]{
+  --tenant-radius-sm: 4px;
+  --tenant-radius-md: 6px;
+  --tenant-radius-lg: 8px;
+  --tenant-pad-card:  12px 14px;
+  --tenant-row-h:     32px;
+  --tenant-gap:       10px;
+  --tenant-h1:        18px;
+  --tenant-h2:        15px;
+}
+body[data-density="compact"] .card{padding:var(--tenant-pad-card) !important;border-radius:var(--tenant-radius-lg) !important;margin-bottom:var(--tenant-gap)}
+body[data-density="compact"] .btn{border-radius:var(--tenant-radius-sm) !important;height:34px !important;padding:0 12px !important;font-size:13px}
+body[data-density="compact"] table th, body[data-density="compact"] table td{padding:6px 10px !important}
+body[data-density="compact"] .kpi{padding:10px 12px !important;border-radius:var(--tenant-radius-md) !important}
+body[data-density="compact"] .kpi-value{font-size:20px !important}
+body[data-density="compact"] .side-item{padding:8px 12px !important;border-radius:var(--tenant-radius-sm) !important;font-size:13px;margin-bottom:1px}
+body[data-density="compact"] .modal{border-radius:var(--tenant-radius-lg);padding:20px}
+body[data-density="compact"] .modal h2{font-size:17px;margin-bottom:14px}
+body[data-density="compact"] .fg{margin-bottom:10px}
+body[data-density="compact"] .fg input:not([type="checkbox"]):not([type="radio"]),
+body[data-density="compact"] .fg select,
+body[data-density="compact"] .fg textarea{height:34px;padding:6px 10px;border-radius:var(--tenant-radius-sm);font-size:13px}
+body[data-density="compact"] .content{padding:16px 22px !important}
+body[data-density="compact"] .topbar{padding:0 22px}
+body[data-density="compact"] h1{font-size:var(--tenant-h1)}
+body[data-density="compact"] h2{font-size:var(--tenant-h2)}
+
+/* ROOMY — current default-ish spacing, medium radii. Reads as
+   "premium / standard" — Cardamom, Marigold, Ocean. */
+body[data-density="roomy"]{
+  --tenant-radius-sm: 8px;
+  --tenant-radius-md: 12px;
+  --tenant-radius-lg: 14px;
+  --tenant-pad-card:  18px 22px;
+  --tenant-row-h:     40px;
+  --tenant-gap:       16px;
+  --tenant-h1:        22px;
+  --tenant-h2:        17px;
+}
+body[data-density="roomy"] .card{padding:var(--tenant-pad-card) !important;border-radius:var(--tenant-radius-lg) !important;margin-bottom:var(--tenant-gap)}
+body[data-density="roomy"] .btn{border-radius:var(--tenant-radius-sm) !important;height:42px !important;padding:0 18px !important}
+body[data-density="roomy"] table th, body[data-density="roomy"] table td{padding:11px 12px !important}
+body[data-density="roomy"] .kpi{padding:14px 18px !important;border-radius:var(--tenant-radius-md) !important}
+body[data-density="roomy"] .side-item{padding:12px 14px !important;border-radius:10px !important}
+body[data-density="roomy"] .modal{border-radius:var(--tenant-radius-lg);padding:24px}
+body[data-density="roomy"] .fg input:not([type="checkbox"]):not([type="radio"]),
+body[data-density="roomy"] .fg select,
+body[data-density="roomy"] .fg textarea{height:40px;padding:9px 14px;border-radius:var(--tenant-radius-sm)}
+body[data-density="roomy"] .content{padding:28px 36px !important}
+body[data-density="roomy"] h1{font-size:var(--tenant-h1)}
+body[data-density="roomy"] h2{font-size:var(--tenant-h2)}
+
+/* SPACIOUS — generous whitespace, large 14-18px radii, bigger
+   fonts and soft shadows. Reads as "calm / minimal / premium" —
+   Western Ghats. */
+body[data-density="spacious"]{
+  --tenant-radius-sm: 10px;
+  --tenant-radius-md: 14px;
+  --tenant-radius-lg: 18px;
+  --tenant-pad-card:  26px 30px;
+  --tenant-row-h:     46px;
+  --tenant-gap:       22px;
+  --tenant-h1:        26px;
+  --tenant-h2:        19px;
+}
+body[data-density="spacious"] .card{padding:var(--tenant-pad-card) !important;border-radius:var(--tenant-radius-lg) !important;margin-bottom:var(--tenant-gap);box-shadow:0 1px 3px rgba(0,0,0,.04)}
+body[data-density="spacious"] .btn{border-radius:var(--tenant-radius-sm) !important;height:48px !important;padding:0 22px !important;font-size:14px}
+body[data-density="spacious"] table th, body[data-density="spacious"] table td{padding:15px 16px !important}
+body[data-density="spacious"] .kpi{padding:20px 24px !important;border-radius:var(--tenant-radius-md) !important}
+body[data-density="spacious"] .kpi-value{font-size:30px !important}
+body[data-density="spacious"] .side-item{padding:14px 16px !important;border-radius:12px !important;font-size:14.5px;margin-bottom:4px}
+body[data-density="spacious"] .modal{border-radius:var(--tenant-radius-lg);padding:30px}
+body[data-density="spacious"] .modal h2{font-size:21px;margin-bottom:24px}
+body[data-density="spacious"] .fg{margin-bottom:18px}
+body[data-density="spacious"] .fg input:not([type="checkbox"]):not([type="radio"]),
+body[data-density="spacious"] .fg select,
+body[data-density="spacious"] .fg textarea{height:46px;padding:12px 16px;border-radius:var(--tenant-radius-sm);font-size:14px}
+body[data-density="spacious"] .content{padding:38px 48px !important;max-width:1280px}
+body[data-density="spacious"] .topbar{padding:0 48px}
+body[data-density="spacious"] h1{font-size:var(--tenant-h1)}
+body[data-density="spacious"] h2{font-size:var(--tenant-h2)}
+
+/* ─────────────────────────────────────────────────────────────────
+   PRESET PERSONALITY (Option B) — per-preset aesthetic touches
+   ─────────────────────────────────────────────────────────────────
+   Beyond color + density, each preset gets distinct character cues:
+   button shape, shadow weight, accent treatment. This is what makes
+   "Bluehill" feel like a different product from "Western Ghats"
+   even when you mute the colors.
+
+   Set via body[data-preset="<slug>"], applied at boot from
+   /api/branding presetConfig. Layered ON TOP of density rules so
+   density still governs spacing — preset just adds finishing touches.
+   ───────────────────────────────────────────────────────────────── */
+
+/* CARDAMOM — default install (Vinoth's father's app). Subtle
+   shadows, medium radii, premium-but-friendly feel. */
+body[data-preset="cardamom"] .card{box-shadow:0 1px 2px rgba(20,83,45,.05)}
+body[data-preset="cardamom"] .btn{font-weight:600;letter-spacing:.2px}
+
+/* BLUEHILL — corporate-modern. Tight 6px corners, subtle indigo
+   shadow tint, sentence-case buttons. Reads like a serious financial
+   tool that still belongs in 2026 (not 1995). */
+body[data-preset="bluehill"] .card{box-shadow:0 1px 2px rgba(79,70,229,.06);border-radius:6px !important}
+body[data-preset="bluehill"] .btn{border-radius:6px !important;font-weight:600}
+body[data-preset="bluehill"] .side-item{border-radius:6px !important}
+body[data-preset="bluehill"] .modal{border-radius:8px !important;box-shadow:0 8px 24px rgba(79,70,229,.12)}
+body[data-preset="bluehill"] .topbar{border-bottom:1px solid rgba(79,70,229,.18)}
+body[data-preset="bluehill"] .kpi{border-left:3px solid var(--spice-saffron);border-radius:6px !important;box-shadow:0 1px 2px rgba(79,70,229,.05)}
+
+/* WESTERN-GHATS — calm premium. Pill buttons, soft shadows on
+   everything, rounded everything. Reads like a wellness app. */
+body[data-preset="western-ghats"] .btn{border-radius:999px !important;padding:0 24px !important;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+body[data-preset="western-ghats"] .card{box-shadow:0 2px 8px rgba(13,148,136,.06);border-color:rgba(13,148,136,.12)}
+body[data-preset="western-ghats"] .side-item{border-radius:999px !important;margin:0 4px 4px}
+body[data-preset="western-ghats"] .modal{box-shadow:0 12px 40px rgba(13,148,136,.12)}
+body[data-preset="western-ghats"] .kpi{border-radius:14px !important;box-shadow:0 1px 3px rgba(13,148,136,.06)}
+
+/* SLATE — minimalist grey. 8px corners, hairline borders, subtle
+   shadow. Reads like a clean modern admin tool, NOT 1990s Windows.
+   Differentiation comes from restrained palette + minimal shadows,
+   not from sharp corners or all-caps text. */
+body[data-preset="slate"] .card{box-shadow:0 1px 2px rgba(15,23,42,.04);border:1px solid #e2e8f0;border-radius:8px !important}
+body[data-preset="slate"] .btn{border-radius:8px !important;font-weight:500;letter-spacing:0}
+body[data-preset="slate"] .side-item{border-radius:8px !important}
+body[data-preset="slate"] .modal{border-radius:10px !important;box-shadow:0 12px 32px rgba(15,23,42,.16)}
+body[data-preset="slate"] .topbar{border-bottom:1px solid #e2e8f0}
+body[data-preset="slate"] .kpi{border:1px solid #e2e8f0;border-radius:8px !important;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+
+/* MARIGOLD — warm and playful. Rounded everywhere, golden shadows,
+   bold typography. Reads like a creative-agency tool. */
+body[data-preset="marigold"] .card{box-shadow:0 2px 6px rgba(245,158,11,.08);border-radius:18px !important}
+body[data-preset="marigold"] .btn{border-radius:12px !important;font-weight:700}
+body[data-preset="marigold"] .side-item{border-radius:12px !important}
+body[data-preset="marigold"] .modal{border-radius:18px !important;box-shadow:0 12px 32px rgba(245,158,11,.16)}
+body[data-preset="marigold"] .kpi{border-radius:14px !important;box-shadow:0 2px 4px rgba(245,158,11,.06)}
+
+/* OCEAN — cool professional. Subtle blue-tinted borders, gentle
+   shadows, balanced. Reads like a SaaS dashboard. */
+body[data-preset="ocean"] .card{box-shadow:0 1px 3px rgba(6,182,212,.06);border-color:rgba(6,182,212,.15)}
+body[data-preset="ocean"] .btn{border-radius:8px !important;font-weight:600}
+body[data-preset="ocean"] .modal{box-shadow:0 8px 24px rgba(6,182,212,.1)}
+body[data-preset="ocean"] .kpi{border-left:3px solid var(--spice-saffron);box-shadow:0 1px 2px rgba(6,182,212,.04)}
+
 /* ═══ THEME: Coral sunset — warm pink/coral primary, peach accents ═══ */
 body[data-theme="coral"]{
+  --sidebar-bg-top: #7F1D1D;
+  --sidebar-bg-bot: #5B1717;
+  --spice-cardamom:    #BE123C;
+  --spice-cardamom-dk: #881337;
+  --spice-cardamom-lt: #FFE4E6;
   --spice-saffron:    #F43F5E;   /* rose-500 — vibrant coral pink */
   --spice-saffron-lt: #FFF1F2;
   --spice-saffron-md: #FDA4AF;
@@ -72,6 +257,11 @@ body[data-theme="coral"]{
 
 /* ═══ THEME: Violet — bright purple primary, magenta accents ═══ */
 body[data-theme="violet"]{
+  --sidebar-bg-top: #4C1D95;
+  --sidebar-bg-bot: #2E1065;
+  --spice-cardamom:    #6D28D9;
+  --spice-cardamom-dk: #4C1D95;
+  --spice-cardamom-lt: #F5F3FF;
   --spice-saffron:    #8B5CF6;   /* violet-500 */
   --spice-saffron-lt: #F5F3FF;
   --spice-saffron-md: #C4B5FD;
@@ -83,6 +273,11 @@ body[data-theme="violet"]{
 
 /* ═══ THEME: Sunshine — bright yellow-gold primary + lime ═══ */
 body[data-theme="sunshine"]{
+  --sidebar-bg-top: #78350F;
+  --sidebar-bg-bot: #451A03;
+  --spice-cardamom:    #D97706;
+  --spice-cardamom-dk: #92400E;
+  --spice-cardamom-lt: #FFFBEB;
   --spice-saffron:    #EAB308;   /* yellow-500 */
   --spice-saffron-lt: #FEFCE8;
   --spice-saffron-md: #FDE047;
@@ -94,6 +289,11 @@ body[data-theme="sunshine"]{
 
 /* ═══ THEME: Electric — vivid magenta primary, cyan accents ═══ */
 body[data-theme="electric"]{
+  --sidebar-bg-top: #1E3A8A;
+  --sidebar-bg-bot: #1E2A6B;
+  --spice-cardamom:    #2563EB;
+  --spice-cardamom-dk: #1E40AF;
+  --spice-cardamom-lt: #DBEAFE;
   --spice-saffron:    #EC4899;   /* pink-500 */
   --spice-saffron-lt: #FDF2F8;
   --spice-saffron-md: #F9A8D4;
@@ -105,6 +305,11 @@ body[data-theme="electric"]{
 
 /* ═══ THEME: Ocean — bright sky blue primary + sunset amber ═══ */
 body[data-theme="ocean"]{
+  --sidebar-bg-top: #0C4A6E;
+  --sidebar-bg-bot: #082F49;
+  --spice-cardamom:    #0369A1;
+  --spice-cardamom-dk: #0C4A6E;
+  --spice-cardamom-lt: #F0F9FF;
   --spice-saffron:    #0EA5E9;   /* sky-500 */
   --spice-saffron-lt: #F0F9FF;
   --spice-saffron-md: #7DD3FC;
@@ -116,6 +321,8 @@ body[data-theme="ocean"]{
 
 /* ═══ THEME: Emerald (current default, explicit) ═══ */
 body[data-theme="emerald"]{
+  --sidebar-bg-top: #166534;
+  --sidebar-bg-bot: #14532D;
   --spice-saffron:    #10B981;
   --spice-saffron-lt: #ECFDF5;
   --spice-saffron-md: #6EE7B7;
@@ -127,6 +334,11 @@ body[data-theme="emerald"]{
 
 /* ═══ THEME: Tech — Charcoal + Electric Blue + Emerald (analytics-feel) ═══ */
 body[data-theme="tech"]{
+  --sidebar-bg-top: #075985;
+  --sidebar-bg-bot: #082F49;
+  --spice-cardamom:    #0284C7;
+  --spice-cardamom-dk: #0369A1;
+  --spice-cardamom-lt: #E0F2FE;
   --spice-saffron:    #007BFF;   /* electric blue primary */
   --spice-saffron-lt: #E6F2FF;
   --spice-saffron-md: #66AFFF;
@@ -139,6 +351,11 @@ body[data-theme="tech"]{
 
 /* ═══ THEME: Minimal — Black / White / Soft Gray / Mint Teal ═══ */
 body[data-theme="minimal"]{
+  --sidebar-bg-top: #1E293B;
+  --sidebar-bg-bot: #0F172A;
+  --spice-cardamom:    #0F172A;
+  --spice-cardamom-dk: #020617;
+  --spice-cardamom-lt: #F1F5F9;
   --spice-saffron:    #4FD1C5;   /* mint teal primary */
   --spice-saffron-lt: #E8F9F7;
   --spice-saffron-md: #9FE5DE;
@@ -152,6 +369,11 @@ body[data-theme="minimal"]{
 
 /* ═══ THEME: Trust — Deep Blue + Sky Blue (banking/reliability feel) ═══ */
 body[data-theme="trust"]{
+  --sidebar-bg-top: #1E3A8A;
+  --sidebar-bg-bot: #172554;
+  --spice-cardamom:    #1E40AF;
+  --spice-cardamom-dk: #1E3A8A;
+  --spice-cardamom-lt: #DBEAFE;
   --spice-saffron:    #003366;   /* deep navy primary */
   --spice-saffron-lt: #E6EFF8;
   --spice-saffron-md: #6691BF;
@@ -163,6 +385,11 @@ body[data-theme="trust"]{
 
 /* ═══ THEME: Rose — saturated pink ═══ */
 body[data-theme="rose"]{
+  --sidebar-bg-top: #9F1239;
+  --sidebar-bg-bot: #660A22;
+  --spice-cardamom:    #BE185D;
+  --spice-cardamom-dk: #9F1239;
+  --spice-cardamom-lt: #FCE7F3;
   --spice-saffron:    #E11D48;
   --spice-saffron-lt: #FFE4E6;
   --spice-saffron-md: #FDA4AF;
@@ -174,6 +401,11 @@ body[data-theme="rose"]{
 
 /* ═══ THEME: Indigo — deep blue/purple ═══ */
 body[data-theme="indigo"]{
+  --sidebar-bg-top: #3730A3;
+  --sidebar-bg-bot: #1E1B4B;
+  --spice-cardamom:    #4338CA;
+  --spice-cardamom-dk: #3730A3;
+  --spice-cardamom-lt: #EEF2FF;
   --spice-saffron:    #4F46E5;
   --spice-saffron-lt: #EEF2FF;
   --spice-saffron-md: #A5B4FC;
@@ -185,6 +417,11 @@ body[data-theme="indigo"]{
 
 /* ═══ THEME: Teal — calm cyan-green ═══ */
 body[data-theme="teal"]{
+  --sidebar-bg-top: #115E59;
+  --sidebar-bg-bot: #042F2E;
+  --spice-cardamom:    #0F766E;
+  --spice-cardamom-dk: #115E59;
+  --spice-cardamom-lt: #CCFBF1;
   --spice-saffron:    #0D9488;
   --spice-saffron-lt: #CCFBF1;
   --spice-saffron-md: #5EEAD4;
@@ -196,6 +433,11 @@ body[data-theme="teal"]{
 
 /* ═══ THEME: Slate — neutral grey-blue ═══ */
 body[data-theme="slate"]{
+  --sidebar-bg-top: #334155;
+  --sidebar-bg-bot: #1E293B;
+  --spice-cardamom:    #475569;
+  --spice-cardamom-dk: #334155;
+  --spice-cardamom-lt: #F1F5F9;
   --spice-saffron:    #64748B;
   --spice-saffron-lt: #F1F5F9;
   --spice-saffron-md: #94A3B8;
@@ -466,7 +708,7 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 .btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(31,25,21,.08)}
 .btn:active{transform:translateY(0)}
 .btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
-.btn-g{background:var(--spice-cardamom);color:#fff;box-shadow:0 2px 6px rgba(22,101,52,.22)}
+.btn-g{background:var(--spice-cardamom);color:#fff;box-shadow:0 2px 6px rgba(0,0,0,.12)}
 .btn-g:hover{background:var(--spice-cardamom-dk)}
 .btn-a{background:var(--spice-saffron);color:#fff;box-shadow:0 2px 6px rgba(16,185,129,.28)}
 .btn-a:hover{background:var(--spice-saffron-dk)}
@@ -499,9 +741,12 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 }
 .topbar h1 .dot{
   width:36px;height:36px;border-radius:10px;
-  background:linear-gradient(135deg,var(--spice-saffron) 0%,#84CC16 100%);
+  /* Gradient ends on cardamom (the theme's darker brand color) instead
+     of hardcoded lime — so the dot harmonises with the active theme
+     rather than always tinging green. */
+  background:linear-gradient(135deg,var(--spice-saffron) 0%,var(--spice-cardamom) 100%);
   display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:800;
-  animation:none;box-shadow:0 3px 10px rgba(16,185,129,.22);
+  animation:none;box-shadow:0 3px 10px rgba(0,0,0,.12);
   overflow:hidden;
   position:relative;
 }
@@ -542,7 +787,12 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
    text/icon colours below are tuned for AA contrast on this base. */
 .sidebar{
   width:244px;
-  background:linear-gradient(180deg,#14532D 0%,#0E3F22 100%);
+  /* Gradient derives from the theme's brand color (--spice-saffron-dk
+     for the darker end, with a slightly-darkened computed second stop).
+     Each theme already defines --spice-saffron-dk, so the sidebar
+     now actually changes color when the theme changes — previously
+     this was hardcoded green and ignored the theme entirely. */
+  background:linear-gradient(180deg, var(--sidebar-bg-top, var(--spice-saffron-dk, #14532D)) 0%, var(--sidebar-bg-bot, var(--spice-cardamom-dk, #0E3F22)) 100%);
   color:rgba(255,255,255,.85);
   border-right:none;
   padding:20px 12px;flex-shrink:0;position:sticky;top:64px;
@@ -1514,12 +1764,12 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 .le-toolbar-btn:active{transform:translateY(0)}
 .le-tb-primary{
   background:var(--green);color:#fff;border-color:var(--green);
-  box-shadow:0 1px 3px rgba(22,101,52,.22)
+  box-shadow:0 1px 3px rgba(0,0,0,.12)
 }
-.le-tb-primary:hover{background:#0f6e54;border-color:#0f6e54}
+.le-tb-primary:hover{background:var(--green-dk);border-color:var(--green-dk)}
 .le-tb-secondary{
-  background:#fff;color:var(--green);border-color:var(--green-border, #bbf7d0);
-  box-shadow:0 1px 2px rgba(22,101,52,.10)
+  background:#fff;color:var(--green);border-color:var(--green-border, var(--green-bg));
+  box-shadow:0 1px 2px rgba(0,0,0,.05)
 }
 .le-tb-secondary:hover{background:var(--green-bg);border-color:var(--green)}
 .le-tb-ghost{
@@ -5023,14 +5273,20 @@ const DataTable = (function(){
       return `<td class="num"><strong>${fmt}</strong></td>`;
     }).join('');
 
-    // Toolbar: single search box + clear (x) + row count
+    // Toolbar: optional search box + clear (x) + row count.
+    // When `noSearch` is set (per-tab pages that already have a more
+    // capable cross-page search above the table), the search input is
+    // suppressed so users aren't confused by two near-identical boxes.
     const hasSearch = !!s.search;
+    const searchBlock = s.noSearch
+      ? ''
+      : `<div class="dt-search-wrap">
+           <input type="text" class="dt-search" placeholder="Search all columns…" value="${esc(s.search||'')}" oninput="DataTable._search('${tbodyId}',this.value)">
+           ${hasSearch ? `<button class="dt-search-clear" title="Clear search" onclick="DataTable._clear('${tbodyId}')" aria-label="Clear">&times;</button>` : ''}
+         </div>`;
     const toolbar = `
       <div class="dt-toolbar">
-        <div class="dt-search-wrap">
-          <input type="text" class="dt-search" placeholder="Search all columns…" value="${esc(s.search||'')}" oninput="DataTable._search('${tbodyId}',this.value)">
-          ${hasSearch ? `<button class="dt-search-clear" title="Clear search" onclick="DataTable._clear('${tbodyId}')" aria-label="Clear">&times;</button>` : ''}
-        </div>
+        ${searchBlock}
         <span class="dt-count">${filtered.length} row${filtered.length===1?'':'s'}${s.data.length!==filtered.length?` (of ${s.data.length})`:''}</span>
       </div>`;
 
@@ -5083,7 +5339,14 @@ const DataTable = (function(){
         rowClass: config.rowClass,
         sort: state[tbodyId] && state[tbodyId].sort || (config.defaultSort || null),
         search: state[tbodyId] && state[tbodyId].search || '',
-        visible: PAGE_SIZE
+        visible: PAGE_SIZE,
+        // noSearch hides the built-in `.dt-search` input — used when
+        // the page already has a more capable per-tab search above
+        // the table (lots/invoices/purchases/bills/debit-notes/payments).
+        // The row-count badge still renders so callers don't lose
+        // the visible-vs-total summary.
+        noSearch: !!config.noSearch,
+        emptyState: config.emptyState
       };
       render(tbodyId);
     },
@@ -8007,7 +8270,7 @@ function renderReassignTiles() {
   // an override for "selected". Booked tiles are non-clickable because
   // they can't be reassigned without first deleting the lot row.
   const stateStyle = (st, selected) => {
-    if (selected) return 'background:#10B981;color:#fff;border:1px solid #047857';
+    if (selected) return 'background:var(--spice-cardamom);color:#fff;border:1px solid var(--spice-cardamom-dk)';
     switch (st) {
       case 'booked':     return 'background:#FCA5A5;color:#7f1d1d;border:1px solid #ef4444;cursor:not-allowed';
       case 'allocated':  return 'background:#DBEAFE;color:#1e3a8a;border:1px solid #93c5fd';
@@ -10443,6 +10706,7 @@ async function searchTraders(q, opts){
 
   const d = rows;
   DataTable.mount('traders-list', d, {
+    noSearch: true,
     columns: [
       BulkActions.column('seller'),
       { key:'name', label:'Name', sort:'text', render:(t)=>
@@ -11041,7 +11305,8 @@ async function searchBuyers(q, opts){
   const d = rows;
   const saleMap={L:'Local',I:'Inter-state',E:'Export'};
   DataTable.mount('buyers-list', d, {
-    emptyState: { icon: 'buyers', title: "No buyers yet", body: "Register buyers to generate sales invoices. Use Add Buyer above or import from a template." }, 
+    noSearch: true,
+    emptyState: { icon: 'buyers', title: "No buyers yet", body: "Register buyers to generate sales invoices. Use Add Buyer above or import from a template." },
     columns: [
       BulkActions.column('buyer'),
       { key:'buyer', label:'BUYER', sort:'text', render:(b)=>
@@ -11215,7 +11480,8 @@ async function loadAuctions(opts){
 
   const d = rows;
   DataTable.mount('auctions-list', d, {
-    emptyState: { icon: 'auctions', title: "No auctions yet", body: "Create your first auction (trade) from the Add Auction button to start entering lots." }, 
+    noSearch: true,
+    emptyState: { icon: 'auctions', title: "No auctions yet", body: "Create your first auction (trade) from the Add Auction button to start entering lots." },
     columns: [
       BulkActions.column('trade'),
       { key:'ano', label:'Trade No', sort:'text', render:(a)=>`<b>${esc(a.ano)}</b>` },
@@ -11941,6 +12207,7 @@ async function loadLots(opts){
   // Bypass client paging when searching so every match is visible at once.
   const _lotsPagedSlice = applyClientSidePagination(_lotsPager, 'lots-pager', gotoLotsPage, arr, !!searchTerm);
   DataTable.mount('lots-list', _lotsPagedSlice, {
+    noSearch: true,
     emptyState: { icon: 'lots', title: "No lots in this auction yet", body: "Add your first lot using the form on the left — enter Lot #, Name, Qty, and Price to get started." },  columns });
 }
 
@@ -12380,7 +12647,8 @@ async function loadInvoices(opts){
   // visible at once instead of hidden across pages.
   const _invSlice = applyClientSidePagination(_invoicesPager, 'invoices-pager', gotoInvoicesPage, arr, !!searchTerm);
   DataTable.mount('invoices-list', _invSlice, {
-    emptyState: { icon: 'invoices', title: "No invoices yet", body: "Once you have calculated lots for a buyer, use Generate Invoice to create one." }, 
+    noSearch: true,
+    emptyState: { icon: 'invoices', title: "No invoices yet", body: "Once you have calculated lots for a buyer, use Generate Invoice to create one." },
     columns: [
       { key:'_select', label:'', labelHTML:'<input type="checkbox" id="inv-select-all" onclick="event.stopPropagation();toggleAllInvoices(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">', sortable:false, searchable:false,
         render:(i)=>`<input type="checkbox" class="inv-select-cb" value="${i.id}" onclick="event.stopPropagation()" style="cursor:pointer">` },
@@ -13374,6 +13642,7 @@ async function loadPurchases(opts){
   // Bypass client paging when searching so every match is visible at once.
   const _purSlice = applyClientSidePagination(_purchasesPager, 'purchases-pager', gotoPurchasesPage, arr, !!searchTerm);
   DataTable.mount('purchases-list', _purSlice, {
+    noSearch: true,
     emptyState: { icon: 'invoices', title: "No purchase invoices yet", body: "Once lots are calculated, generate purchase invoices for sellers using + Generate Purchase or the Generate for All Dealers button." },
     columns: [
       { key:'_select', label:'',
@@ -13895,6 +14164,7 @@ async function loadPayments(opts){
     // match is visible at once.
     const _paySlice = applyClientSidePagination(_paymentsPager, 'payments-pager', gotoPaymentsPage, arr, !!searchTerm);
     DataTable.mount('payments-list', _paySlice, {
+      noSearch: true,
       emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this auction to see per-seller payable amounts here." },
       columns: [
         // Selection column for bulk actions. Click on a checkbox toggles
@@ -14175,7 +14445,8 @@ async function loadBills(opts){
   // Bypass client paging when searching so every match is visible at once.
   const _billsSlice = applyClientSidePagination(_billsPager, 'bills-pager', gotoBillsPage, arr, !!searchTerm);
   DataTable.mount('bills-list', _billsSlice, {
-    emptyState: { icon: 'invoices', title: "No agri bills yet", body: "Generate agriculturist purchase bills for eligible sellers using the form above." }, 
+    noSearch: true,
+    emptyState: { icon: 'invoices', title: "No agri bills yet", body: "Generate agriculturist purchase bills for eligible sellers using the form above." },
     columns: [
       { key:'_select', label:'',
         labelHTML:'<input type="checkbox" id="bill-select-all" onclick="event.stopPropagation();toggleAllBills(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
@@ -14282,6 +14553,7 @@ async function loadDebitNotes(opts){
   // Bypass client paging when searching so every match is visible at once.
   const _dnSlice = applyClientSidePagination(_debitPager, 'debit-pager', gotoDebitPage, d, !!searchTerm);
   DataTable.mount('debit-list', _dnSlice, {
+    noSearch: true,
     columns: [
       { key:'_select', label:'',
         labelHTML:'<input type="checkbox" id="dn-select-all" onclick="event.stopPropagation();toggleAllDn(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
@@ -15572,6 +15844,46 @@ function setCustomColor(hex){
     .then(r => r.ok ? r.json() : null)
     .then(d => {
       if (!d) return;
+      // ── Preset bundle (white-label) ─────────────────────────────
+      // If the install's admin has set a tenant preset via /admin/branding,
+      // it carries the full color+density+font+hide-appearance bundle.
+      // Apply it first so the theme below uses the preset's color when
+      // a preset is active (the preset's theme wins over any per-user
+      // localStorage choice — that's the whole point of "lock-down").
+      if (d.preset && d.presetConfig) {
+        const p = d.presetConfig;
+        // Color theme from preset overrides localStorage. We DON'T
+        // write it back to localStorage because the user can't change
+        // it anyway — keeping localStorage clean means clearing the
+        // preset reverts the user to whatever they had before.
+        if (p.theme && _THEMES.includes(p.theme)) {
+          document.body.setAttribute('data-theme', p.theme);
+        }
+        if (p.customColor && /^#[0-9a-fA-F]{6}$/.test(p.customColor)) {
+          document.body.style.setProperty('--spice-custom-base', p.customColor);
+        }
+        // Density — sets data-density attr; CSS rules below the existing
+        // theme block respond to it (smaller padding / corner radius for
+        // 'compact', larger for 'spacious').
+        if (p.density) document.body.setAttribute('data-density', p.density);
+        // Font — sets data-font attr; body[data-font="..."] CSS picks
+        // which of the @import'd web fonts is active.
+        if (p.font) document.body.setAttribute('data-font', p.font);
+        // Preset slug — drives the Option B "personality" CSS that
+        // gives each preset distinct character beyond density+color
+        // (e.g. Bluehill gets square buttons + uppercase labels;
+        // Western-Ghats gets pill buttons + soft shadows).
+        document.body.setAttribute('data-preset', d.preset);
+        // Hide-appearance — wipe the entire Appearance card from Settings.
+        // The end user never knows it existed. Hidden via inline style
+        // so it's gone even before tab transition CSS runs.
+        if (p.hideAppearance) {
+          const card = document.getElementById('appearance-card');
+          if (card) card.style.display = 'none';
+        }
+        return; // preset wins — skip the per-user theme code below
+      }
+      // ── Legacy mode (no preset set) ─────────────────────────────
       // Server's chosen theme wins. If empty, leave the localStorage
       // value in place (covers fresh installs where the admin hasn't
       // touched Settings → Appearance yet).

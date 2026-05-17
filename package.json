@@ -2,7 +2,7 @@
   "name": "spice-etrade",
   "productName": "Spice e-Trade",
   "version": "1.0.0",
-  "description": "Spice e-Trade — admin app for invoices, payments, and exports (e-Trade only)",
+  "description": "Spice e-Trade \u2014 admin app for invoices, payments, and exports (e-Trade only)",
   "author": "Vinoth",
   "main": "electron/main.js",
   "scripts": {
@@ -19,6 +19,7 @@
     "call-bind-apply-helpers": "^1.0.2",
     "cors": "^2.8.5",
     "dbffile": "^1.12.0",
+    "dotenv": "^16.4.5",
     "es-set-tostringtag": "^2.0.3",
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
@@ -42,7 +43,7 @@
   "build": {
     "appId": "com.vinoth.spice-etrade",
     "productName": "Spice e-Trade",
-    "copyright": "© 2026",
+    "copyright": "\u00a9 2026",
     "files": [
       "electron/**/*",
       "public/**/*",
@@ -71,8 +72,20 @@
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.business",
       "artifactName": "SpiceETrade-${version}-${arch}.${ext}",
