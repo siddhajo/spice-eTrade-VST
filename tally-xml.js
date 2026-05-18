@@ -95,12 +95,24 @@ const toTallyDate = (d) => {
   // yyyy-mm-dd or yyyy-mm-ddT...
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return `${m[1]}${m[2]}${m[3]}`;
-  // dd/mm/yyyy
-  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return `${m[3]}${m[2]}${m[1]}`;
+  // dd/mm/yyyy or dd-mm-yyyy (handles the user-configurable display
+  // format too — DD-MM-YYYY rendered dates feed back in via journal
+  // rows in some flows).
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) return `${m[3]}${m[2].padStart(2,'0')}${m[1].padStart(2,'0')}`;
+  // yyyy/mm/dd or yyyy-mm-dd already handled above; also accept
+  // yyyy/mm/dd with slashes
+  m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (m) return `${m[1]}${m[2].padStart(2,'0')}${m[3].padStart(2,'0')}`;
   // yyyymmdd (already correct)
   if (/^\d{8}$/.test(s)) return s;
-  return s.replace(/\D/g, '').slice(0, 8);
+  // Anything else is malformed (a 4-digit fragment like "1226" used
+  // to fall through here and silently produce a junk <DATE>1226</DATE>
+  // in every voucher). Log a warning so we can find the source row,
+  // and return empty rather than garbage — Tally will reject an empty
+  // <DATE> with a clear error instead of importing wrong data.
+  try { console.warn(`[tally-xml] toTallyDate: refusing malformed date input ${JSON.stringify(d)} — auction or invoice row needs cleanup`); } catch(_){}
+  return '';
 };
 
 // ── Tally XML constants (mirror VBA constants in ConvertSales.bas) ──
@@ -277,6 +289,10 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const Tax_IGST     = cfgGet(cfg, 'tally_igst', 'OUTPUT IGST 5%');
   const Tax_TCS      = cfgGet(cfg, 'tally_tcs',  'TCS on Sale of Goods');
   const Round_LDR    = cfgGet(cfg, 'tally_round', 'Round On/Off');
+  // Whether to emit the Round Off ledger entry on every voucher.
+  // Defaults to true to match Tally's expected structure (the target
+  // file has it on every voucher even when the round amount is 0).
+  const tlyrnd       = cfgBool(cfg, 'tally_round_enabled', true);
   const Item_Card    = cfgGet(cfg, 'tally_item_cardamom', 'Cardamom');
   const Item_Gunny   = cfgGet(cfg, 'tally_item_gunny',    'Gunny');
   const HSN_Card     = cfgGet(cfg, 'tally_hsn_cardamom',  '09083120');
@@ -377,7 +393,7 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
 
     xml += `
 <DATE>${dateval}</DATE>
-<REFERENCEDATE></REFERENCEDATE>
+<REFERENCEDATE>${dateval}</REFERENCEDATE>
 <IRNACKDATE>${dateval}</IRNACKDATE>
 <VCHSTATUSDATE>${dateval}</VCHSTATUSDATE>
 <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
@@ -623,10 +639,14 @@ ${TAGS.DEEMNO}
 </LEDGERENTRIES.LIST>`;
     }
 
-    // Round-off — always emit (matches reference; sign reflects the
-    // adjustment to reach the rounded total). Reference always uses
-    // ISDEEMEDPOSITIVE=No and lets the AMOUNT carry the sign.
-    if (Math.abs(rnd) > 0.001) {
+    // Round-off — always emit when tlyrnd is ON (matches reference;
+    // every voucher has a Round Off line, even with a 0 amount).
+    // Sign reflects the adjustment to reach the rounded total.
+    // Reference always uses ISDEEMEDPOSITIVE=No and lets the AMOUNT
+    // carry the sign. The previous `Math.abs(rnd) > 0.001` gate
+    // silently dropped the ledger whenever the total landed on a
+    // whole rupee, which is what the user was hitting.
+    if (tlyrnd) {
       xml += `
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${xe(Round_LDR)}</LEDGERNAME>
