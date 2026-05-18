@@ -1407,7 +1407,11 @@ function generSalesXML(rows, cfg, opts = {}) {
   const Tax_SGST     = cfgGet(cfg, 'tally_sgst', 'OUTPUT SGST 2.5%');
   const Tax_IGST     = cfgGet(cfg, 'tally_igst', 'OUTPUT IGST 5%');
   const Tax_TCS      = cfgGet(cfg, 'tally_tcs',  'TCS on Sale of Goods');
-  const Round_LDR    = cfgGet(cfg, 'tally_round', 'Round Off');
+  const Round_LDR    = cfgGet(cfg, 'tally_round', 'Round On/Off');
+  // Whether to emit the Round Off ledger entry on every voucher.
+  // Defaults to true to match Tally's expected structure (the target
+  // file has it on every voucher even when the round amount is 0).
+  const tlyrnd       = cfgBool(cfg, 'tally_round_enabled', true);
   const Item_Card    = cfgGet(cfg, 'tally_item_cardamom', 'Cardamom');
   const Item_Gunny   = cfgGet(cfg, 'tally_item_gunny',    'Gunny Bag');
   const HSN_Card     = cfgGet(cfg, 'tally_hsn_cardamom',  '09083110');
@@ -1588,8 +1592,12 @@ ${TAGS.DEEMNO}
 </LEDGERENTRIES.LIST>`;
     }
 
-    // Round off
-    if (Math.abs(rnd) > 0.001) {
+    // Round Off — always emit when the flag is on (matches Tally's
+    // expected structure where every voucher has a Round Off line,
+    // even with a 0 amount). Skipping it when rnd is 0 produced
+    // vouchers without the ledger entry, which is what the user is
+    // seeing. The flag default is true.
+    if (tlyrnd) {
       xml += `
 <LEDGERENTRIES.LIST>
 <LEDGERNAME>${xe(Round_LDR)}</LEDGERNAME>
