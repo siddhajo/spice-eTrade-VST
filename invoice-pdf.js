@@ -5,6 +5,8 @@
 
 const PDFDocument = require('pdfkit');
 const { amountToWords } = require('./amount-words');
+// Honours user's Settings → Display → Date format choice.
+const { fmtDate: fmtUserDate, todayLocalISO } = require('./date-format');
 // Defensive resolution — uses the real getCompanyIdentity from
 // report-formatters.js when available, falls through to a shared inline
 // fallback otherwise. Fixes "getCompanyIdentity is not a function" when
@@ -179,7 +181,7 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
   ];
   const rightPairs = [
     ['INVOICE NO', ''], // value blank per reference
-    ['DATE', invoiceData.invoiceDate || new Date().toLocaleDateString('en-GB')],
+    ['DATE', invoiceData.invoiceDate || fmtUserDate(todayLocalISO())],
     ['PLACE OF SUPPLY', (cfg.s_place || '').toUpperCase() + (cfg.s_state ? '  [' + (cfg.s_state || '').toUpperCase() + ']' : '')],
     ['REVERSE CHARGE', ''],
   ];
@@ -587,7 +589,7 @@ function generateCropReceiptPDF(lot, cfg) {
   const details = [
     ['Trade No', lot.ano || ''],
     ['Lot No', lot.lot_no || ''],
-    ['Date', new Date().toLocaleDateString('en-GB')],
+    ['Date', fmtUserDate(todayLocalISO())],
     ['No. of Bags', String(lot.bags || '')],
     ['Nett Weight', String(lot.qty || '')],
     ['Depot', lot.branch || ''],
@@ -1829,7 +1831,7 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
   const infoH = 16;
   doc.moveTo(x0, infoY).lineTo(x1, infoY).stroke();
   doc.moveTo(x0, infoY + infoH).lineTo(x1, infoY + infoH).stroke();
-  const invDate = (billData && billData.billDate) || new Date().toLocaleDateString('en-GB');
+  const invDate = (billData && billData.billDate) || fmtUserDate(todayLocalISO());
   const eTradeNo = (billData && billData.eTradeNo) || cfg.e_trade_no || '';
   doc.font('Helvetica').fontSize(8.5);
   doc.text(`Invoice No: ${billNo || ''}`, x0 + 6, infoY + 4);

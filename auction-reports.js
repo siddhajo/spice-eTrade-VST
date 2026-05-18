@@ -32,12 +32,9 @@ function _loadSettings(db) {
 // ── Number formatting ────────────────────────────────────────
 // fmtMoney / fmtQty / fmtPrice come from report-formatters.js (Indian comma
 // grouping; 2 decimals for rupees, 3 for kilos).
-function fmtDateDMY(iso) {
-  if (!iso) return '';
-  const s = String(iso);
-  if (s.includes('-') && s.length >= 10) return s.slice(0, 10).split('-').reverse().join('/');
-  return s;
-}
+// Date format honours the user's Settings → Display → Date format
+// choice via the shared ./date-format module.
+const { fmtDate: fmtDateDMY } = require('./date-format');
 
 // Manually truncate `text` so doc.widthOfString(out) <= maxWidth, appending an
 // ellipsis when truncated. PDFKit 0.15's `lineBreak: false` + `ellipsis: true`

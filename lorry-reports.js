@@ -28,12 +28,9 @@ const {
 const { createExcelBuffer } = require('./exports');
 
 // ── Helpers ──────────────────────────────────────────────────
-function fmtDateDMY(iso) {
-  if (!iso) return '';
-  const s = String(iso);
-  if (s.includes('-') && s.length >= 10) return s.slice(0, 10).split('-').reverse().join('/');
-  return s;
-}
+// Date format honours the user's Settings → Display → Date format
+// choice via the shared ./date-format module.
+const { fmtDate: fmtDateDMY } = require('./date-format');
 // fmtMoney / fmtQty / fmtPrice come from report-formatters.js (Indian comma
 // grouping; 2 decimals for rupees, 3 for kilos).
 

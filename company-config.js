@@ -179,6 +179,15 @@ const DEFAULTS = [
   // flow. Installs that don't use the mapping workflow can hide the
   // sidebar entry AND the Lots-toolbar button with this flag.
   { key: 'flag_price_list_mapping', value: 'true',    category: 'flags',     label: 'Price List Mapping',       type: 'boolean' },
+  // Date format used for display across UI tables, PDFs and Excel
+  // exports. Three options:
+  //   DD/MM/YYYY  → 18/05/2026 (Indian/UK default, current behaviour)
+  //   DD-MM-YYYY  → 18-05-2026
+  //   YYYY-MM-DD  → 2026-05-18 (ISO-style)
+  // Storage in the DB is always ISO (YYYY-MM-DD); this setting only
+  // affects how dates are rendered. Tally XML keeps its own YYYYMMDD
+  // format because Tally itself requires it (machine-to-machine).
+  { key: 'date_format',     value: 'DD/MM/YYYY',     category: 'display',   label: 'Date format',              type: 'select', options: ['DD/MM/YYYY','DD-MM-YYYY','YYYY-MM-DD'] },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
@@ -330,6 +339,7 @@ const CATEGORIES = {
   bank:       { order: 8, title: 'Bank Details',          icon: '🏦' },
   season:     { order: 9, title: 'Season / Financial Year', icon: '📅' },
   invoice:    { order: 10, title: 'Invoice Settings',     icon: '📄' },
+  display:    { order: 10.5, title: 'Display',            icon: '🖼', description: 'Visual / formatting preferences. The date format is applied across UI tables, PDFs and Excel exports — storage in the database is always ISO (YYYY-MM-DD).' },
   flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
   lot_entry:  { order: 11.5, title: 'Lot Entry Defaults',   icon: '📝', description: 'Defaults applied when field staff enter lots from the Lot Entry tab. Sample weight is auto-filled into each new lot; moisture column shows when enabled; edit timeout limits how long after creation a non-admin user can edit their own lots.' },
   integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },

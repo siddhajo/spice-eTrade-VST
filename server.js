@@ -191,16 +191,11 @@ function addDays(isoDate, days) {
   return `${yy}-${mm}-${dd}`;
 }
 
-// Display: yyyy-mm-dd → dd/mm/yyyy (handles Excel serials defensively too)
-function fmtDate(d) {
-  if (!d && d !== 0) return '';
-  const iso = normalizeDate(d);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-    const [y, m, day] = iso.split('-');
-    return `${day}/${m}/${y}`;
-  }
-  return String(d);
-}
+// Shared date-format helpers live in ./date-format.js so PDF / XLSX
+// generators in other modules can import the same single source of
+// truth (avoids drift between local copies of fmtDate that all
+// hardcode DD/MM/YYYY).
+const { fmtDate, todayLocalISO, invalidateDateFormatCache } = require('./date-format');
 
 function withFmtDate(rows, field = 'date') {
   if (!Array.isArray(rows)) return rows;
@@ -1063,6 +1058,10 @@ app.get('/api/company-settings', requireViewOrLotEntry, (req, res) => {
 });
 app.put('/api/company-settings', requireSettingsWrite, (req, res) => {
   const count = updateSettings(getDb(), req.body.settings || {});
+  // Drop the cached date-format whenever settings change so fmtDate
+  // picks up the new value on the next call instead of serving the
+  // stale one for the rest of the process lifetime.
+  invalidateDateFormatCache();
   res.json({ success: true, updated: count });
 });
 app.get('/api/company-settings/flat', requireViewOrLotEntry, (req, res) => res.json(getSettingsFlat(getDb())));
@@ -1805,7 +1804,7 @@ app.get('/api/traders/template', requireExport, async (req, res) => {
   }];
   const buf = await createExcelBuffer('Sellers', cols, sample, {
     db, title: 'SELLERS TEMPLATE',
-    metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
+    metaLines: [`Date: ${fmtDate(todayLocalISO())}`],
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="sellers-template.xlsx"');
@@ -2001,7 +2000,7 @@ app.get('/api/buyers/template', requireExport, async (req, res) => {
   }];
   const buf = await createExcelBuffer('Buyers', cols, sample, {
     db, title: 'BUYERS TEMPLATE',
-    metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
+    metaLines: [`Date: ${fmtDate(todayLocalISO())}`],
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="buyers-template.xlsx"');
@@ -2909,7 +2908,7 @@ app.get('/api/auctions/template', requireExport, async (req, res) => {
   }];
   const buf = await createExcelBuffer('Lots', cols, sample, {
     db, title: 'AUCTION / LOTS TEMPLATE',
-    metaLines: [`Date: ${new Date().toLocaleDateString('en-GB')}`],
+    metaLines: [`Date: ${fmtDate(todayLocalISO())}`],
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="auction-lots-template.xlsx"');
@@ -4425,10 +4424,10 @@ function enrichPurchaseForPDF(invoice, cfg, db, auctionId) {
     const auction = db.get('SELECT date FROM auctions WHERE id = ?', [auctionId]);
     if (auction && auction.date) {
       const d = new Date(auction.date);
-      if (!isNaN(d)) invoice.invoiceDate = d.toLocaleDateString('en-GB');
+      if (!isNaN(d)) invoice.invoiceDate = fmtDate(auction.date);
     }
   }
-  if (!invoice.invoiceDate) invoice.invoiceDate = new Date().toLocaleDateString('en-GB');
+  if (!invoice.invoiceDate) invoice.invoiceDate = fmtDate(todayLocalISO());
   if (!invoice.eTradeNo) invoice.eTradeNo = String(auctionId || '');
 
   // Buyer block — populated from the central company identity (which
@@ -4721,9 +4720,9 @@ app.get('/api/bills/pdf/:auctionId/:sellerName', requireView, async (req, res) =
     const auction = db.get('SELECT date FROM auctions WHERE id = ?', [req.params.auctionId]);
     if (auction && auction.date) {
       const d = new Date(auction.date);
-      if (!isNaN(d)) bill.billDate = d.toLocaleDateString('en-GB');
+      if (!isNaN(d)) bill.billDate = fmtDate(auction.date);
     }
-    if (!bill.billDate) bill.billDate = new Date().toLocaleDateString('en-GB');
+    if (!bill.billDate) bill.billDate = fmtDate(todayLocalISO());
     bill.eTradeNo = req.query.eTradeNo || req.params.auctionId;
 
     const pdf = await generateAgriBillPDF(bill, cfg, billNo);
@@ -4779,10 +4778,10 @@ app.post('/api/bills/pdf-bulk', requireView, async (req, res) => {
         const auction = db.get('SELECT date FROM auctions WHERE id = ?', [stored.auction_id]);
         if (auction && auction.date) {
           const d = new Date(auction.date);
-          if (!isNaN(d)) bill.billDate = d.toLocaleDateString('en-GB');
+          if (!isNaN(d)) bill.billDate = fmtDate(auction.date);
         }
       }
-      if (!bill.billDate) bill.billDate = new Date().toLocaleDateString('en-GB');
+      if (!bill.billDate) bill.billDate = fmtDate(todayLocalISO());
       bill.eTradeNo = stored.auction_id || '';
       payloads.push({ billData: bill, billNo: stored.bil });
     }
@@ -5530,11 +5529,8 @@ app.get('/api/debit-notes/:id/pdf', requireView, (req, res) => {
 
     const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-    const fmtDate = (d) => {
-      if (!d) return '';
-      const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
-      return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d);
-    };
+    // fmtDate falls through to the module-level helper which honours
+    // the user's chosen date format from Settings → Display.
 
     // ── Render ────────────────────────────────────────────────
     const doc = new PDFDocument({ size: 'A4', margin: 30 });
@@ -6017,7 +6013,8 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
   const trader = db.get('SELECT * FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [sellerName]);
   const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-  const fmtDate = (d) => { if (!d) return ''; const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d); };
+  // fmtDate falls through to the module-level helper which honours
+  // the user's chosen date format from Settings → Display.
   const company = (cfg.trade_name || cfg.short_name || cfg.tally_company_name || cfg.legal_name || 'Company').toString();
 
   const PAGE_L = 30, PAGE_R = 565, PAGE_W = PAGE_R - PAGE_L;

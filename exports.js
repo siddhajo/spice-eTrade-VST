@@ -12,6 +12,11 @@ const {
 // Defensive identity resolver — see _company-identity-fallback.js.
 // Avoids "getCompanyIdentity is not a function" on partial deploys.
 const getCompanyIdentity = require('./_company-identity-fallback').resolve();
+// Date formatter honours the user's Settings → Display → Date format
+// choice via the shared module. Replaces the ad-hoc
+// `String(d).slice(0,10).split('-').reverse().join('/')` pattern that
+// was hardcoded to DD/MM/YYYY in several places.
+const { fmtDate: fmtUserDate } = require('./date-format');
 
 // Build an XLSX buffer with a unified brand band on top and Indian-format
 // numeric columns. `opts.title` is the report title shown in the middle of
@@ -202,7 +207,7 @@ function auctionMeta(db, auctionId) {
       'SELECT ano, date, crop_type FROM auctions WHERE id = ?', [auctionId]
     );
     if (!a) return [];
-    const dt = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
+    const dt = fmtUserDate(String(a.date || '').slice(0, 10));
     const meta = [];
     if (a.ano) meta.push(`e-TRADE No: ${a.ano}`);
     if (dt) meta.push(`Date: ${dt}`);
@@ -279,7 +284,7 @@ async function exportPriceList(db, auctionId) {
 async function exportPriceListBefore(db, auctionId) {
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
   const tradeNo = a.ano || '';
-  const tradeDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
+  const tradeDate = fmtUserDate(String(a.date || '').slice(0, 10));
   const rawRows = db.all(
     `SELECT lot_no as lot, bags as bag, qty
      FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
@@ -330,7 +335,7 @@ async function exportBankPayment(db, auctionId, cfg) {
   // Auction context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
   const ano = a.ano || '';
-  const valueDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
+  const valueDate = fmtUserDate(String(a.date || '').slice(0, 10));
 
   const rows = payments.map(p => {
     const amount = Number(p.amount) || 0;

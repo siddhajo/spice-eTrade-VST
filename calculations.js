@@ -877,15 +877,9 @@ function listAgriSellers(db, auctionId) {
   );
 }
 
-// Convert YYYY-MM-DD (SQLite date) → dd/mm/yyyy for display in
-// journal exports. Falls through unchanged if the input doesn't match.
-function _ddmmyyyy(d) {
-  if (!d) return '';
-  const s = String(d);
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-  return s;
-}
+// Display date formatter for journal exports — honours the user's
+// Settings → Display → Date format choice via the shared module.
+const { fmtDate: _ddmmyyyy } = require('./date-format');
 
 /**
  * Sales Journal (JOUR.PRG)
