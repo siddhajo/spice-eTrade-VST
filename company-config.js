@@ -411,6 +411,10 @@ function initCompanySettings(db) {
     'distance_auto_enabled', 'distance_road_multiplier',
     // Local transport / insurance toggles moved out of Tally to Rates.
     'tally_local_transport', 'tally_local_insurance',
+    // Roll-Discount-into-P_Rate is Grade-1-only — the Grade-2 "Dealer
+    // discount-inclusive" variant is unused. Drop the orphan row so
+    // it stops appearing in Settings → Rates.
+    'deduction2_inclusive',
   ];
   const drop = db.prepare('DELETE FROM company_settings WHERE key = ?');
   for (const k of REMOVED_KEYS) drop.run(k);
