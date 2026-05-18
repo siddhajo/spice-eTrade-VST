@@ -305,18 +305,30 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const SAC_Transport  = cfgGet(cfg, 'tally_hsn_transport', '996791');
   const SAC_Insurance  = cfgGet(cfg, 'tally_hsn_insurance', '997136');
 
-  // Dispatch-from defaults: this single-company build pulls dispatch
-  // info from the
-  // configured Kerala address block (since dispatch typically goes via
-  // the Kerala warehouse). User can override per-export via opts.
+  // Dispatch-from defaults — pick the address block matching the
+  // active business_state, with `tally_dispatch_pin` as an explicit
+  // override. The previous code hardcoded the Kerala (`kl_*`) block
+  // which left the dispatch PIN empty on Tamil Nadu installs, and
+  // Tally rejects the import with "consignor dispatch from pin is
+  // missing". Falls back to the other state's block if the active
+  // state's fields are blank, so partly-configured installs still
+  // emit a non-empty dispatch address.
+  const _activeState  = String(cfgGet(cfg, 'business_state', 'TAMIL NADU') || '').toUpperCase();
+  const _isKL         = _activeState.includes('KERALA');
+  const _pri = _isKL ? 'kl' : 'tn';
+  const _alt = _isKL ? 'tn' : 'kl';
+  const _pick = (suffix) => cfgGet(cfg, `${_pri}_${suffix}`, '') || cfgGet(cfg, `${_alt}_${suffix}`, '');
   const d_company    = cfgGet(cfg, 'short_name', cfgGet(cfg, 'trade_name', ''));
-  const d_add        = cfgGet(cfg, 'kl_address1', '');
-  const d_add2       = cfgGet(cfg, 'kl_address2', '');
-  const d_place      = cfgGet(cfg, 'kl_place', cfgGet(cfg, 'kl_branch', ''));
-  const d_pin        = cfgGet(cfg, 'kl_pin', '');
-  const d_state      = cfgGet(cfg, 'kl_state', 'Kerala');
-  const d_state_code = '32';
-  const d_gstin      = cfgGet(cfg, 'kl_gstin', '');
+  const d_add        = _pick('address1');
+  const d_add2       = _pick('address2');
+  const d_place      = _pick('place') || _pick('branch');
+  // Explicit dispatch-pin override wins so users with a warehouse in
+  // a different city than their billing address can still set the
+  // correct origin (also used by the e-way bill distance resolver).
+  const d_pin        = cfgGet(cfg, 'tally_dispatch_pin', '') || _pick('pin');
+  const d_state      = _pick('state') || (_isKL ? 'Kerala' : 'Tamil Nadu');
+  const d_state_code = _isKL ? '32' : '33';
+  const d_gstin      = _pick('gstin');
 
   // E-way bill consignor type — kept for reference compatibility
   const consignorType = cfgGet(cfg, 'tally_consignor_type', 'Self');
