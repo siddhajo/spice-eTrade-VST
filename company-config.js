@@ -178,7 +178,15 @@ const DEFAULTS = [
   // Price List Mapping — sister tool of the Lots → Price Import
   // flow. Installs that don't use the mapping workflow can hide the
   // sidebar entry AND the Lots-toolbar button with this flag.
+  // Also gates the "Set Grade 1" bulk button on the Lots screen,
+  // since that's part of the same mapping workflow.
   { key: 'flag_price_list_mapping', value: 'true',    category: 'flags',     label: 'Price List Mapping',       type: 'boolean' },
+  // Print Selected Purchase — ASP-only "purchase-side mirror" PDF
+  // for ticked invoices. Niche; most e-Trade installs don't use it.
+  // Defaults to OFF so the button stays hidden until explicitly
+  // enabled. Even with this ON the button still requires Kerala
+  // business state (the ASP-context check that already gates it).
+  { key: 'flag_print_selected_purchase', value: 'false', category: 'flags', label: 'Print Selected Purchase (ASP / Kerala only)', type: 'boolean' },
   // Date format used for display across UI tables, PDFs and Excel
   // exports. Three options:
   //   DD/MM/YYYY  → 18/05/2026 (Indian/UK default, current behaviour)

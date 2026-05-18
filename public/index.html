@@ -954,12 +954,18 @@ body:not([data-feat-debit-notes="1"]) .feat-debit-notes{display:none !important}
    Lots toolbar are tagged .feat-price-list-mapping so this single
    rule hides both when the flag is OFF. */
 body:not([data-feat-price-list-mapping="1"]) .feat-price-list-mapping{display:none !important}
-/* "Set Grade 1" bulk-action button on the Lots screen — only useful
-   when flag_discount_in_prate is ON, because that's the only mode
-   where Grade 1 calculates differently. With the flag OFF the
-   button would silently re-stamp grades without any user-visible
-   effect, so we hide it entirely. */
+/* feat-discount-in-prate is reserved (no consumers right now after
+   "Set Grade 1" moved to feat-price-list-mapping). Kept for future
+   surfaces that only make sense when the discount-in-prate
+   calculation mode is on. */
 body:not([data-feat-discount-in-prate="1"]) .feat-discount-in-prate{display:none !important}
+/* "Print Selected Purchase" button on the Sales tab — niche
+   "purchase-side mirror" PDF used by ASP/Kerala installs only.
+   Gated by flag_print_selected_purchase so other installs don't
+   see a dead button. The existing applyAspContextVisibility()
+   layer still hides it outside Kerala business state, so the
+   button needs BOTH the flag ON and Kerala active to appear. */
+body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -2806,15 +2812,17 @@ input[type="search"]:focus{
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
             <!-- Bulk-grade button — only visible when at least one lot
-                 is ticked AND flag_discount_in_prate is ON. With the
-                 flag OFF, Grade 1 doesn't calculate differently from
-                 ungraded lots, so re-stamping grades would have no
-                 user-visible effect. Two gates:
-                   - .feat-discount-in-prate hides the whole button
+                 is ticked AND flag_price_list_mapping is ON. The
+                 button is part of the price-list-mapping workflow
+                 (mark certain lots as Grade 1 after re-importing a
+                 mapped price list), so it shares the same flag as
+                 the Price List Mapping tab and Lots-toolbar entry.
+                 Two gates:
+                   - .feat-price-list-mapping hides the whole button
                      based on the flag (CSS rule above).
                    - BulkActions._sync flips display:none/inline based
                      on whether any lots are ticked. -->
-            <button id="lot-bulk-grade" class="needs-lot-write feat-discount-in-prate btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-grade" class="needs-lot-write feat-price-list-mapping btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Sister tool to Price Import. Opens the Price List Mapping
                  tab where the user can fill the CODE column on a Price
@@ -3250,8 +3258,11 @@ input[type="search"]:focus{
             <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedInvoices()" title="Print all ticked invoices">🖨 Print Selected</button>
             <button id="inv-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- ASP-only: Print Selected Purchase. Hidden outside ASP context.
-                 Visibility toggled by applyAspContextVisibility() at load + state switch. -->
-            <button id="btn-print-asp-purchase" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="printSelectedPurchaseFromInvoices()" title="Print purchase-side mirror PDF for all ticked invoices (available when business state is Kerala)">🖨 Print Selected Purchase</button>
+                 Visibility toggled by applyAspContextVisibility() at load + state switch.
+                 Also gated by flag_print_selected_purchase — installs that
+                 don't need this niche purchase-side-mirror PDF can hide it
+                 entirely without depending on the ASP-context check. -->
+            <button id="btn-print-asp-purchase" class="btn feat-print-selected-purchase" style="display:none;height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="printSelectedPurchaseFromInvoices()" title="Print purchase-side mirror PDF for all ticked invoices (available when business state is Kerala)">🖨 Print Selected Purchase</button>
             <!-- Lorry no: bulk-set vehicle number on ticked invoices.
                  Stored in invoices.lorry_no, picked up by the Tally
                  sales voucher generator as e-way bill VehicleNo. -->
@@ -5522,12 +5533,20 @@ async function applyFeatureFlags() {
   document.body.setAttribute('data-feat-bills',       featOn('flag_bills') ? '1' : '0');
   document.body.setAttribute('data-feat-debit-notes', featOn('flag_debit_notes') ? '1' : '0');
   document.body.setAttribute('data-feat-price-list-mapping', featOn('flag_price_list_mapping') ? '1' : '0');
-  // flag_discount_in_prate defaults to OFF (not ON) — it's a niche
-  // calculation mode, not a baseline feature, so the "Set Grade 1"
-  // button stays hidden until the admin explicitly enables it.
+  // flag_discount_in_prate defaults to OFF (not ON). Currently no
+  // UI surfaces are tagged with .feat-discount-in-prate (the Set
+  // Grade 1 button moved to .feat-price-list-mapping), but the
+  // attribute is still set so future flag_discount_in_prate-only
+  // surfaces gate cleanly without re-wiring applyFeatureFlags.
   const dipOn = cfg && (cfg.flag_discount_in_prate === true
     || String(cfg.flag_discount_in_prate || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-discount-in-prate', dipOn ? '1' : '0');
+  // flag_print_selected_purchase defaults to OFF — niche feature for
+  // ASP/Kerala installs only. Even when this flag is ON the button
+  // still requires Kerala business state (applyAspContextVisibility).
+  const pspOn = cfg && (cfg.flag_print_selected_purchase === true
+    || String(cfg.flag_print_selected_purchase || '').toLowerCase() === 'true');
+  document.body.setAttribute('data-feat-print-selected-purchase', pspOn ? '1' : '0');
   // Date format: cached on window for fmtD() to pick up. Honours
   // Settings → Display → Date format. Defaults DD/MM/YYYY when the
   // setting isn't present (legacy installs or pre-fetch first paint).
