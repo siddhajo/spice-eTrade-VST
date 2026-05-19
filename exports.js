@@ -285,17 +285,23 @@ async function exportPriceListBefore(db, auctionId) {
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
   const tradeNo = a.ano || '';
   const tradeDate = fmtUserDate(String(a.date || '').slice(0, 10));
+  // PRICE + CODE are read straight from the lots table — both will be
+  // blank pre-auction (auction not held yet) and populated post-
+  // auction. The "Before" form is typically printed empty so buyers
+  // can hand-fill PRICE / CODE during the auction.
   const rawRows = db.all(
-    `SELECT lot_no as lot, bags as bag, qty
+    `SELECT lot_no as lot, bags as bag, qty, price, COALESCE(code,'') AS code
      FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
   );
   const rows = rawRows.map(r => ({ trade_no: tradeNo, date: tradeDate, ...r }));
   const cols = [
-    { header: 'TRADE NO', key: 'trade_no', width: 12 },
-    { header: 'DATE',     key: 'date',     width: 12 },
-    { header: 'LOT',      key: 'lot',      width: 10 },
-    { header: 'BAG',      key: 'bag',      width: 8  },
-    { header: 'QTY',      key: 'qty',      width: 14 },
+    { header: 'TNO',   key: 'trade_no', width: 10 },
+    { header: 'DATE',  key: 'date',     width: 12 },
+    { header: 'LOT',   key: 'lot',      width: 10 },
+    { header: 'BAG',   key: 'bag',      width: 8  },
+    { header: 'QTY',   key: 'qty',      width: 14 },
+    { header: 'PRICE', key: 'price',    width: 10 },
+    { header: 'CODE',  key: 'code',     width: 10 },
   ];
   return createExcelBuffer('PriceListBefore', cols, rows, {
     db, title: 'Price List (Before)', metaLines: auctionMeta(db, auctionId),

@@ -172,7 +172,7 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
 
   function isNumericCol(col) {
     const h = (col.header || '').toUpperCase();
-    return /^(QTY|BAG|BAGS|PRICE|RATE|AMOUNT|PQTY|PRATE|PURAMT|CGST|SGST|IGST|TCS|TOTAL|DISCOUNT|PAYABLE|ADVANCE|BALANCE|LITRE|LOTS|TDS|ASSESS_VALUE|COST|NET|GUNNY|TRANSPORT|INSURANCE|CARDAMOM|CARDAMOM_COST|GUNNY_COST|ROUND|BILAMT|COM)$/.test(h);
+    return /^(QTY|BAG|BAGS|PRICE|RATE|AMOUNT|PQTY|PRATE|PURAMT|PURCHAMT|CGST|SGST|IGST|TCS|TOTAL|DISCOUNT|PAYABLE|ADVANCE|BALANCE|LITRE|LOTS|TDS|ASSESS_VALUE|COST|NET|GUNNY|TRANSPORT|INSURANCE|CARDAMOM|CARDAMOM_COST|GUNNY_COST|ROUND|BILAMT|COM)$/.test(h);
   }
 
   function fmtCell(val, col) {
@@ -513,11 +513,13 @@ const COLS = {
     { header: 'BIDDER', key: 'bidder', width: 20 },
   ],
   price_list_before: [
-    { header: 'TRADE NO', key: 'trade_no', width: 12 },
-    { header: 'DATE',     key: 'date',     width: 12 },
-    { header: 'LOT',      key: 'lot',      width: 10 },
-    { header: 'BAG',      key: 'bag',      width: 8  },
-    { header: 'QTY',      key: 'qty',      width: 14 },
+    { header: 'TNO',   key: 'trade_no', width: 10 },
+    { header: 'DATE',  key: 'date',     width: 12 },
+    { header: 'LOT',   key: 'lot',      width: 10 },
+    { header: 'BAG',   key: 'bag',      width: 8  },
+    { header: 'QTY',   key: 'qty',      width: 14 },
+    { header: 'PRICE', key: 'price',    width: 10 },
+    { header: 'CODE',  key: 'code',     width: 10 },
   ],
   bank_payment: [
     // PDF-only display columns — restructured for portrait so all data fits
@@ -766,7 +768,7 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       const tradeNo = a.ano || '';
       const tradeDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
       return db.all(
-        `SELECT lot_no as lot, bags as bag, qty
+        `SELECT lot_no as lot, bags as bag, qty, price, COALESCE(code,'') AS code
          FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
       ).map(r => ({ trade_no: tradeNo, date: tradeDate, ...r }));
     }

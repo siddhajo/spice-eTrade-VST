@@ -383,20 +383,30 @@ function xlsxNumFmtForHeader(header) {
   // text columns to the left.
   // Treat all other numerics as rupees (price/amount/total/etc.)
   if (
-    h === 'PRICE'   || h === 'AMOUNT' || h === 'PURAMT' ||
-    h === 'PRATE'   || h === 'PAYABLE'|| h === 'DISCOUNT' ||
+    h === 'PRICE'   || h === 'AMOUNT' || h === 'PURAMT' || h === 'PURCHAMT' ||
+    h === 'RATE'    || h === 'PRATE'  || h === 'PAYABLE'|| h === 'DISCOUNT' ||
     h === 'BALANCE' || h === 'ADVANCE'|| h === 'VALUE' ||
-    h === 'INV.AMOUNT' || h === 'TOTAL' || h === 'COMMISSION' ||
+    h === 'INV.AMOUNT' || h === 'TOTAL' || h === 'COMMISSION' || h === 'COM' ||
     h === 'CGST'    || h === 'SGST'   || h === 'IGST' ||
-    h === 'REFUND'  ||
+    h === 'REFUND'  || h === 'BILAMT' || h === 'BIL.AMT' ||
     // Sales-journal column headers — were previously unformatted, now
     // grouped Indian-style for readability across the wide journal.
     h === 'CARDAMOM' || h === 'GUNNY'  || h === 'TRANSPORT' ||
     h === 'INSURANCE'|| h === 'TCS'    || h === 'ROUND' ||
     // Purchase-journal extras
-    h === 'COST'     || h === 'NET'    || h === 'TDS'
+    h === 'COST'     || h === 'NET'    || h === 'TDS' ||
+    // Sales-taxes export uses these compound headers
+    h === 'CARDAMOM_COST' || h === 'CARDAMOM COST' ||
+    h === 'GUNNY_COST'    || h === 'GUNNY COST'    ||
+    h === 'TAX'      || h === 'ASSESS_VALUE' || h === 'ASSESS VALUE'
   ) {
     return '#,##,##0.00';  // Indian-style 2-decimal with lakh grouping
+  }
+  // Fallback: catch any money-like header by suffix (covers user-added
+  // exports that don't show up in the explicit list above). 2 decimals
+  // is the safe default for rupee columns.
+  if (/(AMT|AMOUNT|COST|PRICE|RATE|TOTAL|VALUE|CHG|TAX|GST|TDS|TCS|REFUND|DISCOUNT|PAYABLE|BALANCE|ADVANCE|NET|COMMISSION|ROUND)$/.test(h)) {
+    return '#,##,##0.00';
   }
   return null;             // not numeric — no format
 }

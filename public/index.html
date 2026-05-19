@@ -12253,8 +12253,8 @@ async function loadLots(opts){
       const pct = realLotCount > 0 ? Math.round((calculatedCount / realLotCount) * 100) : 0;
       const $ = (id) => document.getElementById(id);
       if ($('lot-kpi-count'))  $('lot-kpi-count').textContent  = arr.length;
-      if ($('lot-kpi-qty'))    $('lot-kpi-qty').innerHTML      = `${fmtI(totalQty, 0)}<span class="kpi-unit">kg</span>`;
-      if ($('lot-kpi-amount')) $('lot-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 0)}`;
+      if ($('lot-kpi-qty'))    $('lot-kpi-qty').innerHTML      = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
+      if ($('lot-kpi-amount')) $('lot-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 2)}`;
       if ($('lot-kpi-calc'))   $('lot-kpi-calc').innerHTML     = `${pct}%<span class="kpi-unit"> done</span>`;
 
       // Sold / Withdrawn aggregates from the same lot list (no extra fetch).
@@ -12293,7 +12293,8 @@ async function loadLots(opts){
       // the friendly "value with unit" treatment used elsewhere.
       const metaRow = (lbl, val) => `<span class="lbl">${lbl}</span><span class="val">${val}</span>`;
       const ccy = (n) => `<span class="ccy">₹</span>${fmtI(n,2)}`;
-      const ccyInt = (n) => `<span class="ccy">₹</span>${fmtI(n,0)}`;
+      // Bags is an integer count — kept at 0 decimals. Qty/Amount use
+      // the 2-decimal `ccy`/explicit `, 2` formatting like the main tiles.
 
       if ($('lot-kpi-amount-meta')) $('lot-kpi-amount-meta').innerHTML = hasSold
         ? metaRow('Min', ccy(priceMin)) + metaRow('Max', ccy(priceMax)) + metaRow('Avg', ccy(priceAvg))
@@ -12302,19 +12303,19 @@ async function loadLots(opts){
       if ($('lot-kpi-sold-count')) $('lot-kpi-sold-count').textContent = agg.sold.n;
       if ($('lot-kpi-sold-meta'))  $('lot-kpi-sold-meta').innerHTML =
         metaRow('Bags', fmtI(agg.sold.bags, 0))
-        + metaRow('Qty', `${fmtI(agg.sold.qty, 0)} kg`)
-        + metaRow('Amount', ccyInt(agg.sold.amt));
+        + metaRow('Qty', `${fmtI(agg.sold.qty, 2)} kg`)
+        + metaRow('Amount', ccy(agg.sold.amt));
 
       if ($('lot-kpi-wd-count'))   $('lot-kpi-wd-count').textContent = agg.wd.n;
       if ($('lot-kpi-wd-meta'))    $('lot-kpi-wd-meta').innerHTML =
         metaRow('Bags', fmtI(agg.wd.bags, 0))
-        + metaRow('Qty', `${fmtI(agg.wd.qty, 0)} kg`)
-        + metaRow('Amount', ccyInt(agg.wd.amt));
+        + metaRow('Qty', `${fmtI(agg.wd.qty, 2)} kg`)
+        + metaRow('Amount', ccy(agg.wd.amt));
 
       updateSummaryStats('lots',
         `<strong>${arr.length}</strong> lot${arr.length===1?'':'s'} · `
-        + `<strong>${fmtI(totalQty,0)} kg</strong> · `
-        + `<strong>₹${fmtI(totalAmount,0)}</strong> · `
+        + `<strong>${fmtI(totalQty,2)} kg</strong> · `
+        + `<strong>₹${fmtI(totalAmount,2)}</strong> · `
         + `<strong>${pct}%</strong> calculated · `
         + `<strong>${agg.sold.n}</strong> sold · `
         + `<strong>${agg.wd.n}</strong> WD`);
@@ -12836,14 +12837,14 @@ async function loadInvoices(opts){
       const grandTotal  = arr.reduce((a,i) => a + (Number(i.tot)    || 0), 0);
       const $ = (id) => document.getElementById(id);
       if ($('inv-kpi-count'))  $('inv-kpi-count').textContent  = arr.length;
-      if ($('inv-kpi-qty'))    $('inv-kpi-qty').innerHTML      = `${fmtI(totalQty, 0)}<span class="kpi-unit">kg</span>`;
-      if ($('inv-kpi-amount')) $('inv-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 0)}`;
-      if ($('inv-kpi-total'))  $('inv-kpi-total').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(grandTotal, 0)}`;
+      if ($('inv-kpi-qty'))    $('inv-kpi-qty').innerHTML      = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
+      if ($('inv-kpi-amount')) $('inv-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 2)}`;
+      if ($('inv-kpi-total'))  $('inv-kpi-total').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(grandTotal, 2)}`;
       // Compact summary line shown when collapsed
       updateSummaryStats('invoices',
         `<strong>${arr.length}</strong> invoice${arr.length===1?'':'s'} · `
-        + `<strong>${fmtI(totalQty,0)} kg</strong> · `
-        + `<strong>₹${fmtI(grandTotal,0)}</strong> total`);
+        + `<strong>${fmtI(totalQty,2)} kg</strong> · `
+        + `<strong>₹${fmtI(grandTotal,2)}</strong> total`);
     }
   }
 
@@ -13834,13 +13835,13 @@ async function loadPurchases(opts){
       const grandTotal  = arr.reduce((a,i) => a + (Number(i.total)  || 0), 0);
       const $ = (id) => document.getElementById(id);
       if ($('pur-kpi-count'))  $('pur-kpi-count').textContent  = arr.length;
-      if ($('pur-kpi-qty'))    $('pur-kpi-qty').innerHTML      = `${fmtI(totalQty, 0)}<span class="kpi-unit">kg</span>`;
-      if ($('pur-kpi-amount')) $('pur-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 0)}`;
-      if ($('pur-kpi-total'))  $('pur-kpi-total').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(grandTotal, 0)}`;
+      if ($('pur-kpi-qty'))    $('pur-kpi-qty').innerHTML      = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
+      if ($('pur-kpi-amount')) $('pur-kpi-amount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalAmount, 2)}`;
+      if ($('pur-kpi-total'))  $('pur-kpi-total').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(grandTotal, 2)}`;
       updateSummaryStats('purchases',
         `<strong>${arr.length}</strong> invoice${arr.length===1?'':'s'} · `
-        + `<strong>${fmtI(totalQty,0)} kg</strong> · `
-        + `<strong>₹${fmtI(grandTotal,0)}</strong> total`);
+        + `<strong>${fmtI(totalQty,2)} kg</strong> · `
+        + `<strong>₹${fmtI(grandTotal,2)}</strong> total`);
     }
   }
 
@@ -14353,13 +14354,13 @@ async function loadPayments(opts){
         const totalPayable  = arr.reduce((a,i) => a + (Number(i.total_payable)  || 0), 0);
         const $ = (id) => document.getElementById(id);
         if ($('pay-kpi-sellers'))  $('pay-kpi-sellers').textContent  = arr.length;
-        if ($('pay-kpi-qty'))      $('pay-kpi-qty').innerHTML        = `${fmtI(totalQty, 0)}<span class="kpi-unit">kg</span>`;
-        if ($('pay-kpi-discount')) $('pay-kpi-discount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalDiscount, 0)}`;
-        if ($('pay-kpi-payable'))  $('pay-kpi-payable').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalPayable, 0)}`;
+        if ($('pay-kpi-qty'))      $('pay-kpi-qty').innerHTML        = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
+        if ($('pay-kpi-discount')) $('pay-kpi-discount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalDiscount, 2)}`;
+        if ($('pay-kpi-payable'))  $('pay-kpi-payable').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalPayable, 2)}`;
         updateSummaryStats('payments',
           `<strong>${arr.length}</strong> seller${arr.length===1?'':'s'} · `
-          + `<strong>${fmtI(totalQty,0)} kg</strong> · `
-          + `<strong>₹${fmtI(totalPayable,0)}</strong> payable`);
+          + `<strong>${fmtI(totalQty,2)} kg</strong> · `
+          + `<strong>₹${fmtI(totalPayable,2)}</strong> payable`);
       }
     }
 
@@ -14640,12 +14641,12 @@ async function loadBills(opts){
       const totalNet = arr.reduce((a,i) => a + (Number(i.net) || 0), 0);
       const $ = (id) => document.getElementById(id);
       if ($('bill-kpi-count')) $('bill-kpi-count').textContent = arr.length;
-      if ($('bill-kpi-qty'))   $('bill-kpi-qty').innerHTML     = `${fmtI(totalQty, 0)}<span class="kpi-unit">kg</span>`;
-      if ($('bill-kpi-net'))   $('bill-kpi-net').innerHTML     = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalNet, 0)}`;
+      if ($('bill-kpi-qty'))   $('bill-kpi-qty').innerHTML     = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
+      if ($('bill-kpi-net'))   $('bill-kpi-net').innerHTML     = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalNet, 2)}`;
       updateSummaryStats('bills',
         `<strong>${arr.length}</strong> bill${arr.length===1?'':'s'} · `
-        + `<strong>${fmtI(totalQty,0)} kg</strong> · `
-        + `<strong>₹${fmtI(totalNet,0)}</strong> net`);
+        + `<strong>${fmtI(totalQty,2)} kg</strong> · `
+        + `<strong>₹${fmtI(totalNet,2)}</strong> net`);
     }
   }
 
