@@ -11340,8 +11340,14 @@ function lotBulkBuyerPreview(){
     x => String(x.buyer || '').trim().toUpperCase() === code
   );
   if (b) {
+    const saleRaw = String(b.sale || '').trim().toUpperCase();
+    const saleCode = ['L','I','E'].includes(saleRaw) ? saleRaw : 'L';
+    const saleLabel = saleCode === 'L' ? 'Local'
+                    : saleCode === 'I' ? 'Inter-state'
+                    : 'Export';
     prev.innerHTML = `→ <strong style="color:var(--spice-cardamom)">${esc(b.buyer1 || '(no trade name)')}</strong>`
-      + (b.code ? `<span style="color:var(--text3)"> · code ${esc(b.code)}</span>` : '');
+      + (b.code ? `<span style="color:var(--text3)"> · code ${esc(b.code)}</span>` : '')
+      + `<span style="color:var(--text3)"> · sale ${esc(saleLabel)}</span>`;
   } else {
     prev.innerHTML = `<span style="color:var(--spice-chili)">No buyer registered with code "${esc(code)}". Add them in the Buyers tab first.</span>`;
   }
@@ -11380,7 +11386,10 @@ async function lotBulkBuyerApply(){
       try { await j(`/api/lots/calculate/${aid}`, { method: 'POST' }); } catch(_){}
     }
     hideModal('lot-bulk-buyer-modal');
-    toast(`Set buyer ${r.buyer} on ${n} lot${n === 1 ? '' : 's'} — recalculated`);
+    const saleLabel = r.sale === 'I' ? 'Inter-state'
+                    : r.sale === 'E' ? 'Export'
+                    : 'Local';
+    toast(`Set buyer ${r.buyer} (${saleLabel}) on ${n} lot${n === 1 ? '' : 's'} — recalculated`);
     if (typeof loadLots === 'function') loadLots();
   } catch (e) {
     err.textContent = (e && e.message) || 'Failed';

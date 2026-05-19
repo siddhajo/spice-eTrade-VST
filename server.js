@@ -3229,7 +3229,7 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
     }
     const db = getDb();
     const b = db.get(
-      `SELECT buyer, buyer1, code FROM buyers
+      `SELECT buyer, buyer1, code, sale FROM buyers
         WHERE UPPER(TRIM(buyer)) = UPPER(TRIM(?))
         LIMIT 1`,
       [buyerCode]
@@ -3237,10 +3237,17 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
     if (!b) {
       return res.status(404).json({ error: `No buyer found with code "${buyerCode}". Register the buyer first in the Buyers tab.` });
     }
+    // Apply the buyer's default sale type (L/I/E) onto the lot so the
+    // GST regime on subsequent invoice generation matches what the buyer
+    // is registered for — otherwise a Local buyer reassigned from an
+    // Inter-state lot would still carry the IGST flag from the prior
+    // assignment.
+    const buyerSale = String(b.sale || '').trim().toUpperCase();
+    const saleVal = ['L', 'I', 'E'].includes(buyerSale) ? buyerSale : 'L';
     const placeholders = numericIds.map(() => '?').join(',');
     db.run(
-      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ? WHERE id IN (${placeholders})`,
-      [b.buyer, b.buyer1 || '', b.code || '', ...numericIds]
+      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ? WHERE id IN (${placeholders})`,
+      [b.buyer, b.buyer1 || '', b.code || '', saleVal, ...numericIds]
     );
     res.json({
       success: true,
@@ -3248,6 +3255,7 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
       buyer: b.buyer,
       buyer1: b.buyer1 || '',
       code: b.code || '',
+      sale: saleVal,
     });
   } catch (e) {
     res.status(500).json({ error: 'Bulk buyer update failed: ' + (e.message || e) });
