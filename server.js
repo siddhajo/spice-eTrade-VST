@@ -3205,6 +3205,55 @@ app.post('/api/lots/bulk-grade', requireLotWrite, (req, res) => {
   }
 });
 
+// Bulk buyer-code update — paired with the Lots-screen "Set Buyer"
+// button. Body: { ids: [1, 2, …], buyer: 'CODE' }
+// Resolves the buyer in the buyers table to fetch buyer1 (trade name)
+// and code (short code) so all three columns on the lot stay in sync
+// — otherwise the lot would carry the new buyer code with a stale
+// trade name from the previous buyer, which breaks invoice generation
+// and Tally export party lookups. Match is case-insensitive on
+// `buyer` to tolerate uppercase/lowercase entries in legacy data.
+app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
+  try {
+    const { ids, buyer } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids[] is required' });
+    }
+    const buyerCode = String(buyer == null ? '' : buyer).trim();
+    if (!buyerCode) {
+      return res.status(400).json({ error: 'buyer code is required' });
+    }
+    const numericIds = ids.map(x => Number(x)).filter(Number.isFinite);
+    if (!numericIds.length) {
+      return res.status(400).json({ error: 'ids[] contains no valid numeric ids' });
+    }
+    const db = getDb();
+    const b = db.get(
+      `SELECT buyer, buyer1, code FROM buyers
+        WHERE UPPER(TRIM(buyer)) = UPPER(TRIM(?))
+        LIMIT 1`,
+      [buyerCode]
+    );
+    if (!b) {
+      return res.status(404).json({ error: `No buyer found with code "${buyerCode}". Register the buyer first in the Buyers tab.` });
+    }
+    const placeholders = numericIds.map(() => '?').join(',');
+    db.run(
+      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ? WHERE id IN (${placeholders})`,
+      [b.buyer, b.buyer1 || '', b.code || '', ...numericIds]
+    );
+    res.json({
+      success: true,
+      updated: numericIds.length,
+      buyer: b.buyer,
+      buyer1: b.buyer1 || '',
+      code: b.code || '',
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Bulk buyer update failed: ' + (e.message || e) });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════
 // INVOICES — Sales (GSTIN.PRG / KGSTIN.PRG)
 // ══════════════════════════════════════════════════════════════

@@ -966,6 +966,11 @@ body:not([data-feat-discount-in-prate="1"]) .feat-discount-in-prate{display:none
    layer still hides it outside Kerala business state, so the
    button needs BOTH the flag ON and Kerala active to appear. */
 body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{display:none !important}
+/* "Set Buyer" bulk button on the Lots screen — gated by
+   flag_lot_set_buyer so installs that don't retag buyer codes
+   after entry don't see a dead button. Two gates stack: this
+   flag must be ON AND at least one lot must be ticked. */
+body:not([data-feat-lot-set-buyer="1"]) .feat-lot-set-buyer{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -2811,6 +2816,17 @@ input[type="search"]:focus{
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
+            <!-- Bulk buyer-set button — visible when at least one lot
+                 is ticked AND flag_lot_set_buyer is ON. Opens a modal
+                 where the user picks a buyer by code; the server
+                 updates buyer/buyer1/code on every ticked row and the
+                 auction recalculates so the new buyer is reflected
+                 in PurAmt / Payable. Two gates:
+                   - .feat-lot-set-buyer hides the whole button based
+                     on the flag (CSS rule above).
+                   - BulkActions._sync flips display:none/inline based
+                     on whether any lots are ticked. -->
+            <button id="lot-bulk-buyer" class="needs-lot-write feat-lot-set-buyer btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-cardamom);color:#fff;font-weight:600" onclick="lotBulkSetBuyer()" title="Set the buyer code on every ticked lot — auto-fills the trade name + short code from the Buyers master">👤 Set Buyer <span id="lot-bulk-buyer-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Bulk-grade button — only visible when at least one lot
                  is ticked AND flag_price_list_mapping is ON. The
                  button is part of the price-list-mapping workflow
@@ -4442,6 +4458,28 @@ input[type="search"]:focus{
   <div class="actions"><button class="btn btn-o" onclick="hideModal('import-auction-modal')">Cancel</button><button class="btn btn-g" onclick="importAuction()">Import</button></div>
 </div></div>
 
+<!-- ═══ BULK SET BUYER (Lots screen) ════════════════════════════
+     User picks a buyer code (autocomplete fed by /api/buyers) and we
+     apply it to every ticked lot. The buyer's trade name + short code
+     auto-fill from the buyers master so all three columns stay in sync.
+     A small preview shows the resolved trade name once the typed code
+     matches a real buyer so the user can sanity-check before saving. -->
+<div class="modal-bg" id="lot-bulk-buyer-modal"><div class="modal" style="max-width:480px">
+  <h2>Set Buyer for selected lots</h2>
+  <p style="font-size:13px;color:var(--spice-text-mute);margin-bottom:14px"><span id="lot-bulk-buyer-summary">No lots selected.</span> Trade name and short code auto-fill from the Buyers master.</p>
+  <div class="fg">
+    <label>Buyer Code</label>
+    <input id="lot-bulk-buyer-input" list="lot-bulk-buyer-codes" placeholder="Type or pick a buyer code…" autocomplete="off" oninput="lotBulkBuyerPreview()">
+    <datalist id="lot-bulk-buyer-codes"></datalist>
+    <div id="lot-bulk-buyer-preview" style="margin-top:8px;font-size:12.5px;color:var(--text2);min-height:18px"></div>
+  </div>
+  <div id="lot-bulk-buyer-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-bottom:10px"></div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('lot-bulk-buyer-modal')">Cancel</button>
+    <button class="btn btn-g" id="lot-bulk-buyer-save" onclick="lotBulkBuyerApply()">Apply</button>
+  </div>
+</div></div>
+
 <!-- ═══ PRICE IMPORT (post-auction) ═══════════════════════ -->
 <div class="modal-bg" id="price-import-modal"><div class="modal">
   <h2>Price Import — Post-Auction Data</h2>
@@ -5547,6 +5585,11 @@ async function applyFeatureFlags() {
   const pspOn = cfg && (cfg.flag_print_selected_purchase === true
     || String(cfg.flag_print_selected_purchase || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-print-selected-purchase', pspOn ? '1' : '0');
+  // flag_lot_set_buyer defaults to OFF — the "Set Buyer" bulk button
+  // on the Lots toolbar stays hidden until admin enables it.
+  const lsbOn = cfg && (cfg.flag_lot_set_buyer === true
+    || String(cfg.flag_lot_set_buyer || '').toLowerCase() === 'true');
+  document.body.setAttribute('data-feat-lot-set-buyer', lsbOn ? '1' : '0');
   // Date format: cached on window for fmtD() to pick up. Honours
   // Settings → Display → Date format. Defaults DD/MM/YYYY when the
   // setting isn't present (legacy installs or pre-fetch first paint).
@@ -11140,13 +11183,18 @@ const BulkActions = (function(){
     const counter = document.getElementById(`${id}-sel-count`);
     if (delBtn)  delBtn.style.display  = ticked > 0 ? '' : 'none';
     if (counter) counter.textContent   = ticked > 0 ? `(${ticked})` : '';
-    // Lots also have a "Set Grade 1" bulk button — same visibility
-    // rule. Other resources don't have these elements so the
-    // getElementById calls below return null and we no-op silently.
+    // Lots also have "Set Grade 1" and "Set Buyer" bulk buttons —
+    // same visibility rule. Other resources don't have these elements
+    // so the getElementById calls below return null and we no-op
+    // silently.
     const gradeBtn = document.getElementById(`${id}-bulk-grade`);
     const gradeCounter = document.getElementById(`${id}-bulk-grade-count`);
     if (gradeBtn)     gradeBtn.style.display  = ticked > 0 ? '' : 'none';
     if (gradeCounter) gradeCounter.textContent = ticked > 0 ? `(${ticked})` : '';
+    const buyerBtn = document.getElementById(`${id}-bulk-buyer`);
+    const buyerCounter = document.getElementById(`${id}-bulk-buyer-count`);
+    if (buyerBtn)     buyerBtn.style.display  = ticked > 0 ? '' : 'none';
+    if (buyerCounter) buyerCounter.textContent = ticked > 0 ? `(${ticked})` : '';
   }
   function toggleAll(id, state){
     getVisibleCheckboxes(id).forEach(cb => { cb.checked = state; });
@@ -11236,6 +11284,109 @@ async function lotBulkSetGrade1(){
     if (typeof loadLots === 'function') loadLots();
   } catch (e) {
     showError(e);
+  }
+}
+
+// ── Bulk-set buyer code on ticked lots ───────────────────────
+// Three-step flow:
+//   1. lotBulkSetBuyer()        — opens the modal, populates the
+//                                 datalist from /api/buyers, stashes
+//                                 the ticked lot IDs.
+//   2. lotBulkBuyerPreview()    — fires on each keystroke; resolves
+//                                 the typed code against the cached
+//                                 buyers list and shows the matching
+//                                 trade name (or a "not found" hint).
+//   3. lotBulkBuyerApply()      — POST /api/lots/bulk-buyer, then
+//                                 recalculate the auction so PurAmt /
+//                                 Payable reflect the new buyer.
+let _lotBulkBuyer = { ids: [], buyers: [] };
+async function lotBulkSetBuyer(){
+  const ids = BulkActions.getTickedIds('lot');
+  if (!ids.length) { toast('Tick one or more lots first'); return; }
+  _lotBulkBuyer.ids = ids;
+  // Reset modal state.
+  const input = document.getElementById('lot-bulk-buyer-input');
+  const prev  = document.getElementById('lot-bulk-buyer-preview');
+  const err   = document.getElementById('lot-bulk-buyer-err');
+  const sum   = document.getElementById('lot-bulk-buyer-summary');
+  if (input) input.value = '';
+  if (prev)  prev.innerHTML = '';
+  if (err)   { err.style.display = 'none'; err.textContent = ''; }
+  if (sum)   sum.textContent = `${ids.length} lot${ids.length === 1 ? '' : 's'} selected.`;
+  // Populate the datalist from the buyers master. Cached on the module
+  // for the preview lookup so we don't refetch per keystroke.
+  try {
+    _lotBulkBuyer.buyers = await j('/api/buyers') || [];
+  } catch (_) {
+    _lotBulkBuyer.buyers = [];
+  }
+  const dl = document.getElementById('lot-bulk-buyer-codes');
+  if (dl) {
+    dl.innerHTML = _lotBulkBuyer.buyers.map(b =>
+      `<option value="${esc(b.buyer || '')}">${esc((b.buyer1 || b.buyer || '').toString())}${b.code ? ' · ' + esc(b.code) : ''}</option>`
+    ).join('');
+  }
+  showModal('lot-bulk-buyer-modal');
+  setTimeout(() => { try { input && input.focus(); } catch(_){} }, 50);
+}
+
+function lotBulkBuyerPreview(){
+  const input = document.getElementById('lot-bulk-buyer-input');
+  const prev  = document.getElementById('lot-bulk-buyer-preview');
+  if (!input || !prev) return;
+  const code = String(input.value || '').trim().toUpperCase();
+  if (!code) { prev.innerHTML = ''; return; }
+  const b = (_lotBulkBuyer.buyers || []).find(
+    x => String(x.buyer || '').trim().toUpperCase() === code
+  );
+  if (b) {
+    prev.innerHTML = `→ <strong style="color:var(--spice-cardamom)">${esc(b.buyer1 || '(no trade name)')}</strong>`
+      + (b.code ? `<span style="color:var(--text3)"> · code ${esc(b.code)}</span>` : '');
+  } else {
+    prev.innerHTML = `<span style="color:var(--spice-chili)">No buyer registered with code "${esc(code)}". Add them in the Buyers tab first.</span>`;
+  }
+}
+
+async function lotBulkBuyerApply(){
+  const input = document.getElementById('lot-bulk-buyer-input');
+  const err   = document.getElementById('lot-bulk-buyer-err');
+  const save  = document.getElementById('lot-bulk-buyer-save');
+  const code  = String((input && input.value) || '').trim();
+  err.style.display = 'none'; err.textContent = '';
+  if (!code) {
+    err.textContent = 'Enter a buyer code.';
+    err.style.display = 'block';
+    return;
+  }
+  const ids = _lotBulkBuyer.ids || [];
+  if (!ids.length) {
+    err.textContent = 'No lots selected.';
+    err.style.display = 'block';
+    return;
+  }
+  save.disabled = true; save.textContent = 'Applying…';
+  try {
+    const r = await j('/api/lots/bulk-buyer', {
+      method: 'POST',
+      body: JSON.stringify({ ids, buyer: code }),
+    });
+    const n = r.updated || ids.length;
+    // Recalculate the current auction so any downstream values
+    // (puramt, balance, etc. — buyer doesn't affect these directly
+    // today, but keeps the lots view consistent and matches the
+    // "Set Grade 1" flow's expectations) refresh immediately.
+    const aid = document.getElementById('lot-auction')?.value;
+    if (aid) {
+      try { await j(`/api/lots/calculate/${aid}`, { method: 'POST' }); } catch(_){}
+    }
+    hideModal('lot-bulk-buyer-modal');
+    toast(`Set buyer ${r.buyer} on ${n} lot${n === 1 ? '' : 's'} — recalculated`);
+    if (typeof loadLots === 'function') loadLots();
+  } catch (e) {
+    err.textContent = (e && e.message) || 'Failed';
+    err.style.display = 'block';
+  } finally {
+    save.disabled = false; save.textContent = 'Apply';
   }
 }
 

@@ -187,6 +187,13 @@ const DEFAULTS = [
   // enabled. Even with this ON the button still requires Kerala
   // business state (the ASP-context check that already gates it).
   { key: 'flag_print_selected_purchase', value: 'false', category: 'flags', label: 'Print Selected Purchase (ASP / Kerala only)', type: 'boolean' },
+  // Lots → "Set Buyer" bulk button. Defaults OFF — installs that
+  // don't routinely retag buyer codes after lot entry can keep the
+  // toolbar simpler. When ON, the cardamom-green "Set Buyer" button
+  // appears next to Delete Selected / Set Grade 1 whenever lots are
+  // ticked. Server endpoint /api/lots/bulk-buyer is always present
+  // regardless of this flag (it's permission-gated by lot_write).
+  { key: 'flag_lot_set_buyer',     value: 'false',          category: 'flags',     label: 'Lots → Set Buyer bulk action', type: 'boolean' },
   // Date format used for display across UI tables, PDFs and Excel
   // exports. Three options:
   //   DD/MM/YYYY  → 18/05/2026 (Indian/UK default, current behaviour)
