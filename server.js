@@ -6292,6 +6292,351 @@ app.get('/api/lorry-reports/:type/:auctionId', requireExport, async (req, res) =
 });
 
 // ══════════════════════════════════════════════════════════════
+// TRADE REPORTS — JSON + PDF summaries for an auction
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/reports/trade-summary/:auctionId
+// JSON snapshot of one auction's activity: per-branch, per-seller,
+// per-grade breakdowns, plus hourly entry rate. Drives the desktop
+// "Reports → Trade Summary" view.
+app.get('/api/reports/trade-summary/:auctionId', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.auctionId, 10);
+  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
+  if (!auction) return res.status(404).json({ error: 'Trade not found' });
+
+  // Optional branch filter — when set, the *aggregates* (Sold/Withdrawn/
+  // Min/Max/Avg) restrict to lots from that branch. The branch list
+  // itself is always returned in full so the UI can offer easy switching.
+  const branchFilter = String(req.query.branch || '').trim();
+  const bWhere = branchFilter ? ' AND branch = ?' : '';
+  const bParams = branchFilter ? [branchFilter] : [];
+
+  // Per-branch — primary view dad uses to compare today's branches.
+  const branchWise = db.all(
+    `SELECT branch,
+            COUNT(*)             AS lot_count,
+            SUM(bags)            AS total_bags,
+            SUM(qty)             AS total_qty,
+            COUNT(DISTINCT trader_id) AS seller_count,
+            SUM(CASE WHEN amount > 0 THEN 1 ELSE 0 END) AS sold_lots,
+            SUM(CASE WHEN amount > 0 THEN qty ELSE 0 END) AS sold_qty,
+            SUM(CASE WHEN COALESCE(amount,0) <= 0 THEN 1 ELSE 0 END) AS withdrawn_lots,
+            SUM(CASE WHEN COALESCE(amount,0) <= 0 THEN qty ELSE 0 END) AS withdrawn_qty,
+            MAX(CASE WHEN amount > 0 THEN price END) AS max_price,
+            MIN(CASE WHEN amount > 0 THEN price END) AS min_price,
+            CASE WHEN SUM(CASE WHEN amount > 0 THEN qty ELSE 0 END) > 0
+                 THEN SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) * 1.0
+                      / SUM(CASE WHEN amount > 0 THEN qty ELSE 0 END)
+                 ELSE 0 END AS avg_price
+       FROM lots WHERE auction_id = ?
+      GROUP BY branch ORDER BY total_qty DESC`,
+    [auctionId]
+  );
+
+  // Sold/Withdrawn/Min/Max/Avg aggregates — branch-filtered if requested.
+  const aggSold = db.get(
+    `SELECT COUNT(*) AS lots, COALESCE(SUM(qty),0) AS qty,
+            COALESCE(SUM(bags),0) AS bags, COALESCE(SUM(amount),0) AS cost
+       FROM lots WHERE auction_id = ? AND amount > 0` + bWhere,
+    [auctionId, ...bParams]
+  ) || { lots:0, qty:0, bags:0, cost:0 };
+  const aggWithdrawn = db.get(
+    `SELECT COUNT(*) AS lots, COALESCE(SUM(qty),0) AS qty,
+            COALESCE(SUM(bags),0) AS bags
+       FROM lots WHERE auction_id = ? AND COALESCE(amount,0) <= 0` + bWhere,
+    [auctionId, ...bParams]
+  ) || { lots:0, qty:0, bags:0 };
+  const aggPrice = db.get(
+    `SELECT MIN(price) AS min_price, MAX(price) AS max_price
+       FROM lots WHERE auction_id = ? AND amount > 0` + bWhere,
+    [auctionId, ...bParams]
+  ) || { min_price: 0, max_price: 0 };
+  const avgPrice = aggSold.qty > 0 ? (Number(aggSold.cost) / Number(aggSold.qty)) : 0;
+  const branchAggregates = {
+    branch: branchFilter || null,
+    sold:      { lots: aggSold.lots, bags: aggSold.bags, qty: aggSold.qty, cost: aggSold.cost },
+    withdrawn: { lots: aggWithdrawn.lots, bags: aggWithdrawn.bags, qty: aggWithdrawn.qty },
+    min: Number(aggPrice.min_price) || 0,
+    max: Number(aggPrice.max_price) || 0,
+    avg: avgPrice,
+  };
+
+  // Per-seller — pulls fresh names from traders master, falls back to
+  // the denormalised lots.name field for legacy / mobile entries.
+  const sellerWise = db.all(
+    `SELECT COALESCE(t.name, l.name, 'Unknown') AS seller_name,
+            l.trader_id,
+            l.branch,
+            COUNT(*)        AS lot_count,
+            SUM(l.bags)     AS total_bags,
+            SUM(l.qty)      AS total_qty
+       FROM lots l
+       LEFT JOIN traders t ON t.id = l.trader_id
+      WHERE l.auction_id = ?
+      GROUP BY COALESCE(l.trader_id, l.name)
+      ORDER BY total_qty DESC`,
+    [auctionId]
+  );
+
+  // Per-user (optional, gated by show_username setting).
+  const userWise = db.all(
+    `SELECT user_id,
+            COUNT(*)    AS lot_count,
+            SUM(bags)   AS total_bags,
+            SUM(qty)    AS total_qty
+       FROM lots WHERE auction_id = ? AND user_id != ''
+      GROUP BY user_id ORDER BY lot_count DESC`,
+    [auctionId]
+  );
+
+  // Hourly bucket — shows the rhythm of the auction day.
+  const hourly = db.all(
+    `SELECT substr(created_at, 12, 2) AS hour,
+            COUNT(*)  AS lot_count,
+            SUM(qty)  AS total_qty
+       FROM lots WHERE auction_id = ?
+      GROUP BY hour ORDER BY hour ASC`,
+    [auctionId]
+  );
+
+  // Grade breakdown (1, 2, GRD, ungraded etc.)
+  const gradeWise = db.all(
+    `SELECT grade,
+            COUNT(*)    AS lot_count,
+            SUM(bags)   AS total_bags,
+            SUM(qty)    AS total_qty,
+            COUNT(DISTINCT trader_id) AS seller_count
+       FROM lots WHERE auction_id = ?
+      GROUP BY grade ORDER BY grade ASC`,
+    [auctionId]
+  );
+
+  const totals = db.get(
+    `SELECT COUNT(*)               AS lot_count,
+            SUM(bags)              AS total_bags,
+            SUM(qty)               AS total_qty,
+            COUNT(DISTINCT trader_id) AS seller_count,
+            COUNT(DISTINCT branch) AS branch_count
+       FROM lots WHERE auction_id = ?`,
+    [auctionId]
+  ) || { lot_count: 0, total_bags: 0, total_qty: 0, seller_count: 0, branch_count: 0 };
+
+  // show_username toggle controls whether the per-user list is sent.
+  const showUserRow = db.get(`SELECT value FROM company_settings WHERE key = 'show_username'`);
+  const showUsername = !!(showUserRow && showUserRow.value === 'true');
+
+  res.json({
+    auction, totals, branchWise, sellerWise,
+    userWise: showUsername ? userWise : [],
+    hourly, gradeWise, showUsername,
+    branchAggregates,
+  });
+});
+
+// GET /api/reports/branch-comparison
+// Cross-trade comparison: how each branch has performed across all
+// auctions in the DB. Heavy query — only runs on demand.
+app.get('/api/reports/branch-comparison', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const data = db.all(
+    `SELECT l.branch, a.id AS auction_id, a.ano, a.date, a.crop_type,
+            COUNT(*)    AS lot_count,
+            SUM(l.bags) AS total_bags,
+            SUM(l.qty)  AS total_qty
+       FROM lots l JOIN auctions a ON a.id = l.auction_id
+      GROUP BY l.branch, l.auction_id
+      ORDER BY a.date DESC, l.branch ASC`
+  );
+  const overall = db.all(
+    `SELECT branch,
+            COUNT(*)              AS lot_count,
+            SUM(bags)             AS total_bags,
+            SUM(qty)              AS total_qty,
+            COUNT(DISTINCT auction_id) AS trade_count,
+            COUNT(DISTINCT trader_id)  AS seller_count
+       FROM lots
+      GROUP BY branch ORDER BY total_qty DESC`
+  );
+  res.json({ data, overall });
+});
+
+// GET /api/reports/summary-pdf/:auctionId
+// One-page A4 PDF: headline totals, branch breakdown, top sellers.
+// Window-opened via window.open() so we accept token via querystring
+// (no Authorization header from window.open).
+app.get('/api/reports/summary-pdf/:auctionId', (req, res, next) => {
+  const hdr = (req.headers.authorization || '').replace('Bearer ', '');
+  const tok = hdr || String(req.query.token || '');
+  if (!tok) return res.status(401).json({ error: 'No token' });
+  const db = getDb();
+  const session = db.get('SELECT * FROM sessions WHERE token = ?', [tok]);
+  if (!session) return res.status(403).json({ error: 'Session expired' });
+  const user = db.get('SELECT * FROM users WHERE id = ?', [session.user_id]);
+  if (!user) return res.status(403).json({ error: 'Unauthorized' });
+  req.user = user;
+  next();
+}, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.auctionId, 10);
+  const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
+  if (!auction) return res.status(404).json({ error: 'Trade not found' });
+
+  const titleRow = db.get(`SELECT value FROM company_settings WHERE key = 'trade_name'`);
+  const appTitle = (titleRow && titleRow.value) || 'Spice Auction';
+  const dateFmt  = auction.date ? fmtDate(auction.date) : '';
+
+  const branchFilterPdf = String(req.query.branch || '').trim();
+  const bWherePdf = branchFilterPdf ? ' AND branch = ?' : '';
+  const bWherePdfL = branchFilterPdf ? ' AND l.branch = ?' : '';
+  const bParamsPdf = branchFilterPdf ? [branchFilterPdf] : [];
+  const totals = db.get(
+    `SELECT COUNT(*) AS lots, SUM(bags) AS bags, SUM(qty) AS qty,
+            COUNT(DISTINCT trader_id) AS sellers, COUNT(DISTINCT branch) AS branches
+       FROM lots WHERE auction_id = ?` + bWherePdf,
+    [auctionId, ...bParamsPdf]
+  ) || { lots: 0, bags: 0, qty: 0, sellers: 0, branches: 0 };
+  const branchWise = db.all(
+    `SELECT branch, COUNT(*) AS lots, SUM(bags) AS bags, SUM(qty) AS qty,
+            SUM(CASE WHEN amount > 0 THEN qty ELSE 0 END) AS sold_qty,
+            SUM(CASE WHEN COALESCE(amount,0) <= 0 THEN qty ELSE 0 END) AS withdrawn_qty,
+            MAX(CASE WHEN amount > 0 THEN price END) AS max_price,
+            MIN(CASE WHEN amount > 0 THEN price END) AS min_price,
+            CASE WHEN SUM(CASE WHEN amount > 0 THEN qty ELSE 0 END) > 0
+                 THEN SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) * 1.0
+                      / SUM(CASE WHEN amount > 0 THEN qty ELSE 0 END)
+                 ELSE 0 END AS avg_price
+       FROM lots WHERE auction_id = ? GROUP BY branch ORDER BY qty DESC`,
+    [auctionId]
+  );
+  const sellerWise = db.all(
+    `SELECT COALESCE(t.name, l.name, 'Unknown') AS name,
+            l.branch,
+            COUNT(*) AS lots, SUM(l.bags) AS bags, SUM(l.qty) AS qty
+       FROM lots l LEFT JOIN traders t ON t.id = l.trader_id
+      WHERE l.auction_id = ?` + bWherePdfL +
+     ` GROUP BY COALESCE(l.trader_id, l.name) ORDER BY qty DESC`,
+    [auctionId, ...bParamsPdf]
+  );
+
+  // Logo for the header — spice-config single-company convention.
+  const logoPath = (function () {
+    const p = path.join(__dirname, 'public', 'logo-ispl.png');
+    return fs.existsSync(p) ? p : null;
+  })();
+
+  const PDFDocument = require('pdfkit');
+  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition',
+    `inline; filename="Trade_${auction.ano}_Summary_${auction.date}.pdf"`);
+  doc.pipe(res);
+
+  const m = 40, w = 515;
+
+  function drawRow(y, cols, font, size) {
+    doc.font(font || 'Helvetica').fontSize(size || 9);
+    cols.forEach(c => {
+      doc.text(String(c.val == null ? '' : c.val), c.x, y,
+        { width: c.w, align: c.align || 'left' });
+    });
+    return y + (size || 9) + 5;
+  }
+
+  // Header
+  if (logoPath) {
+    try { doc.image(logoPath, (595 - 45) / 2, doc.y, { width: 45, height: 45 }); doc.y += 50; } catch (_) {}
+  }
+  doc.font('Helvetica-Bold').fontSize(16).text(appTitle, m, doc.y, { width: w, align: 'center' });
+  doc.moveDown(0.2);
+  doc.font('Helvetica').fontSize(11).text(
+    'Trade #' + auction.ano + '  |  ' + dateFmt + '  |  ' + (auction.crop_type || '') +
+      (branchFilterPdf ? '  |  Branch: ' + branchFilterPdf : ''),
+    m, doc.y, { width: w, align: 'center' }
+  );
+  doc.moveDown(0.5);
+  doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(1).strokeColor('#166534').stroke();
+  doc.strokeColor('#000');
+  doc.moveDown(0.6);
+
+  // Totals strip
+  const sY = doc.y;
+  const sItems = [
+    { label: 'Lots',     val: totals.lots || 0 },
+    { label: 'Bags',     val: totals.bags || 0 },
+    { label: 'Qty (kg)', val: Number(totals.qty || 0).toFixed(3) },
+    { label: 'Sellers',  val: totals.sellers || 0 },
+    { label: 'Branches', val: totals.branches || 0 },
+  ];
+  const sW = w / sItems.length;
+  sItems.forEach((s, i) => {
+    const sx = m + i * sW;
+    doc.font('Helvetica-Bold').fontSize(14).text(String(s.val), sx, sY, { width: sW, align: 'center' });
+    doc.font('Helvetica').fontSize(8).fillColor('#666').text(s.label, sx, sY + 18, { width: sW, align: 'center' });
+  });
+  doc.fillColor('#000');
+  doc.y = sY + 40;
+  doc.moveDown(0.6);
+
+  // Branch-wise table
+  doc.font('Helvetica-Bold').fontSize(11).text('Branch-wise Breakdown', m);
+  doc.moveDown(0.4);
+  let y = doc.y;
+  y = drawRow(y, [
+    { x: m,       w: 200, val: 'Branch' },
+    { x: m + 200, w: 70,  val: 'Lots', align: 'right' },
+    { x: m + 270, w: 70,  val: 'Bags', align: 'right' },
+    { x: m + 340, w: 100, val: 'Qty (kg)', align: 'right' },
+  ], 'Helvetica-Bold', 9);
+  doc.moveTo(m, y - 2).lineTo(m + 440, y - 2).lineWidth(0.5).stroke();
+  branchWise.forEach(b => {
+    if (y > 770) { doc.addPage(); y = 40; }
+    y = drawRow(y, [
+      { x: m,       w: 200, val: b.branch || '' },
+      { x: m + 200, w: 70,  val: b.lots, align: 'right' },
+      { x: m + 270, w: 70,  val: b.bags, align: 'right' },
+      { x: m + 340, w: 100, val: Number(b.qty || 0).toFixed(3), align: 'right' },
+    ]);
+  });
+  doc.y = y;
+  doc.moveDown(0.8);
+
+  // Top sellers table (cap at 30)
+  if (sellerWise.length) {
+    doc.font('Helvetica-Bold').fontSize(11).text('Top Sellers (up to 30)', m);
+    doc.moveDown(0.4);
+    y = doc.y;
+    y = drawRow(y, [
+      { x: m,       w: 170, val: 'Seller' },
+      { x: m + 170, w: 110, val: 'Branch' },
+      { x: m + 280, w: 50,  val: 'Lots', align: 'right' },
+      { x: m + 330, w: 60,  val: 'Bags', align: 'right' },
+      { x: m + 390, w: 80,  val: 'Qty (kg)', align: 'right' },
+    ], 'Helvetica-Bold', 9);
+    doc.moveTo(m, y - 2).lineTo(m + 470, y - 2).lineWidth(0.5).stroke();
+    sellerWise.slice(0, 30).forEach(s => {
+      if (y > 770) { doc.addPage(); y = 40; }
+      y = drawRow(y, [
+        { x: m,       w: 170, val: s.name || 'Unknown' },
+        { x: m + 170, w: 110, val: s.branch || '' },
+        { x: m + 280, w: 50,  val: s.lots, align: 'right' },
+        { x: m + 330, w: 60,  val: s.bags, align: 'right' },
+        { x: m + 390, w: 80,  val: Number(s.qty || 0).toFixed(3), align: 'right' },
+      ]);
+    });
+    doc.y = y + 10;
+  }
+
+  // Footer
+  doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.5).stroke();
+  doc.moveDown(0.4);
+  doc.font('Helvetica').fontSize(8).fillColor('#888')
+     .text('Generated ' + new Date().toLocaleString('en-IN'), m, doc.y, { width: w, align: 'center' });
+
+  doc.end();
+});
+
+// ══════════════════════════════════════════════════════════════
 // DBF EXPORTS (FoxPro-compatible format)
 // ══════════════════════════════════════════════════════════════
 

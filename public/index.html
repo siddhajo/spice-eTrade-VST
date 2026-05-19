@@ -1311,6 +1311,100 @@ tr:hover td{background:var(--spice-cream)}
 .sw input:checked+.sl::before{transform:translateX(12px)}
 
 
+/* ── Reports tab — quick-access tile grid ─────────────── */
+.reports-hub{
+  background:linear-gradient(135deg,#F0FDF4 0%,#FFFBEB 100%);
+  border:1px solid #BBF7D0;border-radius:16px;
+  padding:24px 26px;margin-bottom:20px;
+}
+.reports-hub-head{margin-bottom:18px}
+.reports-tile-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;
+}
+.report-tile{
+  display:block;text-decoration:none;color:inherit;
+  background:#fff;border:1px solid var(--spice-line);border-radius:12px;
+  padding:18px 18px 16px;cursor:pointer;
+  transition:transform .15s,box-shadow .15s,border-color .15s;
+  position:relative;overflow:hidden;
+}
+.report-tile::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:4px;
+  background:var(--spice-cardamom);border-radius:12px 0 0 12px;
+  transition:width .15s;
+}
+.report-tile[data-accent="cardamom"]::before{background:var(--spice-cardamom)}
+.report-tile[data-accent="turmeric"]::before{background:var(--spice-turmeric,#F59E0B)}
+.report-tile[data-accent="saffron"]::before{background:var(--spice-saffron,#F97316)}
+.report-tile[data-accent="chili"]::before{background:var(--spice-chili,#DC2626)}
+.report-tile:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(31,25,21,.08);border-color:#A7F3D0}
+.report-tile:hover::before{width:6px}
+.report-tile-icon{
+  width:42px;height:42px;border-radius:10px;background:#F0FDF4;
+  display:inline-flex;align-items:center;justify-content:center;font-size:22px;
+  margin-bottom:10px;
+}
+.report-tile-title{
+  font-size:15px;font-weight:700;color:var(--text);
+  margin-bottom:4px;letter-spacing:-.2px;
+}
+.report-tile-desc{font-size:12.5px;line-height:1.45;color:var(--text3)}
+
+/* ── Reports — collapsible sections inside Trade Summary ──── */
+.rep-section{
+  border:1px solid var(--spice-line);border-radius:10px;
+  margin-bottom:14px;overflow:hidden;background:#fff;
+}
+.rep-section-head{
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+  padding:12px 16px;user-select:none;
+  background:linear-gradient(180deg,#F8FAFC 0%,#F1F5F9 100%);
+  border-bottom:1px solid transparent;transition:background .12s;
+}
+.rep-section[data-open="1"] .rep-section-head{
+  border-bottom-color:var(--spice-line);
+  background:linear-gradient(180deg,#F0FDF4 0%,#ECFCCB 100%);
+}
+.rep-section-head:hover{background:linear-gradient(180deg,#F0FDF4 0%,#ECFDF5 100%)}
+.rep-section-head h3{
+  margin:0;font-size:14px;font-weight:700;color:var(--spice-text-main);
+  letter-spacing:-.2px;flex:0 0 auto;
+}
+.rep-section-meta{
+  flex:1;font-size:11.5px;color:var(--spice-text-mute);font-weight:500;
+  text-transform:uppercase;letter-spacing:.5px;
+}
+.rep-section-chev{
+  font-size:14px;color:var(--spice-text-mute);font-weight:700;
+  width:20px;text-align:center;flex-shrink:0;
+}
+.rep-section-body{padding:0}
+.rep-section-scroll{
+  max-height:380px;overflow:auto;padding:14px 16px;
+}
+.rep-section-scroll table{margin:0;width:100%}
+.rep-section-scroll thead{position:sticky;top:0;background:#fff;z-index:1}
+.rep-section-scroll thead th{background:var(--bg)}
+
+/* ── Branch Comparison — chart-first card body ──────────── */
+.bc-chart-wrap{
+  position:relative;height:280px;
+  background:#fff;border:1px solid var(--spice-line);border-radius:10px;
+  padding:14px 16px 10px;margin-bottom:12px;
+}
+.bc-toggle-data{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 12px;font-size:12px;font-weight:600;
+  background:#fff;color:var(--spice-text-mute);
+  border:1px solid var(--spice-line);border-radius:6px;cursor:pointer;
+  transition:background .12s,color .12s,border-color .12s;
+}
+.bc-toggle-data:hover{background:#F8FAFC;color:var(--spice-text-main);border-color:#CBD5E1}
+.bc-data-table{margin-top:10px;border:1px solid var(--spice-line);border-radius:8px;overflow:auto;max-height:380px}
+.bc-data-table table{margin:0;width:100%}
+.bc-data-table thead{position:sticky;top:0;background:#F8FAFC;z-index:1}
+.bc-data-table thead th{background:#F8FAFC;border-bottom:1px solid var(--spice-line)}
+
 /* ── To Tally settings panel — macro-style grouped form ──── */
 .tally-banner{
   background:var(--spice-cream);border:1px solid var(--spice-saffron-lt);
@@ -2295,6 +2389,13 @@ input[type="search"]:focus{
       </div>
       <div class="side-group">
         <div class="side-group-lbl">Reports</div>
+        <!-- Reports hub — trade summary, branch comparison, links to
+             every report generator. Sits at the top of the Reports
+             section so it's the first thing the user sees. -->
+        <button class="side-item" data-tab="reports" onclick="go('reports')">
+          <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+          Reports Hub
+        </button>
         <button class="side-item" data-tab="exports" onclick="go('exports')">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           Exports
@@ -3464,6 +3565,84 @@ input[type="search"]:focus{
 
         <div style="overflow-x:auto"><table><thead><tr><th>Seller</th><th>Lots</th><th>Qty</th><th>Amount</th><th>Purchase</th><th>Discount</th><th>GST 5%</th><th>Payable</th><th>Actions</th></tr></thead><tbody id="payments-list"></tbody></table></div>
         <div id="payments-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── REPORTS HUB — trade summary, branch comparison, and tiles
+         linking to every report generator. Loaded on demand from
+         /api/reports/trade-summary, /api/reports/branch-comparison,
+         and /api/reports/summary-pdf. -->
+    <div class="tc" id="tc-reports">
+      <!-- Hub tile grid — quick navigation to every report flavor. -->
+      <div class="reports-hub">
+        <div class="reports-hub-head">
+          <h2 style="margin:0;font-size:22px;font-weight:800">Reports &amp; Insights</h2>
+          <p style="color:var(--text3);margin:6px 0 0;font-size:13px">All auction analytics in one place — pick a report below to drill in.</p>
+        </div>
+        <div class="reports-tile-grid">
+          <a class="report-tile" href="#" onclick="event.preventDefault();document.getElementById('rep-trade-summary').scrollIntoView({behavior:'smooth'})" data-accent="cardamom">
+            <div class="report-tile-icon">📊</div>
+            <div class="report-tile-title">Auction Summary</div>
+            <div class="report-tile-desc">Per-branch &amp; per-seller breakdown for any single auction.</div>
+          </a>
+          <a class="report-tile" href="#" onclick="event.preventDefault();document.getElementById('rep-branch-card').scrollIntoView({behavior:'smooth'});loadBranchComparison()" data-accent="turmeric">
+            <div class="report-tile-icon">🏪</div>
+            <div class="report-tile-title">Branch Comparison</div>
+            <div class="report-tile-desc">Lifetime performance side-by-side across every branch.</div>
+          </a>
+          <a class="report-tile" href="#" onclick="event.preventDefault();go('spicesboard')" data-accent="saffron">
+            <div class="report-tile-icon">🌶</div>
+            <div class="report-tile-title">Spice Board Reports</div>
+            <div class="report-tile-desc">Form C, Form D &amp; Buyers Statement — board-ready PDF / XLSX.</div>
+          </a>
+          <a class="report-tile" href="#" onclick="event.preventDefault();go('journals')" data-accent="chili">
+            <div class="report-tile-icon">📚</div>
+            <div class="report-tile-title">Sales / Purchase Journals</div>
+            <div class="report-tile-desc">Invoice-by-invoice registers for filing &amp; audit.</div>
+          </a>
+          <a class="report-tile" href="#" onclick="event.preventDefault();go('tally')" data-accent="cardamom">
+            <div class="report-tile-icon">📤</div>
+            <div class="report-tile-title">Tally XML Export</div>
+            <div class="report-tile-desc">Sales, purchases, debit notes — ready to import into Tally.</div>
+          </a>
+          <a class="report-tile" href="#" onclick="event.preventDefault();go('exports')" data-accent="turmeric">
+            <div class="report-tile-icon">⬇</div>
+            <div class="report-tile-title">Other Exports</div>
+            <div class="report-tile-desc">Bank payments, lot slips, collection, pooler register…</div>
+          </a>
+        </div>
+      </div>
+
+      <!-- Per-auction summary: pick a auction + optional branch filter,
+           the card renders aggregates + collapsible breakdown sections. -->
+      <div class="card" id="rep-trade-summary">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2 style="margin:0;flex:1">Auction Summary</h2>
+          <select id="rep-auction" onchange="loadTradeSummary()" style="height:34px;padding:0 10px;border-radius:6px;border:1px solid var(--border);min-width:220px"></select>
+          <select id="rep-branch" onchange="loadTradeSummary()" title="Filter Sold/Withdrawn/Min/Max/Avg by branch" style="height:34px;padding:0 10px;border-radius:6px;border:1px solid var(--border);min-width:160px">
+            <option value="">All Branches</option>
+          </select>
+          <button class="btn btn-g btn-sm" onclick="openTradeSummaryPdf()" id="rep-pdf-btn" disabled>📄 Open PDF</button>
+        </div>
+        <p style="color:var(--spice-text-mute);font-size:13px;margin:6px 0 16px">Per-branch and per-seller breakdown for the selected auction.</p>
+        <div id="rep-summary-totals" style="display:none;display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px"></div>
+        <div id="rep-summary-body">
+          <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Pick a auction above to see its breakdown.</div>
+        </div>
+      </div>
+
+      <!-- Lifetime branch comparison — chart-first, with a "Show data
+           table" toggle below each chart. Runs on demand to keep the
+           initial Reports tab load cheap. -->
+      <div class="card" id="rep-branch-card">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <h2 style="margin:0;flex:1">Branch Comparison (Lifetime)</h2>
+          <button class="btn btn-sm" onclick="loadBranchComparison()">↻ Refresh</button>
+        </div>
+        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">How each branch has performed across every auction in the database. Click ↻ Refresh to compute (can be slow on large DBs).</p>
+        <div id="rep-branch-body">
+          <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Click ↻ Refresh to load</div>
+        </div>
       </div>
     </div>
 
@@ -5701,7 +5880,7 @@ function go(tab){
   if (typeof applyLogoBadge === 'function') {
     try { applyLogoBadge(); } catch(_) {}
   }
-  const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
+  const loaders={dash:loadStats,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,reports:loadReports,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
     bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,tally:loadTallyAuctions,
@@ -6804,6 +6983,398 @@ function applyLogoBadge(){
   // applies to the active company.
   applyTallyCompanyVisibility();
 }
+
+// ══════════════════════════════════════════════════════════════
+// Reports tab — Auction Summary + Branch Comparison
+// ══════════════════════════════════════════════════════════════
+// Drives the Reports Hub page (sidebar → Reports → Reports Hub).
+// All three server endpoints (/api/reports/trade-summary,
+// /api/reports/branch-comparison, /api/reports/summary-pdf) are gated
+// by `view` or `lot_entry_view` so every signed-in role can read.
+
+// Cached for use by openTradeSummaryPdf etc.
+var _repAuctions = [];
+
+async function loadReports(){
+  // Populate the auction picker once per visit. Use the shared
+  // /api/auctions list (newest first). _wireAuctionSync makes the
+  // selection follow the user across tabs so they don't re-pick.
+  try{
+    _repAuctions = await j('/api/auctions');
+    const sel = document.getElementById('rep-auction');
+    sel.innerHTML = '<option value="">— Select a auction —</option>' +
+      _repAuctions.map(a => `<option value="${a.id}">Auction #${esc(a.ano)} · ${esc((a.date||'').split('T')[0])}${a.crop_type?' · '+esc(a.crop_type):''}</option>`).join('');
+    _wireAuctionSync(sel);
+    if (sel.value) loadTradeSummary();
+  }catch(e){showError(e)}
+}
+
+// Branch dropdown — pulled from Settings → Branches via the shared
+// getAllocBranches() helper. Used in multiple places (Reports, Lots
+// summary), so this keeps the source of truth in one place.
+async function populateBranchSelect(selectId, opts){
+  opts = opts || {};
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const branches = (typeof getAllocBranches === 'function') ? await getAllocBranches() : [];
+  const cur = sel.value || '';
+  const allLabel = opts.allLabel || 'All Branches';
+  sel.innerHTML = ['<option value="">' + allLabel + '</option>']
+    .concat(branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`))
+    .join('');
+  if (cur && branches.includes(cur)) sel.value = cur;
+}
+
+// Auction Summary card. Branch filter restricts the Sold/Withdrawn/Min/
+// Max/Avg aggregates only — branch list itself always shows every
+// configured branch so the user can pivot quickly.
+async function loadTradeSummary(){
+  await populateBranchSelect('rep-branch');
+  const aid = document.getElementById('rep-auction').value;
+  const branchSel = document.getElementById('rep-branch');
+  const branch = branchSel ? branchSel.value : '';
+  const totalsBox = document.getElementById('rep-summary-totals');
+  const body = document.getElementById('rep-summary-body');
+  document.getElementById('rep-pdf-btn').disabled = !aid;
+  if(!aid){
+    totalsBox.style.display = 'none';
+    body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Pick a auction above to see its breakdown.</div>';
+    return;
+  }
+  body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Loading…</div>';
+  try{
+    const qs = branch ? `?branch=${encodeURIComponent(branch)}` : '';
+    const d = await j('/api/reports/trade-summary/' + aid + qs);
+    // Totals strip
+    const t = d.totals || {};
+    const items = [
+      { l:'Lots',       v: t.lot_count||0 },
+      { l:'Bags',       v: t.total_bags||0 },
+      { l:'Qty (kg)',   v: Number(t.total_qty||0).toFixed(3) },
+      { l:'Sellers',    v: t.seller_count||0 },
+      { l:'Branches',   v: t.branch_count||0 },
+    ];
+    totalsBox.style.display = 'grid';
+    totalsBox.innerHTML = items.map(i =>
+      `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center"><div style="font-size:22px;font-weight:700;color:var(--green)">${i.v}</div><div style="font-size:11px;color:var(--spice-text-mute);text-transform:uppercase;letter-spacing:.5px;margin-top:4px">${i.l}</div></div>`).join('');
+    // Sold/Withdrawn/Min/Max/Avg (branch-filtered when set)
+    const ba = d.branchAggregates || {};
+    const baScope = ba.branch ? `Branch: ${esc(ba.branch)}` : 'All Branches';
+    const aggCells = [
+      { l:'Sold (kg)',      v: Number((ba.sold && ba.sold.qty)||0).toFixed(3) },
+      { l:'Withdrawn (kg)', v: Number((ba.withdrawn && ba.withdrawn.qty)||0).toFixed(3) },
+      { l:'Min Price',      v: Number(ba.min||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
+      { l:'Max Price',      v: Number(ba.max||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
+      { l:'Avg Price',      v: Number(ba.avg||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
+    ];
+    const aggHtml = `<div style="margin:14px 0 4px;font-size:12px;color:var(--spice-text-mute);text-transform:uppercase;letter-spacing:.5px">${baScope}</div>`
+      + `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px">`
+      + aggCells.map(i => `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--green)">${i.v}</div><div style="font-size:11px;color:var(--spice-text-mute);text-transform:uppercase;letter-spacing:.5px;margin-top:4px">${i.l}</div></div>`).join('')
+      + `</div>`;
+
+    // Collapsible section helper — each block has a click-to-toggle
+    // header. First section (Per-Branch) opens by default.
+    let _secId = 0;
+    const section = (title, meta, payload, opts) => {
+      opts = opts || {};
+      _secId++;
+      const open = opts.open !== false;
+      return '<div class="rep-section" data-open="'+(open?1:0)+'">'
+        + '<div class="rep-section-head" onclick="toggleRepSection(this)">'
+        +   '<h3>'+title+'</h3>'
+        +   (meta ? '<span class="rep-section-meta">'+meta+'</span>' : '')
+        +   '<span class="rep-section-chev">'+(open?'⌄':'›')+'</span>'
+        + '</div>'
+        + '<div class="rep-section-body" style="'+(open?'':'display:none')+'">'
+        +   '<div class="rep-section-scroll">'+payload+'</div>'
+        + '</div></div>';
+    };
+
+    let html = aggHtml;
+
+    // Per-branch table
+    const bw = d.branchWise || [];
+    let branchTable = '<table><thead><tr><th>Branch</th><th style="text-align:right">Lots</th><th style="text-align:right">Sold (kg)</th><th style="text-align:right">Withdrawn (kg)</th><th style="text-align:right">Min</th><th style="text-align:right">Max</th><th style="text-align:right">Avg</th><th style="text-align:right">Sellers</th></tr></thead><tbody>';
+    if(!bw.length) branchTable += '<tr><td colspan="8" style="text-align:center;padding:14px;color:var(--spice-text-hint)">No lots yet</td></tr>';
+    bw.forEach(b => {
+      const minP = Number(b.min_price||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const maxP = Number(b.max_price||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const avgP = Number(b.avg_price||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+      branchTable += `<tr><td><strong>${esc(b.branch||'-')}</strong></td><td style="text-align:right">${b.lot_count}</td><td style="text-align:right;font-weight:600">${Number(b.sold_qty||0).toFixed(3)}</td><td style="text-align:right">${Number(b.withdrawn_qty||0).toFixed(3)}</td><td style="text-align:right">${minP}</td><td style="text-align:right">${maxP}</td><td style="text-align:right">${avgP}</td><td style="text-align:right">${b.seller_count||0}</td></tr>`;
+    });
+    branchTable += '</tbody></table>';
+    html += section('Per-Branch', bw.length + ' branch' + (bw.length===1?'':'es'), branchTable, { open: true });
+
+    // Per-grade
+    const gw = d.gradeWise || [];
+    if (gw.length) {
+      let gradeTable = '<table><thead><tr><th>Grade</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th><th style="text-align:right">Sellers</th></tr></thead><tbody>';
+      gw.forEach(g => { gradeTable += `<tr><td>${esc(g.grade||'-')}</td><td style="text-align:right">${g.lot_count}</td><td style="text-align:right">${g.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(g.total_qty||0).toFixed(3)}</td><td style="text-align:right">${g.seller_count||0}</td></tr>`; });
+      gradeTable += '</tbody></table>';
+      html += section('By Grade', gw.length + ' grade' + (gw.length===1?'':'s'), gradeTable, { open: false });
+    }
+
+    // Top sellers — user-controlled row cap (persists across reloads)
+    const sw = d.sellerWise || [];
+    if (sw.length) {
+      const savedLimit = (function(){
+        try { return localStorage.getItem('rep_top_sellers_limit') || '25'; }
+        catch(_) { return '25'; }
+      })();
+      const lim = savedLimit === 'all' ? sw.length : Math.min(parseInt(savedLimit,10) || 25, sw.length);
+      const visible = savedLimit === 'all' ? sw : sw.slice(0, lim);
+      let sellerTable = '<table><thead><tr><th style="width:32px;text-align:right">#</th><th>Seller</th><th>Branch</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th></tr></thead><tbody>';
+      visible.forEach((s, i) => { sellerTable += `<tr><td style="text-align:right;color:var(--text3);font-size:11px">${i+1}</td><td><strong>${esc(s.seller_name)}</strong></td><td>${esc(s.branch||'')}</td><td style="text-align:right">${s.lot_count}</td><td style="text-align:right">${s.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(s.total_qty||0).toFixed(3)}</td></tr>`; });
+      sellerTable += '</tbody></table>';
+      const opts = ['5','10','25','50','100','all'].map(v => {
+        const lbl = v==='all' ? 'All' : 'Top '+v;
+        const sel = v===savedLimit ? ' selected' : '';
+        return `<option value="${v}"${sel}>${lbl}</option>`;
+      }).join('');
+      const limitCtrl = `Showing ${visible.length} of ${sw.length}`
+        + ` &nbsp;<select onchange="event.stopPropagation();repSetTopSellersLimit(this.value)" onclick="event.stopPropagation()"`
+        + ` style="height:24px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--text);margin-left:6px">${opts}</select>`;
+      html += section('Top Sellers', limitCtrl, sellerTable, { open: false });
+    }
+
+    // Hourly pace
+    const hr = d.hourly || [];
+    if (hr.length) {
+      const maxQty = Math.max(...hr.map(h => Number(h.total_qty) || 0), 1);
+      let hourlyBars = '<div style="display:flex;gap:4px;align-items:flex-end;height:120px;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow-x:auto">';
+      hr.forEach(h => {
+        const pct = (Number(h.total_qty) || 0) / maxQty * 100;
+        hourlyBars += `<div style="flex:1;min-width:36px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end"><div title="${h.lot_count} lots · ${Number(h.total_qty||0).toFixed(1)} kg" style="width:100%;height:${pct}%;background:var(--green);border-radius:3px 3px 0 0;min-height:2px"></div><div style="font-size:10px;color:var(--spice-text-mute);margin-top:4px">${esc(h.hour)}h</div></div>`;
+      });
+      hourlyBars += '</div>';
+      html += section('Hourly Pace', hr.length + ' hour' + (hr.length===1?'':'s'), hourlyBars, { open: false });
+    }
+
+    // Per-user (only if show_username is on)
+    const uw = d.userWise || [];
+    if (d.showUsername && uw.length) {
+      let userTable = '<table><thead><tr><th>User</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th></tr></thead><tbody>';
+      uw.forEach(u => { userTable += `<tr><td><strong>${esc(u.user_id||'')}</strong></td><td style="text-align:right">${u.lot_count}</td><td style="text-align:right">${u.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(u.total_qty||0).toFixed(3)}</td></tr>`; });
+      userTable += '</tbody></table>';
+      html += section('By Operator', uw.length + ' operator' + (uw.length===1?'':'s'), userTable, { open: false });
+    }
+    body.innerHTML = html;
+  }catch(e){
+    body.innerHTML = `<div style="text-align:center;padding:30px;color:#b91c1c">${esc(e.message||'Failed to load')}</div>`;
+  }
+}
+
+// Persist the user's Top-Sellers cap so it survives reloads.
+function repSetTopSellersLimit(v){
+  try { localStorage.setItem('rep_top_sellers_limit', String(v)); } catch(_) {}
+  loadTradeSummary();
+}
+
+// Collapsible section toggle — shared between Auction Summary and
+// Branch Comparison panels.
+function toggleRepSection(head){
+  const sec = head.closest('.rep-section');
+  if (!sec) return;
+  const body = sec.querySelector('.rep-section-body');
+  const chev = sec.querySelector('.rep-section-chev');
+  const open = sec.getAttribute('data-open') === '1';
+  const next = !open;
+  sec.setAttribute('data-open', next ? '1' : '0');
+  if (body) body.style.display = next ? '' : 'none';
+  if (chev) chev.textContent  = next ? '⌄' : '›';
+}
+
+function openTradeSummaryPdf(){
+  const aid = document.getElementById('rep-auction').value;
+  if (!aid) return;
+  const br = document.getElementById('rep-branch')?.value || '';
+  const branchQs = br ? `&branch=${encodeURIComponent(br)}` : '';
+  // Token-in-querystring because window.open() can't set Authorization.
+  window.open(`${B}/api/reports/summary-pdf/${aid}?token=${T}${branchQs}`, '_blank');
+}
+
+// ── Branch Comparison — chart-first rendering ───────────────────
+// Muted single-hue palette so branches read as distinct bars without
+// rainbowing. Same shades reused for the stacked-by-trade chart.
+const BC_PALETTE = [
+  '#0F766E','#0E7490','#1E40AF','#4338CA','#6D28D9',
+  '#9D174D','#9F1239','#7C2D12','#854D0E','#3F6212',
+  '#166534','#365314',
+];
+function bcBranchColor(name, fallbackIdx){
+  const s = String(name || '-');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return BC_PALETTE[(h + (fallbackIdx || 0)) % BC_PALETTE.length];
+}
+
+// Toggle the data-table panel under a chart.
+function bcToggleData(btn, panelId){
+  const el = document.getElementById(panelId);
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  btn.textContent = open ? 'Show data table' : 'Hide data table';
+}
+
+async function loadBranchComparison(){
+  const body = document.getElementById('rep-branch-body');
+  body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Loading…</div>';
+  try{
+    const d = await j('/api/reports/branch-comparison');
+    const overall = d.overall || [];
+    const data = d.data || [];
+    if(!overall.length){
+      body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--spice-text-hint)">No lot data yet.</div>';
+      return;
+    }
+    let _bcSec = 0;
+    const bcSection = (title, meta, payload, opts) => {
+      opts = opts || {};
+      _bcSec++;
+      const open = opts.open !== false;
+      return '<div class="rep-section" data-open="'+(open?1:0)+'">'
+        + '<div class="rep-section-head" onclick="toggleRepSection(this)">'
+        +   '<h3>'+title+'</h3>'
+        +   (meta ? '<span class="rep-section-meta">'+meta+'</span>' : '')
+        +   '<span class="rep-section-chev">'+(open?'⌄':'›')+'</span>'
+        + '</div>'
+        + '<div class="rep-section-body" style="'+(open?'':'display:none')+'">'
+        +   '<div class="rep-section-scroll">'+payload+'</div>'
+        + '</div></div>';
+    };
+    let html = '';
+    window._bcOverall = overall;
+    window._bcData = data;
+
+    // Lifetime Totals — chart on top, optional data table below
+    let lifetimePayload =
+      '<div class="bc-chart-wrap"><canvas id="bc-lifetime-chart"></canvas></div>'
+      + '<button class="bc-toggle-data" type="button" onclick="bcToggleData(this,\'bc-lifetime-data\')">'
+      + 'Show data table</button>'
+      + '<div id="bc-lifetime-data" class="bc-data-table" style="display:none">'
+      +   '<table><thead><tr><th>Branch</th><th style="text-align:right">Auctions</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th><th style="text-align:right">Unique Sellers</th></tr></thead><tbody>'
+      +   overall.map(b => `<tr><td><strong>${esc(b.branch||'-')}</strong></td><td style="text-align:right">${b.trade_count||0}</td><td style="text-align:right">${b.lot_count}</td><td style="text-align:right">${b.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(b.total_qty||0).toFixed(3)}</td><td style="text-align:right">${b.seller_count||0}</td></tr>`).join('')
+      +   '</tbody></table>'
+      + '</div>';
+    html += bcSection('Lifetime Totals', overall.length + ' branch' + (overall.length===1?'':'es'), lifetimePayload, { open: true });
+
+    if (data.length) {
+      // Aggregate per-trade for the stacked chart (limit to recent 50)
+      const recent = data.slice(0, 50);
+      const tradeMap = new Map();
+      for (const r of recent) {
+        const key = r.ano + '|' + (r.date || '');
+        if (!tradeMap.has(key)) tradeMap.set(key, { ano:r.ano, date:r.date, crop:r.crop_type, total:0, byBranch:{} });
+        const t = tradeMap.get(key);
+        const q = Number(r.total_qty) || 0;
+        t.total += q;
+        t.byBranch[r.branch || '-'] = (t.byBranch[r.branch || '-'] || 0) + q;
+      }
+      const trades = Array.from(tradeMap.values()).sort((a,b) => String(a.date||'').localeCompare(String(b.date||'')));
+      window._bcTrades = trades;
+
+      let byTradePayload =
+        '<div class="bc-chart-wrap" style="height:340px"><canvas id="bc-by-trade-chart"></canvas></div>'
+        + '<button class="bc-toggle-data" type="button" onclick="bcToggleData(this,\'bc-trade-data\')">'
+        + 'Show data table</button>'
+        + '<div id="bc-trade-data" class="bc-data-table" style="display:none">'
+        +   '<table><thead><tr><th>Date</th><th>Auction</th><th>Crop</th><th>Branch</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th></tr></thead><tbody>'
+        +   recent.map(r => `<tr><td style="font-family:monospace;font-size:12px">${esc((r.date||'').split('T')[0])}</td><td>#${esc(r.ano||'')}</td><td><span style="font-size:11px;padding:1px 6px;background:var(--bg);border-radius:4px">${esc(r.crop_type||'-')}</span></td><td><strong>${esc(r.branch||'-')}</strong></td><td style="text-align:right">${r.lot_count}</td><td style="text-align:right">${r.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(r.total_qty||0).toFixed(3)}</td></tr>`).join('')
+        +   '</tbody></table>'
+        + '</div>';
+      html += bcSection('By Auction', Math.min(50,data.length) + ' most recent of ' + data.length, byTradePayload, { open: true });
+    }
+    body.innerHTML = html;
+
+    // Charts mount AFTER innerHTML lands (canvas needs to exist).
+    requestAnimationFrame(() => bcRenderCharts());
+  }catch(e){
+    body.innerHTML = `<div style="text-align:center;padding:30px;color:#b91c1c">${esc(e.message||'Failed to load')}</div>`;
+  }
+}
+
+// Two charts: lifetime vertical bars + per-trade stacked. Both rendered
+// after the canvases exist in the DOM.
+function bcRenderCharts(){
+  if (typeof Chart === 'undefined') return;
+  const overall = window._bcOverall || [];
+  const trades = window._bcTrades || [];
+
+  // 1) Lifetime Totals — one bar per branch, sorted by qty desc.
+  const cv1 = document.getElementById('bc-lifetime-chart');
+  if (cv1) {
+    if (cv1._chart) { cv1._chart.destroy(); cv1._chart = null; }
+    const ordered = overall.slice().sort((a,b) => (Number(b.total_qty)||0) - (Number(a.total_qty)||0));
+    const labels = ordered.map(b => b.branch || '-');
+    const qtys = ordered.map(b => Number(b.total_qty) || 0);
+    const colors = labels.map((b,i) => bcBranchColor(b, i));
+    cv1._chart = new Chart(cv1.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label:'Quantity (kg)', data:qtys, backgroundColor:colors, borderRadius:4, maxBarThickness:48 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#0F172A', padding: 10,
+            callbacks: { label: (c) => Number(c.parsed.y).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kg' }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size:11, weight:'600' }, color:'#475569' } },
+          y: { grid: { color:'#F1F5F9' }, ticks: { font:{size:11}, color:'#64748B', callback:(v)=>Number(v).toLocaleString('en-IN') } }
+        }
+      }
+    });
+  }
+
+  // 2) By Trade — stacked vertical bars, one stack per trade.
+  const cv2 = document.getElementById('bc-by-trade-chart');
+  if (cv2 && trades.length) {
+    if (cv2._chart) { cv2._chart.destroy(); cv2._chart = null; }
+    const branches = Array.from(new Set(trades.flatMap(t => Object.keys(t.byBranch)))).sort();
+    const labels = trades.map(t => '#' + (t.ano || ''));
+    const datasets = branches.map((b, i) => ({
+      label: b || '-',
+      data: trades.map(t => Number(t.byBranch[b] || 0)),
+      backgroundColor: bcBranchColor(b, i),
+      borderRadius: 3,
+      maxBarThickness: 36,
+    }));
+    cv2._chart = new Chart(cv2.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { font:{size:11,weight:'600'}, color:'#475569', boxWidth:12, boxHeight:12, padding:12, usePointStyle:true, pointStyle:'rectRounded' }
+          },
+          tooltip: {
+            backgroundColor: '#0F172A', padding: 10,
+            callbacks: {
+              title: (items) => {
+                const t = trades[items[0].dataIndex];
+                const d = String(t.date || '').split('T')[0];
+                return 'Auction ' + items[0].label + (d ? ' · ' + d : '');
+              },
+              label: (c) => c.dataset.label + ': ' + Number(c.parsed.y).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kg',
+            }
+          }
+        },
+        scales: {
+          x: { stacked:true, grid:{display:false}, ticks:{ font:{size:10,weight:'600'}, color:'#475569', maxRotation:0, autoSkip:true } },
+          y: { stacked:true, grid:{color:'#F1F5F9'}, ticks:{ font:{size:11}, color:'#64748B', callback:(v)=>Number(v).toLocaleString('en-IN') } }
+        }
+      }
+    });
+  }
+}
+
 // ── Formulas reference (read-only) ─────────────────────────────────
 // Renders a static page with every calculation the system performs,
 // alongside the live config values that feed each one. Useful for
