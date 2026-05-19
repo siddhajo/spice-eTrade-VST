@@ -3582,18 +3582,13 @@ input[type="search"]:focus{
         <div class="reports-tile-grid">
           <a class="report-tile" href="#" onclick="event.preventDefault();document.getElementById('rep-trade-summary').scrollIntoView({behavior:'smooth'})" data-accent="cardamom">
             <div class="report-tile-icon">📊</div>
-            <div class="report-tile-title">Auction Summary</div>
-            <div class="report-tile-desc">Per-branch &amp; per-seller breakdown for any single auction.</div>
+            <div class="report-tile-title">Trade Summary</div>
+            <div class="report-tile-desc">Per-branch &amp; per-seller breakdown for any single trade.</div>
           </a>
           <a class="report-tile" href="#" onclick="event.preventDefault();document.getElementById('rep-branch-card').scrollIntoView({behavior:'smooth'});loadBranchComparison()" data-accent="turmeric">
             <div class="report-tile-icon">🏪</div>
             <div class="report-tile-title">Branch Comparison</div>
             <div class="report-tile-desc">Lifetime performance side-by-side across every branch.</div>
-          </a>
-          <a class="report-tile" href="#" onclick="event.preventDefault();go('spicesboard')" data-accent="saffron">
-            <div class="report-tile-icon">🌶</div>
-            <div class="report-tile-title">Spice Board Reports</div>
-            <div class="report-tile-desc">Form C, Form D &amp; Buyers Statement — board-ready PDF / XLSX.</div>
           </a>
           <a class="report-tile" href="#" onclick="event.preventDefault();go('journals')" data-accent="chili">
             <div class="report-tile-icon">📚</div>
@@ -3613,21 +3608,21 @@ input[type="search"]:focus{
         </div>
       </div>
 
-      <!-- Per-auction summary: pick a auction + optional branch filter,
+      <!-- Per-trade summary: pick a trade + optional branch filter,
            the card renders aggregates + collapsible breakdown sections. -->
       <div class="card" id="rep-trade-summary">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <h2 style="margin:0;flex:1">Auction Summary</h2>
+          <h2 style="margin:0;flex:1">Trade Summary</h2>
           <select id="rep-auction" onchange="loadTradeSummary()" style="height:34px;padding:0 10px;border-radius:6px;border:1px solid var(--border);min-width:220px"></select>
           <select id="rep-branch" onchange="loadTradeSummary()" title="Filter Sold/Withdrawn/Min/Max/Avg by branch" style="height:34px;padding:0 10px;border-radius:6px;border:1px solid var(--border);min-width:160px">
             <option value="">All Branches</option>
           </select>
           <button class="btn btn-g btn-sm" onclick="openTradeSummaryPdf()" id="rep-pdf-btn" disabled>📄 Open PDF</button>
         </div>
-        <p style="color:var(--spice-text-mute);font-size:13px;margin:6px 0 16px">Per-branch and per-seller breakdown for the selected auction.</p>
+        <p style="color:var(--spice-text-mute);font-size:13px;margin:6px 0 16px">Per-branch and per-seller breakdown for the selected trade.</p>
         <div id="rep-summary-totals" style="display:none;display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px"></div>
         <div id="rep-summary-body">
-          <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Pick a auction above to see its breakdown.</div>
+          <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Pick a trade above to see its breakdown.</div>
         </div>
       </div>
 
@@ -6997,15 +6992,12 @@ var _repAuctions = [];
 
 async function loadReports(){
   // Populate the auction picker once per visit. Use the shared
-  // /api/auctions list (newest first). _wireAuctionSync makes the
-  // selection follow the user across tabs so they don't re-pick.
+  // /api/auctions list (newest first).
   try{
     _repAuctions = await j('/api/auctions');
     const sel = document.getElementById('rep-auction');
-    sel.innerHTML = '<option value="">— Select a auction —</option>' +
-      _repAuctions.map(a => `<option value="${a.id}">Auction #${esc(a.ano)} · ${esc((a.date||'').split('T')[0])}${a.crop_type?' · '+esc(a.crop_type):''}</option>`).join('');
-    _wireAuctionSync(sel);
-    if (sel.value) loadTradeSummary();
+    sel.innerHTML = '<option value="">— Select a trade —</option>' +
+      _repAuctions.map(a => `<option value="${a.id}">Trade #${esc(a.ano)} · ${esc((a.date||'').split('T')[0])}${a.crop_type?' · '+esc(a.crop_type):''}</option>`).join('');
   }catch(e){showError(e)}
 }
 
@@ -7283,7 +7275,7 @@ async function loadBranchComparison(){
         +   recent.map(r => `<tr><td style="font-family:monospace;font-size:12px">${esc((r.date||'').split('T')[0])}</td><td>#${esc(r.ano||'')}</td><td><span style="font-size:11px;padding:1px 6px;background:var(--bg);border-radius:4px">${esc(r.crop_type||'-')}</span></td><td><strong>${esc(r.branch||'-')}</strong></td><td style="text-align:right">${r.lot_count}</td><td style="text-align:right">${r.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(r.total_qty||0).toFixed(3)}</td></tr>`).join('')
         +   '</tbody></table>'
         + '</div>';
-      html += bcSection('By Auction', Math.min(50,data.length) + ' most recent of ' + data.length, byTradePayload, { open: true });
+      html += bcSection('By Trade', Math.min(50,data.length) + ' most recent of ' + data.length, byTradePayload, { open: true });
     }
     body.innerHTML = html;
 
@@ -7360,7 +7352,7 @@ function bcRenderCharts(){
               title: (items) => {
                 const t = trades[items[0].dataIndex];
                 const d = String(t.date || '').split('T')[0];
-                return 'Auction ' + items[0].label + (d ? ' · ' + d : '');
+                return 'Trade ' + items[0].label + (d ? ' · ' + d : '');
               },
               label: (c) => c.dataset.label + ': ' + Number(c.parsed.y).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kg',
             }
