@@ -115,6 +115,20 @@ const toTallyDate = (d) => {
   return '';
 };
 
+// Append " - PURCHASE" to a party's ledger name for purchase-side
+// vouchers (RD purchase, URD purchase, debit note) so Tally can hold
+// separate Sales and Purchase ledgers for the same trade name. Used
+// by all the purchase-side builders below; sales-side party ledgers
+// stay raw. Idempotent — won't double-suffix if the name already
+// ends with the marker (defensive against re-runs over already-
+// transformed rows).
+const PURCHASE_LEDGER_SUFFIX = ' - PURCHASE';
+function purchaseLedgerName(n) {
+  const s = String(n == null ? '' : n).trim();
+  if (!s) return s;
+  return s.toUpperCase().endsWith(PURCHASE_LEDGER_SUFFIX.toUpperCase()) ? s : s + PURCHASE_LEDGER_SUFFIX;
+}
+
 // ── Tally XML constants (mirror VBA constants in ConvertSales.bas) ──
 const TAGS = {
   STARTENV:  '<ENVELOPE>',
@@ -2756,7 +2770,12 @@ function buildRDPurchaseRows(db, auctionId, cfg) {
     return {
       ano: p.ano,
       date: p.date,
-      name: p.name,
+      // Suffix with " - PURCHASE" so the voucher's PARTYNAME / PARTY-
+      // LEDGERNAME / BASICBASEPARTYNAME / LEDGERNAME all reference
+      // the purchase ledger (which buildRDPartyLedgerRows creates
+      // with the same suffix). Without this the voucher would point
+      // at a ledger that doesn't exist in Tally and the import fails.
+      name: purchaseLedgerName(p.name),
       address: p.add_line,
       place: p.place,
       pin: '',
@@ -2824,7 +2843,10 @@ function buildURDPurchaseRows(db, auctionId, cfg) {
     return {
       ano: b.ano,
       date: b.date,
-      name: b.name,
+      // Suffix with " - PURCHASE" — matches the URD party ledger
+      // emitted by _urdTraderRow so the voucher's party references
+      // the correct ledger in Tally.
+      name: purchaseLedgerName(b.name),
       address: b.add_line,
       place: b.pla,
       pin: '',
@@ -2883,7 +2905,13 @@ function buildDebitNoteRows(db, auctionId, cfg) {
     return {
       ano: d.ano,
       date: d.date,
-      name: d.name,
+      // Suffix with " - PURCHASE" so the debit note voucher's party
+      // points at the same purchase ledger Tally expects (the one
+      // _rdTraderRow / _urdTraderRow created). Without the suffix
+      // Tally would create or reference a different ledger than the
+      // original purchase voucher used, and the DN wouldn't reconcile
+      // against the corresponding purchase on the dealer's account.
+      name: purchaseLedgerName(d.name),
       address: dealer.padd || '',
       place:   dealer.ppla || '',
       pin:     dealer.pin  || '',
@@ -3109,7 +3137,9 @@ function _rdTraderRow(t, todayDate, intra, interDealPur, localDealPur) {
   return {
     kind: 'party',
     partyKind: 'rd',
-    name: t.name || '',
+    // Suffix with " - PURCHASE" so the ledger emitted to Tally is
+    // distinct from any sales-side ledger for the same trade name.
+    name: purchaseLedgerName(t.name || ''),
     parent: isIntra ? localDealPur : interDealPur,
     gstin: partyGstin,
     pan: t.pan || '',
@@ -3125,7 +3155,8 @@ function _urdTraderRow(t, todayDate, auctionLDR) {
   return {
     kind: 'party',
     partyKind: 'urd',
-    name: t.name || '',
+    // Suffix with " - PURCHASE" — see _rdTraderRow comment.
+    name: purchaseLedgerName(t.name || ''),
     parent: auctionLDR,           // Agriculturists go under the auction-purchase parent
     gstin: '',
     pan: t.pan || '',
