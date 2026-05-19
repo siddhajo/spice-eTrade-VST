@@ -1697,6 +1697,11 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
   const Item_Card       = cfgGet(cfg, 'tally_item_cardamom', 'Cardamom');
   const HSN_Card        = cfgGet(cfg, 'tally_hsn_cardamom',  '09083110');
   const TDS_Rate        = cfgNum(cfg, 'tds_purchase_rate', 0.1);  // % rate for 194Q
+  // Purchase-side bill allocations: independent of `detailed` (which
+  // still controls inventory entries) so the user can pick "detailed
+  // inventory + consolidated bills" or any other mix from
+  // Settings → Tally. Default true preserves the original behaviour.
+  const purchaseBillDetailed = cfgBool(cfg, 'tally_purchase_detailed', true);
 
   let xml = '\n' + startEnvelope(company, 'Vouchers');
 
@@ -1748,9 +1753,11 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
     const qtytot      = r2(row.qtytot || 0);
     const rt          = r2(row.rate || (qtytot > 0 ? amounttot / qtytot : 0));
 
-    // bill allocations per lot
+    // bill allocations per lot — only built when the purchase-side
+    // bill-detailed flag is ON. When OFF we emit a single consolidated
+    // bill alloc (further down at the LEDGERENTRIES site).
     let billAlloc1 = '';
-    if (detailed && Array.isArray(row.lots)) {
+    if (purchaseBillDetailed && Array.isArray(row.lots)) {
       for (const lot of row.lots) {
         billAlloc1 += `
 <BILLALLOCATIONS.LIST>
@@ -1886,7 +1893,7 @@ ${rates.cess}
 <LEDGERNAME>${name}</LEDGERNAME>
 ${TAGS.DEEMNO}
 <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
-<AMOUNT>${tlyrnd ? r0(total) : total}</AMOUNT>${detailed ? billAlloc1 : `
+<AMOUNT>${tlyrnd ? r0(total) : total}</AMOUNT>${purchaseBillDetailed ? billAlloc1 : `
 <BILLALLOCATIONS.LIST>
 <NAME>${xe(`${row.ano}/${taxNm}/${season}`)}</NAME>
 <BILLTYPE>New Ref</BILLTYPE>
@@ -1997,6 +2004,9 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
   const detailed  = cfgBool(cfg, 'tally_detailed', true);
   const tlyrnd    = cfgBool(cfg, 'tally_round_enabled', true);
   const opt       = cfgBool(cfg, 'tally_optional', false);
+  // Purchase-side bill allocations — see comment in generRDPurchaseXML.
+  // Default true preserves the original per-lot emission.
+  const purchaseBillDetailed = cfgBool(cfg, 'tally_purchase_detailed', true);
   // amazing/ainvPrefix kept as locals so dead sister branches below still
   // parse; `amazing` is force-disabled in this e-Trade-only build.
   const amazing   = false;
@@ -2036,9 +2046,12 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
 
     const startVoucher = `<VOUCHER VCHTYPE="Purchase" ACTION="Create" OBJVIEW="Invoice Voucher View">`;
 
-    // Bill allocations (per lot)
+    // Bill allocations — per lot when purchaseBillDetailed is ON,
+    // else a single consolidated allocation with NAME =
+    // <ano>/<voucherNum>/<season>. Default ON preserves the
+    // original per-lot emission.
     let billAlloc = '';
-    if (Array.isArray(row.lots)) {
+    if (purchaseBillDetailed && Array.isArray(row.lots)) {
       for (const lot of row.lots) {
         billAlloc += `
 <BILLALLOCATIONS.LIST>
@@ -2047,6 +2060,16 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
 <AMOUNT>${tlyrnd ? r0(lot.bilamt || lot.amount) : r2(lot.bilamt || lot.amount)}</AMOUNT>
 </BILLALLOCATIONS.LIST>`;
       }
+    } else {
+      const bilamtConsol = Array.isArray(row.lots)
+        ? row.lots.reduce((s, l) => s + Number(l.bilamt || l.amount || 0), 0)
+        : Number(row.bilamttot || row.amounttot || row.total || 0);
+      billAlloc = `
+<BILLALLOCATIONS.LIST>
+<NAME>${xe(`${row.ano}/${taxNm}/${season}`)}</NAME>
+<BILLTYPE>New Ref</BILLTYPE>
+<AMOUNT>${tlyrnd ? r0(bilamtConsol) : r2(bilamtConsol)}</AMOUNT>
+</BILLALLOCATIONS.LIST>`;
     }
 
     // Inventory: detailed-per-lot or aggregated

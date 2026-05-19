@@ -247,6 +247,12 @@ const DEFAULTS = [
 
   // Mode toggles (mirror the macro checkboxes)
   { key: 'tally_detailed',        value: 'true',           category: 'tally', label: 'Detailed Inv (one inventory entry per lot)',type: 'boolean' },
+  // Purchase XML bill allocations only — independent of the global
+  // `tally_detailed` flag so users can mix detailed inventory entries
+  // with consolidated bills (or vice versa). When ON, one BILLALLOC-
+  // ATIONS.LIST per lot is emitted. When OFF, a single consolidated
+  // BILLALLOCATIONS.LIST is emitted with NAME = <ano>/<invoiceNo>/<season>.
+  { key: 'tally_purchase_detailed', value: 'true',          category: 'tally', label: 'Purchase XML — Detailed bill allocations (one per lot)', type: 'boolean' },
   { key: 'tally_round_enabled',   value: 'true',           category: 'tally', label: 'Round (Round On/Off ledger)',               type: 'boolean' },
   { key: 'tally_tcs_enabled',     value: 'false',          category: 'tally', label: 'TCS (apply on Sales when applicable)',      type: 'boolean' },
   { key: 'tally_tds_enabled',     value: 'false',          category: 'tally', label: 'TDS (apply 194Q on RD Purchases)',          type: 'boolean' },
