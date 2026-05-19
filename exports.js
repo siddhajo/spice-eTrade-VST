@@ -886,10 +886,101 @@ async function exportTradeReport(db, auctionId) {
   return tradeReportXlsx(db, auctionId);
 }
 
+// ── Lot Buyer / Lot Name / Lot Payment ──────────────────────
+// Three pre-printed auction-floor sheets. Each shares the lot list
+// for the auction; the difference is which columns are filled in vs.
+// left blank for hand entry on the day:
+//   • Lot Buyer   → BUYER blank (auction not yet held)
+//   • Lot Name    → NAME pre-filled (seller), PRICE + CONTROL blank
+//   • Lot Payment → fully populated post-auction payment summary
+// `br` is derived from the lot's state column (KERALA → KL,
+// TAMIL NADU → TN) to match the printed-form layout the user
+// already uses.
+const BR_FROM_STATE_SQL = `
+  CASE UPPER(COALESCE(state,''))
+    WHEN 'KERALA' THEN 'KL'
+    WHEN 'TAMIL NADU' THEN 'TN'
+    ELSE UPPER(SUBSTR(COALESCE(state,''), 1, 2))
+  END`;
+
+async function exportLotBuyer(db, auctionId) {
+  const rows = db.all(
+    `SELECT lot_no AS lot, COALESCE(buyer,'') AS buyer,
+            ${BR_FROM_STATE_SQL} AS br,
+            bags AS bag, qty
+     FROM lots WHERE auction_id = ? ORDER BY lot_no`,
+    [auctionId]
+  );
+  const cols = [
+    { header: 'LOT',   key: 'lot',   width: 8  },
+    { header: 'BUYER', key: 'buyer', width: 24 },
+    { header: 'BR',    key: 'br',    width: 6  },
+    { header: 'BAG',   key: 'bag',   width: 6  },
+    { header: 'QTY',   key: 'qty',   width: 12 },
+  ];
+  return createExcelBuffer('LotBuyer', cols, rows, {
+    db, title: 'Lot Buyer', metaLines: auctionMeta(db, auctionId),
+  });
+}
+
+async function exportLotName(db, auctionId) {
+  const rows = db.all(
+    `SELECT lot_no AS lot, COALESCE(name,'') AS name,
+            ${BR_FROM_STATE_SQL} AS br,
+            bags AS bag, qty, price, '' AS control
+     FROM lots WHERE auction_id = ? ORDER BY lot_no`,
+    [auctionId]
+  );
+  const cols = [
+    { header: 'LOT',     key: 'lot',     width: 8  },
+    { header: 'NAME',    key: 'name',    width: 30 },
+    { header: 'BR',      key: 'br',      width: 6  },
+    { header: 'BAG',     key: 'bag',     width: 6  },
+    { header: 'QTY',     key: 'qty',     width: 12 },
+    { header: 'PRICE',   key: 'price',   width: 10 },
+    { header: 'CONTROL', key: 'control', width: 12 },
+  ];
+  return createExcelBuffer('LotName', cols, rows, {
+    db, title: 'Lot Name', metaLines: auctionMeta(db, auctionId),
+  });
+}
+
+async function exportLotPayment(db, auctionId) {
+  // Order by branch then name so the natural printed layout (branch
+  // header followed by that branch's lots) emerges from the row
+  // sequence, even though the generic table renderer doesn't draw
+  // a separator row between branches.
+  const rows = db.all(
+    `SELECT COALESCE(branch,'') AS branch,
+            lot_no AS lot, qty, price AS rate, amount AS cost,
+            pqty, prate, puramt AS purchamt,
+            COALESCE(name,'') AS seller_name
+     FROM lots WHERE auction_id = ? ORDER BY branch, name, lot_no`,
+    [auctionId]
+  );
+  const cols = [
+    { header: 'BRANCH',      key: 'branch',      width: 14 },
+    { header: 'LOT',         key: 'lot',         width: 6  },
+    { header: 'QTY',         key: 'qty',         width: 10 },
+    { header: 'RATE',        key: 'rate',        width: 10 },
+    { header: 'COST',        key: 'cost',        width: 14 },
+    { header: 'PQTY',        key: 'pqty',        width: 10 },
+    { header: 'PRATE',       key: 'prate',       width: 10 },
+    { header: 'PURCHAMT',    key: 'purchamt',    width: 14 },
+    { header: 'SELLER NAME', key: 'seller_name', width: 26 },
+  ];
+  return createExcelBuffer('LotPayment', cols, rows, {
+    db, title: 'Lot Payment Summary', metaLines: auctionMeta(db, auctionId),
+  });
+}
+
 // ── Export router ────────────────────────────────────────────
 const EXPORT_TYPES = {
   lot_slip:           { fn: exportLotSlip,           name: 'LotSlip' },
   lot_slip_after:     { fn: exportLotSlipAfter,      name: 'LotSlipAfter' },
+  lot_buyer:          { fn: exportLotBuyer,          name: 'LotBuyer' },
+  lot_name:           { fn: exportLotName,           name: 'LotName' },
+  lot_payment:        { fn: exportLotPayment,        name: 'LotPayment' },
   praman_csv:         { fn: exportPramanCSV,         name: 'eTrade_Praman', ext: 'csv', mime: 'text/csv', needsCfg: true },
   price_list:         { fn: exportPriceList,         name: 'PriceList' },
   price_list_before:  { fn: exportPriceListBefore,   name: 'PriceListBefore' },
@@ -911,7 +1002,8 @@ module.exports = {
   // can route through the same standardized brand band + column-header
   // styling instead of building their own ExcelJS workbook.
   createExcelBuffer,
-  exportLotSlip, exportLotSlipAfter, exportPramanCSV, exportPriceList, exportPriceListBefore,
+  exportLotSlip, exportLotSlipAfter, exportLotBuyer, exportLotName, exportLotPayment,
+  exportPramanCSV, exportPriceList, exportPriceListBefore,
   exportBankPayment, exportBankPaymentBefore,
   exportPoolerRegister, exportFullFile, exportCollection, exportTradeReport, exportDealerList,
   exportSalesTaxes, exportPaymentSummary, exportTDSReturn, exportTallyPurchase,

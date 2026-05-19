@@ -477,6 +477,33 @@ const COLS = {
     { header: 'AMOUNT', key: 'amount', width: 14 },
     { header: 'CODE', key: 'code', width: 8 },
   ],
+  lot_buyer: [
+    { header: 'LOT',   key: 'lot',   width: 8  },
+    { header: 'BUYER', key: 'buyer', width: 24 },
+    { header: 'BR',    key: 'br',    width: 6  },
+    { header: 'BAG',   key: 'bag',   width: 6  },
+    { header: 'QTY',   key: 'qty',   width: 12 },
+  ],
+  lot_name: [
+    { header: 'LOT',     key: 'lot',     width: 8  },
+    { header: 'NAME',    key: 'name',    width: 30 },
+    { header: 'BR',      key: 'br',      width: 6  },
+    { header: 'BAG',     key: 'bag',     width: 6  },
+    { header: 'QTY',     key: 'qty',     width: 12 },
+    { header: 'PRICE',   key: 'price',   width: 10 },
+    { header: 'CONTROL', key: 'control', width: 12 },
+  ],
+  lot_payment: [
+    { header: 'BRANCH',      key: 'branch',      width: 14 },
+    { header: 'LOT',         key: 'lot',         width: 6  },
+    { header: 'QTY',         key: 'qty',         width: 10 },
+    { header: 'RATE',        key: 'rate',        width: 10 },
+    { header: 'COST',        key: 'cost',        width: 14 },
+    { header: 'PQTY',        key: 'pqty',        width: 10 },
+    { header: 'PRATE',       key: 'prate',       width: 10 },
+    { header: 'PURCHAMT',    key: 'purchamt',    width: 14 },
+    { header: 'SELLER NAME', key: 'seller_name', width: 26 },
+  ],
   price_list: [
     { header: 'LOT', key: 'lot', width: 8 },
     { header: 'BAG', key: 'bag', width: 6 },
@@ -608,6 +635,9 @@ const COLS = {
 const TOTAL_KEYS = {
   lot_slip:        ['bag', 'qty'],
   lot_slip_after:  ['bag', 'qty', 'amount'],
+  lot_buyer:       ['bag', 'qty'],
+  lot_name:        ['bag', 'qty'],
+  lot_payment:     ['qty', 'cost', 'pqty', 'purchamt'],
   price_list:      ['bag', 'qty'],
   price_list_before: ['bag', 'qty'],
   bank_payment:    ['amount'],
@@ -624,6 +654,9 @@ const TOTAL_KEYS = {
 const TITLES = {
   lot_slip:        'Lot Slip',
   lot_slip_after:  'Lot Slip (After Trade)',
+  lot_buyer:       'Lot Buyer',
+  lot_name:        'Lot Name',
+  lot_payment:     'Lot Payment Summary',
   price_list:      'Price List',
   price_list_before: 'Price List (Before)',
   bank_payment:    'Bank Payment (RTGS/NEFT)',
@@ -692,6 +725,36 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
         `SELECT state, lot_no as lot, name, bags as bag, qty, price, amount, code
          FROM lots WHERE auction_id = ? ${extra.state ? 'AND state = ?' : ''}
          ORDER BY lot_no`, extra.state ? [auctionId, extra.state] : [auctionId]);
+
+    case 'lot_buyer':
+      return db.all(
+        `SELECT lot_no as lot, COALESCE(buyer,'') as buyer,
+                CASE UPPER(COALESCE(state,''))
+                  WHEN 'KERALA' THEN 'KL'
+                  WHEN 'TAMIL NADU' THEN 'TN'
+                  ELSE UPPER(SUBSTR(COALESCE(state,''), 1, 2))
+                END AS br,
+                bags as bag, qty
+         FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
+
+    case 'lot_name':
+      return db.all(
+        `SELECT lot_no as lot, COALESCE(name,'') as name,
+                CASE UPPER(COALESCE(state,''))
+                  WHEN 'KERALA' THEN 'KL'
+                  WHEN 'TAMIL NADU' THEN 'TN'
+                  ELSE UPPER(SUBSTR(COALESCE(state,''), 1, 2))
+                END AS br,
+                bags as bag, qty, price, '' as control
+         FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
+
+    case 'lot_payment':
+      return db.all(
+        `SELECT COALESCE(branch,'') as branch,
+                lot_no as lot, qty, price as rate, amount as cost,
+                pqty, prate, puramt as purchamt,
+                COALESCE(name,'') as seller_name
+         FROM lots WHERE auction_id = ? ORDER BY branch, name, lot_no`, [auctionId]);
 
     case 'price_list':
       return db.all(

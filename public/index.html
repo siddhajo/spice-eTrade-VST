@@ -14499,7 +14499,9 @@ async function loadPayments(opts){
 }
 
 // ── Exports ───────────────────────────────────────────────
-const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',praman_csv:'e-Trade CSV (Praman)',price_list_before:'Price List (Before)',price_list:'Price List',bank_payment_before:'Bank Payment (Before)',bank_payment:'Bank Payment (RTGS/NEFT)',
+const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',
+  lot_buyer:'Lot Buyer',lot_name:'Lot Name',lot_payment:'Lot Payment Summary',
+  praman_csv:'e-Trade CSV (Praman)',price_list_before:'Price List (Before)',price_list:'Price List',bank_payment_before:'Bank Payment (Before)',bank_payment:'Bank Payment (RTGS/NEFT)',
   pooler_register:'Pooler Register',full_file:'Full File',collection:'Collection',trade_report:'Trade Report',dealer_list:'Dealer List',
   payment:'Payment Summary'};
 // Export types that only support a specific format (no XLSX/PDF choice).
