@@ -4505,9 +4505,21 @@ input[type="search"]:focus{
 <div class="modal-bg" id="lot-modal"><div class="modal" style="max-width:640px">
   <h2 id="lot-modal-title">Edit Lot</h2>
   <input type="hidden" id="l-id">
+  <!-- Hidden trader_id — populated from the loaded lot, rewritten when the
+       operator clicks "Change Seller…". The server PUT detects a change in
+       trader_id and auto-backfills every denormalised seller column (pan,
+       tel, ppla, ppin, pstate, pst_code, padd, aadhar) from the new
+       trader, even though those columns aren't in the form. -->
+  <input type="hidden" id="l-trader-id">
   <div class="sgrid">
     <div class="fg"><label>Lot No *</label><input id="l-lotno"></div>
-    <div class="fg"><label>Name</label><input id="l-name"></div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+        <span>Name</span>
+        <a href="#" onclick="lotOpenChangeSeller();return false" style="font-size:11px;font-weight:600;color:var(--green);text-decoration:none">↻ Change Seller…</a>
+      </label>
+      <input id="l-name">
+    </div>
     <div class="fg"><label>CR / GSTIN</label><input id="l-cr"></div>
     <div class="fg"><label>Branch</label><input id="l-branch"></div>
     <div class="fg"><label>Grade</label><input id="l-grade"></div>
@@ -9911,27 +9923,52 @@ function leClearRecentSearch(){
 }
 
 // ── Change Seller modal ────────────────────────────────────
-// Opens from the recent-entries toolbar when ≥1 lot is checked. Picks
-// a new seller via live /api/traders search; confirming posts to
-// /api/lots/bulk-seller which rewrites trader_id + every denormalised
-// seller column on the ticked lots.
-function leOpenChangeSeller(){
-  const ids = (_le.selectedForPrint && _le.selectedForPrint.size)
-    ? [..._le.selectedForPrint] : [];
-  if (!ids.length) { toast('Tick one or more lots first'); return; }
+// Two modes:
+//   • bulk  (default) — opens from the recent-entries toolbar when ≥1
+//     lot is checked. Confirming posts to /api/lots/bulk-seller which
+//     rewrites trader_id + every denormalised seller column on the
+//     ticked lots, then refreshes the recent list.
+//   • form  — opens from the single-lot edit modal's "Change Seller…"
+//     link. Confirming runs an onConfirm(trader) callback so the
+//     caller can update its form fields; no API call here. The actual
+//     persistence happens when the operator clicks Save on the lot.
+//
+// Mode state lives on _le.changeSellerMode; the bulk path is the
+// implicit default so callsites that don't pass an opts object behave
+// like before.
+function leOpenChangeSeller(opts){
+  opts = opts || {};
+  const mode = opts.mode || 'bulk';
+  _le.changeSellerMode = mode;
+  _le.changeSellerOnConfirm = (typeof opts.onConfirm === 'function') ? opts.onConfirm : null;
+  if (mode === 'bulk') {
+    const ids = (_le.selectedForPrint && _le.selectedForPrint.size)
+      ? [..._le.selectedForPrint] : [];
+    if (!ids.length) { toast('Tick one or more lots first'); return; }
+  }
   _le.changeSellerPick = null;
   const m = document.getElementById('le-changeseller-modal');
   const summary = document.getElementById('le-cs-summary');
   if (summary) {
-    const visible = (_le.recentLots || []).filter(l => _le.selectedForPrint.has(l.id));
-    const sellers = new Set(visible.map(l => l.name || '?'));
-    summary.textContent = `${ids.length} lot${ids.length===1?'':'s'} from ${sellers.size} seller${sellers.size===1?'':'s'} — every ticked lot will be reassigned.`;
+    if (mode === 'form') {
+      summary.textContent = opts.summary
+        || 'Pick the new seller — the form will update with the new details. Save the lot to persist.';
+    } else {
+      const ids = [..._le.selectedForPrint];
+      const visible = (_le.recentLots || []).filter(l => _le.selectedForPrint.has(l.id));
+      const sellers = new Set(visible.map(l => l.name || '?'));
+      summary.textContent = `${ids.length} lot${ids.length===1?'':'s'} from ${sellers.size} seller${sellers.size===1?'':'s'} — every ticked lot will be reassigned.`;
+    }
   }
+  // Save button label flips so the user knows whether the click commits
+  // to the DB (bulk) or just updates the form (single-lot).
+  const saveBtn = document.getElementById('le-cs-save');
+  if (saveBtn) saveBtn.textContent = (mode === 'form') ? 'Use This Seller' : 'Update Lots';
   document.getElementById('le-cs-search').value = '';
   document.getElementById('le-cs-results').style.display = 'none';
   document.getElementById('le-cs-picked').style.display = 'none';
   const err = document.getElementById('le-cs-err'); if (err) err.style.display = 'none';
-  document.getElementById('le-cs-save').disabled = true;
+  if (saveBtn) saveBtn.disabled = true;
   m.style.display = 'flex';
   setTimeout(() => document.getElementById('le-cs-search').focus(), 50);
 }
@@ -9989,6 +10026,18 @@ async function leApplyChangeSeller(){
   const showErr = (m) => { err.textContent = m; err.style.display = 'block'; };
   err.style.display = 'none';
   if (!t || !t.id) return showErr('Pick a seller first');
+  // Form mode — hand the picked trader to the caller (lot-edit modal)
+  // and close. No API call here; the caller is responsible for
+  // persisting via its own save flow.
+  if (_le.changeSellerMode === 'form') {
+    const cb = _le.changeSellerOnConfirm;
+    leCloseChangeSeller();
+    if (cb) try { cb(t); } catch (e) { console.error('onConfirm callback failed', e); }
+    return;
+  }
+  // Bulk mode — commit immediately via /api/lots/bulk-seller, refresh
+  // the recent list, drop the seller-suggestions cache so new sellers
+  // surface.
   const ids = (_le.selectedForPrint && _le.selectedForPrint.size)
     ? [..._le.selectedForPrint] : [];
   if (!ids.length) return showErr('No lots selected');
@@ -10002,14 +10051,37 @@ async function leApplyChangeSeller(){
     toast(`Reassigned ${r.updated || ids.length} lot${(r.updated || ids.length) === 1 ? '' : 's'} to ${r.name || t.name}`);
     leCloseChangeSeller();
     if (_le.selectedForPrint) _le.selectedForPrint.clear();
-    // Suggestion cache is keyed by auction — the renamed lots may have
-    // introduced a new seller in the trade, so drop the cache.
     if (_le._suggestCache) delete _le._suggestCache[document.getElementById('le-auction')?.value];
     await loadLeRecent();
   } catch (e) {
     showErr(e.message || 'Update failed');
     btn.disabled = false; btn.textContent = 'Update Lots';
   }
+}
+
+// Called from the Lot Edit modal's "Change Seller…" link. Opens the
+// shared picker in form mode; the onConfirm callback updates the
+// modal's form fields. Storing the trader_id in #l-trader-id lets
+// saveLot post it; server PUT then auto-backfills pan/tel/ppla/etc.
+// from the new trader.
+function lotOpenChangeSeller(){
+  const lotId = document.getElementById('l-id').value;
+  const cur   = document.getElementById('l-name').value;
+  leOpenChangeSeller({
+    mode: 'form',
+    summary: lotId
+      ? `Lot ${(document.getElementById('l-lotno').value || '').trim() || '#' + lotId} · currently "${cur || '—'}". Pick a new seller; saving the lot will rewrite all linked seller details.`
+      : 'Pick the new seller for this lot.',
+    onConfirm: (t) => {
+      // Update visible name + cr; the hidden trader_id triggers the
+      // server-side backfill of pan/tel/ppla/ppin/pstate/pst_code/padd/aadhar.
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v == null ? '' : v); };
+      set('l-name', t.name);
+      set('l-cr',   t.cr);
+      set('l-trader-id', t.id);
+      toast(`Seller staged: ${t.name || '(unnamed)'} — click Save to persist`);
+    },
+  });
 }
 
 function leToggleLotSelected(lotId, on) {
@@ -13313,10 +13385,13 @@ async function downloadDbfRange(type){
 }
 
 // ── Lots ──────────────────────────────────────────────────
-const L_FIELDS=['lot_no','name','cr','branch','grade','bags','litre','qty','price','amount','buyer','buyer1','code','sale'];
+// trader_id is included so the modal's Change Seller flow can post the
+// new id; saveLot iterates L_FIELDS so adding it here makes the value
+// flow through without changing the save logic.
+const L_FIELDS=['lot_no','name','cr','branch','grade','bags','litre','qty','price','amount','buyer','buyer1','code','sale','trader_id'];
 const L_IDS={lot_no:'l-lotno',name:'l-name',cr:'l-cr',branch:'l-branch',grade:'l-grade',bags:'l-bags',
   litre:'l-litre',qty:'l-qty',price:'l-price',amount:'l-amount',buyer:'l-buyer',buyer1:'l-buyer1',
-  code:'l-code',sale:'l-sale'};
+  code:'l-code',sale:'l-sale',trader_id:'l-trader-id'};
 
 // Refresh wrapper: surfaces feedback so the user knows the click registered.
 // Root cause the button "did nothing" was: loadLots() silently bailed when
@@ -13847,6 +13922,16 @@ async function saveLot(){
     if(['bags','qty','price','amount'].includes(f)) body[f]=parseFloat(el.value)||0;
     else body[f]=el.value;
   });
+  // trader_id: drop when blank so the server's seller-backfill check
+  // doesn't fire on a NaN id (lots with NULL trader_id in legacy data).
+  // Convert to integer when present so the server doesn't have to.
+  if (!body.trader_id) {
+    delete body.trader_id;
+  } else {
+    const tid = parseInt(body.trader_id, 10);
+    if (Number.isFinite(tid)) body.trader_id = tid;
+    else delete body.trader_id;
+  }
   // Optimistic UI: close the modal immediately and show a pending toast.
   // The actual save runs in the background. If it fails, we show an error and
   // re-open the modal so the user can retry without re-entering data.
