@@ -3261,36 +3261,12 @@ input[type="search"]:focus{
         </div>
       </div>
 
-      <!-- ───────────────────────────────────────────────────────────
-           Change Seller modal — opens from the Recent-entries toolbar
-           when 1+ lots are checked. Reuses the same seller search
-           pattern as the entry form: live /api/traders?search= with a
-           results dropdown. Confirming POSTs /api/lots/bulk-seller
-           which rewrites trader_id + all denormalised seller columns
-           on every checked lot. -->
-      <div class="modal-overlay" id="le-changeseller-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
-        <div style="background:#fff;border-radius:14px;width:min(480px,92vw);padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
-          <h3 style="margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:8px">
-            <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
-            Change Seller
-          </h3>
-          <p id="le-cs-summary" style="font-size:12px;color:var(--text3);margin:0 0 14px"></p>
-          <div style="position:relative">
-            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Pick new seller</div>
-            <input type="text" id="le-cs-search" placeholder="Search by name, phone, CR no, or PAN…" autocomplete="off" oninput="leCsSearchSeller(this.value)" onfocus="leCsSearchSeller(this.value)" style="width:100%;height:42px;padding:0 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
-            <div id="le-cs-results" style="display:none;position:absolute;top:68px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);max-height:280px;overflow-y:auto;z-index:5"></div>
-          </div>
-          <div id="le-cs-picked" style="display:none;margin-top:12px;padding:10px 14px;border:1.5px solid var(--green);background:var(--green-bg);border-radius:8px">
-            <div id="le-cs-picked-name" style="font-weight:700;font-size:14px;color:var(--text)"></div>
-            <div id="le-cs-picked-meta" style="font-size:11px;color:var(--text3);margin-top:2px"></div>
-          </div>
-          <div id="le-cs-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-top:10px"></div>
-          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-            <button class="btn btn-o" onclick="leCloseChangeSeller()" style="height:38px;padding:0 16px">Cancel</button>
-            <button class="btn btn-g" id="le-cs-save" onclick="leApplyChangeSeller()" disabled style="height:38px;padding:0 18px;font-weight:600">Update Lots</button>
-          </div>
-        </div>
-      </div>
+      <!-- Change Seller modal lives at the global-modal level (outside
+           the tab containers) so it works from BOTH the Lot Entry tab's
+           Recent-Entries toolbar AND the Lots tab's lot-edit modal.
+           Keeping it nested inside tc-lotentry made the picker invisible
+           when invoked from the Lots tab because the parent tab was
+           display:none. Find it near `lot-modal` below. -->
 
       <!-- ───────────────────────────────────────────────────────────
            Add New Seller modal — minimal-fields quick add for the
@@ -4501,6 +4477,37 @@ input[type="search"]:focus{
     <button class="btn btn-g" onclick="saveQuickAddLots()">Add Lots</button>
   </div>
 </div></div>
+
+<!-- Change Seller modal — used by BOTH the Lot Entry tab's Recent-Entries
+     toolbar (bulk mode) AND the Lots tab's lot-edit "Change Seller…" link
+     (form mode). Lives at the global modal level so it shows regardless
+     of which tab is active. Two modes wired through leOpenChangeSeller's
+     opts.mode argument: 'bulk' posts /api/lots/bulk-seller and refreshes
+     the recent list; 'form' invokes an onConfirm(trader) callback so the
+     caller can update its own form fields. -->
+<div class="modal-overlay" id="le-changeseller-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:14px;width:min(480px,92vw);padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+    <h3 style="margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:8px">
+      <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
+      Change Seller
+    </h3>
+    <p id="le-cs-summary" style="font-size:12px;color:var(--text3);margin:0 0 14px"></p>
+    <div style="position:relative">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Pick new seller</div>
+      <input type="text" id="le-cs-search" placeholder="Search by name, phone, CR no, or PAN…" autocomplete="off" oninput="leCsSearchSeller(this.value)" onfocus="leCsSearchSeller(this.value)" style="width:100%;height:42px;padding:0 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+      <div id="le-cs-results" style="display:none;position:absolute;top:68px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);max-height:280px;overflow-y:auto;z-index:5"></div>
+    </div>
+    <div id="le-cs-picked" style="display:none;margin-top:12px;padding:10px 14px;border:1.5px solid var(--green);background:var(--green-bg);border-radius:8px">
+      <div id="le-cs-picked-name" style="font-weight:700;font-size:14px;color:var(--text)"></div>
+      <div id="le-cs-picked-meta" style="font-size:11px;color:var(--text3);margin-top:2px"></div>
+    </div>
+    <div id="le-cs-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-top:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="btn btn-o" onclick="leCloseChangeSeller()" style="height:38px;padding:0 16px">Cancel</button>
+      <button class="btn btn-g" id="le-cs-save" onclick="leApplyChangeSeller()" disabled style="height:38px;padding:0 18px;font-weight:600">Update Lots</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal-bg" id="lot-modal"><div class="modal" style="max-width:640px">
   <h2 id="lot-modal-title">Edit Lot</h2>
