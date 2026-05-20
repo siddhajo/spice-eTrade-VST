@@ -194,6 +194,14 @@ const DEFAULTS = [
   // ticked. Server endpoint /api/lots/bulk-buyer is always present
   // regardless of this flag (it's permission-gated by lot_write).
   { key: 'flag_lot_set_buyer',     value: 'false',          category: 'flags',     label: 'Lots → Set Buyer bulk action', type: 'boolean' },
+  // Price Check tab + transaction gate. When ON the operator gets the
+  // Reports → Price Check tab, the gate banner, and a hard server-side
+  // block on Calculate / Invoice / Purchase / Bill / Debit-Note
+  // generation until verify clears for the active auction. When OFF
+  // the tab is hidden, buttons are never disabled, and the gate is a
+  // no-op (writes still happen). Default OFF so existing installs are
+  // unaffected on upgrade.
+  { key: 'flag_price_check',       value: 'false',          category: 'flags',     label: 'Price Check + transaction gate',  type: 'boolean' },
   // Date format used for display across UI tables, PDFs and Excel
   // exports. Three options:
   //   DD/MM/YYYY  → 18/05/2026 (Indian/UK default, current behaviour)

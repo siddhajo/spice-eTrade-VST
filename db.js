@@ -226,7 +226,13 @@ async function initDb() {
     state TEXT DEFAULT '',
     start_time TEXT,
     end_time TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime'))
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    -- Stamped by /api/price-check/verify when the operator has verified
+    -- the auction's lots against an external price sheet AND cleared
+    -- every code-level discrepancy. Acts as the green-light gate for
+    -- calculate / invoice / purchase / bill / debit-note generation.
+    -- Auto-cleared by any endpoint that mutates lot price or code.
+    price_checked_at TEXT DEFAULT ''
   )`);
 
   // ── LOTS (CPA1.DBF — main lot data, before + after trade) ─
@@ -494,6 +500,10 @@ async function initDb() {
     // created by an earlier build.
     "ALTER TABLE import_log ADD COLUMN inserted_ids TEXT DEFAULT ''",
     "ALTER TABLE import_log ADD COLUMN undone_at TEXT DEFAULT ''",
+    // Price-check gate timestamp — see auctions CREATE TABLE for semantics.
+    // Existing DBs without this column need the ALTER; ignored on fresh
+    // installs where the column is already present.
+    "ALTER TABLE auctions ADD COLUMN price_checked_at TEXT DEFAULT ''",
     'ALTER TABLE purchases ADD COLUMN auction_id INTEGER',
     'ALTER TABLE invoices ADD COLUMN auction_id INTEGER',
     'ALTER TABLE bills ADD COLUMN auction_id INTEGER',

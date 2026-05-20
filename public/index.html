@@ -971,6 +971,10 @@ body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{
    after entry don't see a dead button. Two gates stack: this
    flag must be ON AND at least one lot must be ticked. */
 body:not([data-feat-lot-set-buyer="1"]) .feat-lot-set-buyer{display:none !important}
+/* Price Check tab + its transaction gate. When OFF: the sidebar entry,
+   tab content, gate banners, and Apply UI are hidden, AND pcRefreshGate
+   skips every button-disable (so .needs-price-check stays enabled). */
+body:not([data-feat-price-check="1"]) .feat-price-check{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -2397,6 +2401,13 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
           Price List Mapping
         </button>
+        <!-- Price Check — reconciles an externally-recorded price sheet
+             against the lots table. Replaces the legacy
+             PriceCheck_VSTL.xlsm macro workbook. -->
+        <button class="side-item feat-price-check" data-tab="pricecheck" onclick="go('pricecheck')">
+          <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Price Check
+        </button>
         <!-- Lot Entry — fast desktop entry form for the auction-hall
              workflow (one row per lot, seller search, save & next).
              Uses the existing /api/traders + /api/lots endpoints so
@@ -2680,6 +2691,47 @@ input[type="search"]:focus{
       </div>
     </div>
 
+    <!-- ════════════════════════════════════════════════════════════
+         PRICE CHECK — replaces the legacy PriceCheck_VSTL.xlsm macro
+         workbook. Operator uploads an external price sheet (from the
+         auction-floor record or a third-party system) and the server
+         reconciles every row against the `lots` table, showing red
+         highlights on any mismatch. ════════════════════════════════ -->
+    <div class="tc feat-price-check" id="tc-pricecheck">
+      <div class="card">
+        <h2>Price Check
+          <span style="font-weight:400;font-size:12px;color:var(--text3)">
+            Upload a price sheet — server validates the <b>SERVER PRICE</b> column against <code>lots.price</code> in the database
+          </span>
+        </h2>
+        <div style="font-size:12px;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:10px 12px;margin:6px 0 14px 0">
+          <strong>Expected columns:</strong> LOT and SERVER PRICE (required) &nbsp;·&nbsp;
+          KERALA/STATE, TNO/ANO, DATE, BAG, QTY, PRICE, CODE (optional, kept for context) &nbsp;·&nbsp;
+          If <code>SERVER PRICE</code> is absent, falls back to <code>PRICE</code>. Pre-pick an auction below to ignore TNO/DATE in the file.
+        </div>
+
+        <div class="sgrid" style="margin-bottom:14px">
+          <div class="fg"><label>Auction (optional — leave blank to resolve per row from TNO + DATE)</label>
+            <select id="pc-auction" style="height:38px;padding:0 10px;border-radius:6px;border:1px solid var(--border)">
+              <option value="">— Any (use TNO + DATE columns) —</option>
+            </select>
+          </div>
+          <div class="fg"><label>File (.xlsx / .xls)</label>
+            <input type="file" id="pc-file" accept=".xls,.xlsx" onchange="pcOnFileChange()">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+          <button class="btn btn-g" onclick="pcVerify()">1. Verify Prices</button>
+          <button class="btn btn-a" id="pc-download-btn" onclick="pcDownload()" disabled>2. Download Annotated File</button>
+          <button class="btn btn-o" onclick="pcClear()" style="margin-left:auto">Clear</button>
+        </div>
+
+        <div id="pc-result" style="margin-bottom:14px;font-size:12.5px;color:var(--text2)"></div>
+        <div id="pc-preview" style="overflow-x:auto;max-height:600px;border:1px solid var(--spice-line);border-radius:8px;padding:8px;background:#fff"></div>
+      </div>
+    </div>
+
     <!-- IMPORT OLD DATA — re-imports legacy XLS/XLSX exports back into
          the system. Used to migrate FoxPro/legacy data, or restore
          specific tables from a backup file without restoring the
@@ -2955,7 +3007,7 @@ input[type="search"]:focus{
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="refreshLots(this)" title="Reload the lots table from the server">🔄 Refresh</button>
-            <button class="needs-lot-write btn btn-a" id="btn-calculate-all" style="height:38px;padding:0 16px;font-weight:600" onclick="calculateAll()">Calculate All</button>
+            <button class="needs-lot-write btn btn-a needs-price-check" id="btn-calculate-all" style="height:38px;padding:0 16px;font-weight:600" onclick="calculateAll()">Calculate All</button>
             <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="validateLots()">Validate</button>
           </div>
 
@@ -3439,8 +3491,8 @@ input[type="search"]:focus{
 
           <!-- Create group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="needs-invoice-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenInvModal()">+ Generate Invoice</button>
-            <button class="needs-invoice-write btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('invoices')">⚡ Generate for All Buyers</button>
+            <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-inv-one" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenInvModal()">+ Generate Invoice</button>
+            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-inv-all" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('invoices')">⚡ Generate for All Buyers</button>
           </div>
 
           <!-- Print group -->
@@ -3532,8 +3584,8 @@ input[type="search"]:focus{
           </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="needs-invoice-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenPurModal()">+ Generate Purchase</button>
-            <button class="needs-invoice-write btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('purchases')">⚡ Generate for All Dealers</button>
+            <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-pur-one" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenPurModal()">+ Generate Purchase</button>
+            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-pur-all" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('purchases')">⚡ Generate for All Dealers</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -3918,8 +3970,8 @@ input[type="search"]:focus{
           </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('gen-bill-modal')">+ Generate Bill</button>
-            <button class="needs-invoice-write btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('bills')">⚡ Generate for All Agri Sellers</button>
+            <button class="btn btn-g needs-price-check" id="btn-gen-bill-one" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('gen-bill-modal')">+ Generate Bill</button>
+            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-bill-all" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('bills')">⚡ Generate for All Agri Sellers</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -3953,12 +4005,12 @@ input[type="search"]:focus{
                purchase invoice number (modal). Generates ONE DN for the
                specified purchase, validated to belong to the selected
                trade. -->
-          <button class="needs-invoice-write btn btn-g" onclick="openGenDebitSingleModal()">+ Generate Debit Note</button>
+          <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-dn-one" onclick="openGenDebitSingleModal()">+ Generate Debit Note</button>
 
           <!-- Generate All (trade-scoped): input = trade (dropdown).
                Generates one DN per eligible purchase IN THAT TRADE ONLY.
                No cross-trade data. -->
-          <button class="needs-invoice-write btn btn-a" onclick="openGenDebitAllModal()">⚡ Generate All</button>
+          <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-dn-all" onclick="openGenDebitAllModal()">⚡ Generate All</button>
 
           <!-- Bulk actions on ticked rows. Hidden until at least one row
                is selected; the count badge updates live as boxes toggle. -->
@@ -6006,6 +6058,13 @@ async function applyFeatureFlags() {
   const lsbOn = cfg && (cfg.flag_lot_set_buyer === true
     || String(cfg.flag_lot_set_buyer || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-lot-set-buyer', lsbOn ? '1' : '0');
+  // flag_price_check — when ON the Reports → Price Check tab appears,
+  // gate banners render, and pcRefreshGate disables Calculate/Invoice/
+  // Purchase/Bill/DN buttons until verify clears for the active auction.
+  // Default OFF so existing installs are unaffected on upgrade.
+  const pcOn = cfg && (cfg.flag_price_check === true
+    || String(cfg.flag_price_check || '').toLowerCase() === 'true');
+  document.body.setAttribute('data-feat-price-check', pcOn ? '1' : '0');
   // Date format: cached on window for fmtD() to pick up. Honours
   // Settings → Display → Date format. Defaults DD/MM/YYYY when the
   // setting isn't present (legacy installs or pre-fetch first paint).
@@ -6130,7 +6189,10 @@ function go(tab){
     // so the operator sees recent imports without clicking the button.
     importold: () => { if (typeof impLoadHistory === 'function') impLoadHistory(); },
     // Price List Mapping has no auto-load (waits for file upload).
-    plmap: () => {}};
+    plmap: () => {},
+    // Price Check — populate the auction dropdown so the operator can
+    // pre-pick an auction. File upload is the only other input.
+    pricecheck: loadPriceCheckAuctions};
   if(loaders[tab]){
     try{
       const r=loaders[tab]();
@@ -13454,6 +13516,9 @@ function gotoLotsPage(p){
 async function loadLots(opts){
   const aid=document.getElementById('lot-auction').value;
   if(!aid)return;
+  // Price-check gate — disables Calculate All / generate buttons until
+  // verify has cleared. Becomes a no-op when flag_price_check is OFF.
+  if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-lots');
   // Skeleton shimmer while fetching — replaces the stale row data so
   // the user sees motion instead of "old data → flash → new data".
   if (typeof showSkeleton === 'function') showSkeleton('lots-list', 8);
@@ -14056,6 +14121,7 @@ async function loadInvoices(opts){
   // Skeleton shimmer while fetching — see loadLots() for rationale.
   if (typeof showSkeleton === 'function') showSkeleton('invoices-list', 8);
   const aid=document.getElementById('inv-auction')?.value;
+  if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-invoices');
   // Sale-type filter — empty means no filter. Read live each load so a
   // dropdown change re-fires loadInvoices() and the URL picks up the
   // new value without needing a separate state variable.
@@ -15067,6 +15133,7 @@ function gotoPurchasesPage(p){
 async function loadPurchases(opts){
   if (!opts || !opts.keepPage) _purchasesPager.page = 1;
   const aid=document.getElementById('pur-auction')?.value;
+  if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-purchases');
   // Sale-type filter for purchases — same pattern as invoices.
   // Server derives the type from the row's GST columns since
   // purchases don't carry a sale column directly.
@@ -15865,6 +15932,8 @@ function gotoBillsPage(p){
 }
 async function loadBills(opts){
   if (!opts || !opts.keepPage) _billsPager.page = 1;
+  const __billAid = document.getElementById('bill-auction')?.value;
+  if (typeof pcRefreshGate === 'function') pcRefreshGate(__billAid, '#tc-bills');
   // Populate the branch dropdown from Settings → Branches & Contacts so
   // every configured branch shows up (even ones with no bills yet).
   // Done on every load so new branches added in Settings appear
@@ -16004,6 +16073,7 @@ function gotoDebitPage(p){
 async function loadDebitNotes(opts){
   if (!opts || !opts.keepPage) _debitPager.page = 1;
   const aid = document.getElementById('dn-auction')?.value || '';
+  if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-debit');
   // Search filters within the currently-selected trade. The trade
   // filter still applies client-side (debit_notes has no auction_id
   // column — only `ano`, which we resolve from the dropdown option).
@@ -18289,6 +18359,578 @@ async function plDownload(){
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
     if (typeof toast === 'function') toast('Mapped file downloaded ✓');
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">'+escAttr(e.message||String(e))+'</span>';
+  } finally {
+    btn.disabled = false; btn.textContent = origLabel;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// PRICE CHECK — Reconcile external price sheet vs. lots table.
+// Mirrors the legacy PriceCheck_VSTL.xlsm workflow (mapping →
+// priceCheck → checkRate) but as a single-screen flow against the
+// live DB.
+// ════════════════════════════════════════════════════════════════
+let _pcLastSummary = null;
+
+async function loadPriceCheckAuctions(){
+  const sel = document.getElementById('pc-auction');
+  if (!sel) return;
+  try {
+    const d = await j('/api/auctions');
+    // Server returns either a flat array OR { rows, total, ... } depending
+    // on pagination. Handle both shapes so this works on installs where
+    // /api/auctions returns the paginated envelope.
+    const arr = Array.isArray(d) ? d : (d && Array.isArray(d.rows) ? d.rows : []);
+    const opts = ['<option value="">— Any (use TNO + DATE columns) —</option>']
+      .concat(arr.map(a => '<option value="'+a.id+'">'+escAttr(a.ano)+' — '+escAttr(fmtD(a.date))+' ('+(a.lot_count||0)+' lots)</option>'));
+    sel.innerHTML = opts.join('');
+  } catch (e) {
+    console.error('loadPriceCheckAuctions failed', e);
+  }
+}
+
+function pcOnFileChange(){
+  _pcLastSummary = null;
+  const btn = document.getElementById('pc-download-btn');
+  if (btn) btn.disabled = true;
+  const result  = document.getElementById('pc-result');
+  const host    = document.getElementById('pc-preview');
+  if (result) result.innerHTML = '';
+  if (host)   host.innerHTML = '';
+}
+
+function pcClear(){
+  const fileEl = document.getElementById('pc-file');
+  if (fileEl) fileEl.value = '';
+  const aucEl = document.getElementById('pc-auction');
+  if (aucEl) aucEl.value = '';
+  pcOnFileChange();
+}
+
+async function pcVerify(){
+  const fileEl = document.getElementById('pc-file');
+  const aucEl  = document.getElementById('pc-auction');
+  const result = document.getElementById('pc-result');
+  const host   = document.getElementById('pc-preview');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  result.innerHTML = 'Checking prices…';
+  host.innerHTML = '';
+  const fd = new FormData();
+  fd.append('file', fileEl.files[0]);
+  if (aucEl && aucEl.value) fd.append('auction_id', aucEl.value);
+  try {
+    const r = await fetch(B + '/api/price-check/verify', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.innerHTML = '<span style="color:#c00">Error: '+escAttr(data.error||'verification failed')+'</span>';
+      _pcLastSummary = null;
+      document.getElementById('pc-download-btn').disabled = true;
+      return;
+    }
+    _pcLastSummary = data;
+    document.getElementById('pc-download-btn').disabled = false;
+    // The server may have just stamped (or skipped stamping) the gate
+    // for the verified auction. Drop its cached status so the next
+    // tab visit / load function re-reads fresh state from the server.
+    if (data.forcedAuction && data.forcedAuction.id) {
+      _PC_STATUS_CACHE.delete(String(data.forcedAuction.id));
+    }
+    _pcRenderPreview(data);
+    const priceIssues = (data.mismatched || 0) + (data.missingServer || 0) + (data.missingFile || 0) + (data.noAuction || 0);
+    const codeIssues  = (data.codeMismatched || 0) + (data.codeFileBlank || 0) + (data.codeDbBlank || 0);
+    const issues = priceIssues + codeIssues;
+    const clean = issues === 0;
+    const tone = clean ? '#15803d' : '#c00';
+    const msg = clean
+      ? '✓ All ' + data.matched + ' rows match the server — prices and codes reconciled.'
+      : '⚠ ' + priceIssues + ' price issue(s), ' + codeIssues + ' code issue(s) need review.';
+    const colNote = data.hasServerPriceCol
+      ? 'Validating <code>' + data.validatedColumn + '</code> column vs <code>lots.price</code>'
+      : '<span style="color:#a16207">No SERVER PRICE column found — falling back to <code>PRICE</code> column</span>';
+    result.innerHTML =
+      '<div style="font-size:11px;color:#555;margin-bottom:4px">'+colNote+'</div>'+
+      '<b>Total rows:</b> '+data.total+
+      ' · <b style="color:#15803d">matched:</b> '+(data.matched||0)+
+      ' · <b style="color:#c00">mismatched:</b> '+(data.mismatched||0)+
+      ' · <b style="color:#a16207">missing in server:</b> '+(data.missingServer||0)+
+      ' · <b style="color:#a16207">missing in file:</b> '+(data.missingFile||0)+
+      ((data.serverEmpty||0) ? ' · <b style="color:#a16207">blank price:</b> '+data.serverEmpty : '')+
+      ((data.codeMismatched||0) ? ' · <b style="color:#c00">code diff:</b> '+data.codeMismatched : '')+
+      (((data.codeFileBlank||0)+(data.codeDbBlank||0)) ? ' · <b style="color:#a16207">code blank:</b> '+((data.codeFileBlank||0)+(data.codeDbBlank||0)) : '')+
+      ' &nbsp;<span style="color:'+tone+'">'+msg+'</span>';
+  } catch (e) {
+    result.innerHTML = '<span style="color:#c00">Error: '+escAttr(e.message||String(e))+'</span>';
+    _pcLastSummary = null;
+    document.getElementById('pc-download-btn').disabled = true;
+  }
+}
+
+function _pcRenderPreview(data){
+  const host = document.getElementById('pc-preview');
+  if (!host) return;
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+
+  const card = (label, value, color) =>
+    '<div style="flex:1;min-width:120px;padding:10px 12px;border:1px solid '+color+';border-radius:8px;background:'+color+'1a">'+
+      '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.4px">'+label+'</div>'+
+      '<div style="font-size:22px;font-weight:700;color:'+color+'">'+value+'</div>'+
+    '</div>';
+  const fmtMoney = (n) => {
+    if (n == null) return '—';
+    const s = Math.abs(n).toLocaleString('en-IN');
+    return (n < 0 ? '−' : (n > 0 ? '+' : '')) + '₹' + s;
+  };
+  const isFullyMatched = rw => rw.status === 'match'
+    && rw.code_status !== 'diff'
+    && rw.code_status !== 'db_blank';
+  const rowFixable = rw =>
+    rw && rw.lot_id && (
+      (rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'))
+      || (rw.status === 'server_diff' && rw.file_server_price != null)
+    );
+
+  // Gate banner — green when this run cleared the transaction lock,
+  // red otherwise. Auto-stamped on the server when verify runs against
+  // a forced auction AND there are no fixable code issues left.
+  let html = '';
+  if (data.forcedAuction) {
+    if (data.gateReady) {
+      html += '<div style="margin-bottom:10px;padding:10px 14px;background:#DCFCE7;border:1px solid #86EFAC;border-radius:8px;color:#14532D;font-size:13px;line-height:1.5">'+
+        '<b>✓ Price check passed.</b> Calculate, invoice, purchase, agri-bill, and debit-note generation are now unlocked for this auction.'+
+        '</div>';
+    } else {
+      const pend = data.codeFixesPending || 0;
+      html += '<div style="margin-bottom:10px;padding:10px 14px;background:#FEE2E2;border:1px solid #FECACA;border-radius:8px;color:#7F1D1D;font-size:13px;line-height:1.5">'+
+        '<b>✕ Transactions locked.</b> '+
+        (pend > 0
+          ? pend + ' code fix' + (pend===1?'':'es') + ' still pending. Apply them (or re-upload a clean file) to unlock Calculate / Invoice / Purchase / Bill / Debit Note generation.'
+          : 'Run verify again after fixing flagged rows to unlock transaction generation.')+
+        '</div>';
+    }
+  }
+
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+    card('Total rows',         data.total||0,             '#374151')+
+    card('Matched',            data.matched||0,           '#15803d')+
+    card('Mismatched',         data.mismatched||0,        '#c00')+
+    card('Blank price',        data.serverEmpty||0,       '#a16207')+
+    card('Withdrawn (WD)',     data.hasCodeCol ? (data.withdrawnFile||0) : (data.withdrawnDb||0), '#6B7280')+
+    card('Missing in server',  data.missingServer||0,     '#a16207')+
+    card('Missing in file',    data.missingFile||0,       '#a16207')+
+    card('Net diff',           fmtMoney(data.totalSignedDiff||0), (data.totalSignedDiff||0) === 0 ? '#15803d' : '#c00')+
+    card('Total |diff|',       fmtMoney(data.totalAbsDiff||0),    (data.totalAbsDiff||0) === 0 ? '#15803d' : '#c00')+
+    '</div>';
+
+  // Buyer-code reconciliation strip — separate from price totals so the
+  // operator can scan code health at a glance even when prices are clean.
+  const hasCodeSignal = data.hasCodeCol
+    || (data.codeMatched|0) + (data.codeMismatched|0)
+       + (data.codeFileBlank|0) + (data.codeDbBlank|0) > 0;
+  const codeIssues = (data.codeMismatched||0) + (data.codeFileBlank||0) + (data.codeDbBlank||0);
+  if (hasCodeSignal) {
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">'+
+      '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#555;padding:4px 6px 4px 0">Buyer code</div>'+
+      card('Code matched',      data.codeMatched||0,     '#15803d')+
+      card('Code mismatches',   data.codeMismatched||0,  '#c00')+
+      card('Blank in file',     data.codeFileBlank||0,   '#a16207')+
+      card('Blank in DB',       data.codeDbBlank||0,     '#a16207')+
+      '</div>';
+  }
+
+  // Apply-all toolbar — lives ABOVE the detail row table.
+  const fixable = (data.rows || []).filter(rowFixable);
+  if (fixable.length) {
+    html += '<div style="display:flex;gap:8px;margin:-2px 0 10px 0;align-items:center">'+
+      '<button class="btn btn-g btn-sm" onclick="pcApplyAllFixes()" '+
+      'title="For each fixable row: write the file\'s server PRICE and/or CODE onto the matching lot. Buyer / sale-type are re-resolved from the buyer master when a code changes.">'+
+      '✓ Apply all '+fixable.length+' fix'+(fixable.length===1?'':'es')+
+      '</button>'+
+      '<span style="font-size:11.5px;color:#555">Writes file price + code onto matched lots, re-resolving buyer details. Skips rows without a DB lot or with nothing fixable.</span>'+
+      '</div>';
+  } else if (codeIssues === 0 && (data.mismatched || 0) === 0) {
+    html += '<div style="margin:-2px 0 10px 0;font-size:12px;color:#15803d">✓ Prices and buyer codes both reconcile with the server.</div>';
+  }
+
+  if (hasCodeSignal || (data.missingServer||0) > 0 || (data.noAuction||0) > 0) {
+    html += '<div style="margin:-2px 0 12px 0;padding:8px 12px;background:#FEF3C7;border:1px solid #FDE68A;border-radius:6px;font-size:11.5px;color:#78350F;line-height:1.55">'+
+      '<b>Note:</b> Apply only handles rows that have a matching DB lot.'+
+      ' Rows tagged <b>NOT IN SERVER</b> or <b>NO AUCTION</b> have no DB lot to update — create the lot in Lot Entry first, then re-verify.'+
+      ' Rows where the file CODE is <b>FILE BLANK</b> have nothing to write — use'+
+      ' <i>Lots → Set Buyer Code</i> with a manually-picked code instead.'+
+      '</div>';
+  }
+
+  const matchCount = rows.filter(isFullyMatched).length;
+  if (!rows.length) {
+    html += '<div style="padding:12px;color:#666;font-style:italic">No data rows found in the file.</div>';
+    host.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="margin:4px 0 8px 0;font-size:12px;color:#555">'+
+    '<label style="cursor:pointer;user-select:none"><input type="checkbox" id="pc-show-matches" '+
+      (matchCount === 0 ? 'checked disabled' : '')+
+      ' onchange="_pcToggleMatches()"> Show '+matchCount+' matched rows (price + code OK)</label>'+
+  '</div>';
+
+  const showManualCol = !!data.hasServerPriceCol;
+  const validatedHeader = data.hasServerPriceCol ? 'File SERVER PRICE' : 'File PRICE';
+  html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
+  html += '<table id="pc-table" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">#</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Auction</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lot</th>'+
+    (showManualCol ? '<th style="text-align:right;padding:4px 8px;border:1px solid #ddd;color:#999">Manual PRICE</th>' : '')+
+    '<th style="text-align:right;padding:4px 8px;border:1px solid #ddd">'+validatedHeader+'</th>'+
+    '<th style="text-align:right;padding:4px 8px;border:1px solid #ddd">DB price</th>'+
+    '<th style="text-align:right;padding:4px 8px;border:1px solid #ddd">Diff</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">File CODE</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">DB CODE</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Code</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Status</th>'+
+    '<th style="text-align:center;padding:4px 8px;border:1px solid #ddd">Fix</th>'+
+    '</tr></thead><tbody>';
+  for (const rw of rows) {
+    const display = isFullyMatched(rw) ? 'display:none' : '';
+    const bg = _pcRowBg(rw.status);
+    const issues = rw.issues || [];
+    const badge = _pcStatusBadge(rw);
+    const diffCell = rw.diff == null ? '—'
+      : (rw.diff === 0 ? '<span style="color:#15803d">0</span>'
+         : '<span style="color:#c00;font-weight:700">'+(rw.diff > 0 ? '+' : '')+rw.diff+'</span>');
+
+    const manualCell = rw.manual_price == null ? '<span style="color:#aaa">—</span>' : rw.manual_price;
+    const filePriceVal = rw.file_server_price;
+    const fileEmpty = filePriceVal == null;
+    const fileMismatch = issues.includes('server_diff') || issues.includes('server_empty');
+    const fileCell = fileEmpty ? '<span style="color:#a16207">blank</span>' : filePriceVal;
+
+    const fileCodeRaw = rw.file_code || '';
+    const dbCodeRaw   = rw.db_code   || '';
+    const codeStatus  = rw.code_status || 'both_blank';
+    const codeFileBlankUI = !fileCodeRaw;
+    const codeDbBlankUI   = !dbCodeRaw;
+    const codeFileCell = codeFileBlankUI
+      ? '<span style="color:#aaa">—</span>'
+      : escAttr(fileCodeRaw);
+    const codeDbCell = codeDbBlankUI
+      ? '<span style="color:#a16207">blank</span>'
+      : escAttr(dbCodeRaw);
+    let codeBadge;
+    if (codeStatus === 'match')        codeBadge = '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#dcfce7;color:#15803d;font-weight:700;font-size:11px">MATCH</span>';
+    else if (codeStatus === 'diff')    codeBadge = '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fecaca;color:#991b1b;font-weight:700;font-size:11px">DIFF</span>';
+    else if (codeStatus === 'db_blank')   codeBadge = '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fed7aa;color:#9a3412;font-weight:700;font-size:11px">DB BLANK</span>';
+    else if (codeStatus === 'file_blank') codeBadge = '<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fef3c7;color:#a16207;font-weight:700;font-size:11px">FILE BLANK</span>';
+    else codeBadge = '<span style="color:#aaa;font-size:11px">—</span>';
+
+    const fixCode  = !!(fileCodeRaw && (codeStatus === 'diff' || codeStatus === 'db_blank'));
+    const fixPrice = !!(rw.status === 'server_diff' && filePriceVal != null);
+    const canFix   = rw.lot_id && (fixCode || fixPrice);
+    let btnLabel = 'Apply';
+    if (fixCode && fixPrice) btnLabel = 'Apply price + code';
+    else if (fixCode)        btnLabel = 'Apply code';
+    else if (fixPrice)       btnLabel = 'Apply price';
+    const fixCell = canFix
+      ? '<button class="btn btn-g btn-sm" style="padding:2px 10px;font-size:11px;white-space:nowrap" '+
+        'onclick="pcApplyFix(this,'+rw.lot_id+
+          ','+(fixCode ? '\''+escAttr(fileCodeRaw)+'\'' : 'null')+
+          ','+(fixPrice ? Number(filePriceVal) : 'null')+
+          ')">'+btnLabel+'</button>'
+      : '<span style="color:#aaa">—</span>';
+
+    html += '<tr class="pc-row pc-'+rw.status+'" data-code-status="'+codeStatus+'" style="'+display+';background:'+bg+'">'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+(rw.row || '+')+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.auction_ano || rw.ano || '—')+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace;font-weight:600">'+escAttr(rw.lot || '—')+'</td>'+
+      (showManualCol ? '<td style="padding:3px 8px;border:1px solid #f0f0f0;text-align:right;color:#666">'+manualCell+'</td>' : '')+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;text-align:right'+(fileMismatch?';color:#c00;font-weight:700':'')+'">'+fileCell+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;text-align:right">'+(rw.db_price == null ? '—' : rw.db_price)+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;text-align:right">'+diffCell+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace'+(codeStatus==='diff'||codeStatus==='db_blank'?';color:#c00;font-weight:700':'')+'">'+codeFileCell+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace'+(codeStatus==='diff'?';color:#c00':'')+'">'+codeDbCell+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+codeBadge+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;text-align:center">'+fixCell+'</td>'+
+    '</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  html += '<div style="margin-top:10px;font-size:11.5px;color:#555;display:flex;gap:14px;flex-wrap:wrap">'+
+    '<span><span style="display:inline-block;width:12px;height:12px;background:#fee2e2;border:1px solid #fecaca;vertical-align:middle"></span> File price ≠ DB price (or lot missing from DB)</span>'+
+    '<span><span style="display:inline-block;width:12px;height:12px;background:#fef3c7;border:1px solid #fde68a;vertical-align:middle"></span> Blank price / missing in file / no auction match</span>'+
+    '<span><span style="display:inline-block;width:12px;height:12px;background:#dcfce7;border:1px solid #bbf7d0;vertical-align:middle"></span> Match</span>'+
+  '</div>';
+
+  host.innerHTML = html;
+}
+
+function _pcToggleMatches(){
+  const show = document.getElementById('pc-show-matches').checked;
+  const rows = document.querySelectorAll('#pc-table tr.pc-match');
+  rows.forEach(r => {
+    const cs = r.getAttribute('data-code-status') || '';
+    if (cs === 'diff' || cs === 'db_blank') {
+      r.style.display = '';
+      return;
+    }
+    r.style.display = show ? '' : 'none';
+  });
+}
+
+function _pcRowBg(status){
+  if (status === 'match') return '#f0fdf4';
+  if (status === 'missing_file' || status === 'no_auction' || status === 'blank' || status === 'server_empty') return '#fef3c7';
+  return '#fee2e2';
+}
+
+function _pcStatusBadge(rw){
+  const make = (label, bg, fg) =>
+    '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:'+bg+';color:'+fg+';font-weight:700;font-size:11px">'+label+'</span>';
+  switch (rw.status) {
+    case 'match':          return make('MATCH', '#dcfce7', '#15803d');
+    case 'server_diff':    return make('PRICE DIFF', '#fecaca', '#991b1b');
+    case 'server_empty':   return make('BLANK PRICE', '#fed7aa', '#9a3412');
+    case 'missing_server': return make('NOT IN SERVER', '#fecaca', '#991b1b');
+    case 'missing_file':   return make('NOT IN FILE', '#fed7aa', '#9a3412');
+    case 'no_auction':     return make('NO AUCTION', '#fed7aa', '#9a3412');
+    case 'blank':          return make('BLANK', '#e5e7eb', '#374151');
+    default:               return make('CHECK', '#fecaca', '#991b1b');
+  }
+}
+
+// ── Price Check — transaction gate (Calculate / Invoice / etc.) ──
+// Every tab that exposes a price-dependent action (Calculate All,
+// Generate Invoice / Purchase / Bill / Debit Note) tags its CTAs
+// with `.needs-price-check`. On every auction-selector change we
+// ping the status endpoint and flip those buttons between
+// enabled/disabled. The server enforces the same rule (412 if
+// bypassed), so the UI is just a courtesy.
+const _PC_STATUS_CACHE = new Map();
+async function _pcFetchStatus(auctionId){
+  if (!auctionId) return null;
+  try {
+    const d = await j('/api/auctions/' + encodeURIComponent(auctionId) + '/price-check-status');
+    _PC_STATUS_CACHE.set(String(auctionId), d);
+    return d;
+  } catch (_) { return null; }
+}
+function _pcApplyDisable(selector, scopeSelector, ready, reason){
+  const scope = scopeSelector ? document.querySelector(scopeSelector) : document;
+  if (!scope) return;
+  scope.querySelectorAll(selector).forEach(el => {
+    if (ready) {
+      el.disabled = false;
+      el.removeAttribute('data-pc-locked');
+      el.style.opacity = '';
+      el.style.cursor = '';
+      el.title = el.dataset.pcOriginalTitle || '';
+    } else {
+      el.disabled = true;
+      el.setAttribute('data-pc-locked', '1');
+      el.style.opacity = '0.55';
+      el.style.cursor = 'not-allowed';
+      if (!el.dataset.pcOriginalTitle) el.dataset.pcOriginalTitle = el.title || '';
+      el.title = reason || 'Run Reports → Price Check on this auction first.';
+    }
+  });
+}
+async function pcRefreshGate(auctionId, tabScope){
+  const flagOn = document.body.getAttribute('data-feat-price-check') === '1';
+  if (!flagOn) {
+    _pcApplyDisable('.needs-price-check', tabScope, true, '');
+    return true;
+  }
+  const ready = auctionId
+    ? (await _pcFetchStatus(auctionId))?.checked === true
+    : false;
+  const reason = auctionId
+    ? 'Price check pending — run Reports → Price Check against this auction first.'
+    : 'Pick an auction first, then run Price Check to unlock.';
+  _pcApplyDisable('.needs-price-check', tabScope, ready, reason);
+  return ready;
+}
+
+// ── Price Check — Apply CODE fixes ──────────────────────────
+let _pcBuyerCache = null;
+async function _pcEnsureBuyerCache(){
+  if (_pcBuyerCache) return _pcBuyerCache;
+  const buyers = await j('/api/buyers?all=1');
+  const cache = new Map();
+  // Handle either flat array or paginated { rows, ... } envelope.
+  const arr = Array.isArray(buyers) ? buyers : (buyers && Array.isArray(buyers.rows) ? buyers.rows : []);
+  for (const b of arr) {
+    const code = String(b.code || '').trim().toUpperCase();
+    if (!code) continue;
+    if (cache.has(code)) continue;
+    cache.set(code, {
+      code: b.code || '',
+      buyer:  b.buyer  || '',
+      buyer1: b.buyer1 || '',
+      sale:   b.sale   || '',
+    });
+  }
+  _pcBuyerCache = cache;
+  return _pcBuyerCache;
+}
+
+async function pcApplyFix(btn, lotId, fileCode, filePrice){
+  if (!lotId) return;
+  if (fileCode == null && filePrice == null) return;
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const payload = { ids: [Number(lotId)] };
+    let masterHit = null;
+    if (fileCode != null) {
+      payload.code = fileCode;
+      const cache = await _pcEnsureBuyerCache();
+      masterHit = cache.get(String(fileCode).trim().toUpperCase()) || null;
+      if (masterHit) {
+        payload.buyer  = masterHit.buyer;
+        payload.buyer1 = masterHit.buyer1;
+        payload.sale   = masterHit.sale;
+      }
+    }
+    if (filePrice != null) payload.price = Number(filePrice);
+    const r = await fetch(B + '/api/lots/bulk-set-buyer', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + T, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Apply failed');
+    if (typeof toast === 'function') {
+      const parts = [];
+      if (filePrice != null) parts.push('price='+filePrice);
+      if (fileCode  != null) parts.push('code='+fileCode + (masterHit && (masterHit.buyer1 || masterHit.buyer) ? ' ('+(masterHit.buyer1 || masterHit.buyer)+')' : ''));
+      toast('Updated '+parts.join(', '));
+    }
+    if (btn) {
+      btn.textContent = '✓';
+      btn.style.background = '#15803d';
+      btn.style.borderColor = '#15803d';
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    if (typeof showError === 'function') showError(e);
+    else alert('Error: ' + (e.message || String(e)));
+  }
+}
+
+async function pcApplyAllFixes(){
+  if (!_pcLastSummary || !Array.isArray(_pcLastSummary.rows)) {
+    if (typeof toast === 'function') toast('Run Verify Prices first.');
+    return;
+  }
+  const fixable = _pcLastSummary.rows.filter(rw =>
+    rw && rw.lot_id && (
+      (rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'))
+      || (rw.status === 'server_diff' && rw.file_server_price != null)
+    ));
+  if (!fixable.length) {
+    if (typeof toast === 'function') toast('Nothing to fix.');
+    return;
+  }
+  if (!confirm('Apply '+fixable.length+' fix'+(fixable.length===1?'':'es')+'? Each row\'s lot will be updated with the file\'s PRICE and/or CODE (with buyer details re-resolved from the buyer master).')) return;
+
+  const cache = await _pcEnsureBuyerCache();
+  // Group rows by exact payload so one POST handles every lot needing the same write.
+  const groups = new Map();
+  for (const rw of fixable) {
+    const wantCode  = !!(rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'));
+    const wantPrice = !!(rw.status === 'server_diff' && rw.file_server_price != null);
+    const code  = wantCode ? String(rw.file_code).trim() : '';
+    const price = wantPrice ? Number(rw.file_server_price) : '';
+    const hit   = wantCode ? (cache.get(code.toUpperCase()) || null) : null;
+    const key = [
+      code, price,
+      (hit && hit.buyer)  || '',
+      (hit && hit.buyer1) || '',
+      (hit && hit.sale)   || '',
+    ].join('||');
+    let g = groups.get(key);
+    if (!g) {
+      g = { ids: [], payload: {} };
+      if (wantCode)  g.payload.code  = code;
+      if (wantPrice) g.payload.price = price;
+      if (hit) {
+        g.payload.buyer  = hit.buyer;
+        g.payload.buyer1 = hit.buyer1;
+        g.payload.sale   = hit.sale;
+      }
+      groups.set(key, g);
+    }
+    g.ids.push(Number(rw.lot_id));
+  }
+  let updated = 0, failed = 0;
+  for (const g of groups.values()) {
+    try {
+      const r = await fetch(B + '/api/lots/bulk-set-buyer', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + T, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: g.ids, ...g.payload }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'apply failed');
+      updated += (d.updated || 0);
+    } catch (e) {
+      failed += g.ids.length;
+      console.error('Bulk fix group failed', g, e);
+    }
+  }
+  const summary = failed
+    ? 'Updated '+updated+' lot(s). '+failed+' failed — check console.'
+    : 'Updated '+updated+' lot(s).';
+  if (typeof toast === 'function') toast(summary);
+  pcVerify();
+}
+
+async function pcDownload(){
+  const fileEl = document.getElementById('pc-file');
+  const aucEl  = document.getElementById('pc-auction');
+  const result = document.getElementById('pc-result');
+  if (!fileEl.files || !fileEl.files[0]) {
+    result.innerHTML = '<span style="color:#c00">Select a file first.</span>';
+    return;
+  }
+  if (!_pcLastSummary) {
+    result.innerHTML = '<span style="color:#c00">Run "Verify Prices" first so you can see what will be flagged.</span>';
+    return;
+  }
+  const btn = document.getElementById('pc-download-btn');
+  const origLabel = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Building file…';
+  try {
+    const fd = new FormData();
+    fd.append('file', fileEl.files[0]);
+    if (aucEl && aucEl.value) fd.append('auction_id', aucEl.value);
+    const r = await fetch(B + '/api/price-check/download', {
+      method: 'POST', body: fd,
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || ('Download failed ('+r.status+')'));
+    }
+    const blob = await r.blob();
+    let filename = 'price-check.xlsx';
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^";]+)"?/i.exec(cd);
+    if (m) filename = m[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    if (typeof toast === 'function') toast('Annotated file downloaded ✓');
   } catch (e) {
     result.innerHTML = '<span style="color:#c00">'+escAttr(e.message||String(e))+'</span>';
   } finally {
