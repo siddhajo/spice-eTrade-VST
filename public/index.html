@@ -1349,6 +1349,12 @@ tr:hover td{background:var(--spice-cream)}
   margin-bottom:4px;letter-spacing:-.2px;
 }
 .report-tile-desc{font-size:12.5px;line-height:1.45;color:var(--text3)}
+.report-tile-stat{
+  margin-top:10px;padding-top:10px;border-top:1px dashed var(--spice-line);
+  font-size:11.5px;font-weight:600;color:var(--spice-text-mute);
+  letter-spacing:.2px;line-height:1.4;
+}
+.report-tile-stat strong{color:var(--spice-cardamom-dk);font-weight:700;font-size:13px}
 
 /* ── Reports — collapsible sections inside Trade Summary ──── */
 .rep-section{
@@ -1571,6 +1577,24 @@ tr:hover td{background:var(--spice-cream)}
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 .busy-card .msg{font-size:14px;font-weight:600;color:var(--text);line-height:1.4}
+
+/* ── Loading skeletons ────────────────────────────────── */
+/* Drop-in shimmer rows for tables. Used at the start of long-running
+   list loaders (Lots / Invoices / Payments) so the user sees motion
+   instead of stale data followed by a brief flash. */
+@keyframes skel-shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position:  600px 0; }
+}
+.skel-row td {
+  padding:12px 14px;border-bottom:1px solid var(--spice-line);background:#fff;
+}
+.skel-bar {
+  height:14px;border-radius:4px;
+  background:linear-gradient(90deg,#eef2f5 0%,#f7fafc 50%,#eef2f5 100%);
+  background-size:400px 100%;
+  animation:skel-shimmer 1.1s infinite linear;
+}
 
 /* ── Empty-state illustrations ────────────────────────── */
 .empty-state{
@@ -2078,7 +2102,19 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   box-shadow:0 12px 40px rgba(0,0,0,.2)
 }
 .modal h2{font-size:19px;font-weight:700;margin-bottom:18px;color:var(--text)}
-.modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
+.modal .actions{
+  display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;
+  /* Sticky to the bottom of the modal scroll area so Save/Cancel stay
+     in reach on long forms (Trader edit + multi-bank, Buyer edit +
+     consignee, Lot edit). The negative side margins pull the row to the
+     modal's edges; padding adds it back so the buttons keep their normal
+     spacing. Border-top + card background overlay scrolled content. */
+  position:sticky;bottom:0;z-index:2;
+  margin:22px -28px -28px;
+  padding:14px 28px 28px;
+  background:var(--card);
+  border-top:1px solid var(--spice-line);
+}
 
 /* ── Mobile ──────────────────────────────────────────────── */
 @media(max-width:900px){
@@ -2265,6 +2301,13 @@ input[type="search"]:focus{
         <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
       <h1><span class="dot"><img id="topbar-logo-img" alt="" onerror="this.remove()"></span> <span id="topbar-brand-name">Admin Console</span></h1>
+      <!-- Shared trade selector — every transactional tab's auction dropdown
+           mirrors this one. Persists in sessionStorage. Hidden until the
+           auctions list has been fetched at least once. -->
+      <div id="topbar-trade-wrap" style="display:none;align-items:center;gap:6px;margin-left:14px;padding-left:14px;border-left:1px solid var(--spice-line)">
+        <span style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Trade</span>
+        <select id="topbar-trade" onchange="setSharedAuctionId(this.value, 'topbar')" title="Selected trade — applies to every tab that reads a trade" style="height:32px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:13px;font-weight:600;min-width:200px"></select>
+      </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
       <span id="sync-indicator" class="sync-pill sync-ok" title="Last successful sync"></span>
@@ -3176,9 +3219,9 @@ input[type="search"]:focus{
           <span style="font-weight:700;font-size:14px">Recent entries — this trade</span>
           <span id="le-recent-count" style="font-weight:400;color:var(--text3);font-size:12px;margin-left:4px"></span>
           <span style="flex:1"></span>
-          <!-- Print Selected, Print by Seller, Clear — shown only when ≥1 lot
-               is checked. The N badges update live. Styling is unified into a
-               .le-toolbar-btn pill set so all three sit on the same baseline,
+          <!-- Bulk actions — shown only when ≥1 lot is checked. The N
+               badges update live. Styling is unified into the
+               .le-toolbar-btn pill set so all sit on the same baseline,
                with a clear primary / secondary / ghost hierarchy. -->
           <button id="le-print-selected-btn" type="button" onclick="event.stopPropagation();lePrintSelected()" class="le-toolbar-btn le-tb-primary" style="display:none">
             <span aria-hidden="true">🖨</span> Print Selected
@@ -3188,10 +3231,64 @@ input[type="search"]:focus{
             <span aria-hidden="true">👤</span> Print by Seller
             <span id="le-print-by-seller-count" class="le-tb-badge"></span>
           </button>
+          <!-- Change Seller — rewrites every ticked lot's seller (trader_id
+               + all denormalised columns) to a newly picked trader.
+               Useful when a row was created under the wrong seller and
+               needs to be moved without re-entering each lot. -->
+          <button id="le-change-seller-btn" type="button" onclick="event.stopPropagation();leOpenChangeSeller()" class="le-toolbar-btn le-tb-secondary" style="display:none" title="Replace the seller on every ticked lot — looks up the new seller and updates all linked seller details">
+            <span aria-hidden="true">↻</span> Change Seller
+            <span id="le-change-seller-count" class="le-tb-badge"></span>
+          </button>
           <button id="le-print-clear-btn" type="button" onclick="event.stopPropagation();leClearPrintSelection()" class="le-toolbar-btn le-tb-ghost" style="display:none">Clear</button>
         </div><!-- /le-collapse-head -->
         <div class="le-collapse-body" style="padding:0 20px 16px">
+          <!-- Filter + search bar: type-ahead by seller name. Backed by
+               /api/lots's `name` LIKE filter so it works across the whole
+               trade, not just the loaded page. Datalist suggests existing
+               sellers in the trade for quick exact-pick. -->
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding-top:4px">
+            <div style="position:relative;flex:1;min-width:220px;max-width:360px">
+              <input type="search" id="le-recent-search" list="le-recent-sellers" placeholder="Filter by seller name…" oninput="leOnRecentSearchInput()" autocomplete="off"
+                     style="width:100%;height:34px;padding:0 32px 0 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px">
+              <datalist id="le-recent-sellers"></datalist>
+            </div>
+            <span id="le-recent-search-status" style="font-size:11.5px;color:var(--text3)"></span>
+          </div>
           <div id="le-recent-list" style="font-size:13px"></div>
+          <!-- Pagination footer — Prev / page indicator / Next. Filled by
+               renderLeRecent() each load. Hidden when total ≤ page size. -->
+          <div id="le-recent-pager" style="display:none;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12.5px;color:var(--text2)"></div>
+        </div>
+      </div>
+
+      <!-- ───────────────────────────────────────────────────────────
+           Change Seller modal — opens from the Recent-entries toolbar
+           when 1+ lots are checked. Reuses the same seller search
+           pattern as the entry form: live /api/traders?search= with a
+           results dropdown. Confirming POSTs /api/lots/bulk-seller
+           which rewrites trader_id + all denormalised seller columns
+           on every checked lot. -->
+      <div class="modal-overlay" id="le-changeseller-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
+        <div style="background:#fff;border-radius:14px;width:min(480px,92vw);padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+          <h3 style="margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:8px">
+            <span style="width:6px;height:18px;background:var(--green);border-radius:3px;display:inline-block"></span>
+            Change Seller
+          </h3>
+          <p id="le-cs-summary" style="font-size:12px;color:var(--text3);margin:0 0 14px"></p>
+          <div style="position:relative">
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Pick new seller</div>
+            <input type="text" id="le-cs-search" placeholder="Search by name, phone, CR no, or PAN…" autocomplete="off" oninput="leCsSearchSeller(this.value)" onfocus="leCsSearchSeller(this.value)" style="width:100%;height:42px;padding:0 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+            <div id="le-cs-results" style="display:none;position:absolute;top:68px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);max-height:280px;overflow-y:auto;z-index:5"></div>
+          </div>
+          <div id="le-cs-picked" style="display:none;margin-top:12px;padding:10px 14px;border:1.5px solid var(--green);background:var(--green-bg);border-radius:8px">
+            <div id="le-cs-picked-name" style="font-weight:700;font-size:14px;color:var(--text)"></div>
+            <div id="le-cs-picked-meta" style="font-size:11px;color:var(--text3);margin-top:2px"></div>
+          </div>
+          <div id="le-cs-err" style="display:none;padding:8px 12px;background:#FEE2E2;color:#991B1B;border-radius:6px;font-size:13px;margin-top:10px"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+            <button class="btn btn-o" onclick="leCloseChangeSeller()" style="height:38px;padding:0 16px">Cancel</button>
+            <button class="btn btn-g" id="le-cs-save" onclick="leApplyChangeSeller()" disabled style="height:38px;padding:0 18px;font-weight:600">Update Lots</button>
+          </div>
         </div>
       </div>
 
@@ -3584,34 +3681,41 @@ input[type="search"]:focus{
             <div class="report-tile-icon">📊</div>
             <div class="report-tile-title">Trade Summary</div>
             <div class="report-tile-desc">Per-branch &amp; per-seller breakdown for any single trade.</div>
+            <div class="report-tile-stat" id="rt-stat-trades">—</div>
           </a>
           <a class="report-tile" href="#" onclick="event.preventDefault();document.getElementById('rep-branch-card').scrollIntoView({behavior:'smooth'});loadBranchComparison()" data-accent="turmeric">
             <div class="report-tile-icon">🏪</div>
             <div class="report-tile-title">Branch Comparison</div>
             <div class="report-tile-desc">Lifetime performance side-by-side across every branch.</div>
+            <div class="report-tile-stat" id="rt-stat-branches">—</div>
           </a>
           <a class="report-tile" href="#" onclick="event.preventDefault();go('journals')" data-accent="chili">
             <div class="report-tile-icon">📚</div>
             <div class="report-tile-title">Sales / Purchase Journals</div>
             <div class="report-tile-desc">Invoice-by-invoice registers for filing &amp; audit.</div>
+            <div class="report-tile-stat" id="rt-stat-journals">—</div>
           </a>
           <a class="report-tile" href="#" onclick="event.preventDefault();go('tally')" data-accent="cardamom">
             <div class="report-tile-icon">📤</div>
             <div class="report-tile-title">Tally XML Export</div>
             <div class="report-tile-desc">Sales, purchases, debit notes — ready to import into Tally.</div>
+            <div class="report-tile-stat" id="rt-stat-tally">—</div>
           </a>
           <a class="report-tile" href="#" onclick="event.preventDefault();go('exports')" data-accent="turmeric">
             <div class="report-tile-icon">⬇</div>
             <div class="report-tile-title">Other Exports</div>
             <div class="report-tile-desc">Bank payments, lot slips, collection, pooler register…</div>
+            <div class="report-tile-stat" id="rt-stat-exports">—</div>
           </a>
         </div>
       </div>
 
       <!-- Per-trade summary: pick a trade + optional branch filter,
-           the card renders aggregates + collapsible breakdown sections. -->
+           the card renders aggregates + collapsible breakdown sections.
+           The filter row is sticky so it stays in reach while scrolling
+           through Top Sellers / Per-Branch tables further down. -->
       <div class="card" id="rep-trade-summary">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="rep-summary-filter" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;background:var(--card);z-index:5;padding:4px 0 10px;margin:-4px 0 6px;border-bottom:1px solid var(--spice-line)">
           <h2 style="margin:0;flex:1">Trade Summary</h2>
           <select id="rep-auction" onchange="loadTradeSummary()" style="height:34px;padding:0 10px;border-radius:6px;border:1px solid var(--border);min-width:220px"></select>
           <select id="rep-branch" onchange="loadTradeSummary()" title="Filter Sold/Withdrawn/Min/Max/Avg by branch" style="height:34px;padding:0 10px;border-radius:6px;border:1px solid var(--border);min-width:160px">
@@ -3620,23 +3724,24 @@ input[type="search"]:focus{
           <button class="btn btn-g btn-sm" onclick="openTradeSummaryPdf()" id="rep-pdf-btn" disabled>📄 Open PDF</button>
         </div>
         <p style="color:var(--spice-text-mute);font-size:13px;margin:6px 0 16px">Per-branch and per-seller breakdown for the selected trade.</p>
-        <div id="rep-summary-totals" style="display:none;display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px"></div>
+        <div id="rep-summary-totals" style="display:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px"></div>
         <div id="rep-summary-body">
           <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Pick a trade above to see its breakdown.</div>
         </div>
       </div>
 
       <!-- Lifetime branch comparison — chart-first, with a "Show data
-           table" toggle below each chart. Runs on demand to keep the
-           initial Reports tab load cheap. -->
+           table" toggle below each chart. Auto-loads on first Reports
+           tab visit (handled in loadReports()), refreshes on demand. -->
       <div class="card" id="rep-branch-card">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <h2 style="margin:0;flex:1">Branch Comparison (Lifetime)</h2>
+          <span id="rep-branch-stamp" style="font-size:11.5px;color:var(--spice-text-hint)"></span>
           <button class="btn btn-sm" onclick="loadBranchComparison()">↻ Refresh</button>
         </div>
-        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">How each branch has performed across every auction in the database. Click ↻ Refresh to compute (can be slow on large DBs).</p>
+        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">How each branch has performed across every auction in the database.</p>
         <div id="rep-branch-body">
-          <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Click ↻ Refresh to load</div>
+          <div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Loading…</div>
         </div>
       </div>
     </div>
@@ -3676,6 +3781,13 @@ input[type="search"]:focus{
             <div style="display:flex;gap:8px;align-items:end;margin-bottom:10px;flex-wrap:wrap">
               <div class="fg" style="margin:0"><label>From</label><input type="date" id="dbf-from"></div>
               <div class="fg" style="margin:0"><label>To</label><input type="date" id="dbf-to"></div>
+              <div class="date-quickpicks" style="display:flex;gap:4px;flex-wrap:wrap;align-self:flex-end;margin-bottom:1px">
+                <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','week')"  style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Week</button>
+                <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','month')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Month</button>
+                <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','last_month')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">Last Month</button>
+                <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','quarter')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Quarter</button>
+                <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','year')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Year</button>
+              </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
               <button class="btn btn-a" onclick="downloadDbfRange('invoices')">Sales Invoices (INV.DBF)</button>
@@ -3762,6 +3874,13 @@ input[type="search"]:focus{
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:end">
           <div class="fg" style="margin:0"><label>From</label><input type="date" id="tds-from"></div>
           <div class="fg" style="margin:0"><label>To</label><input type="date" id="tds-to"></div>
+          <div class="date-quickpicks" style="display:flex;gap:4px;flex-wrap:wrap;align-self:flex-end;margin-bottom:1px">
+            <button type="button" class="btn-sm" onclick="dateQuickPick('tds-from','tds-to','week')"  style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Week</button>
+            <button type="button" class="btn-sm" onclick="dateQuickPick('tds-from','tds-to','month')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Month</button>
+            <button type="button" class="btn-sm" onclick="dateQuickPick('tds-from','tds-to','last_month')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">Last Month</button>
+            <button type="button" class="btn-sm" onclick="dateQuickPick('tds-from','tds-to','quarter')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Quarter</button>
+            <button type="button" class="btn-sm" onclick="dateQuickPick('tds-from','tds-to','year')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Year</button>
+          </div>
           <button class="btn btn-g" onclick="loadTDS()">Load</button>
           <button class="btn btn-a" onclick="exportTDS('xlsx')">Export XLSX</button>
           <button class="btn btn-orange" onclick="exportTDS('pdf')">Export PDF</button>
@@ -4967,20 +5086,45 @@ window.confirm = function(m){
 };
 
 // Show a user-friendly error. Uses the friendlyErr() mapping for HTTP/network
-// errors; falls back to the message string. Non-blocking — shows a red toast.
+// errors; falls back to the message string. Renders a persistent banner that
+// stays until the user dismisses it — "Save failed: X" deserves more than a
+// 5-second toast that disappears before they look back at the screen.
+//
+// Multiple errors stack vertically. Identical messages within a 2-second
+// window are coalesced (avoids spamming the user when a retry storm fires).
 function showError(err){
   const msg = typeof err === 'string' ? err : friendlyErr(err);
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.display = 'block';
-  // Error styling via inline since toast has no variant system
-  t.style.background = 'var(--spice-chili)';
-  t.style.color = '#fff';
-  setTimeout(() => {
-    t.style.display = 'none';
-    t.style.background = '';
-    t.style.color = '';
-  }, 5000);
+  const host = (function(){
+    let h = document.getElementById('err-banner-host');
+    if (!h) {
+      h = document.createElement('div');
+      h.id = 'err-banner-host';
+      h.style.cssText = 'position:fixed;top:14px;right:14px;z-index:9500;display:flex;flex-direction:column;gap:8px;max-width:520px;pointer-events:none';
+      document.body.appendChild(h);
+    }
+    return h;
+  })();
+  // De-dup recent identical errors (e.g. a retry storm firing showError repeatedly)
+  const now = Date.now();
+  for (const c of host.children) {
+    if (c.dataset.msg === msg && (now - Number(c.dataset.t || 0)) < 2000) {
+      // Bump the timestamp + briefly flash so the user sees the repeat
+      c.dataset.t = String(now);
+      c.style.transform = 'scale(1.02)';
+      setTimeout(() => { c.style.transform = ''; }, 200);
+      return;
+    }
+  }
+  const banner = document.createElement('div');
+  banner.dataset.msg = msg;
+  banner.dataset.t   = String(now);
+  banner.style.cssText = 'pointer-events:auto;background:var(--spice-chili);color:#fff;border-radius:10px;padding:12px 14px;display:flex;align-items:flex-start;gap:12px;box-shadow:0 6px 18px rgba(220,38,38,.28);font-size:13.5px;line-height:1.4;transition:transform .15s;font-family:inherit';
+  banner.innerHTML =
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+    '<div style="flex:1;font-weight:600">' + esc(msg) + '</div>' +
+    '<button type="button" aria-label="Dismiss" style="background:rgba(255,255,255,.18);border:0;color:#fff;width:24px;height:24px;border-radius:50%;cursor:pointer;font-size:16px;line-height:1;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto">×</button>';
+  banner.querySelector('button').onclick = () => banner.remove();
+  host.appendChild(banner);
 }
 
 // ── Loading state helpers ──────────────────────────────
@@ -5026,6 +5170,27 @@ async function withOverlay(message, fn){
   const hide = showBusy(message);
   try { return await fn(); }
   finally { hide(); }
+}
+
+// ── Skeleton loader ───────────────────────────────────
+// Replace a tbody with shimmer rows so the table reads as "loading new
+// data" instead of "showing old data". Call right before `await j(...)`
+// in list loaders; the subsequent DataTable.mount overwrites the body.
+// Column count auto-detected from the table's thead — falls back to 6.
+function showSkeleton(tbodyId, rowCount){
+  const body = document.getElementById(tbodyId);
+  if (!body) return;
+  const table = body.closest('table');
+  let cols = 6;
+  if (table) {
+    const ths = table.querySelectorAll('thead th');
+    if (ths.length) cols = ths.length;
+  }
+  const rows = Math.max(3, Math.min(12, rowCount || 8));
+  const cellHtml = '<td><div class="skel-bar"></div></td>'.repeat(cols);
+  let html = '';
+  for (let i = 0; i < rows; i++) html += '<tr class="skel-row">' + cellHtml + '</tr>';
+  body.innerHTML = html;
 }
 
 // ── Empty-state helper ────────────────────────────────
@@ -5307,6 +5472,58 @@ function fmtD(v){
     }
   }
   return s;
+}
+
+// ── Date quick-pick helper ────────────────────────────────
+// Fills two date inputs from a named range (week/month/last_month/
+// quarter/year), then fires a change event on each so attached
+// onchange handlers (e.g. auto-reload) pick up the new values.
+function dateQuickPick(fromId, toId, range){
+  const fromEl = document.getElementById(fromId);
+  const toEl   = document.getElementById(toId);
+  if (!fromEl || !toEl) return;
+  const now = new Date();
+  let from, to;
+  switch (range) {
+    case 'week': {
+      // Week starts on Monday — Indian fiscal/audit conventions assume
+      // Mon-Sun. Sunday = day 0 in JS, so back up the right amount.
+      const day = (now.getDay() + 6) % 7;       // Mon=0, …, Sun=6
+      from = new Date(now); from.setDate(now.getDate() - day);
+      to   = new Date(from); to.setDate(from.getDate() + 6);
+      break;
+    }
+    case 'month':
+      from = new Date(now.getFullYear(), now.getMonth(), 1);
+      to   = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      break;
+    case 'last_month':
+      from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      to   = new Date(now.getFullYear(), now.getMonth(), 0);
+      break;
+    case 'quarter': {
+      const q = Math.floor(now.getMonth() / 3);
+      from = new Date(now.getFullYear(), q * 3, 1);
+      to   = new Date(now.getFullYear(), q * 3 + 3, 0);
+      break;
+    }
+    case 'year':
+      from = new Date(now.getFullYear(), 0, 1);
+      to   = new Date(now.getFullYear(), 11, 31);
+      break;
+    default:
+      return;
+  }
+  const iso = d => {
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${dd}`;
+  };
+  fromEl.value = iso(from);
+  toEl.value   = iso(to);
+  // Fire change so any wired listeners (auto-reload, filter) re-run.
+  fromEl.dispatchEvent(new Event('change', { bubbles: true }));
+  toEl.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 // ── Icon helpers ──────────────────────────────────────────
@@ -5712,6 +5929,9 @@ async function login(){
   // navigates to Settings.
   try { await loadSettings(); } catch(_) {}
   try { await applyFeatureFlags(); } catch(_) {}
+  // Populate the shared topbar trade selector after login (fire-and-forget;
+  // failures hide the widget rather than blocking the dashboard).
+  try { loadTopbarTradeSelector(); } catch(_) {}
   // lot_entry users land directly on the Lot Entry tab — they can't see
   // dash/anything else anyway, so this saves a click.
   go(window._userRole === 'lot_entry' ? 'lotentry' : 'dash');}
@@ -5723,6 +5943,9 @@ function logout(){h('/api/logout',{method:'POST'});T='';localStorage.removeItem(
   for (const attr of Array.from(document.body.attributes)) {
     if (attr.name.startsWith('data-perm-')) document.body.removeAttribute(attr.name);
   }
+  // Clear shared-auction state + hide topbar widget on logout
+  try { sessionStorage.removeItem('spice.sharedAucId'); } catch(_){}
+  const tw = document.getElementById('topbar-trade-wrap'); if (tw) tw.style.display = 'none';
   document.getElementById('app').style.display='none';document.getElementById('login').style.display='flex'}
 // Reads feature flags from the public branding endpoint extension and
 // flips body[data-feat-*] attributes so CSS can show/hide whole feature
@@ -5822,6 +6045,7 @@ applyBranding();
   // ensures the topbar badge shows the correct Logo Code on tab open.
   try { await loadSettings(); } catch(_) {}
   try { await applyFeatureFlags(); } catch(_) {}
+  try { loadTopbarTradeSelector(); } catch(_) {}
   go(window._userRole === 'lot_entry' ? 'lotentry' : 'dash');}catch(e){T='';localStorage.removeItem('t')}})();
 
 // ── Navigation ────────────────────────────────────────────
@@ -6683,6 +6907,7 @@ async function loadUsers(){
   try{
     const users = await j('/api/users');
     DataTable.mount('users-list', users, {
+      emptyState: { icon: 'traders', title: "No users yet", body: "Create logins so each person on your team can use their own credentials." },
       columns: [
         { key:'username', label:'Username', sort:'text', render:(u)=>{
             const isMe = u.username === uname;
@@ -6989,15 +7214,60 @@ function applyLogoBadge(){
 
 // Cached for use by openTradeSummaryPdf etc.
 var _repAuctions = [];
+// Tracks when Branch Comparison was last computed so the auto-load skips
+// re-running on every tab switch and the footer can show "computed Nm ago".
+var _bcLastLoadedAt = 0;
+function _bcStamp(){
+  const el = document.getElementById('rep-branch-stamp');
+  if (!el) return;
+  if (!_bcLastLoadedAt) { el.textContent = ''; return; }
+  const ageSec = Math.round((Date.now() - _bcLastLoadedAt) / 1000);
+  let age;
+  if (ageSec < 60) age = 'just now';
+  else if (ageSec < 3600) age = Math.floor(ageSec/60) + ' min ago';
+  else age = Math.floor(ageSec/3600) + ' hr ago';
+  el.textContent = 'computed ' + age;
+}
+setInterval(_bcStamp, 30000);
+
+// Live counts on each hub tile — driven by /api/stats. Fire-and-forget;
+// failures fall back to the "—" placeholder so the tiles never look broken.
+async function loadReportsHubStats(){
+  try{
+    const d = await j('/api/stats?auction_id=all');
+    const c = d.counts || {};
+    const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+    set('rt-stat-trades',   `<strong>${c.auctions||0}</strong> trade${c.auctions===1?'':'s'} · <strong>${c.lots||0}</strong> lots`);
+    set('rt-stat-branches', `<strong>${(d.branchTotals||[]).length}</strong> branch${(d.branchTotals||[]).length===1?'':'es'} tracked`);
+    set('rt-stat-journals', `<strong>${c.invoices||0}</strong> sales · <strong>${c.purchases||0}</strong> purchases`);
+    set('rt-stat-tally',    `<strong>${(c.invoices||0)+(c.purchases||0)+(c.debit_notes||0)}</strong> vouchers ready`);
+    set('rt-stat-exports',  `<strong>${c.bills||0}</strong> bills · <strong>${c.debit_notes||0}</strong> DN${c.debit_notes===1?'':'s'}`);
+  }catch(_){ /* leave placeholders */ }
+}
 
 async function loadReports(){
-  // Populate the auction picker once per visit. Use the shared
-  // /api/auctions list (newest first).
+  // Populate the auction picker, default to the most recent trade so the
+  // page lands on real data instead of an empty-state prompt. /api/auctions
+  // returns newest first, so option[1] (after the placeholder) is what we want.
   try{
     _repAuctions = await j('/api/auctions');
     const sel = document.getElementById('rep-auction');
     sel.innerHTML = '<option value="">— Select a trade —</option>' +
       _repAuctions.map(a => `<option value="${a.id}">Trade #${esc(a.ano)} · ${esc((a.date||'').split('T')[0])}${a.crop_type?' · '+esc(a.crop_type):''}</option>`).join('');
+    // Wire into the shared topbar trade selector so picking from another
+    // tab follows here too. _wireAuctionSync applies the shared selection
+    // if available, else seeds from whatever's currently picked.
+    if (typeof _wireAuctionSync === 'function') _wireAuctionSync(sel);
+    if (_repAuctions.length && !sel.value) {
+      sel.value = String(_repAuctions[0].id);
+      if (typeof setSharedAuctionId === 'function') setSharedAuctionId(sel.value, sel);
+      loadTradeSummary();
+    } else if (sel.value) {
+      loadTradeSummary();
+    }
+    // Kick off live tile stats + Branch Comparison in parallel (both fire-and-forget).
+    if (typeof loadReportsHubStats === 'function') loadReportsHubStats();
+    if (typeof loadBranchComparison === 'function' && !_bcLastLoadedAt) loadBranchComparison();
   }catch(e){showError(e)}
 }
 
@@ -7060,7 +7330,7 @@ async function loadTradeSummary(){
       { l:'Avg Price',      v: Number(ba.avg||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
     ];
     const aggHtml = `<div style="margin:14px 0 4px;font-size:12px;color:var(--spice-text-mute);text-transform:uppercase;letter-spacing:.5px">${baScope}</div>`
-      + `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px">`
+      + `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px">`
       + aggCells.map(i => `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--green)">${i.v}</div><div style="font-size:11px;color:var(--spice-text-mute);text-transform:uppercase;letter-spacing:.5px;margin-top:4px">${i.l}</div></div>`).join('')
       + `</div>`;
 
@@ -7281,6 +7551,8 @@ async function loadBranchComparison(){
 
     // Charts mount AFTER innerHTML lands (canvas needs to exist).
     requestAnimationFrame(() => bcRenderCharts());
+    _bcLastLoadedAt = Date.now();
+    _bcStamp();
   }catch(e){
     body.innerHTML = `<div style="text-align:center;padding:30px;color:#b91c1c">${esc(e.message||'Failed to load')}</div>`;
   }
@@ -7590,9 +7862,13 @@ const _le = {
   selectedSeller: null,    // { id, name, cr, pan, tel, ppla, pin, banks: [...] }
   selectedBankId: null,    // chosen bank account id (null if seller has no banks)
   searchTimer: null,       // debounce timer for seller search
-  recentLots: [],          // currently-loaded window of lots (server-paginated, lot_no DESC)
-  recentTotal: 0,          // total rows in this trade (from server) — drives Load More gating
-  recentOffset: 0,         // rows already fetched from server; next Load More uses this as offset
+  recentLots: [],          // currently-loaded page of lots (server-paginated, lot_no DESC)
+  recentTotal: 0,          // total rows matching current filter (from server)
+  recentPage: 1,           // 1-based current page in the recent-entries panel
+  recentPageSize: 25,      // rows per page
+  recentSearch: '',        // active seller filter (LIKE on lots.name via API)
+  recentSearchTimer: null, // debounce for the seller-filter input
+  changeSellerPick: null,  // trader chosen in the Change Seller modal
   sampleWeight: 0,         // from settings (sample_weight key, defaults to 0)
   defaultLitre: '',        // from settings — pre-fills litre input on each new lot
   showMoisture: false,     // from settings — toggles the moisture column/input
@@ -7726,6 +8002,11 @@ async function loadLotEntry(){
     // newest-first; pick the first non-closed entry.
     const latest = list.find(a => (a.status || '') !== 'closed');
     if (latest) sel.value = String(latest.id);
+    // Wire into the shared topbar trade selector — picking a trade in
+    // any other tab follows here too. If the shared id matches an open
+    // trade on this select, _wireAuctionSync overrides the auto-latest
+    // pick. We re-call leOnAuctionChange to load lots for whatever ends up selected.
+    if (typeof _wireAuctionSync === 'function') _wireAuctionSync(sel);
     // Read Lot Entry defaults from settings. Keys match the PWA app.html
     // 1:1 so behavior is consistent: sample_weight pre-fills each new
     // lot, default_litre pre-fills litre wt, show_moisture toggles the
@@ -7803,7 +8084,8 @@ function leOnAuctionChange(){
   const aid = document.getElementById('le-auction').value;
   document.getElementById('le-form-card').style.display = aid ? 'block' : 'none';
   if (!aid) {
-    _le.recentLots = []; _le.recentTotal = 0; _le.recentOffset = 0;
+    _le.recentLots = []; _le.recentTotal = 0; _le.recentPage = 1; _le.recentSearch = '';
+    const sb = document.getElementById('le-recent-search'); if (sb) sb.value = '';
     if (_le.selectedForPrint) _le.selectedForPrint.clear();
     renderLeRecent();
     const card = document.getElementById('le-alloc-card'); if (card) card.style.display = 'none';
@@ -8369,47 +8651,98 @@ async function loadLeRecent(){
   const aid = document.getElementById('le-auction').value;
   if (!aid) return;
   try {
-    const PAGE = 25;
-    const data = await j(`/api/lots/${aid}?paginated=1&limit=${PAGE}&offset=0`);
-    // Server now returns { rows, total, limit, offset } when paginated=1.
-    // Defensive fall-through for very old servers that returned a flat
-    // array even with paginated=1 — render whatever shape we got.
+    const page = Math.max(1, parseInt(_le.recentPage, 10) || 1);
+    const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
+    const offset = (page - 1) * pageSize;
+    const search = String(_le.recentSearch || '').trim();
+    // Backed by /api/lots's `name` LIKE filter so the search runs across
+    // the WHOLE trade, not just this page. Combined with paginated=1 so
+    // the server returns { rows, total } for the current window.
+    const qs = `paginated=1&limit=${pageSize}&offset=${offset}` +
+               (search ? `&name=${encodeURIComponent(search)}` : '');
+    const data = await j(`/api/lots/${aid}?${qs}`);
     if (Array.isArray(data)) {
-      _le.recentLots = data;
-      _le.recentTotal  = data.length;
-      _le.recentOffset = data.length;
+      _le.recentLots  = data;
+      _le.recentTotal = data.length;
     } else {
-      _le.recentLots   = Array.isArray(data.rows) ? data.rows : [];
-      _le.recentTotal  = Number(data.total) || _le.recentLots.length;
-      _le.recentOffset = _le.recentLots.length;
+      _le.recentLots  = Array.isArray(data.rows) ? data.rows : [];
+      _le.recentTotal = Number(data.total) || _le.recentLots.length;
+    }
+    // Clamp page to last available page when filter / deletes shrink the
+    // result set below the current page (e.g. user was on page 5, filter
+    // now yields only 2 pages).
+    const lastPage = Math.max(1, Math.ceil((_le.recentTotal || 0) / pageSize));
+    if (page > lastPage) {
+      _le.recentPage = lastPage;
+      return loadLeRecent(); // re-fetch at the clamped page
     }
     renderLeRecent();
     leUpdateStats();
+    leRefreshSellerSuggestions();
   } catch (e) {
     console.error('Failed to load recent lots:', e);
   }
 }
 
-// Append the next page of lots from the server. Cheap on the wire (25
-// rows of cardamom-lot data is ~3-5 KB) and avoids memory pressure on
-// long auction days.
-async function leLoadMoreRecent(){
-  const aid = document.getElementById('le-auction').value;
-  if (!aid) return;
-  const PAGE = 25;
-  const offset = _le.recentOffset || _le.recentLots.length;
-  try {
-    const data = await j(`/api/lots/${aid}?paginated=1&limit=${PAGE}&offset=${offset}`);
-    const rows = Array.isArray(data) ? data : (data.rows || []);
-    if (!rows.length) return;
-    _le.recentLots = _le.recentLots.concat(rows);
-    _le.recentOffset = (_le.recentOffset || 0) + rows.length;
-    if (!Array.isArray(data)) _le.recentTotal = Number(data.total) || _le.recentTotal;
-    renderLeRecent();
-  } catch (e) {
-    console.error('Failed to load more lots:', e);
-    toast('Failed to load more lots');
+// Pager navigation — called from renderLeRecent's footer Prev/Next /
+// page-input. Clamped to [1, lastPage].
+function leGotoRecentPage(p){
+  const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
+  const lastPage = Math.max(1, Math.ceil((_le.recentTotal || 0) / pageSize));
+  const target = Math.max(1, Math.min(lastPage, parseInt(p, 10) || 1));
+  if (target === _le.recentPage) return;
+  _le.recentPage = target;
+  loadLeRecent();
+}
+
+// Debounced seller-filter input. Hitting the server on every keystroke
+// would churn the table; 200ms feels live for typing without flooding.
+function leOnRecentSearchInput(){
+  const el = document.getElementById('le-recent-search');
+  if (!el) return;
+  const v = (el.value || '').trim();
+  clearTimeout(_le.recentSearchTimer);
+  _le.recentSearchTimer = setTimeout(() => {
+    if (_le.recentSearch === v) return;
+    _le.recentSearch = v;
+    _le.recentPage = 1; // any filter change resets to page 1
+    loadLeRecent();
+  }, 200);
+}
+
+// Populate the datalist with distinct sellers in this trade so the user
+// gets a dropdown of existing names while typing. Cheap — one cached
+// fetch keyed off the current auction id.
+async function leRefreshSellerSuggestions(){
+  const dl = document.getElementById('le-recent-sellers');
+  if (!dl) return;
+  const aid = document.getElementById('le-auction')?.value;
+  if (!aid) { dl.innerHTML = ''; return; }
+  // Cache per-auction so toggling between trades doesn't re-fetch the
+  // same list every time.
+  _le._suggestCache = _le._suggestCache || {};
+  if (_le._suggestCache[aid]) {
+    dl.innerHTML = _le._suggestCache[aid];
+    return;
   }
+  try {
+    // Pull a generous slice unfiltered to enumerate sellers. We don't
+    // have a dedicated /sellers-in-trade endpoint; using the lots list
+    // capped at 500 rows is enough for a trade-day view.
+    const data = await j(`/api/lots/${aid}?paginated=1&limit=500&offset=0`);
+    const rows = Array.isArray(data) ? data : (data.rows || []);
+    const seen = new Set();
+    const opts = [];
+    for (const l of rows) {
+      const n = String(l.name || '').trim();
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      opts.push(`<option value="${esc(n)}">`);
+    }
+    const html = opts.join('');
+    _le._suggestCache[aid] = html;
+    dl.innerHTML = html;
+  } catch (_) { /* non-fatal — datalist stays empty */ }
 }
 
 // ── Auto-refresh the recent panel ────────────────────────────────
@@ -8554,16 +8887,20 @@ function renderLeRecent(){
   const host = document.getElementById('le-recent-list');
   const count = document.getElementById('le-recent-count');
   if (!_le.recentLots.length) {
-    host.innerHTML = '<div style="padding:12px;color:var(--text3);font-size:12px;text-align:center">No lots in this trade yet</div>';
+    // Empty state — distinguish "no lots in trade" from "filter yields nothing"
+    const searchActive = !!String(_le.recentSearch || '').trim();
+    host.innerHTML = searchActive
+      ? `<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">No lots match <b>${esc(_le.recentSearch)}</b> in this trade. <a href="#" onclick="leClearRecentSearch();return false" style="color:var(--green)">Clear filter</a></div>`
+      : '<div style="padding:12px;color:var(--text3);font-size:12px;text-align:center">No lots in this trade yet</div>';
     if (count) count.textContent = '';
+    const pagerHost = document.getElementById('le-recent-pager');
+    if (pagerHost) pagerHost.style.display = 'none';
     leUpdatePrintToolbar();
     return;
   }
   // Server-side pagination: rows arrive in lot_no DESC order already, and
-  // the server tells us the true total (`_le.recentTotal`). Render every
-  // currently-loaded row; the "Load more" button appears whenever there
-  // are more rows on the server than locally cached. The selected sort
-  // mode (column-header click) re-orders the visible window.
+  // the server returns the true total for the active filter. Render the
+  // page; the footer below shows Prev / page indicator / Next.
   const sortMode  = leGetSortMode();
   const sortDir   = leGetSortDir();
   const visible   = leSortRecent(_le.recentLots, sortMode, sortDir);
@@ -8574,8 +8911,16 @@ function renderLeRecent(){
   const hdrStyle = (col, extra) => 'cursor:pointer;user-select:none;' + (extra||'') +
         (sortMode === col ? 'color:var(--green);' : '');
   const total     = _le.recentTotal != null ? _le.recentTotal : visible.length;
-  const remaining = Math.max(0, total - visible.length);
-  if (count) count.textContent = `Showing ${visible.length} of ${total}`;
+  const page      = Math.max(1, parseInt(_le.recentPage, 10) || 1);
+  const pageSize  = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
+  const lastPage  = Math.max(1, Math.ceil(total / pageSize));
+  const fromRow   = (page - 1) * pageSize + 1;
+  const toRow     = Math.min(total, (page - 1) * pageSize + visible.length);
+  if (count) {
+    const filterTail = String(_le.recentSearch || '').trim()
+      ? ` matching <b>${esc(_le.recentSearch)}</b>` : '';
+    count.innerHTML = `Showing ${fromRow}–${toRow} of ${total}${filterTail}`;
+  }
   // 8-column grid: [select] [lot] [seller] [branch] [bags] [litre] [qty] [actions]
   // Header row + scrollable rows region. The wrapping container holds
   // the header outside the scroll area so column titles stay visible
@@ -8619,14 +8964,37 @@ function renderLeRecent(){
           </div>
         </div>`;
       }).join('')}
-      ${remaining > 0 ? `
-        <div style="padding:10px;text-align:center;border-bottom:1px solid var(--border)">
-          <button onclick="leLoadMoreRecent()" class="btn btn-o" style="font-size:12px;padding:6px 14px">
-            Load More (${remaining} more)
-          </button>
-        </div>` : ''}
     </div>
   `;
+  // Pager footer (Prev / page indicator / Next). Hidden when only one
+  // page worth of rows. Page input lets the operator jump directly so
+  // a 200-row trade doesn't need 8 Next clicks to reach the end.
+  const pagerHost = document.getElementById('le-recent-pager');
+  if (pagerHost) {
+    if (lastPage <= 1) {
+      pagerHost.style.display = 'none';
+      pagerHost.innerHTML = '';
+    } else {
+      pagerHost.style.display = 'flex';
+      const btnStyle = 'height:30px;padding:0 12px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer';
+      const disStyle = ';opacity:.4;cursor:not-allowed';
+      const mk = (label, target, dis) =>
+        '<button type="button" style="' + btnStyle + (dis ? disStyle : '') + '"' +
+          (dis ? ' disabled' : ` onclick="leGotoRecentPage(${target})"`) + '>' + label + '</button>';
+      pagerHost.innerHTML =
+        '<div>Page <b>' + page + '</b> of <b>' + lastPage + '</b> · ' + total + ' lot' + (total === 1 ? '' : 's') + '</div>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          mk('« First', 1, page <= 1) +
+          mk('‹ Prev',  page - 1, page <= 1) +
+          '<input type="number" min="1" max="' + lastPage + '" value="' + page + '" ' +
+            'style="width:60px;height:30px;padding:0 6px;border:1px solid var(--border);border-radius:6px;text-align:center;font-size:12px;font-weight:600" ' +
+            'onkeydown="if(event.key===\'Enter\'){leGotoRecentPage(this.value);this.blur()}" ' +
+            'onblur="leGotoRecentPage(this.value)">' +
+          mk('Next ›', page + 1, page >= lastPage) +
+          mk('Last »', lastPage,  page >= lastPage) +
+        '</div>';
+    }
+  }
   // Sync the master "select all" checkbox state with current selection.
   const all = document.getElementById('le-recent-select-all');
   if (all) {
@@ -8637,9 +9005,6 @@ function renderLeRecent(){
   }
   leUpdatePrintToolbar();
 }
-
-// (leLoadMoreRecent now lives next to loadLeRecent above — server-side
-//  pagination, fetches the next 25 rows from the server.)
 
 // Recent-stats badge — fetches a tiny summary endpoint instead of summing
 // the locally-loaded window. With server-side pagination, the local
@@ -9513,15 +9878,19 @@ let _le_pending_print = null; // { lots:[], scope:'single'|'selected' }
 function leUpdatePrintToolbar() {
   const btn      = document.getElementById('le-print-selected-btn');
   const bySeller = document.getElementById('le-print-by-seller-btn');
+  const chgSel   = document.getElementById('le-change-seller-btn');
   const clr      = document.getElementById('le-print-clear-btn');
   const badge    = document.getElementById('le-print-selected-count');
   const seBadge  = document.getElementById('le-print-by-seller-count');
+  const csBadge  = document.getElementById('le-change-seller-count');
   if (!btn) return;
   const ids = (_le.selectedForPrint && _le.selectedForPrint.size) ? _le.selectedForPrint : new Set();
   const n = ids.size;
   btn.style.display = n > 0 ? 'inline-flex' : 'none';
   clr.style.display = n > 0 ? 'inline-flex' : 'none';
-  if (badge) badge.textContent = n;
+  if (chgSel) chgSel.style.display = n > 0 ? 'inline-flex' : 'none';
+  if (badge)  badge.textContent  = n;
+  if (csBadge) csBadge.textContent = n;
   // Sellers represented in the current selection.
   let sellerCount = 0;
   if (n > 0 && Array.isArray(_le.recentLots)) {
@@ -9530,6 +9899,117 @@ function leUpdatePrintToolbar() {
   }
   if (bySeller) bySeller.style.display = (n > 0 && sellerCount > 1) ? 'inline-flex' : 'none';
   if (seBadge)  seBadge.textContent = sellerCount;
+}
+
+// Clear filter helper — called from the no-match empty-state link.
+function leClearRecentSearch(){
+  const el = document.getElementById('le-recent-search');
+  if (el) el.value = '';
+  _le.recentSearch = '';
+  _le.recentPage = 1;
+  loadLeRecent();
+}
+
+// ── Change Seller modal ────────────────────────────────────
+// Opens from the recent-entries toolbar when ≥1 lot is checked. Picks
+// a new seller via live /api/traders search; confirming posts to
+// /api/lots/bulk-seller which rewrites trader_id + every denormalised
+// seller column on the ticked lots.
+function leOpenChangeSeller(){
+  const ids = (_le.selectedForPrint && _le.selectedForPrint.size)
+    ? [..._le.selectedForPrint] : [];
+  if (!ids.length) { toast('Tick one or more lots first'); return; }
+  _le.changeSellerPick = null;
+  const m = document.getElementById('le-changeseller-modal');
+  const summary = document.getElementById('le-cs-summary');
+  if (summary) {
+    const visible = (_le.recentLots || []).filter(l => _le.selectedForPrint.has(l.id));
+    const sellers = new Set(visible.map(l => l.name || '?'));
+    summary.textContent = `${ids.length} lot${ids.length===1?'':'s'} from ${sellers.size} seller${sellers.size===1?'':'s'} — every ticked lot will be reassigned.`;
+  }
+  document.getElementById('le-cs-search').value = '';
+  document.getElementById('le-cs-results').style.display = 'none';
+  document.getElementById('le-cs-picked').style.display = 'none';
+  const err = document.getElementById('le-cs-err'); if (err) err.style.display = 'none';
+  document.getElementById('le-cs-save').disabled = true;
+  m.style.display = 'flex';
+  setTimeout(() => document.getElementById('le-cs-search').focus(), 50);
+}
+function leCloseChangeSeller(){
+  const m = document.getElementById('le-changeseller-modal');
+  if (m) m.style.display = 'none';
+  _le.changeSellerPick = null;
+}
+let _leCsSearchTimer = null;
+function leCsSearchSeller(q){
+  clearTimeout(_leCsSearchTimer);
+  const results = document.getElementById('le-cs-results');
+  if (!q || q.trim().length < 2) { results.style.display = 'none'; return; }
+  _leCsSearchTimer = setTimeout(async () => {
+    try {
+      const traders = await j(`/api/traders?search=${encodeURIComponent(q.trim())}&limit=10`);
+      const list = Array.isArray(traders) ? traders : [];
+      if (!list.length) {
+        results.innerHTML = '<div style="padding:10px 14px;color:var(--text3);font-size:13px;text-align:center">No sellers match this search.</div>';
+        results.style.display = 'block';
+        return;
+      }
+      results.innerHTML = list.map((t, i) => {
+        const loc = [t.ppla, t.pin].filter(Boolean).join(', ');
+        const meta = [t.cr, t.tel].filter(Boolean).join(' · ');
+        return `<div data-idx="${i}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''">
+          <div style="font-weight:600;color:var(--text)">${esc(t.name||'')}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(loc)}${meta?' — '+esc(meta):''}</div>
+        </div>`;
+      }).join('');
+      results.style.display = 'block';
+      results.querySelectorAll('div[data-idx]').forEach(el => {
+        el.onclick = () => leCsPickSeller(list[parseInt(el.dataset.idx, 10)]);
+      });
+    } catch (e) {
+      console.error('Change-seller search failed:', e);
+    }
+  }, 200);
+}
+function leCsPickSeller(t){
+  if (!t) return;
+  _le.changeSellerPick = t;
+  document.getElementById('le-cs-results').style.display = 'none';
+  document.getElementById('le-cs-search').value = t.name || '';
+  document.getElementById('le-cs-picked-name').textContent = t.name || '(unnamed)';
+  const meta = [t.ppla, t.pin, t.pstate].filter(Boolean).join(', ');
+  const meta2 = [t.cr, t.tel, t.pan].filter(Boolean).join(' · ');
+  document.getElementById('le-cs-picked-meta').textContent = [meta, meta2].filter(Boolean).join('  ·  ');
+  document.getElementById('le-cs-picked').style.display = 'block';
+  document.getElementById('le-cs-save').disabled = false;
+}
+async function leApplyChangeSeller(){
+  const t = _le.changeSellerPick;
+  const err = document.getElementById('le-cs-err');
+  const showErr = (m) => { err.textContent = m; err.style.display = 'block'; };
+  err.style.display = 'none';
+  if (!t || !t.id) return showErr('Pick a seller first');
+  const ids = (_le.selectedForPrint && _le.selectedForPrint.size)
+    ? [..._le.selectedForPrint] : [];
+  if (!ids.length) return showErr('No lots selected');
+  const btn = document.getElementById('le-cs-save');
+  btn.disabled = true; btn.textContent = 'Updating…';
+  try {
+    const r = await j('/api/lots/bulk-seller', {
+      method: 'POST',
+      body: JSON.stringify({ ids, trader_id: t.id }),
+    });
+    toast(`Reassigned ${r.updated || ids.length} lot${(r.updated || ids.length) === 1 ? '' : 's'} to ${r.name || t.name}`);
+    leCloseChangeSeller();
+    if (_le.selectedForPrint) _le.selectedForPrint.clear();
+    // Suggestion cache is keyed by auction — the renamed lots may have
+    // introduced a new seller in the trade, so drop the cache.
+    if (_le._suggestCache) delete _le._suggestCache[document.getElementById('le-auction')?.value];
+    await loadLeRecent();
+  } catch (e) {
+    showErr(e.message || 'Update failed');
+    btn.disabled = false; btn.textContent = 'Update Lots';
+  }
 }
 
 function leToggleLotSelected(lotId, on) {
@@ -10425,7 +10905,27 @@ function selectCat(ck){
 }
 function filterSettings(q){
   captureCurrentPanel();
-  _setFilter=q;
+  _setFilter = q;
+  // If the currently-open category has zero matches but another category
+  // does, jump to the first matching category. Without this, the user
+  // sees the right counts in the nav but the panel stays on a category
+  // that shows "No matching settings", which feels broken.
+  const needle = String(q || '').toLowerCase().trim();
+  if (needle) {
+    const matchInCat = (ck) => {
+      if (typeof isCategoryHiddenByMode === 'function' && isCategoryHiddenByMode(ck)) return false;
+      const fields = (_sdata[ck] || []).filter(f => typeof isFieldHiddenByMode === 'function' ? !isFieldHiddenByMode(f.key) : true);
+      return fields.some(f =>
+        (f.label || '').toLowerCase().includes(needle) ||
+        (f.key   || '').toLowerCase().includes(needle)
+      );
+    };
+    if (!matchInCat(_activeCat)) {
+      const keys = Object.keys(_cats).sort((a, b) => _cats[a].order - _cats[b].order);
+      const firstHit = keys.find(matchInCat);
+      if (firstHit) _activeCat = firstHit;
+    }
+  }
   renderSettingsNav();
   renderSettingsPanel();
 }
@@ -11367,6 +11867,7 @@ async function searchTraders(q, opts){
   const d = rows;
   DataTable.mount('traders-list', d, {
     noSearch: true,
+    emptyState: { icon: 'traders', title: "No sellers yet", body: "Register sellers to record their lots. Use Add Seller above or import from a template XLSX." },
     columns: [
       BulkActions.column('seller'),
       { key:'name', label:'Name', sort:'text', render:(t)=>
@@ -12447,9 +12948,98 @@ async function doPriceImport(){
   }
 }
 
+// ── Shared trade selector ─────────────────────────────────
+// One picked trade follows the user across every transactional tab so they
+// don't re-pick the trade five times when switching Sales → Purchases →
+// Payments. State lives in sessionStorage (resets per browser session,
+// avoiding "haunted by last-week's pick" on next login).
+//
+// Two-way sync:
+//   • Picking the topbar dropdown updates every visible per-tab dropdown
+//     and fires its onchange so the page re-renders.
+//   • Picking ANY per-tab dropdown writes back to sessionStorage and
+//     updates the topbar to match. Other tabs pick it up on next open.
+function getSharedAuctionId(){
+  try { return sessionStorage.getItem('spice.sharedAucId') || ''; }
+  catch(_) { return ''; }
+}
+function setSharedAuctionId(id, source){
+  // source = 'topbar' | the per-tab select element | a select-id string —
+  // used to skip echoing the change back to the originator (avoids change-event loops).
+  const v = String(id || '');
+  try { sessionStorage.setItem('spice.sharedAucId', v); } catch(_){}
+  // Update topbar select unless that's where the change came from
+  const topbar = document.getElementById('topbar-trade');
+  if (topbar && source !== 'topbar' && topbar.value !== v) topbar.value = v;
+  // Walk every wired per-tab select (Set populated by _wireAuctionSync)
+  // and update + fire onchange unless the change came from that select itself.
+  for (const sel of (_wiredAuctionSelects || [])) {
+    if (!sel || !sel.isConnected) continue;          // detached from DOM
+    if (sel === source || sel.id === source) continue;
+    // Only switch if the option exists on this select (some tabs filter the list).
+    if (Array.from(sel.options).some(o => o.value === v)) {
+      if (sel.value !== v) {
+        sel.value = v;
+        sel.dispatchEvent(new Event('change'));
+      }
+    }
+  }
+}
+// Set of select elements that should mirror the shared state.
+const _wiredAuctionSelects = new Set();
+function _wireAuctionSync(selOrId){
+  const sel = (typeof selOrId === 'string') ? document.getElementById(selOrId) : selOrId;
+  if (!sel) return;
+  _wiredAuctionSelects.add(sel);
+  // Apply the current shared selection if this select has that option.
+  const shared = getSharedAuctionId();
+  if (shared && Array.from(sel.options).some(o => o.value === shared)) {
+    if (sel.value !== shared) sel.value = shared;
+  } else if (sel.value) {
+    // First-time setup — seed the shared state from whatever this select picked.
+    setSharedAuctionId(sel.value, sel);
+  }
+  // One-time wiring: when this select changes, broadcast.
+  if (!sel._aucSyncWired) {
+    sel.addEventListener('change', () => setSharedAuctionId(sel.value, sel));
+    sel._aucSyncWired = true;
+  }
+}
+// Populate the topbar dropdown. Called once after login from the boot
+// chain (loadStats / loadSettings already fire by then).
+async function loadTopbarTradeSelector(){
+  const wrap = document.getElementById('topbar-trade-wrap');
+  const sel  = document.getElementById('topbar-trade');
+  if (!wrap || !sel) return;
+  try {
+    const auctions = await j('/api/auctions');
+    if (!auctions || !auctions.length) { wrap.style.display = 'none'; return; }
+    sel.innerHTML = auctions.map(a =>
+      `<option value="${a.id}">#${esc(a.ano)} · ${esc((a.date||'').split('T')[0])}${a.lot_count?` · ${a.lot_count} lots`:''}</option>`
+    ).join('');
+    wrap.style.display = 'inline-flex';
+    // Pick existing shared OR default to most-recent (first option, since
+    // /api/auctions returns date DESC).
+    const shared = getSharedAuctionId();
+    if (shared && Array.from(sel.options).some(o => o.value === shared)) {
+      sel.value = shared;
+    } else {
+      sel.value = String(auctions[0].id);
+      // Seed sessionStorage without echoing to topbar
+      setSharedAuctionId(sel.value, 'topbar');
+    }
+  } catch (_) { wrap.style.display = 'none'; }
+}
+
 // ── Auction dropdowns ─────────────────────────────────────
-async function fillAucSelect(selId){const d=await j('/api/auctions');const sel=document.getElementById(selId);
-  sel.innerHTML=d.map(a=>`<option value="${a.id}">${a.ano} — ${fmtD(a.date)} (${a.lot_count} lots)</option>`).join('');return d}
+async function fillAucSelect(selId){
+  const d = await j('/api/auctions');
+  const sel = document.getElementById(selId);
+  if (!sel) return d;
+  sel.innerHTML = d.map(a => `<option value="${a.id}">${a.ano} — ${fmtD(a.date)} (${a.lot_count} lots)</option>`).join('');
+  _wireAuctionSync(sel);
+  return d;
+}
 function loadLotAuctions(){fillAucSelect('lot-auction').then(()=>loadLots())}
 function loadInvAuctions(){fillAucSelect('inv-auction').then(()=>{loadInvoices();loadInvEligibleBuyers()})}
 function loadPurAuctions(){fillAucSelect('pur-auction').then(()=>{loadPurchases();loadPurEligibleSellers()})}
@@ -12782,6 +13372,9 @@ function gotoLotsPage(p){
 async function loadLots(opts){
   const aid=document.getElementById('lot-auction').value;
   if(!aid)return;
+  // Skeleton shimmer while fetching — replaces the stale row data so
+  // the user sees motion instead of "old data → flash → new data".
+  if (typeof showSkeleton === 'function') showSkeleton('lots-list', 8);
   // Pager: fresh loads reset to page 1; only pager-driven navigation
   // sets {keepPage:true} to preserve the user's current page.
   if (!opts || !opts.keepPage) _lotsPager.page = 1;
@@ -13368,6 +13961,8 @@ function gotoInvoicesPage(p){
 }
 async function loadInvoices(opts){
   if (!opts || !opts.keepPage) _invoicesPager.page = 1;
+  // Skeleton shimmer while fetching — see loadLots() for rationale.
+  if (typeof showSkeleton === 'function') showSkeleton('invoices-list', 8);
   const aid=document.getElementById('inv-auction')?.value;
   // Sale-type filter — empty means no filter. Read live each load so a
   // dropdown change re-fires loadInvoices() and the URL picks up the
@@ -14879,11 +15474,11 @@ async function loadPayments(opts){
   const body=document.getElementById('payments-list');
   if(!aid){body.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Select an auction above</td></tr>';return}
 
-  // Visual feedback — set the body to a loading state so the user sees
-  // an obvious refresh even when the underlying data hasn't changed.
-  // Without this the click silently re-fetches and re-renders the same
-  // numbers, so the "Reload" feels broken even when it's working.
-  body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">Loading…</td></tr>';
+  // Visual feedback — skeleton rows so the user sees an obvious refresh
+  // even when the underlying data hasn't changed. Replaces the legacy
+  // "Loading…" cell which looked static. showSkeleton auto-detects the
+  // column count from the thead.
+  if (typeof showSkeleton === 'function') showSkeleton('payments-list', 8);
 
   // Force a fresh DataTable state for this tbody so any retained sort
   // direction / pagination doesn't mask the new data. Without this the
@@ -15131,6 +15726,7 @@ async function exportType(type,format){format=format||'xlsx';
 async function loadTDS(){const f=document.getElementById('tds-from').value,t=document.getElementById('tds-to').value;
   if(!f||!t){alert('Select date range');return}const d=await j(`/api/tds-return?from=${f}&to=${t}`);
   DataTable.mount('tds-list', d, {
+    emptyState: { icon: 'invoices', title: "No TDS entries in this range", body: "Pick a wider date range, or generate purchase invoices that trigger TDS first." },
     columns: [
       { key:'invoice', label:'Invoice', sort:'text' },
       { key:'date', label:'Date', sort:'date', render:(r)=>fmtD(r.date) },
@@ -15334,6 +15930,7 @@ async function loadDebitNotes(opts){
   const _dnSlice = applyClientSidePagination(_debitPager, 'debit-pager', gotoDebitPage, d, !!searchTerm);
   DataTable.mount('debit-list', _dnSlice, {
     noSearch: true,
+    emptyState: { icon: 'invoices', title: "No debit notes yet", body: "Generate a debit note from a purchase invoice to record a discount adjustment." },
     columns: [
       { key:'_select', label:'',
         labelHTML:'<input type="checkbox" id="dn-select-all" onclick="event.stopPropagation();toggleAllDn(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
@@ -15815,6 +16412,7 @@ async function loadJournalDefault(){
       console.warn('Failed to load trade list for journal:', e);
     }
   }
+  if (sel && typeof _wireAuctionSync === 'function') _wireAuctionSync(sel);
   updateJournalSaleVisibility();
 }
 
