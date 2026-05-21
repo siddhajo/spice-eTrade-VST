@@ -252,9 +252,14 @@ function calculateTCS(invoiceAmount, priorSales, cfg) {
  */
 function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
   // Get all lots for this buyer in this auction that have amounts
-  // Don't filter by sale — we're ASSIGNING the sale type now
+  // Don't filter by sale — we're ASSIGNING the sale type now.
+  // Locked lots are excluded — they're finalized records and must not
+  // be picked up into a new invoice. The corresponding stamping UPDATE
+  // in server.js also carries `AND locked_at IS NULL` as a belt-and-
+  // braces guard against any caller that bypasses this helper.
   const lots = db.all(
-    `SELECT * FROM lots WHERE auction_id = ? AND buyer = ? AND amount > 0 
+    `SELECT * FROM lots WHERE auction_id = ? AND buyer = ? AND amount > 0
+     AND locked_at IS NULL
      AND (sale IS NULL OR sale = '' OR sale = ?) ORDER BY lot_no`,
     [auctionId, buyerCode, saleType]
   );

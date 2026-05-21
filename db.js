@@ -287,6 +287,12 @@ async function initDb() {
     bilamt REAL DEFAULT 0,
     paid TEXT DEFAULT '',
     user_id TEXT DEFAULT '',
+    -- Record-lock columns (also added via ALTER for older DBs in the
+    -- migrations block below). See server.js POST /api/lots/lock for
+    -- semantics. Defined here too so fresh DBs get the columns +
+    -- idx_lots_locked index on the very first boot.
+    locked_at TEXT DEFAULT NULL,
+    locked_by TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (auction_id) REFERENCES auctions(id),
     FOREIGN KEY (trader_id) REFERENCES traders(id)
@@ -474,6 +480,12 @@ async function initDb() {
     'CREATE INDEX IF NOT EXISTS idx_lots_name ON lots(name)',
     'CREATE INDEX IF NOT EXISTS idx_lots_buyer ON lots(buyer)',
     'CREATE INDEX IF NOT EXISTS idx_lots_sale ON lots(sale)',
+    // Cascade lock lookups (lotsLockedFor*) scan by (auction_id, buyer)
+    // or (auction_id, name) with locked_at NOT NULL — the auction index
+    // above already covers the leading column, so a dedicated partial-
+    // ish index isn't necessary. We add this one only so the lots-tab
+    // list can sort/filter locked rows cheaply.
+    'CREATE INDEX IF NOT EXISTS idx_lots_locked ON lots(locked_at)',
     'CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date)',
     'CREATE INDEX IF NOT EXISTS idx_invoices_sale ON invoices(sale, invo)',
     'CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date)',
@@ -574,11 +586,26 @@ async function initDb() {
     // even if last_used_at is recent, so a leaked Authorization header has
     // a bounded validity window.
     'ALTER TABLE sessions ADD COLUMN expires_at TEXT',
+    // Per-lot record lock. When locked_at is set, the row becomes
+    // uneditable for non-admins, both directly (PUT/DELETE /api/lots/:id,
+    // bulk lot mutations, calculate) and indirectly (sales invoice /
+    // purchase / debit-note edit/delete/revert that would touch the lot).
+    // Admins can always edit. Only an admin can clear the lock.
+    // locked_by carries the username of whoever set the lock — purely
+    // for audit/UI display; permission is decided from req.user.role.
+    'ALTER TABLE lots ADD COLUMN locked_at TEXT DEFAULT NULL',
+    'ALTER TABLE lots ADD COLUMN locked_by TEXT DEFAULT NULL',
   ];
   for (const m of migrations) {
     try { wrapped.exec(m); console.log('Migration applied:', m); }
     catch (e) { /* column already exists — ignore */ }
   }
+
+  // Re-attempt indexes that depend on migration-added columns. The
+  // indexes block above runs BEFORE migrations, so on upgrade-paths
+  // where the column didn't exist yet the CREATE INDEX silently
+  // no-oped. Idempotent — already-created indexes are a no-op here too.
+  try { wrapped.exec('CREATE INDEX IF NOT EXISTS idx_lots_locked ON lots(locked_at)'); } catch (_) {}
 
   // One-time data fix: legacy ASP-only lots (where invo==asp_invo) had their
   // `sale` field set during the old ASP-generation logic. The current logic
