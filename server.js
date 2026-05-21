@@ -4542,6 +4542,33 @@ app.get('/api/purchases', requireView, (req, res) => {
   res.json(getDb().all(q, p));
 });
 
+// Normalize a GSTIN string for equality comparison. Strips the legacy
+// "GSTIN."/"GSTIN" prefix and any whitespace, uppercases. Two values
+// that both resolve to the same 15-char body compare equal even if
+// one was stored in the UI-prefix format and the other was the bare
+// 15-char Excel-import format.
+function _normGstin(s) {
+  let v = String(s == null ? '' : s).trim().toUpperCase();
+  if (v.startsWith('GSTIN.')) v = v.slice(6);
+  else if (v.startsWith('GSTIN')) v = v.slice(5);
+  return v.trim();
+}
+
+// Resolve the company's (buyer's) GSTIN. Mirrors the same fallback
+// chain `enrichPurchaseForPDF` uses so the equality check here lines
+// up with what the PDF will print as the buyer GSTIN.
+function _resolveBuyerGstin(cfg) {
+  const isASP = cfg.business_mode === 'e-Trade' && String(cfg.business_state || '').toUpperCase() === 'KERALA';
+  let id;
+  try { id = getCompanyIdentity(cfg); } catch (_) { id = {}; }
+  return _normGstin(
+    id.gstin
+    || (isASP ? (cfg.s_gstin || cfg.kl_gstin) : cfg.tn_gstin)
+    || cfg.gstin
+    || ''
+  );
+}
+
 app.post('/api/purchases/generate/:auctionId',
   requireInvoiceWrite,
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
@@ -4550,6 +4577,20 @@ app.post('/api/purchases/generate/:auctionId',
   const { sellerName, invoiceNo } = req.body;
   const invoice = buildPurchaseInvoice(db, req.params.auctionId, sellerName, cfg);
   if (!invoice) return res.status(404).json({ error: 'No data for this seller' });
+
+  // Skip same-entity transactions: if the seller's GSTIN equals our
+  // company's GSTIN, the buyer and seller are the same legal entity
+  // (e.g. inter-branch transfer under one GSTIN). Issuing a tax invoice
+  // in that case isn't valid — refuse with a clear error so the operator
+  // knows to handle it as a stock transfer instead.
+  const sellerGstin = _normGstin(invoice.seller && (invoice.seller.cr || invoice.seller.gstin));
+  const buyerGstin  = _resolveBuyerGstin(cfg);
+  if (sellerGstin && buyerGstin && sellerGstin === buyerGstin) {
+    return res.status(400).json({
+      error: `Seller GSTIN (${sellerGstin}) matches the buyer/company GSTIN — same legal entity, no purchase invoice can be raised. Treat as an internal stock transfer.`,
+      sellerGstin, buyerGstin,
+    });
+  }
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   // Dedup — refuse a second purchase for the same dealer in this trade,
@@ -4600,7 +4641,9 @@ app.get('/api/purchases/eligible-sellers/:auctionId', requireView, (req, res) =>
   // valid GSTIN) plus a length >= 15 guard. Both forms fall through the
   // same downstream `gstinStateCode` helper so intra/inter logic is
   // unaffected.
-  res.json(getDb().all(
+  const cfgEs = getSettingsFlat(getDb());
+  const buyerGstinEs = _resolveBuyerGstin(cfgEs);
+  const allSellers = getDb().all(
     `SELECT name, COUNT(*) as lot_count, SUM(qty) as total_qty, SUM(amount) as total_amount, MAX(cr) as cr
      FROM lots
      WHERE auction_id = ? AND name IS NOT NULL AND name != ''
@@ -4612,7 +4655,14 @@ app.get('/api/purchases/eligible-sellers/:auctionId', requireView, (req, res) =>
      GROUP BY name
      ORDER BY name`,
     [req.params.auctionId]
-  ));
+  );
+  // Drop sellers whose GSTIN equals the buyer/company GSTIN — those
+  // sales are internal stock transfers, not purchases. Keeps them out
+  // of the dropdown AND the bulk "Generate for All" set.
+  const eligible = buyerGstinEs
+    ? allSellers.filter(r => _normGstin(r.cr) !== buyerGstinEs)
+    : allSellers;
+  res.json(eligible);
 });
 
 // Batch: generate purchase invoice for ALL registered dealers in an auction
@@ -4654,7 +4704,8 @@ app.post('/api/purchases/generate-all/:auctionId',
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
   const results = [];
   const errors = [];
-  
+  const buyerGstinAll = _resolveBuyerGstin(cfg);
+
   for (const row of sellers) {
     try {
       // Skip dealers who already have a purchase invoice in this trade.
@@ -4668,6 +4719,13 @@ app.post('/api/purchases/generate-all/:auctionId',
       }
       const invoice = buildPurchaseInvoice(db, req.params.auctionId, row.name, cfg);
       if (!invoice) { errors.push({ seller: row.name, error: 'Build failed' }); continue; }
+      // Same-entity skip: seller GSTIN equals buyer/company GSTIN.
+      // See the single-generate handler for rationale.
+      const sellerGstinAll = _normGstin(invoice.seller && (invoice.seller.cr || invoice.seller.gstin));
+      if (sellerGstinAll && buyerGstinAll && sellerGstinAll === buyerGstinAll) {
+        errors.push({ seller: row.name, error: `Same-entity (GSTIN ${sellerGstinAll}) — no purchase invoice raised` });
+        continue;
+      }
       const s = invoice.summary;
       const invoNo = String(nextNo);
       // Skip if this number is already taken by another dealer in the trade.

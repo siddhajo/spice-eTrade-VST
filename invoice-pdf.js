@@ -155,7 +155,18 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
   doc.font('Helvetica').fontSize(8);
   const sellerAddrBits = [seller.address, seller.place, seller.pin].filter(Boolean).join(', ');
   if (sellerAddrBits) { doc.text(sellerAddrBits, x0, y, { width: W, align: 'center' }); y += 10; }
-  if (seller.gstin || seller.cr) { doc.text('GSTIN:' + (seller.gstin || seller.cr || ''), x0, y, { width: W, align: 'center' }); y += 10; }
+  // Seller GSTIN: `seller.cr` may carry the legacy "GSTIN.<15-char>"
+  // prefix from the UI-entered format, while Excel imports store the
+  // bare 15-char form. Strip the prefix once here so we don't render
+  // "GSTIN:GSTIN.32ABCDE…" (double prefix) on the PDF.
+  const _stripGstinPrefix = (s) => {
+    let v = String(s == null ? '' : s).trim().toUpperCase();
+    if (v.startsWith('GSTIN.')) v = v.slice(6);
+    else if (v.startsWith('GSTIN')) v = v.slice(5);
+    return v.trim();
+  };
+  const sellerGstinRaw = _stripGstinPrefix(seller.gstin || seller.cr || '');
+  if (sellerGstinRaw) { doc.text('GSTIN:' + sellerGstinRaw, x0, y, { width: W, align: 'center' }); y += 10; }
   y += 2;
 
   // Divider between seller block and details grid
@@ -234,7 +245,14 @@ function generatePurchaseInvoicePDF(invoiceData, cfg, invoiceNo, externalDoc) {
   buyerLines.push((buyer.name || '').toUpperCase());
   const buyerAddr = [buyer.address, buyer.place ? 'DOOR No.650, ' + buyer.place : ''].filter(Boolean).join(', ').toUpperCase();
   if (buyerAddr) buyerLines.push(buyerAddr);
-  if (buyer.gstin) buyerLines.push('GSTIN    : ' + buyer.gstin);
+  // GSTIN: read from buyer.gstin, fall back to the cfg-level company
+  // GSTIN if the enrich step somehow left it blank. Strip any legacy
+  // "GSTIN."/"GSTIN" prefix so "GSTIN    : GSTIN.32ABCDE…" can never
+  // appear on the PDF (mirrors the seller-side strip above).
+  const buyerGstinRaw = _stripGstinPrefix(
+    buyer.gstin || cfg.tn_gstin || cfg.kl_gstin || cfg.gstin || ''
+  );
+  if (buyerGstinRaw) buyerLines.push('GSTIN    : ' + buyerGstinRaw);
   if (buyer.pan) buyerLines.push('PAN      : ' + buyer.pan);
   if (buyer.state) buyerLines.push('STATE    : ' + (buyer.state || '').toUpperCase() + '     CODE:' + (buyer.st_code || ''));
 
