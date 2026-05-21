@@ -3072,7 +3072,11 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
   if (name)   { q += ' AND lots.name LIKE ?'; p.push(`%${name}%`); }
   if (buyer)  { q += ' AND lots.buyer = ?'; p.push(buyer); }
   // Free-text search within the trade — lot no, seller name, buyer
-  // code/trade name, invoice no, branch.
+  // code/trade name, short code, invoice no, branch. The "Code" column
+  // shown in the Lots table is sourced from either `lots.code` (set by
+  // price-import / set-buyer flows) or a join to `buyers.code` keyed
+  // by `lots.buyer`. Both surfaces are searched so a user typing the
+  // short alias they see on screen reliably gets a hit.
   const searchTerm = String(search || '').trim();
   if (searchTerm) {
     const wild = `%${searchTerm}%`;
@@ -3081,17 +3085,26 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
             OR COALESCE(lots.name,'')   LIKE ?
             OR COALESCE(lots.buyer,'')  LIKE ?
             OR COALESCE(lots.buyer1,'') LIKE ?
+            OR COALESCE(lots.code,'')   LIKE ?
             OR COALESCE(lots.invo,'')   LIKE ?
             OR COALESCE(lots.branch,'') LIKE ?
+            OR EXISTS (
+              SELECT 1 FROM buyers b
+               WHERE b.buyer = lots.buyer
+                 AND COALESCE(b.code,'') LIKE ?
+            )
           )`;
-    p.push(wild, wild, wild, wild, wild, wild);
+    p.push(wild, wild, wild, wild, wild, wild, wild, wild);
   }
 
   // Summary mode — returns aggregate counts only (cheap, no row data).
   // Used by the Lot Entry stats badge so it shows true totals even when
-  // only a 25-row window of lots is loaded client-side.
+  // only a 25-row window of lots is loaded client-side. The WHERE
+  // clauses below MUST stay in lockstep with the placeholders pushed
+  // onto `p` above (auction_id + branch + name + buyer + search×8) —
+  // a mismatch silently drops or swallows parameters.
   if (summary === '1') {
-    const aggSql =
+    let aggSql =
       `SELECT COUNT(*) AS n,
               COALESCE(SUM(CAST(bags AS INTEGER)), 0) AS bags,
               COALESCE(SUM(qty), 0)                  AS qty
@@ -3100,6 +3113,22 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
       + (branch ? ' AND lots.branch = ?' : '')
       + (name   ? ' AND lots.name LIKE ?' : '')
       + (buyer  ? ' AND lots.buyer = ?' : '');
+    if (searchTerm) {
+      aggSql += ` AND (
+            COALESCE(lots.lot_no,'') LIKE ?
+            OR COALESCE(lots.name,'')   LIKE ?
+            OR COALESCE(lots.buyer,'')  LIKE ?
+            OR COALESCE(lots.buyer1,'') LIKE ?
+            OR COALESCE(lots.code,'')   LIKE ?
+            OR COALESCE(lots.invo,'')   LIKE ?
+            OR COALESCE(lots.branch,'') LIKE ?
+            OR EXISTS (
+              SELECT 1 FROM buyers b
+               WHERE b.buyer = lots.buyer
+                 AND COALESCE(b.code,'') LIKE ?
+            )
+          )`;
+    }
     const row = db.get(aggSql, p) || { n:0, bags:0, qty:0 };
     return res.json({ n: row.n, bags: row.bags, qty: row.qty });
   }
@@ -4554,19 +4583,34 @@ function _normGstin(s) {
   return v.trim();
 }
 
-// Resolve the company's (buyer's) GSTIN. Mirrors the same fallback
-// chain `enrichPurchaseForPDF` uses so the equality check here lines
-// up with what the PDF will print as the buyer GSTIN.
+// Resolve the company's (buyer's) GSTIN. State-aware: in a Kerala
+// install the GSTIN lives under Settings → Address (Kerala) → GSTIN
+// (`kl_gstin`); in a Tamil Nadu install under Address (Tamil Nadu)
+// (`tn_gstin`). We probe BOTH slots regardless of state and also fall
+// through to the generic top-level keys so a misconfigured install
+// (e.g. GSTIN entered under the wrong state) still produces a usable
+// value. Earlier this function gated on `business_mode === 'e-Trade'`
+// to pick between slots — but this build locks business_mode to
+// 'e-Auction', so Kerala's `kl_gstin` was never read and the
+// same-entity check silently bypassed itself.
 function _resolveBuyerGstin(cfg) {
-  const isASP = cfg.business_mode === 'e-Trade' && String(cfg.business_state || '').toUpperCase() === 'KERALA';
-  let id;
-  try { id = getCompanyIdentity(cfg); } catch (_) { id = {}; }
-  return _normGstin(
-    id.gstin
-    || (isASP ? (cfg.s_gstin || cfg.kl_gstin) : cfg.tn_gstin)
-    || cfg.gstin
-    || ''
-  );
+  const stateUpper = String(cfg && cfg.business_state || '').toUpperCase();
+  const isKerala = stateUpper === 'KERALA';
+  // Order matters: the active-state slot is checked first so a TN
+  // install whose user also typed something into kl_gstin still
+  // matches against the TN value.
+  const candidates = isKerala
+    ? [cfg.kl_gstin, cfg.s_gstin, cfg.tn_gstin, cfg.gstin, cfg.business_gstin]
+    : [cfg.tn_gstin, cfg.kl_gstin, cfg.s_gstin, cfg.gstin, cfg.business_gstin];
+  for (const c of candidates) {
+    const norm = _normGstin(c);
+    if (norm) return norm;
+  }
+  // Last resort: identity helper (reads its own pick chain).
+  try {
+    const id = getCompanyIdentity(cfg);
+    return _normGstin(id && id.gstin);
+  } catch (_) { return ''; }
 }
 
 app.post('/api/purchases/generate/:auctionId',
@@ -4585,6 +4629,14 @@ app.post('/api/purchases/generate/:auctionId',
   // knows to handle it as a stock transfer instead.
   const sellerGstin = _normGstin(invoice.seller && (invoice.seller.cr || invoice.seller.gstin));
   const buyerGstin  = _resolveBuyerGstin(cfg);
+  // Soft guardrail: if the company GSTIN couldn't be resolved at all
+  // we surface a clear configuration error instead of silently allowing
+  // the generation. Settings → Address (Kerala/Tamil Nadu) → GSTIN is
+  // the canonical place to set it; without that filled in, the gate
+  // can't compare anything.
+  if (sellerGstin && !buyerGstin) {
+    console.warn('[purchases/generate] Buyer GSTIN could not be resolved from cfg; same-entity check skipped. Set Settings → Address → GSTIN.');
+  }
   if (sellerGstin && buyerGstin && sellerGstin === buyerGstin) {
     return res.status(400).json({
       error: `Seller GSTIN (${sellerGstin}) matches the buyer/company GSTIN — same legal entity, no purchase invoice can be raised. Treat as an internal stock transfer.`,
@@ -4705,6 +4757,9 @@ app.post('/api/purchases/generate-all/:auctionId',
   const results = [];
   const errors = [];
   const buyerGstinAll = _resolveBuyerGstin(cfg);
+  if (!buyerGstinAll) {
+    console.warn('[purchases/generate-all] Buyer GSTIN could not be resolved from cfg; same-entity skip will be inactive. Set Settings → Address → GSTIN.');
+  }
 
   for (const row of sellers) {
     try {

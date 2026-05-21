@@ -2995,7 +2995,7 @@ input[type="search"]:focus{
           <!-- Within-trade search across lot no, seller name, buyer
                code/trade name, invoice no, branch for the selected
                auction. Bypasses client-side pagination when active. -->
-          <input type="search" id="lot-search" placeholder="Search lot no, seller, buyer…" oninput="searchLotsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
+          <input type="search" id="lot-search" placeholder="Search lot no, seller, buyer, code, invoice, branch…" oninput="searchLotsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
 
           <!-- Branch filter — populated from the lots actually present in the
                selected auction (deduplicated). Filtering is server-side

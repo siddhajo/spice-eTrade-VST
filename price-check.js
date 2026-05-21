@@ -35,6 +35,14 @@
  */
 
 const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
+// SheetJS — used to bridge legacy .xls (BIFF) files. ExcelJS only
+// reads modern .xlsx (OOXML); when the operator uploads a .xls (e.g.
+// the legacy PriceCheck_VSTL.xls saved by the macro workbook), SheetJS
+// reads it and re-emits an .xlsx buffer that ExcelJS can then process
+// normally. The downloaded annotated file is always .xlsx.
+const XLSX = require('xlsx');
 
 // ── Normalisation helpers ─────────────────────────────────────
 
@@ -178,9 +186,29 @@ function readNum(row, col) {
 async function processFile(filePath, db, opts) {
   opts = opts || {};
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
+  // Detect legacy .xls and bridge through SheetJS. ExcelJS's
+  // `.xlsx.readFile` doesn't understand the older binary BIFF
+  // format — it opens the file without throwing but returns a
+  // workbook with zero worksheets, which surfaced as the cryptic
+  // "No worksheet found in uploaded file" error. SheetJS handles
+  // both formats transparently, so we read the file there and
+  // re-serialize as an .xlsx buffer that ExcelJS can consume.
+  const ext = String(path.extname(filePath || '') || '').toLowerCase();
+  if (ext === '.xls') {
+    let xlsxBuf;
+    try {
+      const inputBuf = fs.readFileSync(filePath);
+      const sjsWb = XLSX.read(inputBuf, { type: 'buffer', cellDates: true });
+      xlsxBuf = XLSX.write(sjsWb, { bookType: 'xlsx', type: 'buffer' });
+    } catch (e) {
+      throw new Error('Could not read .xls file (' + (e.message || 'unknown error') + '). Try opening it in Excel and saving as .xlsx, then re-upload.');
+    }
+    await wb.xlsx.load(xlsxBuf);
+  } else {
+    await wb.xlsx.readFile(filePath);
+  }
   const ws = wb.worksheets[0];
-  if (!ws) throw new Error('No worksheet found in uploaded file');
+  if (!ws) throw new Error('No worksheet found in uploaded file. If you exported as .xls, save the file as .xlsx and try again.');
 
   const cols = locateColumns(ws);
   if (!cols.headerRow) {
