@@ -2765,6 +2765,7 @@ input[type="search"]:focus{
           <button class="btn btn-a" onclick="impVerify()">2. Verify Against Database</button>
           <button class="btn btn-a" onclick="impRun()">3. Run Import</button>
           <button class="btn btn-o" onclick="impLoadHistory()">View History</button>
+          <button class="btn btn-o" onclick="impClear()" style="margin-left:auto" title="Clear file, reset module pick, hide preview / verify panels">Clear</button>
         </div>
         <div id="imp-result" style="margin-bottom:14px;font-size:12.5px;color:var(--text2)"></div>
         <div id="imp-preview" style="overflow-x:auto;max-height:300px;border:1px solid var(--spice-line);border-radius:8px;padding:8px;background:#fff;margin-bottom:14px"></div>
@@ -17555,6 +17556,37 @@ let _impLastKeyCols = [];
 let _impLastRows    = [];
 let _impLastAutoFillAuctionId = false;
 
+// Resets the Import Old Data screen back to its first-load state:
+// clears the file picker, drops every cached mapping / preview /
+// verify payload, hides the verify panel, wipes the result line and
+// the projected-rows table. Module dropdown is left at whatever the
+// user picked because it's their selection — they may want to clear
+// the picker and re-upload the same module. History panel stays as-is
+// (the user can refresh it via "View History").
+function impClear(){
+  const fileEl = document.getElementById('imp-file');
+  if (fileEl) fileEl.value = '';
+  // Drop every retained payload so the next Preview starts fresh.
+  _impLastMapping = null;
+  _impLastHeaders = [];
+  _impLastFields  = [];
+  _impLastKeyCols = [];
+  _impLastRows    = [];
+  _impLastAutoFillAuctionId = false;
+  if (typeof _impLastVerify !== 'undefined') _impLastVerify = null;
+  // Reset visible surfaces.
+  const result  = document.getElementById('imp-result');
+  const preview = document.getElementById('imp-preview');
+  const verify  = document.getElementById('imp-verify');
+  if (result)  result.innerHTML  = '';
+  if (preview) preview.innerHTML = '';
+  if (verify)  { verify.innerHTML = ''; verify.style.display = 'none'; }
+  // Re-tick dry-run so the next import is safe-by-default.
+  const dry = document.getElementById('imp-dryrun');
+  if (dry) dry.checked = true;
+  if (typeof toast === 'function') toast('Cleared');
+}
+
 async function impPreview(){
   const fileEl = document.getElementById('imp-file');
   const moduleKey = document.getElementById('imp-module').value;
@@ -17797,6 +17829,10 @@ async function impVerify(){
       ' · duplicates='+ (c.duplicate||0) +
       (c.duplicateChanged ? ' ('+c.duplicateChanged+' with changes)' : '') +
       ' · invalid='+ totalInvalid +
+      // Name-corrected count appears when the module supports GSTIN
+      // lookup AND at least one row's name will be rewritten from the
+      // master. Helps the operator catch unexpected over-corrections.
+      (c.nameCorrected ? ' · <span style="color:#0369a1">name-corrected='+c.nameCorrected+'</span>' : '') +
       ' &nbsp;<span style="color:'+(totalInvalid?'#c00':'#15803d')+'">'+
         (totalInvalid ? '⚠ Fix invalid rows or adjust mapping before importing.' : '✓ Ready to import.')+
       '</span>';
@@ -18050,6 +18086,13 @@ async function impRun(){
     let h = '<div style="padding:8px;background:'+(dryRun?'#fff8e1':'#e8f5e9')+';border-radius:6px">';
     h += '<b>'+(dryRun?'Dry-run complete':'Import complete')+'</b> · ';
     h += 'total='+data.total+' · imported='+data.imported+' · skipped(dup)='+data.skipped+' · failed='+data.failed;
+    // Surface the GSTIN→master-name correction count when present —
+    // tells the operator "N rows had truncated names rewritten from
+    // the master." Hidden when the module doesn't support the lookup
+    // or no corrections were applied.
+    if (data.nameCorrected && data.nameCorrected > 0) {
+      h += ' · <span style="color:#0369a1">name-corrected='+data.nameCorrected+'</span>';
+    }
     h += '</div>';
     if (data.errors && data.errors.length) {
       h += '<div style="margin-top:8px"><b>Errors (first '+data.errors.length+'):</b><ul style="margin:4px 0 0 18px;font-size:12px">';

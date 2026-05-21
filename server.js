@@ -4586,22 +4586,15 @@ function _normGstin(s) {
 // Resolve the company's (buyer's) GSTIN. State-aware: in a Kerala
 // install the GSTIN lives under Settings → Address (Kerala) → GSTIN
 // (`kl_gstin`); in a Tamil Nadu install under Address (Tamil Nadu)
-// (`tn_gstin`). We probe BOTH slots regardless of state and also fall
-// through to the generic top-level keys so a misconfigured install
-// (e.g. GSTIN entered under the wrong state) still produces a usable
-// value. Earlier this function gated on `business_mode === 'e-Trade'`
-// to pick between slots — but this build locks business_mode to
-// 'e-Auction', so Kerala's `kl_gstin` was never read and the
-// same-entity check silently bypassed itself.
+// (`tn_gstin`). We probe BOTH slots regardless of state and also
+// fall through to the generic top-level keys, so a user who typed
+// the GSTIN under the wrong section still gets a usable value.
 function _resolveBuyerGstin(cfg) {
   const stateUpper = String(cfg && cfg.business_state || '').toUpperCase();
   const isKerala = stateUpper === 'KERALA';
-  // Order matters: the active-state slot is checked first so a TN
-  // install whose user also typed something into kl_gstin still
-  // matches against the TN value.
   const candidates = isKerala
-    ? [cfg.kl_gstin, cfg.s_gstin, cfg.tn_gstin, cfg.gstin, cfg.business_gstin]
-    : [cfg.tn_gstin, cfg.kl_gstin, cfg.s_gstin, cfg.gstin, cfg.business_gstin];
+    ? [cfg.kl_gstin, cfg.tn_gstin, cfg.gstin, cfg.business_gstin]
+    : [cfg.tn_gstin, cfg.kl_gstin, cfg.gstin, cfg.business_gstin];
   for (const c of candidates) {
     const norm = _normGstin(c);
     if (norm) return norm;
@@ -4611,6 +4604,50 @@ function _resolveBuyerGstin(cfg) {
     const id = getCompanyIdentity(cfg);
     return _normGstin(id && id.gstin);
   } catch (_) { return ''; }
+}
+
+// Normalize a company / seller name for equality comparison. Trims,
+// collapses internal whitespace, uppercases. Two values that mean the
+// same name (different spacing / case) compare equal.
+function _normName(s) {
+  return String(s == null ? '' : s).trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
+// Resolve the company's (buyer's) trade name. Reads `trade_name` first
+// (the canonical user-edited field), falls back to short_name and the
+// central identity helper. Used as a SECONDARY same-entity signal —
+// when a seller record happens to share the company's name but has a
+// blank GSTIN, we still want to block the purchase (it's almost
+// certainly the same legal entity with a configuration gap).
+function _resolveBuyerName(cfg) {
+  const direct = _normName(cfg && (cfg.trade_name || cfg.short_name || cfg.company_name || cfg.tally_company_name));
+  if (direct) return direct;
+  try {
+    const id = getCompanyIdentity(cfg);
+    return _normName(id && (id.name || id.shortName));
+  } catch (_) { return ''; }
+}
+
+// Same-entity check: returns the reason string (for the API response)
+// when the seller and the company should be treated as the same legal
+// entity, otherwise returns null. Priority:
+//   1. GSTIN match (definitive — same legal entity)
+//   2. Name match (fallback — covers blank-GSTIN sellers that share
+//      the company's trade name)
+// Both `invoice.seller` and `cfg` are required.
+function _checkSameEntity(invoice, cfg) {
+  if (!invoice || !invoice.seller) return null;
+  const sellerGstin = _normGstin(invoice.seller.cr || invoice.seller.gstin);
+  const buyerGstin  = _resolveBuyerGstin(cfg);
+  if (sellerGstin && buyerGstin && sellerGstin === buyerGstin) {
+    return { reason: `Seller GSTIN (${sellerGstin}) matches the buyer/company GSTIN — same legal entity, no purchase invoice can be raised.`, by: 'gstin', sellerGstin, buyerGstin };
+  }
+  const sellerName = _normName(invoice.seller.name);
+  const buyerName  = _resolveBuyerName(cfg);
+  if (sellerName && buyerName && sellerName === buyerName) {
+    return { reason: `Seller name (${invoice.seller.name}) matches the company name — same legal entity, no purchase invoice can be raised.`, by: 'name', sellerName, buyerName };
+  }
+  return null;
 }
 
 app.post('/api/purchases/generate/:auctionId',
@@ -4899,39 +4936,39 @@ function enrichPurchaseForPDF(invoice, cfg, db, auctionId) {
   if (!invoice.invoiceDate) invoice.invoiceDate = fmtDate(todayLocalISO());
   if (!invoice.eTradeNo) invoice.eTradeNo = String(auctionId || '');
 
-  // Buyer block — populated from the central company identity (which
-  // reads the user's CURRENT settings). Legacy `s_*` / `tn_*` fields are
-  // only used as a fallback when identity is blank, NOT as the primary
-  // source. Inverting the priority is critical: stale `s_company` left
-  // over from the dual-company migration was overriding the user's
-  // configured company name and producing "ASP address" on PDFs even
-  // after the user updated Settings.
-  //
-  // The isASP branch is structurally retained so the BILLED/SHIPPED TO
-  // address can still pick state-specific address lines (Kerala vs Tamil
-  // Nadu) when both are populated.
-  const isASP = cfg.business_mode === 'e-Trade' && String(cfg.business_state || '').toUpperCase() === 'KERALA';
+  // Buyer block — populated from the central company identity (name /
+  // PAN / etc.) and the state-specific address slot. Single-company
+  // build: there is no sister/ASP. Kerala installs read `kl_*`, every
+  // other state (TN by default) reads `tn_*`. The buyer GSTIN
+  // specifically prefers the state's slot over `_ident.gstin` because
+  // `getCompanyIdentity` only checks `tn_gstin`, which would print the
+  // wrong GSTIN on a Kerala install whose user had filled `kl_gstin`.
   if (!invoice.buyer) {
     const _ident = getCompanyIdentity(cfg);
-    invoice.buyer = isASP ? {
-      name:    _ident.name    || cfg.s_company  || '',
-      address: _ident.address1 || cfg.s_address1 || cfg.kl_address1 || '',
-      place:   cfg.s_place || cfg.kl_place || '',
-      pin:     cfg.s_pin   || cfg.kl_pin   || '',
-      state:   _ident.state    || cfg.s_state || 'Kerala',
-      st_code: _ident.stateCode || cfg.s_st_code || '32',
-      gstin:   _ident.gstin    || cfg.s_gstin || '',
-      pan:     _ident.pan      || cfg.s_pan || cfg.pan || '',
-    } : {
-      name:    _ident.name    || cfg.short_name || cfg.trade_name || '',
-      address: _ident.address1 || cfg.tn_address1 || '',
-      place:   cfg.tn_place || '',
-      pin:     cfg.tn_pin   || '',
-      state:   _ident.state    || cfg.tn_state || 'Tamil Nadu',
-      st_code: _ident.stateCode || cfg.tn_st_code || '33',
-      gstin:   _ident.gstin    || cfg.tn_gstin || '',
-      pan:     _ident.pan      || cfg.pan || '',
-    };
+    const isKerala = String(cfg.business_state || '').toUpperCase() === 'KERALA';
+    if (isKerala) {
+      invoice.buyer = {
+        name:    _ident.name      || cfg.short_name || cfg.trade_name || '',
+        address: cfg.kl_address1   || _ident.address1 || '',
+        place:   cfg.kl_place      || '',
+        pin:     cfg.kl_pin        || '',
+        state:   cfg.kl_state      || _ident.state || 'Kerala',
+        st_code: '32',
+        gstin:   cfg.kl_gstin      || _ident.gstin || '',
+        pan:     _ident.pan        || cfg.pan || '',
+      };
+    } else {
+      invoice.buyer = {
+        name:    _ident.name      || cfg.short_name || cfg.trade_name || '',
+        address: cfg.tn_address1   || _ident.address1 || '',
+        place:   cfg.tn_place      || '',
+        pin:     cfg.tn_pin        || '',
+        state:   cfg.tn_state      || _ident.state || 'Tamil Nadu',
+        st_code: cfg.tn_st_code    || _ident.stateCode || '33',
+        gstin:   cfg.tn_gstin      || _ident.gstin || '',
+        pan:     _ident.pan        || cfg.pan || '',
+      };
+    }
   }
   return invoice;
 }
@@ -8211,6 +8248,52 @@ function _importMapHeaders(headers, moduleDef) {
   }
   return out;
 }
+
+// Per-module GSTIN→master-name lookup config. When a module is in
+// this table, the import flow will:
+//   1. Build an in-memory map of normalised GSTIN → canonical name
+//      from the listed master table (one DB call per import run).
+//   2. For each imported row that has a GSTIN, replace the row's name
+//      field with the master name when there's a match.
+// Solves the legacy-XLS truncation problem: source files often clip
+// long seller / buyer names to 30 chars, but the master record
+// already holds the full canonical name. The GSTIN is the reliable
+// pivot.
+const IMPORT_NAME_BY_GSTIN = {
+  purchase:      { masterTable: 'traders', masterGstin: 'cr',    masterName: 'name',   rowGstinField: 'gstin', rowNameField: 'name'   },
+  bills:         { masterTable: 'traders', masterGstin: 'cr',    masterName: 'name',   rowGstinField: 'crr',   rowNameField: 'name'   },
+  sales_invoice: { masterTable: 'buyers',  masterGstin: 'gstin', masterName: 'buyer1', rowGstinField: 'gstin', rowNameField: 'buyer1' },
+};
+
+// Normalize a GSTIN string for map keying. Mirrors _normGstin used by
+// the purchase same-entity check — strips legacy "GSTIN."/"GSTIN"
+// prefix, trims, uppercases. Defined inline here so this section
+// stays self-contained.
+function _normGstinForLookup(s) {
+  let v = String(s == null ? '' : s).trim().toUpperCase();
+  if (v.startsWith('GSTIN.')) v = v.slice(6);
+  else if (v.startsWith('GSTIN')) v = v.slice(5);
+  return v.trim();
+}
+
+// Build the GSTIN → name map for a given master table. Reads every
+// non-blank GSTIN row once. First-wins on duplicates (rare, since
+// GSTIN is supposed to be unique anyway).
+function _buildGstinNameMap(db, table, gstinCol, nameCol) {
+  const map = new Map();
+  let rows;
+  try {
+    rows = db.all(`SELECT ${gstinCol} AS g, ${nameCol} AS n FROM ${table} WHERE ${gstinCol} IS NOT NULL AND ${gstinCol} != ''`);
+  } catch (e) {
+    console.warn('[import] _buildGstinNameMap failed for', table, '-', e.message);
+    return map;
+  }
+  for (const row of rows) {
+    const norm = _normGstinForLookup(row.g);
+    if (norm && row.n && !map.has(norm)) map.set(norm, String(row.n).trim());
+  }
+  return map;
+}
 app.post('/api/import-old-data/preview', requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const moduleKey = req.body.module;
@@ -8322,6 +8405,14 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
       return id;
     };
 
+    // GSTIN → canonical-name map for this module. Empty when the
+    // module doesn't support the lookup. Built once per request.
+    const nameLookupCfg = IMPORT_NAME_BY_GSTIN[moduleKey] || null;
+    const gstinNameMap = nameLookupCfg
+      ? _buildGstinNameMap(db, nameLookupCfg.masterTable, nameLookupCfg.masterGstin, nameLookupCfg.masterName)
+      : null;
+    let cntNameCorrected = 0;
+
     let cntNew = 0, cntDup = 0, cntDupChanged = 0, cntInvAno = 0, cntInvReq = 0;
     // Four independent sample buckets so the client always has concrete
     // rows from each non-empty status, regardless of where they sit in
@@ -8344,6 +8435,24 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
       const values = {};
       for (const [f, src] of fieldSources) {
         values[f] = src ? r[src] : '';
+      }
+
+      // GSTIN→master-name lookup: when the row's GSTIN matches a
+      // master record, replace the row's name with the master's
+      // canonical name. Solves truncated names in legacy XLS dumps.
+      if (gstinNameMap && nameLookupCfg) {
+        const norm = _normGstinForLookup(values[nameLookupCfg.rowGstinField]);
+        if (norm) {
+          const masterName = gstinNameMap.get(norm);
+          if (masterName) {
+            const original = String(values[nameLookupCfg.rowNameField] || '').trim();
+            if (masterName !== original) {
+              values[nameLookupCfg.rowNameField] = masterName;
+              values._nameCorrected = { from: original, to: masterName, gstin: norm };
+              cntNameCorrected++;
+            }
+          }
+        }
       }
 
       const reasons = [];
@@ -8470,6 +8579,10 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
         duplicateChanged: cntDupChanged,
         invalidAno: cntInvAno,
         invalidRequired: cntInvReq,
+        // Rows where the imported name was overridden by the matching
+        // master record (looked up via GSTIN). Lets the UI tell the
+        // operator "20 names were corrected from the master."
+        nameCorrected: cntNameCorrected,
       },
       samples: {
         new: sampleNew,
@@ -8501,6 +8614,10 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
 
   const db = getDb();
   let imported = 0, skipped = 0, failed = 0;
+  // GSTIN→master-name correction counter — hoisted out of the try
+  // block so the response builder further down can read it. Always
+  // defined; stays 0 when the module isn't in IMPORT_NAME_BY_GSTIN.
+  let nameCorrected = 0;
   const errors = [];
   let total = 0;
   // Capture the primary-key id of every row this import inserts so the
@@ -8537,6 +8654,19 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
     const valuePlaceholders = def.fields.map(() => '?').join(',');
     const insertSql = `INSERT INTO ${def.table} (${def.fields.join(',')}) VALUES (${valuePlaceholders})`;
 
+    // GSTIN → canonical-name map for this module (same logic as
+    // /verify above). Built once, looked up per row. Resolves the
+    // row's gstin field position and name field position so we can
+    // patch the positional `values` array before INSERT.
+    const nameLookupCfg = IMPORT_NAME_BY_GSTIN[moduleKey] || null;
+    const gstinNameMap = nameLookupCfg
+      ? _buildGstinNameMap(db, nameLookupCfg.masterTable, nameLookupCfg.masterGstin, nameLookupCfg.masterName)
+      : null;
+    const nameGstinIdx = nameLookupCfg ? def.fields.indexOf(nameLookupCfg.rowGstinField) : -1;
+    const nameSlotIdx  = nameLookupCfg ? def.fields.indexOf(nameLookupCfg.rowNameField)  : -1;
+    // (nameCorrected is hoisted to the outer scope so the response
+    //  builder can read it after this try block.)
+
     // Cache `ano → auction_id` lookups for autoFillAuctionId modules.
     // Without this every row of a large import would hit the DB once
     // for the same trade number.
@@ -8567,7 +8697,29 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
         // the row is mapped — the auctions table is the source of truth
         // for ano→id, and without this the imported invoices show up
         // nowhere because the Sales tab filters by auction_id.
-        const values = fieldSources.map(([_, src]) => src ? r[src] : '');
+        // `date` is normalized to ISO yyyy-mm-dd here so downstream code
+        // (Tally XML's strict toTallyDate, the /api/invoices date BETWEEN
+        // filter, etc.) sees a canonical value regardless of whether the
+        // spreadsheet held an Excel serial, a DD-MM-YYYY string, etc.
+        const values = fieldSources.map(([fname, src]) => {
+          const v = src ? r[src] : '';
+          if (fname === 'date') return normalizeDate(v);
+          return v;
+        });
+        // GSTIN-driven name correction: when the row's GSTIN matches a
+        // master record, overwrite the (often truncated) imported name
+        // with the master's canonical name. Quiet — counted but not
+        // logged per-row.
+        if (gstinNameMap && nameGstinIdx >= 0 && nameSlotIdx >= 0) {
+          const norm = _normGstinForLookup(values[nameGstinIdx]);
+          if (norm) {
+            const masterName = gstinNameMap.get(norm);
+            if (masterName && masterName !== String(values[nameSlotIdx] || '').trim()) {
+              values[nameSlotIdx] = masterName;
+              nameCorrected++;
+            }
+          }
+        }
         if (def.autoFillAuctionId && auctionIdSlot >= 0) {
           const anoSrc = mapping.ano;
           const anoVal = anoSrc ? r[anoSrc] : '';
@@ -8613,6 +8765,15 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
     } catch (_) { /* non-fatal */ }
   }
 
+  // Repair any bad `date` values left behind by earlier imports (before
+  // the per-row normalize above was added). Same scan that runs at
+  // startup, but on-demand so the user doesn't have to restart the
+  // server to clear non-ISO date strings that make Tally XML drop the
+  // <DATE>/<REFERENCEDATE> tags. Idempotent and cheap on a fresh DB.
+  if (!dryRun) {
+    try { repairBadDates(db); } catch (_) { /* non-fatal */ }
+  }
+
   // Log this run regardless of outcome. `inserted_ids` is left blank on
   // dry-runs (no rows were inserted) so the Undo button stays disabled
   // for that entry. Log failures to the server console — silent
@@ -8638,7 +8799,15 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
   }
 
   fs.unlink(req.file.path, () => {});
-  res.json({ success: true, module: moduleKey, dryRun, total, imported, skipped, failed, errors, importLogId });
+  res.json({
+    success: true, module: moduleKey, dryRun,
+    total, imported, skipped, failed,
+    // Number of rows whose seller / buyer name was overridden by the
+    // master record (GSTIN match). 0 when the module isn't in
+    // IMPORT_NAME_BY_GSTIN — the UI can choose to hide the line.
+    nameCorrected,
+    errors, importLogId,
+  });
 });
 app.get('/api/import-old-data/history', requireAdmin, (req, res) => {
   // Force every request to hit the DB — without this, browsers
