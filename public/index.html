@@ -19208,22 +19208,45 @@ async function _pcFetchStatus(auctionId){
     return d;
   } catch (_) { return null; }
 }
-function _pcApplyDisable(selector, scopeSelector, ready, reason){
+// Tri-state button decorator. `state` is one of:
+//   'clean' — fully reconciled: enabled, no styling, no tooltip
+//   'stale' — verified before but lots changed since: enabled, amber
+//             outline, warning tooltip (soft warning, not a block)
+//   'never' — never verified: disabled, red tooltip (hard block)
+function _pcApplyDisable(selector, scopeSelector, state, reason){
   const scope = scopeSelector ? document.querySelector(scopeSelector) : document;
   if (!scope) return;
   scope.querySelectorAll(selector).forEach(el => {
-    if (ready) {
+    if (!el.dataset.pcOriginalTitle && el.title) el.dataset.pcOriginalTitle = el.title;
+    if (state === 'clean') {
       el.disabled = false;
       el.removeAttribute('data-pc-locked');
+      el.removeAttribute('data-pc-stale');
       el.style.opacity = '';
       el.style.cursor = '';
+      el.style.outline = '';
+      el.style.outlineOffset = '';
       el.title = el.dataset.pcOriginalTitle || '';
+    } else if (state === 'stale') {
+      el.disabled = false;
+      el.removeAttribute('data-pc-locked');
+      el.setAttribute('data-pc-stale', '1');
+      el.style.opacity = '';
+      el.style.cursor = '';
+      // Amber outline so the operator sees the soft warning at a glance
+      // without it looking like a disabled control.
+      el.style.outline = '2px solid #f59e0b';
+      el.style.outlineOffset = '1px';
+      el.title = reason || 'Lots changed since the last Price Check — review before generating.';
     } else {
+      // 'never' — hard block
       el.disabled = true;
       el.setAttribute('data-pc-locked', '1');
+      el.removeAttribute('data-pc-stale');
       el.style.opacity = '0.55';
       el.style.cursor = 'not-allowed';
-      if (!el.dataset.pcOriginalTitle) el.dataset.pcOriginalTitle = el.title || '';
+      el.style.outline = '';
+      el.style.outlineOffset = '';
       el.title = reason || 'Run Reports → Price Check on this auction first.';
     }
   });
@@ -19231,17 +19254,25 @@ function _pcApplyDisable(selector, scopeSelector, ready, reason){
 async function pcRefreshGate(auctionId, tabScope){
   const flagOn = document.body.getAttribute('data-feat-price-check') === '1';
   if (!flagOn) {
-    _pcApplyDisable('.needs-price-check', tabScope, true, '');
+    _pcApplyDisable('.needs-price-check', tabScope, 'clean', '');
     return true;
   }
-  const ready = auctionId
-    ? (await _pcFetchStatus(auctionId))?.checked === true
-    : false;
-  const reason = auctionId
-    ? 'Price check pending — run Reports → Price Check against this auction first.'
-    : 'Pick an auction first, then run Price Check to unlock.';
-  _pcApplyDisable('.needs-price-check', tabScope, ready, reason);
-  return ready;
+  let state = 'never';
+  if (auctionId) {
+    const status = await _pcFetchStatus(auctionId);
+    // Prefer the explicit `state` field; fall back to the legacy
+    // `checked` boolean for older servers without the tri-state field.
+    if (status && status.state) state = status.state;
+    else if (status && status.checked) state = 'clean';
+    if (state === 'off') state = 'clean';
+  }
+  const reason = state === 'stale'
+    ? 'Lots changed since the last Price Check — review the data, then re-verify if needed.'
+    : (auctionId
+        ? 'Price check pending — run Reports → Price Check against this auction first.'
+        : 'Pick an auction first, then run Price Check to unlock.');
+  _pcApplyDisable('.needs-price-check', tabScope, state, reason);
+  return state === 'clean' || state === 'stale';
 }
 
 // ── Price Check — Apply CODE fixes ──────────────────────────

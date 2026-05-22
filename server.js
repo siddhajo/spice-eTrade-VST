@@ -2296,13 +2296,24 @@ app.post('/api/price-list/map-download', requireView, upload.single('file'), asy
 const priceCheck = require('./price-check');
 
 // ── Price-check gate helpers ─────────────────────────────────
-// Stamp / clear / read the auctions.price_checked_at column. The gate
-// blocks calculate / invoice / purchase / bill / debit-note generation
-// until a verify run has reconciled the auction's prices AND codes.
+// Tri-state gate. The auction carries two timestamps:
+//   - price_check_first_passed_at: set on the FIRST successful verify
+//     and never cleared. Tells us the operator has reconciled this
+//     auction at least once.
+//   - price_checked_at: set on every successful verify AND cleared by
+//     any endpoint that mutates a lot's price/code. Tells us the
+//     reconciliation is still current.
+//
+// Gate states (pcGateState):
+//   'off'   — feature flag disabled, treat as clean
+//   'never' — auction has never passed verify → hard 412 block
+//   'stale' — verified at least once, but lots changed since →
+//             allow the action, surface a soft warning in the UI
+//   'clean' — verified and no edits since → green light, no warning
 //
 // Everything below is gated by the `flag_price_check` feature flag.
-// When the flag is OFF: stamp / clear become no-ops, gateReady is
-// always true, and requirePriceChecked just calls next(). The whole
+// When the flag is OFF: stamp / clear become no-ops, state is always
+// 'off', and requirePriceChecked just calls next(). The whole
 // subsystem (tab, banners, button disables) collapses to a no-op,
 // matching the off-by-default rollout we want.
 function pcFlagOn(db) {
@@ -2314,31 +2325,53 @@ function pcFlagOn(db) {
 function pcStampGate(db, auctionId) {
   if (!auctionId) return;
   if (!pcFlagOn(db)) return;
+  // Stamp the current-verify timestamp on every successful pass, and
+  // set the first-pass timestamp only the first time (COALESCE keeps
+  // the original first-pass date when re-stamping).
   db.run(
-    `UPDATE auctions SET price_checked_at = datetime('now','localtime') WHERE id = ?`,
+    `UPDATE auctions
+        SET price_checked_at = datetime('now','localtime'),
+            price_check_first_passed_at = COALESCE(NULLIF(price_check_first_passed_at, ''), datetime('now','localtime'))
+      WHERE id = ?`,
     [auctionId]
   );
 }
 function pcClearGate(db, auctionId) {
   if (!auctionId) return;
   if (!pcFlagOn(db)) return;
+  // Only clear the current-verify timestamp. The first-pass stamp is
+  // permanent for the life of the auction — once verified, edits drop
+  // the gate to 'stale' (soft warning) instead of 'never' (hard block).
   db.run(`UPDATE auctions SET price_checked_at = '' WHERE id = ?`, [auctionId]);
 }
-function pcGateReady(db, auctionId) {
-  if (!auctionId) return false;
-  if (!pcFlagOn(db)) return true;   // flag off → never gate
-  const row = db.get('SELECT price_checked_at FROM auctions WHERE id = ?', [auctionId]);
-  return !!(row && row.price_checked_at);
+function pcGateState(db, auctionId) {
+  if (!auctionId)   return 'never';
+  if (!pcFlagOn(db)) return 'off';
+  const row = db.get(
+    'SELECT price_checked_at, price_check_first_passed_at FROM auctions WHERE id = ?',
+    [auctionId]
+  );
+  if (!row) return 'never';
+  if (!row.price_check_first_passed_at) return 'never';
+  return row.price_checked_at ? 'clean' : 'stale';
 }
-// Express middleware factory: drops a 412 PRECONDITION FAILED with a
-// descriptive error when the requested auction hasn't passed price
-// check yet. `getAuctionId(req)` returns the auction id to gate on.
+// Kept for any legacy callers — true only when the auction is fully
+// reconciled (clean OR feature off). 'stale' is NOT ready by this
+// definition; ready-vs-allowed are intentionally different concepts.
+function pcGateReady(db, auctionId) {
+  const s = pcGateState(db, auctionId);
+  return s === 'clean' || s === 'off';
+}
+// Express middleware factory: drops a 412 PRECONDITION FAILED only on
+// the 'never' state. 'stale' is allowed through (the operator has
+// verified at least once; UI surfaces a soft warning instead).
+// `getAuctionId(req)` returns the auction id to gate on.
 function requirePriceChecked(getAuctionId) {
   return (req, res, next) => {
     if (!pcFlagOn()) return next();        // feature disabled
     const aid = getAuctionId(req);
     if (!aid) return next();               // can't gate a global call
-    if (pcGateReady(getDb(), aid)) return next();
+    if (pcGateState(getDb(), aid) !== 'never') return next();
     return res.status(412).json({
       error: 'Price check required',
       detail: 'Run Reports → Price Check against the auction (and apply any code fixes) before this action.',
@@ -2376,15 +2409,23 @@ app.post('/api/price-check/verify', requireView, upload.single('file'), async (r
 app.get('/api/auctions/:id/price-check-status', requireView, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'invalid auction id' });
-  const row = getDb().get(
-    'SELECT id, ano, date, price_checked_at FROM auctions WHERE id = ?', [id]
+  const db = getDb();
+  const row = db.get(
+    'SELECT id, ano, date, price_checked_at, price_check_first_passed_at FROM auctions WHERE id = ?', [id]
   );
   if (!row) return res.status(404).json({ error: 'auction not found' });
+  // `checked` stays true ONLY for 'clean' so legacy callers keep their
+  // strict semantics. `state` is the tri-state field new UI uses to
+  // distinguish 'stale' (soft warning) from 'never' (hard block).
+  const state = pcGateState(db, id);
   res.json({
     auctionId: id,
     ano: row.ano, date: row.date,
-    checked: !!row.price_checked_at,
+    state,                                     // 'off' | 'never' | 'stale' | 'clean'
+    checked: state === 'clean' || state === 'off',
+    everPassed: !!row.price_check_first_passed_at,
     checkedAt: row.price_checked_at || null,
+    firstPassedAt: row.price_check_first_passed_at || null,
   });
 });
 
@@ -5704,8 +5745,11 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   // Short-circuit when the feature flag is OFF — keeps debit notes
   // generation usable on installs that don't run price check.
   if (pcFlagOn(db)) {
-    const gateAuction = db.get('SELECT id, price_checked_at FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
-    if (gateAuction && !gateAuction.price_checked_at) {
+    // Tri-state gate: only block when the auction has NEVER been verified.
+    // Once it has passed at least once, subsequent lot edits drop it to
+    // 'stale' (soft warning, allowed) — matching the URL-bound middleware.
+    const gateAuction = db.get('SELECT id, price_check_first_passed_at FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
+    if (gateAuction && !gateAuction.price_check_first_passed_at) {
       return res.status(412).json({
         error: 'Price check required',
         detail: 'Run Reports → Price Check against the auction (and apply any code fixes) before generating debit notes.',
@@ -5963,9 +6007,11 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
   }
 
   // Price-check gate — only when the feature is enabled.
+  // Tri-state: hard 412 only when the auction was never verified. After
+  // a first pass, edits drop it to 'stale' (soft warning, allowed).
   if (pcFlagOn(db)) {
-    const ga = db.get('SELECT id, price_checked_at FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
-    if (ga && !ga.price_checked_at) {
+    const ga = db.get('SELECT id, price_check_first_passed_at FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
+    if (ga && !ga.price_check_first_passed_at) {
       return res.status(412).json({
         error: 'Price check required',
         detail: 'Run Reports → Price Check against the auction (and apply any code fixes) before generating debit notes.',

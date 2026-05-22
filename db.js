@@ -232,7 +232,12 @@ async function initDb() {
     -- every code-level discrepancy. Acts as the green-light gate for
     -- calculate / invoice / purchase / bill / debit-note generation.
     -- Auto-cleared by any endpoint that mutates lot price or code.
-    price_checked_at TEXT DEFAULT ''
+    price_checked_at TEXT DEFAULT '',
+    -- Set on the FIRST successful verify and never cleared. Lets the
+    -- gate distinguish "never checked" (hard 412) from "checked then
+    -- edited" (soft warning, allow). Once an auction has been verified
+    -- at least once, subsequent lot edits don't re-block transactions.
+    price_check_first_passed_at TEXT DEFAULT ''
   )`);
 
   // ── LOTS (CPA1.DBF — main lot data, before + after trade) ─
@@ -516,6 +521,15 @@ async function initDb() {
     // Existing DBs without this column need the ALTER; ignored on fresh
     // installs where the column is already present.
     "ALTER TABLE auctions ADD COLUMN price_checked_at TEXT DEFAULT ''",
+    // Tri-state price-check gate: existing DBs need this column to
+    // distinguish never-checked (hard block) from checked-then-edited
+    // (soft warning). See auctions CREATE TABLE for semantics.
+    "ALTER TABLE auctions ADD COLUMN price_check_first_passed_at TEXT DEFAULT ''",
+    // Backfill: any auction that was already verified BEFORE this column
+    // existed gets its first-pass stamp set to the current-verify stamp.
+    // Without this, every previously-verified auction would re-enter the
+    // 'never' state on upgrade and force a one-off re-verify.
+    "UPDATE auctions SET price_check_first_passed_at = price_checked_at WHERE price_checked_at IS NOT NULL AND price_checked_at != '' AND (price_check_first_passed_at IS NULL OR price_check_first_passed_at = '')",
     'ALTER TABLE purchases ADD COLUMN auction_id INTEGER',
     'ALTER TABLE invoices ADD COLUMN auction_id INTEGER',
     'ALTER TABLE bills ADD COLUMN auction_id INTEGER',
