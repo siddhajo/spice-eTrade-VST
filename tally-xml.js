@@ -2897,7 +2897,13 @@ function buildRDPurchaseRows(db, auctionId, cfg) {
     const amounttot = lots.reduce((s, l) => s + Number(l.amount || 0), 0);
     const bilamttot = lots.reduce((s, l) => s + Number(l.bilamt || 0), 0);
     return {
-      ano: p.ano,
+      // Trim ano + invo at the source so any leading/trailing whitespace
+      // from spreadsheet imports (right-aligned number cells in Excel
+      // occasionally pad with spaces) doesn't leak into the voucher
+      // number — would otherwise render as "5/ 1/26-27" instead of
+      // "5/1/26-27" in <VOUCHERNUMBER>, <REFERENCE>, and every <NAME>
+      // tag that reuses `row.ano` (bill allocations, GST allocs, etc.).
+      ano: String(p.ano == null ? '' : p.ano).trim(),
       date: p.date,
       // Suffix with " - PURCHASE" so the voucher's PARTYNAME / PARTY-
       // LEDGERNAME / BASICBASEPARTYNAME / LEDGERNAME all reference
@@ -2922,7 +2928,7 @@ function buildRDPurchaseRows(db, auctionId, cfg) {
       // amount and may be skipped. Reading p.total directly broke that.
       total: r2((p.total || 0) - (p.rund || 0)),
       totalRounded: r0(p.total || 0),
-      voucherNum: p.invo || String(p.id),
+      voucherNum: (p.invo != null && String(p.invo).trim()) ? String(p.invo).trim() : String(p.id),
     };
   });
 }
@@ -2970,7 +2976,9 @@ function buildURDPurchaseRows(db, auctionId, cfg) {
     const amounttot = lots.reduce((s, l) => s + Number(l.amount || 0), 0);
     const bilamttot = lots.reduce((s, l) => s + Number(l.bilamt || 0), 0);
     return {
-      ano: b.ano,
+      // Same trim as buildRDPurchaseRows — strips whitespace at the
+      // source so the voucher number doesn't render as "5/ 1/26-27".
+      ano: String(b.ano == null ? '' : b.ano).trim(),
       date: b.date,
       // Suffix with " - PURCHASE" — matches the URD party ledger
       // emitted by _urdTraderRow so the voucher's party references
@@ -2987,7 +2995,7 @@ function buildURDPurchaseRows(db, auctionId, cfg) {
       // emitted as separate ledger entries inside the voucher, so they
       // are NOT subtracted from the voucher total. Matches the macro.
       total: r2(amounttot),
-      voucherNum: String(b.bil),
+      voucherNum: String(b.bil == null ? '' : b.bil).trim(),
     };
   });
 }
