@@ -8532,6 +8532,55 @@ function _buildGstinNameMap(db, table, gstinCol, nameCol) {
   }
   return map;
 }
+
+// Per-module config for "derive round-off when the source file
+// doesn't carry one." Mirrors the round-off math that calculations.js
+// `buildSalesInvoice` uses at invoice-generation time:
+//
+//   totalBeforeRound = taxableValue + cgst + sgst + igst
+//   subtotalRounded  = round(totalBeforeRound)         // whole rupees
+//   rund             = subtotalRounded - totalBeforeRound
+//
+// `taxableFields` are the source columns that sum to `taxableValue`
+// (cardamom amount + gunny + transport + insurance for sales). The
+// `targetField` is where the computed value lands. The lookup is
+// applied ONLY when the row's existing `targetField` value is blank
+// (so source files that DO carry a rund column are honoured).
+const IMPORT_DERIVE_RUND = {
+  sales_invoice: {
+    taxableFields: ['amount', 'gunny', 'pava_hc', 'ins'],
+    taxFields:     ['cgst', 'sgst', 'igst'],
+    targetField:   'rund',
+  },
+  // Purchase imports already carry rund in their export; bills don't
+  // have GST so there's no round-off to derive. Add modules here if
+  // their source file is missing rund.
+};
+
+// Excel-compatible integer round (round half away from zero). Mirrors
+// calculations.js `round0` so the derived rund matches what the live
+// invoice generator would have produced.
+function _round0Int(n) {
+  const x = Number(n);
+  if (!isFinite(x)) return 0;
+  if (x === 0) return 0;
+  return (x < 0 ? -1 : 1) * Math.round(Math.abs(x));
+}
+
+// Given a row of mapped `values` and a derive-rund config, compute the
+// round-off the same way invoice generation does. Returns the rund
+// value (positive or negative, two decimals). Caller decides whether
+// to overwrite — typically only when the row's stored rund is blank
+// or zero.
+function _deriveRund(values, cfg) {
+  let totalBeforeRound = 0;
+  for (const f of cfg.taxableFields) totalBeforeRound += Number(values[f] || 0);
+  for (const f of cfg.taxFields)     totalBeforeRound += Number(values[f] || 0);
+  const subtotalRounded = _round0Int(totalBeforeRound);
+  // Match calculations.js round2 — two-decimal precision.
+  const rund = subtotalRounded - totalBeforeRound;
+  return Math.round(rund * 100) / 100;
+}
 app.post('/api/import-old-data/preview', requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const moduleKey = req.body.module;
@@ -8651,6 +8700,13 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
       : null;
     let cntNameCorrected = 0;
 
+    // Derive-rund config for this module (null when not applicable).
+    // Source files exported from legacy systems often omit the rund
+    // column entirely — without this, every imported invoice ends up
+    // with rund = '' and Tally exports show 0 in the round-off ledger.
+    const deriveRundCfg = IMPORT_DERIVE_RUND[moduleKey] || null;
+    let cntRundDerived = 0;
+
     let cntNew = 0, cntDup = 0, cntDupChanged = 0, cntInvAno = 0, cntInvReq = 0;
     // Four independent sample buckets so the client always has concrete
     // rows from each non-empty status, regardless of where they sit in
@@ -8689,6 +8745,24 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
               values._nameCorrected = { from: original, to: masterName, gstin: norm };
               cntNameCorrected++;
             }
+          }
+        }
+      }
+
+      // Derive round-off when the source file doesn't carry one.
+      // Mirrors invoice generation: rund = round0(taxable+tax) - (taxable+tax).
+      // Only fires when the row's stored rund is blank/zero so files
+      // that DO carry a rund column are honoured untouched.
+      if (deriveRundCfg) {
+        const cur = values[deriveRundCfg.targetField];
+        const curNum = Number(cur);
+        const isBlank = cur === '' || cur == null || (isFinite(curNum) && curNum === 0);
+        if (isBlank) {
+          const derived = _deriveRund(values, deriveRundCfg);
+          if (derived !== 0) {
+            values[deriveRundCfg.targetField] = derived;
+            values._rundDerived = { value: derived };
+            cntRundDerived++;
           }
         }
       }
@@ -8821,6 +8895,10 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
         // master record (looked up via GSTIN). Lets the UI tell the
         // operator "20 names were corrected from the master."
         nameCorrected: cntNameCorrected,
+        // Rows whose round-off was computed from taxable + tax columns
+        // because the source file had no rund column. 0 when the
+        // module isn't in IMPORT_DERIVE_RUND.
+        rundDerived: cntRundDerived,
       },
       samples: {
         new: sampleNew,
@@ -8856,6 +8934,10 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
   // block so the response builder further down can read it. Always
   // defined; stays 0 when the module isn't in IMPORT_NAME_BY_GSTIN.
   let nameCorrected = 0;
+  // Round-off derivation counter — hoisted for the same reason as
+  // nameCorrected. Stays 0 when the module isn't in IMPORT_DERIVE_RUND
+  // or when every row already had a non-zero rund.
+  let rundDerived = 0;
   const errors = [];
   let total = 0;
   // Capture the primary-key id of every row this import inserts so the
@@ -8904,6 +8986,19 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
     const nameSlotIdx  = nameLookupCfg ? def.fields.indexOf(nameLookupCfg.rowNameField)  : -1;
     // (nameCorrected is hoisted to the outer scope so the response
     //  builder can read it after this try block.)
+
+    // Round-off derivation: pre-resolve the positional slot for the
+    // target field and pre-resolve every taxable/tax field's slot so
+    // we can read them out of the positional `values` array without
+    // re-mapping per row.
+    const deriveRundCfg = IMPORT_DERIVE_RUND[moduleKey] || null;
+    const rundSlotIdx   = deriveRundCfg ? def.fields.indexOf(deriveRundCfg.targetField) : -1;
+    const rundTaxableSlots = deriveRundCfg
+      ? deriveRundCfg.taxableFields.map(f => def.fields.indexOf(f)).filter(i => i >= 0)
+      : [];
+    const rundTaxSlots = deriveRundCfg
+      ? deriveRundCfg.taxFields.map(f => def.fields.indexOf(f)).filter(i => i >= 0)
+      : [];
 
     // Cache `ano → auction_id` lookups for autoFillAuctionId modules.
     // Without this every row of a large import would hit the DB once
@@ -8955,6 +9050,25 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
             if (masterName && masterName !== String(values[nameSlotIdx] || '').trim()) {
               values[nameSlotIdx] = masterName;
               nameCorrected++;
+            }
+          }
+        }
+        // Compute round-off when the source file didn't carry one.
+        // Only overwrite when the row's stored rund is blank or 0 so
+        // files that already include rund are honoured untouched.
+        if (deriveRundCfg && rundSlotIdx >= 0) {
+          const cur    = values[rundSlotIdx];
+          const curNum = Number(cur);
+          const isBlank = cur === '' || cur == null || (isFinite(curNum) && curNum === 0);
+          if (isBlank) {
+            let totalBeforeRound = 0;
+            for (const idx of rundTaxableSlots) totalBeforeRound += Number(values[idx] || 0);
+            for (const idx of rundTaxSlots)     totalBeforeRound += Number(values[idx] || 0);
+            const subtotalRounded = _round0Int(totalBeforeRound);
+            const derived = Math.round((subtotalRounded - totalBeforeRound) * 100) / 100;
+            if (derived !== 0) {
+              values[rundSlotIdx] = derived;
+              rundDerived++;
             }
           }
         }
@@ -9044,6 +9158,10 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
     // master record (GSTIN match). 0 when the module isn't in
     // IMPORT_NAME_BY_GSTIN — the UI can choose to hide the line.
     nameCorrected,
+    // Number of rows whose round-off was computed from taxable + tax
+    // columns because the source file had no rund value. 0 when the
+    // module isn't in IMPORT_DERIVE_RUND.
+    rundDerived,
     errors, importLogId,
   });
 });

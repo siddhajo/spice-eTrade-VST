@@ -17953,6 +17953,11 @@ async function impVerify(){
       // lookup AND at least one row's name will be rewritten from the
       // master. Helps the operator catch unexpected over-corrections.
       (c.nameCorrected ? ' · <span style="color:#0369a1">name-corrected='+c.nameCorrected+'</span>' : '') +
+      // Rund-derived count appears when the source file has no rund
+      // column and we compute it from taxable + tax (matches invoice
+      // generation). Lets the operator see how many round-offs were
+      // synthesized before they hit the DB.
+      (c.rundDerived ? ' · <span style="color:#0369a1">rund-derived='+c.rundDerived+'</span>' : '') +
       ' &nbsp;<span style="color:'+(totalInvalid?'#c00':'#15803d')+'">'+
         (totalInvalid ? '⚠ Fix invalid rows or adjust mapping before importing.' : '✓ Ready to import.')+
       '</span>';
@@ -18212,6 +18217,12 @@ async function impRun(){
     // or no corrections were applied.
     if (data.nameCorrected && data.nameCorrected > 0) {
       h += ' · <span style="color:#0369a1">name-corrected='+data.nameCorrected+'</span>';
+    }
+    // Same idea for derived round-off — "N rows had rund computed from
+    // taxable + tax because the source file omitted the column." Hidden
+    // when the module isn't in IMPORT_DERIVE_RUND or everything was 0.
+    if (data.rundDerived && data.rundDerived > 0) {
+      h += ' · <span style="color:#0369a1">rund-derived='+data.rundDerived+'</span>';
     }
     h += '</div>';
     if (data.errors && data.errors.length) {
