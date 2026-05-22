@@ -12356,21 +12356,24 @@ async function saveTrader(){
   try{
     const r = await fetch(B+(id?`/api/traders/${id}`:'/api/traders'),{method:id?'PUT':'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
-    // 409 = duplicate PAN. Hard block — show which seller already
-    // has this PAN so the operator can find and edit that row
+    // Single body read — see saveBuyer for the same fix.
+    const text = await r.text();
+    let d = {};
+    try { d = text ? JSON.parse(text) : {}; } catch (_) { d = {}; }
+    // 409 + duplicate flag = duplicate PAN. Hard block — show the
+    // existing seller so the operator finds and edits that row
     // instead of creating a second one.
-    if (r.status === 409) {
-      const d = await r.json();
-      if (d && d.duplicate) {
-        const ex = d.existing || {};
-        alert((d.error || 'Duplicate seller.')
-          + `\n\nExisting row:\n  • ${ex.name || '(unnamed)'}\n  • PAN: ${ex.pan || '—'}\n  • CR: ${ex.cr || '—'}\n  • Phone: ${ex.tel || '—'}`
-          + '\n\nEdit the existing seller instead.');
-        return;
-      }
+    if (r.status === 409 && d && d.duplicate) {
+      const ex = d.existing || {};
+      alert((d.error || 'Duplicate seller.')
+        + `\n\nExisting row:\n  • ${ex.name || '(unnamed)'}\n  • PAN: ${ex.pan || '—'}\n  • CR: ${ex.cr || '—'}\n  • Phone: ${ex.tel || '—'}`
+        + '\n\nEdit the existing seller instead.');
+      return;
     }
-    if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
-    hideModal('trader-modal');toast(id?'Seller updated':'Seller added');searchTraders('');
+    if (!r.ok) throw new Error(d.error || ('Save failed (' + r.status + ')'));
+    hideModal('trader-modal');
+    toast(id ? 'Seller updated' : 'Seller added');
+    searchTraders('');
   }catch(e){showError(e)}
 }
 async function delTrader(id){if(!confirm('Delete?'))return;await j(`/api/traders/${id}`,{method:'DELETE'});searchTraders('')}
@@ -13092,21 +13095,28 @@ async function saveBuyer(){
   try{
     const r = await fetch(B+(id?`/api/buyers/${id}`:'/api/buyers'),{method:id?'PUT':'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
-    // 409 = duplicate buyer code or short alias. Hard block — show
-    // which buyer already has this code so the operator can find
-    // and edit that row instead of creating a second one.
-    if (r.status === 409) {
-      const d = await r.json();
-      if (d && d.duplicate) {
-        const ex = d.existing || {};
-        alert((d.error || 'Duplicate buyer.')
-          + `\n\nExisting row:\n  • Buyer Code: ${ex.buyer || '—'}\n  • Trade Name: ${ex.buyer1 || '—'}\n  • Short Code: ${ex.code || '—'}`
-          + '\n\nEdit the existing buyer instead.');
-        return;
-      }
+    // Read the body exactly once. Earlier this path read twice on a
+    // 409-without-duplicate fall-through, which threw "body already
+    // consumed" and produced a misleading success toast in some
+    // browsers' error handling. Single text→JSON pass eliminates
+    // the whole class of failure.
+    const text = await r.text();
+    let d = {};
+    try { d = text ? JSON.parse(text) : {}; } catch (_) { d = {}; }
+    // 409 + duplicate flag = duplicate buyer code or short alias.
+    // Hard block — show the existing row so the operator finds
+    // and edits that buyer instead of creating a second one.
+    if (r.status === 409 && d && d.duplicate) {
+      const ex = d.existing || {};
+      alert((d.error || 'Duplicate buyer.')
+        + `\n\nExisting row:\n  • Buyer Code: ${ex.buyer || '—'}\n  • Trade Name: ${ex.buyer1 || '—'}\n  • Short Code: ${ex.code || '—'}`
+        + '\n\nEdit the existing buyer instead.');
+      return;
     }
-    if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
-    hideModal('buyer-modal');toast(id?'Buyer updated':'Buyer added');searchBuyers('');
+    if (!r.ok) throw new Error(d.error || ('Save failed (' + r.status + ')'));
+    hideModal('buyer-modal');
+    toast(id ? 'Buyer updated' : 'Buyer added');
+    searchBuyers('');
   }catch(e){showError(e)}
 }
 async function delBuyer(id){if(!confirm('Delete?'))return;await j(`/api/buyers/${id}`,{method:'DELETE'});searchBuyers('')}
