@@ -3323,6 +3323,19 @@ input[type="search"]:focus{
               <datalist id="le-recent-sellers"></datalist>
             </div>
             <span id="le-recent-search-status" style="font-size:11.5px;color:var(--text3)"></span>
+            <!-- Bulk-tick by lot number — paste a comma/space/newline-
+                 separated list and every match in this trade gets
+                 checked. Works across pages: selections survive
+                 navigation because they're kept in selectedForPrint
+                 (Set<lot.id>), which renderLeRecent reads on every
+                 paint. -->
+            <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
+              <input type="text" id="le-recent-pick-lots" placeholder="Tick lots: 12, 13, 15…" autocomplete="off"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();leApplyPickLots()}"
+                     style="height:34px;padding:0 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;min-width:200px"
+                     title="Enter lot numbers separated by comma / space / newline. Press Enter or click Tick to check them.">
+              <button type="button" onclick="leApplyPickLots()" class="le-toolbar-btn le-tb-secondary" style="height:34px">Tick</button>
+            </div>
           </div>
           <div id="le-recent-list" style="font-size:13px"></div>
           <!-- Pagination footer — Prev / page indicator / Next. Filled by
@@ -10206,6 +10219,95 @@ function leClearPrintSelection() {
   const all = document.getElementById('le-recent-select-all');
   if (all) { all.checked = false; all.indeterminate = false; }
   leUpdatePrintToolbar();
+}
+
+// Bulk-tick by lot number — parses the input field, resolves each
+// token to a lot.id, and adds the matches to selectedForPrint.
+// Resolution order:
+//   1. Loaded page (_le.recentLots) — instant, no round-trip
+//   2. Full trade via /api/lots/:aid (paginated=0) — covers lots
+//      outside the current page so dad doesn't have to navigate
+//      pages just to tick them.
+// Misses (unknown lot numbers) are reported in the toast.
+async function leApplyPickLots() {
+  const input = document.getElementById('le-recent-pick-lots');
+  if (!input) return;
+  const raw = String(input.value || '').trim();
+  if (!raw) return;
+  // Split on anything that isn't a digit / letter / hyphen — handles
+  // commas, spaces, tabs, newlines, semicolons in one pass.
+  const tokens = raw.split(/[^A-Za-z0-9\-]+/).map(s => s.trim()).filter(Boolean);
+  if (!tokens.length) return;
+
+  if (!_le.selectedForPrint) _le.selectedForPrint = new Set();
+
+  // Index the loaded page first — case-insensitive on the chance lot
+  // numbers are alphanumeric (legacy data sometimes has 'A12' etc).
+  const byLotNo = new Map();
+  for (const l of (_le.recentLots || [])) {
+    const k = String(l.lot_no == null ? '' : l.lot_no).trim().toUpperCase();
+    if (k) byLotNo.set(k, l.id);
+  }
+
+  const matched = new Set();
+  const missing = [];
+  for (const t of tokens) {
+    const k = t.toUpperCase();
+    if (byLotNo.has(k)) matched.add(byLotNo.get(k));
+    else missing.push(t);
+  }
+
+  // Fall back to a single full-trade fetch for the unresolved tokens.
+  // paginated=0 returns the plain array of every lot in the auction;
+  // for trades with hundreds of lots that's still ~tens of KB JSON.
+  if (missing.length) {
+    try {
+      const aid = document.getElementById('le-auction').value;
+      if (aid) {
+        const all = await j('/api/lots/' + aid);
+        const allMap = new Map();
+        for (const l of (Array.isArray(all) ? all : [])) {
+          const k = String(l.lot_no == null ? '' : l.lot_no).trim().toUpperCase();
+          if (k) allMap.set(k, l.id);
+        }
+        const stillMissing = [];
+        for (const t of missing) {
+          const k = t.toUpperCase();
+          if (allMap.has(k)) matched.add(allMap.get(k));
+          else stillMissing.push(t);
+        }
+        missing.length = 0;
+        for (const t of stillMissing) missing.push(t);
+      }
+    } catch (e) {
+      console.warn('Bulk-tick full-trade lookup failed:', e);
+    }
+  }
+
+  for (const id of matched) _le.selectedForPrint.add(id);
+
+  // Re-tick the checkboxes for any matches in the current view.
+  document.querySelectorAll('.le-recent-cb').forEach(cb => {
+    const id = Number(cb.dataset.lotId);
+    if (_le.selectedForPrint.has(id)) cb.checked = true;
+  });
+  // Keep the header master in sync with the visible state.
+  const all = document.getElementById('le-recent-select-all');
+  if (all) {
+    const total = _le.recentLots.length;
+    const inWindow = _le.recentLots.filter(l => _le.selectedForPrint.has(l.id)).length;
+    all.checked = inWindow > 0 && inWindow === total;
+    all.indeterminate = inWindow > 0 && inWindow < total;
+  }
+  leUpdatePrintToolbar();
+
+  // Clear the input on success so the next paste starts fresh.
+  if (matched.size) input.value = '';
+
+  const parts = [];
+  if (matched.size) parts.push(`ticked ${matched.size} lot${matched.size === 1 ? '' : 's'}`);
+  if (missing.length) parts.push(`not found: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}`);
+  toast(parts.length ? parts.join(' · ') : 'No lots matched');
 }
 
 // Single-lot print entry point — wires the row's print icon.
