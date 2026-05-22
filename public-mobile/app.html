@@ -872,7 +872,58 @@ function openSellerModal(n,p){document.getElementById('le-res').style.display='n
 function onWaSameToggle(){var same=document.getElementById('ns-wa-same').checked;var wa=document.getElementById('ns-whatsapp');if(same){wa.value=document.getElementById('ns-tel').value;wa.readOnly=true;wa.style.background='var(--bg)'}else{wa.readOnly=false;wa.style.background=''}}
 function validateEmailField(el,showErr){var v=(el.value||'').trim();var ok=!v||/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);el.classList.toggle('invalid',!ok);var er=document.getElementById('ns-email-err');if(er)er.style.display=(!ok&&showErr)?'block':'none';return ok}
 function closeSellerModal(){document.getElementById('seller-modal').classList.remove('show')}
-async function saveNewSeller(){const name=document.getElementById('ns-name').value.trim(),er=document.getElementById('ns-err');er.innerHTML='';if(!name){er.innerHTML='<div class="eb">Name required</div>';return}const emailEl=document.getElementById('ns-email');const email=emailEl.value.trim();if(!validateEmailField(emailEl,true)){er.innerHTML='<div class="eb">Invalid email format</div>';emailEl.focus();return}document.getElementById('ns-save').disabled=true;try{const r=await fetch(B+'/api/traders',{method:'POST',headers:ah(),body:JSON.stringify({name,cr:document.getElementById('ns-cr').value.trim(),pan:document.getElementById('ns-pan').value.trim(),tel:document.getElementById('ns-tel').value.trim(),whatsapp:document.getElementById('ns-whatsapp').value.trim(),email:email,padd:document.getElementById('ns-padd').value.trim(),ppla:document.getElementById('ns-ppla').value.trim(),pin:document.getElementById('ns-pin').value.trim(),pstate:document.getElementById('ns-pstate').value.trim(),pst_code:document.getElementById('ns-pst').value.trim()})});const d=await r.json();if(!r.ok){er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';return}closeSellerModal();pickTrader(d.trader);toast('"'+d.trader.name+'" added',false)}catch(e){er.innerHTML='<div class="eb">Failed</div>'}finally{document.getElementById('ns-save').disabled=false}}
+async function saveNewSeller(){
+  const name=document.getElementById('ns-name').value.trim(),er=document.getElementById('ns-err');
+  er.innerHTML='';
+  if(!name){er.innerHTML='<div class="eb">Name required</div>';return}
+  const emailEl=document.getElementById('ns-email');
+  const email=emailEl.value.trim();
+  if(!validateEmailField(emailEl,true)){er.innerHTML='<div class="eb">Invalid email format</div>';emailEl.focus();return}
+  document.getElementById('ns-save').disabled=true;
+  try{
+    // Use /api/traders/quick so the lot_entry role can save (the full
+    // POST /api/traders requires trader_write) AND so the response
+    // includes the trader row pickTrader needs. Both endpoints share
+    // the same hard PAN-duplicate guard server-side.
+    const r=await fetch(B+'/api/traders/quick',{method:'POST',headers:ah(),body:JSON.stringify({
+      name,
+      cr:document.getElementById('ns-cr').value.trim(),
+      pan:document.getElementById('ns-pan').value.trim(),
+      tel:document.getElementById('ns-tel').value.trim(),
+      whatsapp:document.getElementById('ns-whatsapp').value.trim(),
+      email:email,
+      padd:document.getElementById('ns-padd').value.trim(),
+      ppla:document.getElementById('ns-ppla').value.trim(),
+      pin:document.getElementById('ns-pin').value.trim(),
+      pstate:document.getElementById('ns-pstate').value.trim(),
+      pst_code:document.getElementById('ns-pst').value.trim()
+    })});
+    const d=await r.json();
+    if(!r.ok){
+      // 409 = duplicate PAN. Surface the existing seller's name +
+      // phone so the field worker knows which row to pick from the
+      // search list instead. Hard block — no override path.
+      if(r.status===409 && d && d.duplicate){
+        var ex=d.existing||{};
+        er.innerHTML='<div class="eb">'+(d.error||'Duplicate seller')+
+          '<br><span style="opacity:.8">Existing: '+(ex.name||'(unnamed)')+
+          ' &middot; PAN '+(ex.pan||'—')+' &middot; phone '+(ex.tel||'—')+
+          '. Cancel and pick that seller from the list.</span></div>';
+        return;
+      }
+      er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';
+      return;
+    }
+    closeSellerModal();
+    pickTrader(d.trader);
+    var deduped = d && d.deduped;
+    toast((deduped?'Picked existing seller "':'Added "')+(d.trader&&d.trader.name||name)+'"',false);
+  }catch(e){
+    er.innerHTML='<div class="eb">Failed</div>';
+  }finally{
+    document.getElementById('ns-save').disabled=false;
+  }
+}
 
 var lotValidateTimer=null,lotIsValid=true;
 function validateLotNo(val){

@@ -8755,7 +8755,18 @@ async function leSaveNewSeller(){
       lePickSeller(result.trader);
     }
   } catch (e) {
-    showErr(e.message || 'Failed to add seller');
+    // 409 = duplicate PAN. j() throws with body attached so we can
+    // surface the existing seller's name in the inline error banner —
+    // hard block, no override path. Modal stays open so the user can
+    // either cancel and pick the existing seller via the main search
+    // box, or clear the PAN field and retry under a different one.
+    if (e && e.status === 409 && e.body && e.body.duplicate) {
+      const ex = e.body.existing || {};
+      showErr((e.body.error || 'Duplicate seller')
+        + ` — existing: ${ex.name || '(unnamed)'} (PAN ${ex.pan || '—'}, phone ${ex.tel || '—'}). Cancel and pick that seller from the list.`);
+    } else {
+      showErr(e.message || 'Failed to add seller');
+    }
   } finally {
     btn.disabled = false;
   }
@@ -12343,24 +12354,19 @@ async function saveTrader(){
     }
   }
   try{
-    const send = async (force) => {
-      const payload = force ? { ...body, force: true } : body;
-      return fetch(B+(id?`/api/traders/${id}`:'/api/traders'),{method:id?'PUT':'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(payload)});
-    };
-    let r = await send(false);
-    // 409 = server detected a duplicate PAN. Surface the existing
-    // row so the operator can decide: cancel (most common) or save
-    // anyway by re-sending with force:true.
+    const r = await fetch(B+(id?`/api/traders/${id}`:'/api/traders'),{method:id?'PUT':'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
+    // 409 = duplicate PAN. Hard block — show which seller already
+    // has this PAN so the operator can find and edit that row
+    // instead of creating a second one.
     if (r.status === 409) {
       const d = await r.json();
       if (d && d.duplicate) {
         const ex = d.existing || {};
-        const msg = (d.error || 'Possible duplicate seller.')
+        alert((d.error || 'Duplicate seller.')
           + `\n\nExisting row:\n  • ${ex.name || '(unnamed)'}\n  • PAN: ${ex.pan || '—'}\n  • CR: ${ex.cr || '—'}\n  • Phone: ${ex.tel || '—'}`
-          + '\n\nSave anyway?';
-        if (!confirm(msg)) return;
-        r = await send(true);
+          + '\n\nEdit the existing seller instead.');
+        return;
       }
     }
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
@@ -13084,23 +13090,19 @@ async function saveBuyer(){
   const body={};B_FIELDS.forEach(f=>{const el=document.getElementById(B_IDS[f]);body[f]=el?el.value:''});
   if(!body.buyer){alert('Buyer code is required');return}
   try{
-    const send = async (force) => {
-      const payload = force ? { ...body, force: true } : body;
-      return fetch(B+(id?`/api/buyers/${id}`:'/api/buyers'),{method:id?'PUT':'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(payload)});
-    };
-    let r = await send(false);
-    // 409 = server detected a duplicate buyer code or short alias.
-    // Surface the existing row so the operator can cancel or override.
+    const r = await fetch(B+(id?`/api/buyers/${id}`:'/api/buyers'),{method:id?'PUT':'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
+    // 409 = duplicate buyer code or short alias. Hard block — show
+    // which buyer already has this code so the operator can find
+    // and edit that row instead of creating a second one.
     if (r.status === 409) {
       const d = await r.json();
       if (d && d.duplicate) {
         const ex = d.existing || {};
-        const msg = (d.error || 'Possible duplicate buyer.')
+        alert((d.error || 'Duplicate buyer.')
           + `\n\nExisting row:\n  • Buyer Code: ${ex.buyer || '—'}\n  • Trade Name: ${ex.buyer1 || '—'}\n  • Short Code: ${ex.code || '—'}`
-          + '\n\nSave anyway?';
-        if (!confirm(msg)) return;
-        r = await send(true);
+          + '\n\nEdit the existing buyer instead.');
+        return;
       }
     }
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}

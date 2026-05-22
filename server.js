@@ -1605,9 +1605,8 @@ function syncTraderBanks(db, traderId, banks) {
 // on a trader so two rows sharing one is almost always an accidental
 // re-entry of the same person. The check is case-insensitive and
 // trims whitespace so "abc123" / " ABC123 " are treated the same.
-// Override: client sends `force: true` after the operator confirms
-// they really want a duplicate (rare — e.g. two HUFs sharing one
-// PAN under different bank accounts).
+// Hard block — there is no override path; the client cannot save a
+// duplicate. Edit the existing seller instead.
 function _findTraderDuplicateByPan(db, pan, excludeId) {
   const norm = String(pan || '').trim().toUpperCase();
   if (!norm) return null;
@@ -1620,13 +1619,11 @@ function _findTraderDuplicateByPan(db, pan, excludeId) {
 app.post('/api/traders', requireTraderWrite, (req, res) => {
   const t = req.body;
   const db = getDb();
-  if (!t.force) {
-    const dup = _findTraderDuplicateByPan(db, t.pan);
-    if (dup) return res.status(409).json({
-      duplicate: true, field: 'pan', existing: dup,
-      error: `A seller with PAN "${dup.pan}" already exists: ${dup.name || '(unnamed)'}`,
-    });
-  }
+  const dup = _findTraderDuplicateByPan(db, t.pan);
+  if (dup) return res.status(409).json({
+    duplicate: true, field: 'pan', existing: dup,
+    error: `A seller with PAN "${dup.pan}" already exists: ${dup.name || '(unnamed)'}`,
+  });
   const info = db.run(`INSERT INTO traders (name,cr,pan,tel,aadhar,padd,ppla,pin,pstate,pst_code,ifsc,acctnum,holder_name)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [t.name,t.cr||'',t.pan||'',t.tel||'',t.aadhar||'',t.padd||'',t.ppla||'',t.pin||'',t.pstate||'',t.pst_code||'',t.ifsc||'',t.acctnum||'',t.holder_name||'']);
@@ -1641,13 +1638,11 @@ app.put('/api/traders/:id', requireTraderWrite, (req, res) => {
   const t = req.body;
   const db = getDb();
   const tid = parseInt(req.params.id, 10);
-  if (!t.force) {
-    const dup = _findTraderDuplicateByPan(db, t.pan, tid);
-    if (dup) return res.status(409).json({
-      duplicate: true, field: 'pan', existing: dup,
-      error: `Another seller with PAN "${dup.pan}" already exists: ${dup.name || '(unnamed)'}`,
-    });
-  }
+  const dup = _findTraderDuplicateByPan(db, t.pan, tid);
+  if (dup) return res.status(409).json({
+    duplicate: true, field: 'pan', existing: dup,
+    error: `Another seller with PAN "${dup.pan}" already exists: ${dup.name || '(unnamed)'}`,
+  });
   db.run(`UPDATE traders SET name=?,cr=?,pan=?,tel=?,aadhar=?,padd=?,ppla=?,pin=?,pstate=?,pst_code=?,ifsc=?,acctnum=?,holder_name=? WHERE id=?`,
     [t.name,t.cr||'',t.pan||'',t.tel||'',t.aadhar||'',t.padd||'',t.ppla||'',t.pin||'',t.pstate||'',t.pst_code||'',t.ifsc||'',t.acctnum||'',t.holder_name||'',tid]);
   if (Array.isArray(t.banks)) {
@@ -1675,6 +1670,16 @@ app.post('/api/traders/quick', requireAnyPermission('trader_write', 'lot_write')
     return res.status(400).json({ error: 'Name is required' });
   }
   const db = getDb();
+  // Hard duplicate-PAN block — same logic as POST /api/traders so an
+  // auction-hall user (lot_entry role) cannot accidentally re-create a
+  // seller that already exists with the same PAN under a different
+  // name spelling. Soft (name+cr / name+tel) de-dupe below still
+  // applies when no PAN is provided.
+  const panDup = _findTraderDuplicateByPan(db, t.pan);
+  if (panDup) return res.status(409).json({
+    duplicate: true, field: 'pan', existing: panDup,
+    error: `A seller with PAN "${panDup.pan}" already exists: ${panDup.name || '(unnamed)'}`,
+  });
   // De-dupe: if a seller with the same name AND (CR or phone) already
   // exists, return that one instead of creating a duplicate. Helps when
   // multiple field users create the same seller around the same time.
@@ -1899,8 +1904,8 @@ app.get('/api/buyers', requireView, (req, res) => {
 // almost always an accidental re-entry. Returns the first match,
 // preferring a `buyer` hit so the toast names the more-prominent
 // collision when both fields conflict.
-// Override: client sends `force: true` after the operator confirms
-// they really want a duplicate.
+// Hard block — there is no override path; the client cannot save a
+// duplicate. Edit the existing buyer instead.
 function _findBuyerDuplicate(db, buyer, code, excludeId) {
   const nb = String(buyer || '').trim().toUpperCase();
   const nc = String(code  || '').trim().toUpperCase();
@@ -1926,13 +1931,11 @@ function _findBuyerDuplicate(db, buyer, code, excludeId) {
 app.post('/api/buyers', requireBuyerWrite, (req, res) => {
   const b = req.body;
   const db = getDb();
-  if (!b.force) {
-    const dup = _findBuyerDuplicate(db, b.buyer, b.code);
-    if (dup) return res.status(409).json({
-      duplicate: true, field: dup.field, existing: dup.row,
-      error: `A buyer with ${dup.field === 'buyer' ? `code "${dup.row.buyer}"` : `short alias "${dup.row.code}"`} already exists${dup.row.buyer1 ? `: ${dup.row.buyer1}` : ''}`,
-    });
-  }
+  const dup = _findBuyerDuplicate(db, b.buyer, b.code);
+  if (dup) return res.status(409).json({
+    duplicate: true, field: dup.field, existing: dup.row,
+    error: `A buyer with ${dup.field === 'buyer' ? `code "${dup.row.buyer}"` : `short alias "${dup.row.code}"`} already exists${dup.row.buyer1 ? `: ${dup.row.buyer1}` : ''}`,
+  });
   db.run(`INSERT INTO buyers (
       buyer, buyer1, code, sbl, add1, add2, pla, pin, state, st_code,
       gstin, pan, tel, ti, sale, email, tdsq,
@@ -1947,13 +1950,11 @@ app.put('/api/buyers/:id', requireBuyerWrite, (req, res) => {
   const b = req.body;
   const db = getDb();
   const bid = parseInt(req.params.id, 10);
-  if (!b.force) {
-    const dup = _findBuyerDuplicate(db, b.buyer, b.code, bid);
-    if (dup) return res.status(409).json({
-      duplicate: true, field: dup.field, existing: dup.row,
-      error: `Another buyer with ${dup.field === 'buyer' ? `code "${dup.row.buyer}"` : `short alias "${dup.row.code}"`} already exists${dup.row.buyer1 ? `: ${dup.row.buyer1}` : ''}`,
-    });
-  }
+  const dup = _findBuyerDuplicate(db, b.buyer, b.code, bid);
+  if (dup) return res.status(409).json({
+    duplicate: true, field: dup.field, existing: dup.row,
+    error: `Another buyer with ${dup.field === 'buyer' ? `code "${dup.row.buyer}"` : `short alias "${dup.row.code}"`} already exists${dup.row.buyer1 ? `: ${dup.row.buyer1}` : ''}`,
+  });
   db.run(`UPDATE buyers SET
       buyer=?, buyer1=?, code=?, sbl=?, add1=?, add2=?, pla=?, pin=?, state=?, st_code=?,
       gstin=?, pan=?, tel=?, ti=?, sale=?, email=?, tdsq=?,
