@@ -3539,7 +3539,7 @@ input[type="search"]:focus{
 
           <!-- Print group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
-            <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedInvoices()" title="Print all ticked invoices">🖨 Print Selected</button>
+            <button id="inv-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedInvoices()" title="Print all ticked invoices">🖨 Print Selected</button>
             <button id="inv-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- ASP-only: Print Selected Purchase. Hidden outside ASP context.
                  Visibility toggled by applyAspContextVisibility() at load + state switch.
@@ -3550,7 +3550,7 @@ input[type="search"]:focus{
             <!-- Lorry no: bulk-set vehicle number on ticked invoices.
                  Stored in invoices.lorry_no, picked up by the Tally
                  sales voucher generator as e-way bill VehicleNo. -->
-            <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="setLorryNoForSelected()" title="Set the lorry / vehicle number on ticked invoices (used by Tally sales voucher e-way bill)">🚚 Set Lorry No</button>
+            <button id="inv-bulk-lorry" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="setLorryNoForSelected()" title="Set the lorry / vehicle number on ticked invoices (used by Tally sales voucher e-way bill)">🚚 Set Lorry No</button>
           </div>
 
           <!-- Destructive group — pushed right -->
@@ -3631,8 +3631,8 @@ input[type="search"]:focus{
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
-            <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedPurchases()" title="Print all ticked purchase invoices">🖨 Print Selected</button>
-            <button class="btn feat-whatsapp" style="height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(37,211,102,.28)" onclick="whatsappSelectedPurchases()" title="Send merged PDF of ticked purchase invoices via WhatsApp">📱 WhatsApp Selected</button>
+            <button id="pur-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedPurchases()" title="Print all ticked purchase invoices">🖨 Print Selected</button>
+            <button id="pur-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(37,211,102,.28)" onclick="whatsappSelectedPurchases()" title="Send merged PDF of ticked purchase invoices via WhatsApp">📱 WhatsApp Selected</button>
             <button id="pur-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPurchases()" title="Delete all ticked purchase invoices">🗑 Delete Selected <span id="pur-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           </div>
 
@@ -3708,8 +3708,8 @@ input[type="search"]:focus{
           <button id="pay-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPayments()" title="Delete the lots for the selected sellers in this trade">🗑 Delete Selected <span id="pay-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
-            <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print Selected</button>
-            <button class="btn feat-whatsapp" style="height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600" onclick="whatsappSelectedPayments()" title="Send merged payment statements via WhatsApp">📱 WhatsApp Selected</button>
+            <button id="pay-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print Selected</button>
+            <button id="pay-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600" onclick="whatsappSelectedPayments()" title="Send merged payment statements via WhatsApp">📱 WhatsApp Selected</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -4017,7 +4017,7 @@ input[type="search"]:focus{
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
-            <button class="btn" style="height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedBills()" title="Print all ticked bills">🖨 Print Selected</button>
+            <button id="bill-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedBills()" title="Print all ticked bills">🖨 Print Selected</button>
             <button id="bill-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedBills()" title="Delete all ticked bills">🗑 Delete Selected <span id="bill-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           </div>
 
@@ -10998,7 +10998,13 @@ function applyAspContextVisibility(){
   const mode  = getCurrentBusinessMode();
   const state = String(getCurrentBusinessState() || '').toUpperCase();
   const isASP = (mode === 'e-Trade' && state === 'KERALA');
-  btn.style.display = isASP ? '' : 'none';
+  // Two-gate visibility: ASP-context AND at least one ticked invoice.
+  // Without the second gate the button would sit always-visible in the
+  // toolbar even when there's nothing to print, breaking the unified
+  // "selected buttons only show when a row is selected" rule.
+  const invBody = document.getElementById('invoices-list');
+  const ticked  = invBody ? invBody.querySelectorAll('.inv-select-cb:checked').length : 0;
+  btn.style.display = (isASP && ticked > 0) ? '' : 'none';
 }
 
 // Hide the off-mode widgets in the To Tally tab. When the active company
@@ -15204,6 +15210,15 @@ function syncInvoiceMaster(){
   const counter = document.getElementById('inv-sel-count');
   if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
   if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+  // Print Selected + Set Lorry No — same "show only when ticked" rule.
+  const printBtn = document.getElementById('inv-bulk-print');
+  if (printBtn) printBtn.style.display = ticked > 0 ? '' : 'none';
+  const lorryBtn = document.getElementById('inv-bulk-lorry');
+  if (lorryBtn) lorryBtn.style.display = ticked > 0 ? '' : 'none';
+  // ASP Print Selected Purchase — visible only when (ASP context active)
+  // AND (rows ticked). Delegate to applyAspContextVisibility, which
+  // combines both gates.
+  if (typeof applyAspContextVisibility === 'function') applyAspContextVisibility();
 }
 // Delete Selected for Invoices — parallel DELETE per ticked row, single
 // confirm dialog up front. Re-uses the existing inv-select-cb checkbox
@@ -15377,6 +15392,14 @@ function syncPurchaseMaster(){
   const counter = document.getElementById('pur-sel-count');
   if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
   if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+  // Print Selected + WhatsApp Selected — show only when at least one row
+  // is ticked. (The WhatsApp button has its own feature-flag CSS rule
+  // that hides it when flag_whatsapp is off — that takes precedence
+  // because !important beats the inline '' fallback below.)
+  const printBtn = document.getElementById('pur-bulk-print');
+  if (printBtn) printBtn.style.display = ticked > 0 ? '' : 'none';
+  const waBtn = document.getElementById('pur-bulk-whatsapp');
+  if (waBtn) waBtn.style.display = ticked > 0 ? '' : 'none';
 }
 async function deleteSelectedPurchases(){
   const body=document.getElementById('purchases-list');
@@ -15435,6 +15458,8 @@ function syncBillMaster(){
   const counter = document.getElementById('bill-sel-count');
   if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
   if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+  const printBtn = document.getElementById('bill-bulk-print');
+  if (printBtn) printBtn.style.display = ticked > 0 ? '' : 'none';
 }
 async function deleteSelectedBills(){
   const body=document.getElementById('bills-list');
@@ -16016,6 +16041,10 @@ function updatePaymentBulkButtons() {
   const cnt = document.getElementById('pay-sel-count');
   if (btn) btn.style.display = checked > 0 ? '' : 'none';
   if (cnt) cnt.textContent = checked > 0 ? String(checked) : '';
+  const printBtn = document.getElementById('pay-bulk-print');
+  if (printBtn) printBtn.style.display = checked > 0 ? '' : 'none';
+  const waBtn = document.getElementById('pay-bulk-whatsapp');
+  if (waBtn) waBtn.style.display = checked > 0 ? '' : 'none';
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');
