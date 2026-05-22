@@ -900,14 +900,11 @@ async function saveNewSeller(){
     })});
     const d=await r.json();
     if(!r.ok){
-      // 409 = duplicate PAN. Field worker on a phone can't tell
-      // the modal "did nothing" from a server reject, so we surface
-      // the duplicate three ways:
-      //   1. Red toast at the top  — impossible to miss
-      //   2. Inline error banner   — stays visible for reference
-      //   3. Scroll-into-view      — guarantees the inline banner
-      //      isn't hidden behind the keyboard / off-screen on a
-      //      tall add-seller form.
+      // 409 = duplicate PAN. On phones the modal is tall, the
+      // keyboard may still be up, and toasts can be hidden behind
+      // either. We force a native alert() so the user is guaranteed
+      // to see what happened — they MUST tap OK to continue. The
+      // inline banner stays for reference after they dismiss.
       if(r.status===409 && d && d.duplicate){
         var ex=d.existing||{};
         var existingLine = 'Existing: '+(ex.name||'(unnamed)')+
@@ -916,12 +913,15 @@ async function saveNewSeller(){
           '<br><span style="opacity:.85">'+existingLine+'</span>'+
           '<br>Cancel and pick that seller from the search list.</div>';
         try { er.scrollIntoView({block:'center',behavior:'smooth'}); } catch(_) {}
-        toast((d.error||'Duplicate seller')+' — '+existingLine, true);
+        alert((d.error||'Duplicate seller')+'\n\n'+existingLine+
+          '\n\nCancel and pick that seller from the search list.');
         return;
       }
+      // Any other non-OK response — same alert-first pattern so the
+      // user can't think the popup "did nothing".
       er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';
       try { er.scrollIntoView({block:'center',behavior:'smooth'}); } catch(_) {}
-      toast(d.error||'Save failed', true);
+      alert(d.error||('Save failed ('+r.status+')'));
       return;
     }
     closeSellerModal();
