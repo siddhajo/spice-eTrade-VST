@@ -2021,8 +2021,11 @@ app.get('/api/buyers/by-tradename', requireView, (req, res) => {
   // Case-insensitive exact match on buyer1 (primary) OR buyer (the
   // full buyer-code string can also be passed as a trade name from
   // free-text fields). Sort by code so the picker is stable.
+  // `tel` is included so the WhatsApp share buttons can look up a
+  // buyer's phone with one round-trip (same shape sellers use via
+  // /api/traders/by-name).
   const rows = getDb().all(
-    `SELECT id, buyer, buyer1, code, ti, sale, gstin, pla
+    `SELECT id, buyer, buyer1, code, ti, sale, gstin, pla, tel
        FROM buyers
       WHERE UPPER(TRIM(buyer1)) = UPPER(TRIM(?))
          OR UPPER(TRIM(buyer))  = UPPER(TRIM(?))

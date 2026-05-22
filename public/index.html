@@ -10080,7 +10080,10 @@ function leCsSearchSeller(q){
       }
       results.innerHTML = list.map((t, i) => {
         const loc = [t.ppla, t.pin].filter(Boolean).join(', ');
-        const meta = [t.cr, t.tel].filter(Boolean).join(' · ');
+        // PAN trails phone in the meta line so the operator can verify
+        // they're picking the right seller when two traders share a
+        // common short name (a recurring dad complaint on big masters).
+        const meta = [t.cr, t.tel, t.pan].filter(Boolean).join(' · ');
         return `<div data-idx="${i}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''">
           <div style="font-weight:600;color:var(--text)">${esc(t.name||'')}</div>
           <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(loc)}${meta?' — '+esc(meta):''}</div>
@@ -14024,32 +14027,39 @@ function _lotWireCodeAutocomplete(){
 
   const render = () => {
     const q = String(codeEl.value || '').trim().toUpperCase();
-    // Strict code match — startsWith first, then contains as a fallback
-    // so a typo in the middle ("J0" → "JP0") still surfaces something.
-    // Whitespace is ignored on both sides.
+    // Match against code first (the primary key the dropdown is keyed
+    // on), then trade name as a fallback so dad can type the buyer's
+    // name and still narrow the list. startsWith ranks above contains
+    // in either field so the most-likely match floats to the top.
     const starts = [];
     const contains = [];
     for (const b of _lotBuyerCache) {
       if (!q) { starts.push(b); continue; }
-      if (b.codeUp.startsWith(q)) starts.push(b);
-      else if (b.codeUp.includes(q)) contains.push(b);
+      const nameUp = String(b.buyer1 || '').trim().toUpperCase();
+      if (b.codeUp.startsWith(q) || nameUp.startsWith(q)) starts.push(b);
+      else if (b.codeUp.includes(q) || nameUp.includes(q)) contains.push(b);
     }
     const matches = starts.concat(contains).slice(0, 50);
     if (!matches.length) {
-      ddl.innerHTML = '<div style="padding:8px 12px;color:#888;font-style:italic">No code matches.</div>';
+      ddl.innerHTML = '<div style="padding:8px 12px;color:#888;font-style:italic">No matches.</div>';
       ddl.style.display = 'block';
       activeIdx = -1;
       return;
     }
     activeIdx = 0;
     ddl.innerHTML = matches.map((b, i) => {
+      // Trade name gets its own column right after the code so the
+      // operator can scan by either. Buyer-code / sale / place trail
+      // as a secondary muted context line.
+      const trade = b.buyer1 || '';
       const ctxParts = [b.buyer, b.sale ? '['+b.sale+']' : '', b.pla].filter(Boolean);
       const ctx = ctxParts.join(' · ');
       return '<div class="lc-row" data-code="'+_escAttr(b.code)+'" data-idx="'+i+'" '+
         'style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f1f1f1;display:flex;gap:10px;align-items:baseline'+
         (i === activeIdx ? ';background:#ecfdf5' : '')+'">'+
         '<span style="font-weight:700;color:#15803d;min-width:60px">'+_escAttr(b.code)+'</span>'+
-        '<span style="flex:1;color:#444">'+_escAttr(ctx)+'</span>'+
+        '<span style="flex:1;color:#222;font-weight:500">'+_escAttr(trade)+'</span>'+
+        '<span style="color:#888;font-size:12px">'+_escAttr(ctx)+'</span>'+
         '</div>';
     }).join('');
     ddl.style.display = 'block';
@@ -14398,6 +14408,7 @@ async function loadInvoices(opts){
             : `<button class="icon-btn i-purchase" title="${purchaseTitle}" style="opacity:.35;cursor:not-allowed" disabled>${ICONS.purchase}</button>`;
           return iconBtn('pdf','View / download PDF',`viewInvoicePDF(${i.id})`)
             + purchaseBtn
+            + iconBtn('whatsapp','Send via WhatsApp',`whatsappInvoice(${i.id},'${encodeURIComponent(i.buyer1||i.buyer||'')}','${encodeURIComponent(i.invo||'')}','${encodeURIComponent(i.sale||'')}',${Number(i.tot)||0},'${esc(i.ano||'')}')`)
             + iconBtn('edit','Edit invoice',`openInvoiceEdit(${JSON.stringify(i).replace(/"/g,'&quot;')})`)
             + iconBtn('revert','Revert \u2014 delete invoice & re-enable lots for re-invoicing',`revertInvoice(${i.id},'${esc(i.buyer1||i.buyer)}','${esc(i.sale)}-${esc(i.invo)}')`)
             + iconBtn('del','Delete invoice',`delInvoice(${i.id})`);
@@ -15393,6 +15404,18 @@ async function _lookupSellerPhone(name) {
     return d.tel || '';
   } catch (_) { return ''; }
 }
+// Buyer-side counterpart for sales-invoice WhatsApp share. The
+// by-tradename endpoint returns an array of buyer rows (a single trade
+// name can map to multiple codes); we just grab the first row's tel.
+async function _lookupBuyerPhone(name) {
+  try {
+    const r = await fetch(B + '/api/buyers/by-tradename?name=' + encodeURIComponent(name), { headers: { 'Authorization': 'Bearer ' + T } });
+    if (!r.ok) return '';
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows.length) return '';
+    return rows[0].tel || '';
+  } catch (_) { return ''; }
+}
 
 // Cached company name & auction lookups — fetched once per page load.
 let _CCFG = null;
@@ -15566,6 +15589,29 @@ async function whatsappDebitNote(id, dealerName, noteNo, totalAmt, ano) {
   } catch (e) { showError(e); }
 }
 
+// Sales-invoice WhatsApp share — mirrors whatsappPurchase but pulls
+// the buyer's phone from the buyers master and labels the message as
+// a SALES INVOICE. The PDF endpoint is /api/invoices/pdf/:id (same
+// one the row's "View / download PDF" icon uses) so the file the
+// buyer receives is byte-for-byte the printable invoice.
+async function whatsappInvoice(id, buyerName, invNo, saleType, totalAmt, ano) {
+  try {
+    const decoded   = decodeURIComponent(buyerName);
+    const decInv    = decodeURIComponent(invNo);
+    const decSale   = decodeURIComponent(saleType || '');
+    // Composite label matches the on-screen "<sale>-<invo>" format
+    // used in revert dialogs / filenames elsewhere.
+    const invLabel  = decSale ? `${decSale}-${decInv}` : decInv;
+    const blob = await withOverlay('Building sales invoice…',
+      () => _fetchPdfBlob(`/api/invoices/pdf/${id}`)
+    );
+    const [phone, company] = await Promise.all([
+      _lookupBuyerPhone(decoded), _getCompanyName(),
+    ]);
+    const msg = `${ano || ''} ${decoded} ${company} SALES INVOICE ${invLabel} ₹${Number(totalAmt||0).toLocaleString('en-IN')}`.trim();
+    await _waOpenDocument({ blob, filename: `SalesInvoice_${decoded}_${invLabel}.pdf`, phone, message: msg });
+  } catch (e) { showError(e); }
+}
 async function whatsappPurchase(auctionId, sellerName, invNo, totalAmt, ano) {
   try {
     const decoded = decodeURIComponent(sellerName);
