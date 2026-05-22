@@ -2891,7 +2891,7 @@ input[type="search"]:focus{
           <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search across all sellers — name, phone, GSTIN, PAN, place, Aadhar…" oninput="searchTradersDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="document.getElementById('imp-traders').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('traders')">Download Template</button>
-          <button id="seller-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('seller')">🗑 Delete Selected <span id="seller-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+          <button id="seller-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('seller')">🗑 Delete Selected <span id="seller-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           <input type="file" id="imp-traders" accept=".xlsx,.xls" style="display:none" onchange="importTraders(event)">
         </div>
         <div id="trader-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
@@ -2910,7 +2910,7 @@ input[type="search"]:focus{
           <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search across all buyers — name, code, GSTIN, PAN, TI, place…" oninput="searchBuyersDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="document.getElementById('imp-buyers').click()">Import XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('buyers')">Download Template</button>
-          <button id="buyer-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('buyer')">🗑 Delete Selected <span id="buyer-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+          <button id="buyer-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('buyer')">🗑 Delete Selected <span id="buyer-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           <input type="file" id="imp-buyers" accept=".xlsx,.xls" style="display:none" onchange="importBuyers(event)">
         </div>
         <div id="buyer-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
@@ -2929,7 +2929,7 @@ input[type="search"]:focus{
           <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by trade number…" oninput="searchAuctionsDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="openImportAuctionModal()">Import Lots from XLS/XLSX</button>
           <button class="btn btn-o" onclick="downloadTemplate('auctions')">Download Template</button>
-          <button id="trade-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('trade')">🗑 Delete Selected <span id="trade-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+          <button id="trade-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('trade')">🗑 Delete Selected <span id="trade-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
         </div>
         <div id="auction-import-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Trade No</th><th>Date</th><th>Type</th><th>Lots</th><th>Actions</th></tr></thead><tbody id="auctions-list"></tbody></table></div>
@@ -3043,7 +3043,7 @@ input[type="search"]:focus{
                      on the flag (CSS rule above).
                    - BulkActions._sync flips display:none/inline based
                      on whether any lots are ticked. -->
-            <button id="lot-bulk-buyer" class="needs-lot-write feat-lot-set-buyer btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-cardamom);color:#fff;font-weight:600" onclick="lotBulkSetBuyer()" title="Set the buyer code on every ticked lot — auto-fills the trade name + short code from the Buyers master">👤 Set Buyer <span id="lot-bulk-buyer-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-buyer" class="needs-lot-write feat-lot-set-buyer btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-cardamom);color:#fff;font-weight:600" onclick="lotBulkSetBuyer()" title="Set the buyer code on every ticked lot — auto-fills the trade name + short code from the Buyers master">👤 Set Buyer <span id="lot-bulk-buyer-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Bulk-grade button — only visible when at least one lot
                  is ticked AND flag_price_list_mapping is ON. The
                  button is part of the price-list-mapping workflow
@@ -3055,16 +3055,16 @@ input[type="search"]:focus{
                      based on the flag (CSS rule above).
                    - BulkActions._sync flips display:none/inline based
                      on whether any lots are ticked. -->
-            <button id="lot-bulk-grade" class="needs-lot-write feat-price-list-mapping btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-grade" class="needs-lot-write feat-price-list-mapping btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Lock Selected: any user with lot_write can confirm + lock
                  ticked lots. Hidden by default; BulkActions._sync (see
                  lock-action wiring below) shows it once a row is ticked. -->
-            <button id="lot-bulk-lock" class="needs-lot-write btn" style="display:none;height:38px;padding:0 14px;background:#1f2937;color:#fff;font-weight:600" onclick="lotBulkLock()" title="Lock the ticked lots — they become uneditable in the Lots tab and in any sales invoice / purchase / debit note that references them. Admin can unlock.">🔒 Lock Selected <span id="lot-bulk-lock-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-lock" class="needs-lot-write btn" style="display:none !important;height:38px;padding:0 14px;background:#1f2937;color:#fff;font-weight:600" onclick="lotBulkLock()" title="Lock the ticked lots — they become uneditable in the Lots tab and in any sales invoice / purchase / debit note that references them. Admin can unlock.">🔒 Lock Selected <span id="lot-bulk-lock-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Unlock Selected: admin only. Both the role gate
                  (.needs-admin) and the row-selection gate (display:none)
                  must clear for the button to appear. -->
-            <button id="lot-bulk-unlock" class="needs-admin btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#1f2937;font-weight:600;border:1px solid #b8860b" onclick="lotBulkUnlock()" title="Unlock the ticked lots — admin only. Lots become editable again.">🔓 Unlock Selected <span id="lot-bulk-unlock-count" style="margin-left:4px;background:rgba(0,0,0,.18);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
-            <button id="lot-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-unlock" class="needs-admin btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-saffron);color:#1f2937;font-weight:600;border:1px solid #b8860b" onclick="lotBulkUnlock()" title="Unlock the ticked lots — admin only. Lots become editable again.">🔓 Unlock Selected <span id="lot-bulk-unlock-count" style="margin-left:4px;background:rgba(0,0,0,.18);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('lot')">🗑 Delete Selected <span id="lot-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Sister tool to Price Import. Opens the Price List Mapping
                  tab where the user can fill the CODE column on a Price
                  List (Before) sheet before re-importing it here. Behind
@@ -3540,7 +3540,7 @@ input[type="search"]:focus{
           <!-- Print group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="inv-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedInvoices()" title="Print all ticked invoices">🖨 Print Selected</button>
-            <button id="inv-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="inv-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- ASP-only: Print Selected Purchase. Hidden outside ASP context.
                  Visibility toggled by applyAspContextVisibility() at load + state switch.
                  Also gated by flag_print_selected_purchase — installs that
@@ -3633,7 +3633,7 @@ input[type="search"]:focus{
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="pur-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedPurchases()" title="Print all ticked purchase invoices">🖨 Print Selected</button>
             <button id="pur-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(37,211,102,.28)" onclick="whatsappSelectedPurchases()" title="Send merged PDF of ticked purchase invoices via WhatsApp">📱 WhatsApp Selected</button>
-            <button id="pur-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPurchases()" title="Delete all ticked purchase invoices">🗑 Delete Selected <span id="pur-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="pur-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPurchases()" title="Delete all ticked purchase invoices">🗑 Delete Selected <span id="pur-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
@@ -3705,7 +3705,7 @@ input[type="search"]:focus{
                checkbox is ticked. Acts on the underlying lots — the
                Payments table is a derived view, so deleting "rows" here
                actually clears those sellers' lots in the selected trade. -->
-          <button id="pay-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPayments()" title="Delete the lots for the selected sellers in this trade">🗑 Delete Selected <span id="pay-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+          <button id="pay-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPayments()" title="Delete the lots for the selected sellers in this trade">🗑 Delete Selected <span id="pay-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="pay-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print Selected</button>
@@ -4018,7 +4018,7 @@ input[type="search"]:focus{
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="bill-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedBills()" title="Print all ticked bills">🖨 Print Selected</button>
-            <button id="bill-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedBills()" title="Delete all ticked bills">🗑 Delete Selected <span id="bill-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="bill-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedBills()" title="Delete all ticked bills">🗑 Delete Selected <span id="bill-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:auto">
@@ -4057,7 +4057,7 @@ input[type="search"]:focus{
           <!-- Bulk actions on ticked rows. Hidden until at least one row
                is selected; the count badge updates live as boxes toggle. -->
           <button id="dn-bulk-print" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedDebitNotes()" title="Print all ticked debit notes as one combined PDF">🖨 Print Selected <span id="dn-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
-          <button id="dn-bulk-del" class="needs-delete btn" style="display:none;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedDebitNotes()" title="Delete all ticked debit notes">🗑 Delete Selected</button>
+          <button id="dn-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedDebitNotes()" title="Delete all ticked debit notes">🗑 Delete Selected</button>
         </div>
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Note#</th><th>Date</th><th>Trade</th><th>Name</th><th>Amount</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total</th><th>Actions</th></tr></thead><tbody id="debit-list"></tbody></table></div>
         <div id="debit-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
@@ -11004,7 +11004,10 @@ function applyAspContextVisibility(){
   // "selected buttons only show when a row is selected" rule.
   const invBody = document.getElementById('invoices-list');
   const ticked  = invBody ? invBody.querySelectorAll('.inv-select-cb:checked').length : 0;
-  btn.style.display = (isASP && ticked > 0) ? '' : 'none';
+  // Route through _bulkBtnSetVisible so the helper exists once for every
+  // bulk button (this one has no `.needs-*` class, so plain display would
+  // also work, but routing through the helper keeps every site uniform).
+  _bulkBtnSetVisible(btn, isASP && ticked > 0);
 }
 
 // Hide the off-mode widgets in the To Tally tab. When the active company
@@ -12523,6 +12526,21 @@ async function loadDeleteLog(){
   }
 }
 
+// Force-toggle visibility on a bulk-action button. The permission CSS
+// (.needs-lot-write / .needs-admin / .needs-delete, etc.) applies
+// `display: inline-flex !important` to authorized users, which would
+// otherwise override a plain inline `display: none`. We have to either
+// (a) write inline `!important`, which beats CSS `!important` via the
+// inline+!important specificity tier, or (b) remove the inline rule
+// entirely so the permission rule shows through. Plain `el.style.display
+// = 'none'` is silently a no-op on permissioned users — that's the bug
+// every sync site was hitting before this helper existed.
+function _bulkBtnSetVisible(el, visible){
+  if (!el) return;
+  if (visible) el.style.removeProperty('display');
+  else el.style.setProperty('display', 'none', 'important');
+}
+
 // ─────────────────────────────────────────────────────────────
 // BulkActions — reusable selection/print/delete helper for any
 // DataTable-rendered list. Removes ~50 lines of duplicated select-all,
@@ -12579,35 +12597,28 @@ const BulkActions = (function(){
       master.indeterminate = ticked > 0 && ticked < visible.length;
       master.checked       = visible.length > 0 && ticked === visible.length;
     }
-    // Show/hide the delete button + count badge
-    const delBtn = document.getElementById(`${id}-bulk-del`);
-    const counter = document.getElementById(`${id}-sel-count`);
-    if (delBtn)  delBtn.style.display  = ticked > 0 ? '' : 'none';
-    if (counter) counter.textContent   = ticked > 0 ? `(${ticked})` : '';
-    // Lots also have "Set Grade 1" and "Set Buyer" bulk buttons —
-    // same visibility rule. Other resources don't have these elements
-    // so the getElementById calls below return null and we no-op
-    // silently.
-    const gradeBtn = document.getElementById(`${id}-bulk-grade`);
-    const gradeCounter = document.getElementById(`${id}-bulk-grade-count`);
-    if (gradeBtn)     gradeBtn.style.display  = ticked > 0 ? '' : 'none';
-    if (gradeCounter) gradeCounter.textContent = ticked > 0 ? `(${ticked})` : '';
-    const buyerBtn = document.getElementById(`${id}-bulk-buyer`);
-    const buyerCounter = document.getElementById(`${id}-bulk-buyer-count`);
-    if (buyerBtn)     buyerBtn.style.display  = ticked > 0 ? '' : 'none';
-    if (buyerCounter) buyerCounter.textContent = ticked > 0 ? `(${ticked})` : '';
-    // Lock / Unlock Selected (lots only — other resources don't define
-    // these elements). Visibility follows the same "ticked > 0" rule;
-    // the role gate (.needs-admin on Unlock) is enforced separately by
-    // the CSS rule above.
-    const lockBtn = document.getElementById(`${id}-bulk-lock`);
-    const lockCounter = document.getElementById(`${id}-bulk-lock-count`);
-    if (lockBtn)     lockBtn.style.display  = ticked > 0 ? '' : 'none';
-    if (lockCounter) lockCounter.textContent = ticked > 0 ? `(${ticked})` : '';
-    const unlockBtn = document.getElementById(`${id}-bulk-unlock`);
-    const unlockCounter = document.getElementById(`${id}-bulk-unlock-count`);
-    if (unlockBtn)     unlockBtn.style.display  = ticked > 0 ? '' : 'none';
-    if (unlockCounter) unlockCounter.textContent = ticked > 0 ? `(${ticked})` : '';
+    // Show/hide the delete button + count badge. All bulk buttons go
+    // through _bulkBtnSetVisible because most have a `.needs-*`
+    // permission class whose CSS rule applies `display: inline-flex
+    // !important` — a plain `style.display = 'none'` would be silently
+    // ignored for users who hold the permission.
+    const showBulk = ticked > 0;
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-del`),    showBulk);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-grade`),  showBulk);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-buyer`),  showBulk);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-lock`),   showBulk);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-unlock`), showBulk);
+    const counts = [
+      [`${id}-sel-count`,         ticked > 0 ? `(${ticked})` : ''],
+      [`${id}-bulk-grade-count`,  ticked > 0 ? `(${ticked})` : ''],
+      [`${id}-bulk-buyer-count`,  ticked > 0 ? `(${ticked})` : ''],
+      [`${id}-bulk-lock-count`,   ticked > 0 ? `(${ticked})` : ''],
+      [`${id}-bulk-unlock-count`, ticked > 0 ? `(${ticked})` : ''],
+    ];
+    for (const [eid, text] of counts) {
+      const el = document.getElementById(eid);
+      if (el) el.textContent = text;
+    }
   }
   function toggleAll(id, state){
     getVisibleCheckboxes(id).forEach(cb => { cb.checked = state; });
@@ -15205,16 +15216,16 @@ function syncInvoiceMaster(){
   const ticked=visible.filter(cb=>cb.checked).length;
   master.indeterminate = ticked>0 && ticked<visible.length;
   master.checked       = visible.length>0 && ticked===visible.length;
-  // Bulk Delete Selected button + count badge (added in v4)
-  const delBtn  = document.getElementById('inv-bulk-del');
+  // Bulk Delete Selected button + count badge (added in v4). Use
+  // _bulkBtnSetVisible because the delete button has `.needs-delete`
+  // whose permission CSS uses !important — plain style.display='none'
+  // is a no-op for permissioned users.
+  _bulkBtnSetVisible(document.getElementById('inv-bulk-del'),   ticked > 0);
   const counter = document.getElementById('inv-sel-count');
-  if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
-  if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+  if (counter) counter.textContent = ticked > 0 ? `(${ticked})` : '';
   // Print Selected + Set Lorry No — same "show only when ticked" rule.
-  const printBtn = document.getElementById('inv-bulk-print');
-  if (printBtn) printBtn.style.display = ticked > 0 ? '' : 'none';
-  const lorryBtn = document.getElementById('inv-bulk-lorry');
-  if (lorryBtn) lorryBtn.style.display = ticked > 0 ? '' : 'none';
+  _bulkBtnSetVisible(document.getElementById('inv-bulk-print'), ticked > 0);
+  _bulkBtnSetVisible(document.getElementById('inv-bulk-lorry'), ticked > 0);
   // ASP Print Selected Purchase — visible only when (ASP context active)
   // AND (rows ticked). Delegate to applyAspContextVisibility, which
   // combines both gates.
@@ -15388,18 +15399,15 @@ function syncPurchaseMaster(){
   const ticked=visible.filter(cb=>cb.checked).length;
   master.indeterminate = ticked>0 && ticked<visible.length;
   master.checked       = visible.length>0 && ticked===visible.length;
-  const delBtn  = document.getElementById('pur-bulk-del');
+  _bulkBtnSetVisible(document.getElementById('pur-bulk-del'),      ticked > 0);
   const counter = document.getElementById('pur-sel-count');
-  if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
-  if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
+  if (counter) counter.textContent = ticked > 0 ? `(${ticked})` : '';
   // Print Selected + WhatsApp Selected — show only when at least one row
   // is ticked. (The WhatsApp button has its own feature-flag CSS rule
-  // that hides it when flag_whatsapp is off — that takes precedence
-  // because !important beats the inline '' fallback below.)
-  const printBtn = document.getElementById('pur-bulk-print');
-  if (printBtn) printBtn.style.display = ticked > 0 ? '' : 'none';
-  const waBtn = document.getElementById('pur-bulk-whatsapp');
-  if (waBtn) waBtn.style.display = ticked > 0 ? '' : 'none';
+  // that hides it when flag_whatsapp is off; that always wins because
+  // the helper only sets `display` and the feat-CSS uses !important.)
+  _bulkBtnSetVisible(document.getElementById('pur-bulk-print'),    ticked > 0);
+  _bulkBtnSetVisible(document.getElementById('pur-bulk-whatsapp'), ticked > 0);
 }
 async function deleteSelectedPurchases(){
   const body=document.getElementById('purchases-list');
@@ -15454,12 +15462,10 @@ function syncBillMaster(){
   const ticked=visible.filter(cb=>cb.checked).length;
   master.indeterminate = ticked>0 && ticked<visible.length;
   master.checked       = visible.length>0 && ticked===visible.length;
-  const delBtn  = document.getElementById('bill-bulk-del');
+  _bulkBtnSetVisible(document.getElementById('bill-bulk-del'),   ticked > 0);
   const counter = document.getElementById('bill-sel-count');
-  if (delBtn)  delBtn.style.display = ticked > 0 ? '' : 'none';
-  if (counter) counter.textContent  = ticked > 0 ? `(${ticked})` : '';
-  const printBtn = document.getElementById('bill-bulk-print');
-  if (printBtn) printBtn.style.display = ticked > 0 ? '' : 'none';
+  if (counter) counter.textContent = ticked > 0 ? `(${ticked})` : '';
+  _bulkBtnSetVisible(document.getElementById('bill-bulk-print'), ticked > 0);
 }
 async function deleteSelectedBills(){
   const body=document.getElementById('bills-list');
@@ -16037,14 +16043,11 @@ function updatePaymentBulkButtons() {
   if (!body) return;
   const checked = body.querySelectorAll('.pay-select-cb:checked').length;
   const total   = body.querySelectorAll('.pay-select-cb').length;
-  const btn = document.getElementById('pay-bulk-del');
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-del'),      checked > 0);
   const cnt = document.getElementById('pay-sel-count');
-  if (btn) btn.style.display = checked > 0 ? '' : 'none';
   if (cnt) cnt.textContent = checked > 0 ? String(checked) : '';
-  const printBtn = document.getElementById('pay-bulk-print');
-  if (printBtn) printBtn.style.display = checked > 0 ? '' : 'none';
-  const waBtn = document.getElementById('pay-bulk-whatsapp');
-  if (waBtn) waBtn.style.display = checked > 0 ? '' : 'none';
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-print'),    checked > 0);
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-whatsapp'), checked > 0);
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');
@@ -16838,13 +16841,14 @@ function updateDnBulkButtons(){
     master.indeterminate = tickedCount>0 && tickedCount<visible.length;
     master.checked       = visible.length>0 && tickedCount===visible.length;
   }
-  // Show/hide the bulk action buttons + count badge
-  const printBtn = document.getElementById('dn-bulk-print');
-  const delBtn   = document.getElementById('dn-bulk-del');
-  const counter  = document.getElementById('dn-sel-count');
-  if (printBtn) printBtn.style.display = tickedCount > 0 ? '' : 'none';
-  if (delBtn)   delBtn.style.display   = tickedCount > 0 ? '' : 'none';
-  if (counter)  counter.textContent    = tickedCount > 0 ? `(${tickedCount})` : '';
+  // Show/hide the bulk action buttons + count badge. _bulkBtnSetVisible
+  // is required for dn-bulk-del because its `.needs-delete` permission
+  // CSS uses !important; the dn-bulk-print button doesn't have a
+  // permission class, but routes through the helper for consistency.
+  _bulkBtnSetVisible(document.getElementById('dn-bulk-print'), tickedCount > 0);
+  _bulkBtnSetVisible(document.getElementById('dn-bulk-del'),   tickedCount > 0);
+  const counter = document.getElementById('dn-sel-count');
+  if (counter) counter.textContent = tickedCount > 0 ? `(${tickedCount})` : '';
 }
 // Delegate: any change on a row checkbox triggers the button-state sync
 document.addEventListener('change', (e)=>{
