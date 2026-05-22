@@ -1601,10 +1601,33 @@ function syncTraderBanks(db, traderId, banks) {
   );
 }
 
+// Duplicate-PAN guard for sellers. PAN is the legally-unique tax id
+// on a trader so two rows sharing one is almost always an accidental
+// re-entry of the same person. The check is case-insensitive and
+// trims whitespace so "abc123" / " ABC123 " are treated the same.
+// Override: client sends `force: true` after the operator confirms
+// they really want a duplicate (rare — e.g. two HUFs sharing one
+// PAN under different bank accounts).
+function _findTraderDuplicateByPan(db, pan, excludeId) {
+  const norm = String(pan || '').trim().toUpperCase();
+  if (!norm) return null;
+  const params = [norm];
+  let sql = 'SELECT id, name, cr, pan, tel FROM traders WHERE UPPER(TRIM(pan)) = ?';
+  if (excludeId) { sql += ' AND id != ?'; params.push(excludeId); }
+  sql += ' LIMIT 1';
+  return db.get(sql, params);
+}
 app.post('/api/traders', requireTraderWrite, (req, res) => {
   const t = req.body;
   const db = getDb();
-  const info = db.run(`INSERT INTO traders (name,cr,pan,tel,aadhar,padd,ppla,pin,pstate,pst_code,ifsc,acctnum,holder_name) 
+  if (!t.force) {
+    const dup = _findTraderDuplicateByPan(db, t.pan);
+    if (dup) return res.status(409).json({
+      duplicate: true, field: 'pan', existing: dup,
+      error: `A seller with PAN "${dup.pan}" already exists: ${dup.name || '(unnamed)'}`,
+    });
+  }
+  const info = db.run(`INSERT INTO traders (name,cr,pan,tel,aadhar,padd,ppla,pin,pstate,pst_code,ifsc,acctnum,holder_name)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [t.name,t.cr||'',t.pan||'',t.tel||'',t.aadhar||'',t.padd||'',t.ppla||'',t.pin||'',t.pstate||'',t.pst_code||'',t.ifsc||'',t.acctnum||'',t.holder_name||'']);
   // If the client sent a banks array (new multi-bank UI), persist them.
@@ -1617,10 +1640,18 @@ app.post('/api/traders', requireTraderWrite, (req, res) => {
 app.put('/api/traders/:id', requireTraderWrite, (req, res) => {
   const t = req.body;
   const db = getDb();
+  const tid = parseInt(req.params.id, 10);
+  if (!t.force) {
+    const dup = _findTraderDuplicateByPan(db, t.pan, tid);
+    if (dup) return res.status(409).json({
+      duplicate: true, field: 'pan', existing: dup,
+      error: `Another seller with PAN "${dup.pan}" already exists: ${dup.name || '(unnamed)'}`,
+    });
+  }
   db.run(`UPDATE traders SET name=?,cr=?,pan=?,tel=?,aadhar=?,padd=?,ppla=?,pin=?,pstate=?,pst_code=?,ifsc=?,acctnum=?,holder_name=? WHERE id=?`,
-    [t.name,t.cr||'',t.pan||'',t.tel||'',t.aadhar||'',t.padd||'',t.ppla||'',t.pin||'',t.pstate||'',t.pst_code||'',t.ifsc||'',t.acctnum||'',t.holder_name||'',req.params.id]);
+    [t.name,t.cr||'',t.pan||'',t.tel||'',t.aadhar||'',t.padd||'',t.ppla||'',t.pin||'',t.pstate||'',t.pst_code||'',t.ifsc||'',t.acctnum||'',t.holder_name||'',tid]);
   if (Array.isArray(t.banks)) {
-    syncTraderBanks(db, parseInt(req.params.id), t.banks);
+    syncTraderBanks(db, tid, t.banks);
   }
   res.json({ success: true });
 });
@@ -1862,9 +1893,47 @@ app.get('/api/buyers', requireView, (req, res) => {
   }
   res.json(db.all('SELECT * FROM buyers ORDER BY buyer1 LIMIT 500'));
 });
+// Duplicate-key guard for buyers. Both the full buyer code (`buyer`)
+// and the short alias (`code`) are operator-typed identifiers used
+// across lots / invoices / price files — two rows sharing either is
+// almost always an accidental re-entry. Returns the first match,
+// preferring a `buyer` hit so the toast names the more-prominent
+// collision when both fields conflict.
+// Override: client sends `force: true` after the operator confirms
+// they really want a duplicate.
+function _findBuyerDuplicate(db, buyer, code, excludeId) {
+  const nb = String(buyer || '').trim().toUpperCase();
+  const nc = String(code  || '').trim().toUpperCase();
+  const buildSql = (col, val) => {
+    const params = [val];
+    let sql = `SELECT id, buyer, buyer1, code FROM buyers WHERE UPPER(TRIM(${col})) = ?`;
+    if (excludeId) { sql += ' AND id != ?'; params.push(excludeId); }
+    sql += ' LIMIT 1';
+    return { sql, params };
+  };
+  if (nb) {
+    const q = buildSql('buyer', nb);
+    const hit = db.get(q.sql, q.params);
+    if (hit) return { row: hit, field: 'buyer' };
+  }
+  if (nc) {
+    const q = buildSql('code', nc);
+    const hit = db.get(q.sql, q.params);
+    if (hit) return { row: hit, field: 'code' };
+  }
+  return null;
+}
 app.post('/api/buyers', requireBuyerWrite, (req, res) => {
   const b = req.body;
-  getDb().run(`INSERT INTO buyers (
+  const db = getDb();
+  if (!b.force) {
+    const dup = _findBuyerDuplicate(db, b.buyer, b.code);
+    if (dup) return res.status(409).json({
+      duplicate: true, field: dup.field, existing: dup.row,
+      error: `A buyer with ${dup.field === 'buyer' ? `code "${dup.row.buyer}"` : `short alias "${dup.row.code}"`} already exists${dup.row.buyer1 ? `: ${dup.row.buyer1}` : ''}`,
+    });
+  }
+  db.run(`INSERT INTO buyers (
       buyer, buyer1, code, sbl, add1, add2, pla, pin, state, st_code,
       gstin, pan, tel, ti, sale, email, tdsq,
       cbuyer1, cadd1, cadd2, cpla, cpin, cstate, cst_code, cgstin
@@ -1876,7 +1945,16 @@ app.post('/api/buyers', requireBuyerWrite, (req, res) => {
 });
 app.put('/api/buyers/:id', requireBuyerWrite, (req, res) => {
   const b = req.body;
-  getDb().run(`UPDATE buyers SET
+  const db = getDb();
+  const bid = parseInt(req.params.id, 10);
+  if (!b.force) {
+    const dup = _findBuyerDuplicate(db, b.buyer, b.code, bid);
+    if (dup) return res.status(409).json({
+      duplicate: true, field: dup.field, existing: dup.row,
+      error: `Another buyer with ${dup.field === 'buyer' ? `code "${dup.row.buyer}"` : `short alias "${dup.row.code}"`} already exists${dup.row.buyer1 ? `: ${dup.row.buyer1}` : ''}`,
+    });
+  }
+  db.run(`UPDATE buyers SET
       buyer=?, buyer1=?, code=?, sbl=?, add1=?, add2=?, pla=?, pin=?, state=?, st_code=?,
       gstin=?, pan=?, tel=?, ti=?, sale=?, email=?, tdsq=?,
       cbuyer1=?, cadd1=?, cadd2=?, cpla=?, cpin=?, cstate=?, cst_code=?, cgstin=?
@@ -1884,7 +1962,7 @@ app.put('/api/buyers/:id', requireBuyerWrite, (req, res) => {
     [b.buyer, b.buyer1||'', b.code||'', b.sbl||'', b.add1||'', b.add2||'', b.pla||'', b.pin||'', b.state||'', b.st_code||'',
      b.gstin||'', b.pan||'', b.tel||'', b.ti||'', b.sale||'L', b.email||'', b.tdsq||'',
      b.cbuyer1||'', b.cadd1||'', b.cadd2||'', b.cpla||'', b.cpin||'', b.cstate||'', b.cst_code||'', b.cgstin||'',
-     req.params.id]);
+     bid]);
   res.json({ success: true });
 });
 app.delete('/api/buyers/:id', requireDelete, (req, res) => {

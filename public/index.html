@@ -12343,8 +12343,26 @@ async function saveTrader(){
     }
   }
   try{
-    const r=await fetch(B+(id?`/api/traders/${id}`:'/api/traders'),{method:id?'PUT':'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
+    const send = async (force) => {
+      const payload = force ? { ...body, force: true } : body;
+      return fetch(B+(id?`/api/traders/${id}`:'/api/traders'),{method:id?'PUT':'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(payload)});
+    };
+    let r = await send(false);
+    // 409 = server detected a duplicate PAN. Surface the existing
+    // row so the operator can decide: cancel (most common) or save
+    // anyway by re-sending with force:true.
+    if (r.status === 409) {
+      const d = await r.json();
+      if (d && d.duplicate) {
+        const ex = d.existing || {};
+        const msg = (d.error || 'Possible duplicate seller.')
+          + `\n\nExisting row:\n  • ${ex.name || '(unnamed)'}\n  • PAN: ${ex.pan || '—'}\n  • CR: ${ex.cr || '—'}\n  • Phone: ${ex.tel || '—'}`
+          + '\n\nSave anyway?';
+        if (!confirm(msg)) return;
+        r = await send(true);
+      }
+    }
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
     hideModal('trader-modal');toast(id?'Seller updated':'Seller added');searchTraders('');
   }catch(e){showError(e)}
@@ -13066,8 +13084,25 @@ async function saveBuyer(){
   const body={};B_FIELDS.forEach(f=>{const el=document.getElementById(B_IDS[f]);body[f]=el?el.value:''});
   if(!body.buyer){alert('Buyer code is required');return}
   try{
-    const r=await fetch(B+(id?`/api/buyers/${id}`:'/api/buyers'),{method:id?'PUT':'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(body)});
+    const send = async (force) => {
+      const payload = force ? { ...body, force: true } : body;
+      return fetch(B+(id?`/api/buyers/${id}`:'/api/buyers'),{method:id?'PUT':'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},body:JSON.stringify(payload)});
+    };
+    let r = await send(false);
+    // 409 = server detected a duplicate buyer code or short alias.
+    // Surface the existing row so the operator can cancel or override.
+    if (r.status === 409) {
+      const d = await r.json();
+      if (d && d.duplicate) {
+        const ex = d.existing || {};
+        const msg = (d.error || 'Possible duplicate buyer.')
+          + `\n\nExisting row:\n  • Buyer Code: ${ex.buyer || '—'}\n  • Trade Name: ${ex.buyer1 || '—'}\n  • Short Code: ${ex.code || '—'}`
+          + '\n\nSave anyway?';
+        if (!confirm(msg)) return;
+        r = await send(true);
+      }
+    }
     if(!r.ok){const d=await r.json();throw new Error(d.error||'Save failed')}
     hideModal('buyer-modal');toast(id?'Buyer updated':'Buyer added');searchBuyers('');
   }catch(e){showError(e)}
