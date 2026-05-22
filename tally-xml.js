@@ -2846,7 +2846,15 @@ function buildSalesRows(db, auctionId, cfg) {
     g.sgst      += Number(r.sgst || 0);
     g.igst      += Number(r.igst || 0);
     g.tcsamt    += Number(r.tcs || 0);
-    g.total     += Number(r.tot || 0);
+    // Track BOTH sums so the downstream XML generator can compute a
+    // correct Round Off line:
+    //   _rawTot  = sum of post-round grand totals (== sum of invoices.tot)
+    //   _sumRund = sum of round-off adjustments already applied per row
+    // Earlier this builder summed only r.tot and used it as both the
+    // pre-round and post-round total → rnd always evaluated to 0.
+    // Subtracting _sumRund recovers the pre-round value.
+    g._rawTot  = (g._rawTot || 0) + Number(r.tot || 0);
+    g._sumRund = (g._sumRund || 0) + Number(r.rund || 0);
   }
 
   // round
@@ -2856,8 +2864,12 @@ function buildSalesRows(db, auctionId, cfg) {
     g.gunnyAmt  = r2(g.gunnyAmt);
     g.cgst = r2(g.cgst); g.sgst = r2(g.sgst); g.igst = r2(g.igst);
     g.tcsamt = r2(g.tcsamt);
-    g.total = r2(g.total);
-    g.totalRounded = r0(g.total);
+    // total       = pre-round  (sum_tot − sum_rund)  — used as preRound
+    // totalRounded = post-round (sum_tot)            — used as r0(preRound)
+    g.total        = r2((g._rawTot || 0) - (g._sumRund || 0));
+    g.totalRounded = r0(g._rawTot || 0);
+    delete g._rawTot;
+    delete g._sumRund;
   }
   return out;
 }
