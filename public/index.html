@@ -3007,6 +3007,17 @@ input[type="search"]:focus{
                auction. Bypasses client-side pagination when active. -->
           <input type="search" id="lot-search" placeholder="Search lot no, seller, buyer, code, invoice, branch…" oninput="searchLotsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
 
+          <!-- Bulk-tick by lot number — paste a comma/space/newline list
+               and every match in the loaded trade gets checked. If any
+               match falls outside the current page the rendered slice
+               is expanded so all matches are visible before bulk
+               actions (delete, set buyer, etc.) run. -->
+          <input type="text" id="lot-pick-lots" placeholder="Tick lots: 12, 13, 15…" autocomplete="off"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();lotApplyPickLots()}"
+                 style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;min-width:200px"
+                 title="Enter lot numbers separated by comma / space / newline. Press Enter or click Tick to check them.">
+          <button type="button" class="btn btn-o" onclick="lotApplyPickLots()" style="height:38px;padding:0 14px;font-weight:600">Tick</button>
+
           <!-- Branch filter — populated from the lots actually present in the
                selected auction (deduplicated). Filtering is server-side
                (`/api/lots/:aid?branch=…`) so the KPI strip + table stay in
@@ -10221,6 +10232,35 @@ function leClearPrintSelection() {
   leUpdatePrintToolbar();
 }
 
+// Expand a raw "tick lots" input into individual lot-no tokens.
+// Accepted shapes:
+//   • single numbers     →  "12"
+//   • comma / space /    →  "12, 13 15;17\n19"
+//     semicolon / newline
+//   • numeric ranges     →  "5-10"  →  ["5","6","7","8","9","10"]
+//     (both ends inclusive; reversed ranges like "10-5" also work)
+// Non-numeric tokens (legacy "A12", "B-7", etc.) are preserved
+// verbatim — the range expander only fires when BOTH sides of the
+// hyphen are pure digits, so alphanumeric lot codes aren't mangled.
+// Ranges wider than 10,000 entries are clamped to bound memory.
+function _expandLotNoTokens(raw) {
+  const out = [];
+  const segments = String(raw || '').split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+  for (const seg of segments) {
+    const m = /^(\d+)-(\d+)$/.exec(seg);
+    if (m) {
+      let a = parseInt(m[1], 10);
+      let b = parseInt(m[2], 10);
+      if (a > b) { const t = a; a = b; b = t; }
+      const span = Math.min(b - a + 1, 10000);
+      for (let i = 0; i < span; i++) out.push(String(a + i));
+    } else {
+      out.push(seg);
+    }
+  }
+  return out;
+}
+
 // Bulk-tick by lot number — parses the input field, resolves each
 // token to a lot.id, and adds the matches to selectedForPrint.
 // Resolution order:
@@ -10234,9 +10274,9 @@ async function leApplyPickLots() {
   if (!input) return;
   const raw = String(input.value || '').trim();
   if (!raw) return;
-  // Split on anything that isn't a digit / letter / hyphen — handles
-  // commas, spaces, tabs, newlines, semicolons in one pass.
-  const tokens = raw.split(/[^A-Za-z0-9\-]+/).map(s => s.trim()).filter(Boolean);
+  // Expand ranges ("5-10") and split on comma / space / semicolon /
+  // newline. Shared helper so the Lots tab's bulk-tick stays in sync.
+  const tokens = _expandLotNoTokens(raw);
   if (!tokens.length) return;
 
   if (!_le.selectedForPrint) _le.selectedForPrint = new Set();
@@ -13702,6 +13742,79 @@ async function refreshLots(btn){
 // correctly; only the table render is page-windowed.
 const _lotsPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
 
+// Full loaded trade (server response from /api/lots/:aid). Populated
+// by loadLots on every load and read by lotApplyPickLots so the
+// bulk-tick-by-lot-no helper can resolve lot_no → id without a
+// second round-trip.
+let _lotsFull = [];
+
+// Bulk-tick by lot number on the Lots tab. Mirrors the lot-entry
+// version (leApplyPickLots) but works on the DOM-checkbox-driven
+// BulkActions registry instead of the in-memory selectedForPrint
+// Set. If any match falls outside the current page we expand the
+// client-side pageSize to render the whole trade so every ticked
+// row stays visible before the operator runs Delete / Set Buyer /
+// Set Grade etc. — otherwise BulkActions.getTickedIds, which only
+// sees rendered checkboxes, would silently drop them.
+async function lotApplyPickLots() {
+  const input = document.getElementById('lot-pick-lots');
+  if (!input) return;
+  const raw = String(input.value || '').trim();
+  if (!raw) return;
+  // Same range-aware parser the lot-entry bulk-tick uses, so "1,3,5-10"
+  // expands identically on both screens.
+  const tokens = _expandLotNoTokens(raw);
+  if (!tokens.length) return;
+
+  const arr = Array.isArray(_lotsFull) ? _lotsFull : [];
+  if (!arr.length) { toast('Load a trade first'); return; }
+
+  // Build a case-insensitive lot_no → id map. Legacy data sometimes
+  // has alphanumeric lot numbers (e.g. "A12"), so we don't coerce.
+  const byLotNo = new Map();
+  for (const l of arr) {
+    const k = String(l.lot_no == null ? '' : l.lot_no).trim().toUpperCase();
+    if (k) byLotNo.set(k, l.id);
+  }
+
+  const matchedIds = new Set();
+  const missing = [];
+  for (const t of tokens) {
+    const k = t.toUpperCase();
+    if (byLotNo.has(k)) matchedIds.add(byLotNo.get(k));
+    else missing.push(t);
+  }
+
+  // If any matched row isn't currently rendered, expand the pager
+  // to show every row before ticking. Re-running loadLots with the
+  // larger pageSize re-mounts DataTable so the new checkboxes exist
+  // when we go to tick them.
+  const visibleIds = new Set(
+    Array.from(document.querySelectorAll('.lot-select-cb')).map(cb => Number(cb.value))
+  );
+  const offPage = [...matchedIds].filter(id => !visibleIds.has(id));
+  if (offPage.length) {
+    _lotsPager.pageSize = Math.max(arr.length, _lotsPager.pageSize);
+    _lotsPager.page     = 1;
+    await loadLots({ keepPage: true });
+  }
+
+  // Tick matched rows. Doing this AFTER the (optional) re-mount so
+  // every matched id has a freshly-rendered checkbox in the DOM.
+  document.querySelectorAll('.lot-select-cb').forEach(cb => {
+    if (matchedIds.has(Number(cb.value))) cb.checked = true;
+  });
+  // Refresh the master checkbox + bulk-action toolbar counts.
+  if (typeof BulkActions !== 'undefined' && BulkActions._sync) BulkActions._sync('lot');
+
+  if (matchedIds.size) input.value = '';
+
+  const parts = [];
+  if (matchedIds.size) parts.push(`ticked ${matchedIds.size} lot${matchedIds.size === 1 ? '' : 's'}`);
+  if (missing.length)  parts.push(`not found: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}`);
+  toast(parts.length ? parts.join(' · ') : 'No lots matched');
+}
+
 function gotoLotsPage(p){
   const max = _lotsPager.totalPages || 1;
   _lotsPager.page = Math.max(1, Math.min(max, p|0));
@@ -13741,6 +13854,10 @@ async function loadLots(opts){
   // may return stale cached JSON and nothing visibly changes)
   const d=await j(`/api/lots/${aid}?_=${Date.now()}${branchParam}${searchParam}`);
   const arr = Array.isArray(d) ? d : [];
+  // Cache the full trade so bulk-tick (lotApplyPickLots) can resolve
+  // lot_no → id without re-fetching. Replaced on every load so it
+  // stays in sync with deletes / inserts / branch filter changes.
+  _lotsFull = arr;
 
   // Update KPI strip — count, qty, amount, calculated %
   const kpiStrip = document.getElementById('lot-kpis');
