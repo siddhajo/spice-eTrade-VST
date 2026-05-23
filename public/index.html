@@ -19284,10 +19284,45 @@ function _pcApplyDisable(selector, scopeSelector, state, reason){
     }
   });
 }
+// Inline amber banner shown at the top of any tab whose price-check
+// gate is 'stale'. The amber outline on the buttons alone proved too
+// subtle (operators didn't notice the tooltip); this puts the warning
+// on the page where they can't miss it, and gives them a one-click
+// path back to re-verify. Removed automatically when state changes
+// off 'stale' so the page is quiet again once the gate is clean.
+function _pcRenderStaleBanner(tabScope, state){
+  const scope = tabScope ? document.querySelector(tabScope) : null;
+  if (!scope) return;
+  // One banner per tab scope — clear any old one before deciding.
+  const existing = scope.querySelector(':scope > .pc-stale-banner');
+  if (state !== 'stale') {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;   // already rendered, no-op
+  const banner = document.createElement('div');
+  banner.className = 'pc-stale-banner';
+  banner.style.cssText = [
+    'display:flex','align-items:center','gap:12px',
+    'margin:0 0 12px 0','padding:10px 14px',
+    'background:#FEF3C7','border:1px solid #F59E0B',
+    'border-radius:8px','color:#7C2D12',
+    'font-size:13px','line-height:1.5',
+  ].join(';');
+  banner.innerHTML =
+    '<span style="font-size:18px;line-height:1">⚠</span>'+
+    '<span style="flex:1"><b>Lots changed since the last Price Check.</b> '+
+    'Review the data, then re-verify before generating to stay safe.</span>'+
+    '<button type="button" class="btn btn-o" '+
+    'style="height:30px;padding:0 12px;font-weight:600;font-size:12.5px" '+
+    'onclick="go(\'pricecheck\')">Re-verify</button>';
+  scope.insertBefore(banner, scope.firstChild);
+}
 async function pcRefreshGate(auctionId, tabScope){
   const flagOn = document.body.getAttribute('data-feat-price-check') === '1';
   if (!flagOn) {
     _pcApplyDisable('.needs-price-check', tabScope, 'clean', '');
+    _pcRenderStaleBanner(tabScope, 'clean');   // ensure banner cleared
     return true;
   }
   let state = 'never';
@@ -19305,6 +19340,7 @@ async function pcRefreshGate(auctionId, tabScope){
         ? 'Price check pending — run Reports → Price Check against this auction first.'
         : 'Pick an auction first, then run Price Check to unlock.');
   _pcApplyDisable('.needs-price-check', tabScope, state, reason);
+  _pcRenderStaleBanner(tabScope, state);
   return state === 'clean' || state === 'stale';
 }
 
