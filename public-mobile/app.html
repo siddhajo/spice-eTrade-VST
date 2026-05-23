@@ -35,7 +35,12 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
 /* ── INPUTS ── */
 .ein{width:100%;height:34px;border-radius:8px;border:1.5px solid var(--border);padding:0 10px;font-size:14px;font-family:inherit;outline:none;background:var(--input-bg);color:var(--text);-webkit-appearance:none;transition:all .25s}
 .ein:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(13,124,95,.1);transform:translateY(-1px)}
-input[type=text],input[type=password],input[type=tel],input[type=email],input[type=number]{width:100%;height:44px;border-radius:var(--radius);border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:inherit;outline:none;background:var(--input-bg);color:var(--text);-webkit-appearance:none;transition:all .25s}
+input[type=text],input[type=password],input[type=tel],input[type=email],input[type=number],input[type=search]{width:100%;height:44px;border-radius:var(--radius);border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:inherit;outline:none;background:var(--input-bg);color:var(--text);-webkit-appearance:none;transition:all .25s}
+/* Mobile search inputs — left-anchored magnifying glass + native
+   browser clear (×) on the right. Same visual language as the
+   desktop app so dad sees the icons either device he uses. */
+input[type=search]{padding-left:36px !important;padding-right:34px !important;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230d7c5f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");background-repeat:no-repeat;background-position:12px center;background-size:16px 16px}
+input[type=search]::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;height:18px;width:18px;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c0392b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><line x1='15' y1='9' x2='9' y2='15'/><line x1='9' y1='9' x2='15' y2='15'/></svg>");background-size:contain;background-repeat:no-repeat;opacity:.7}
 input.invalid{border-color:#d93025;background:#fff5f5}
 input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(13,124,95,.1)}
 input::placeholder{color:#bbb}
@@ -259,7 +264,7 @@ select:focus{border-color:var(--green)}
           <div class="elb" id="elb-seller">SELLER</div>
           <div class="sx">
             <span class="sx-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
-            <input type="text" id="le-name" placeholder="Search seller by name, phone, GSTIN..." autocomplete="off" onfocus="showSaveBtn()" oninput="searchTrader(this.value)" style="height:36px;font-size:13px">
+            <input type="search" id="le-name" placeholder="Search seller by name, phone, GSTIN..." autocomplete="off" onfocus="showSaveBtn()" oninput="searchTrader(this.value)" style="height:36px;font-size:13px">
             <button type="button" class="sx-clear" id="le-name-clear" aria-label="Clear search">✕</button>
           </div>
           <div class="sr" id="le-res" style="display:none"></div>
@@ -368,7 +373,7 @@ select:focus{border-color:var(--green)}
     </div>
     <div class="lot-search"><div class="sx">
       <span class="sx-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
-      <input type="text" id="ml-search" placeholder="Search seller name..." oninput="filterMyLots(this.value)">
+      <input type="search" id="ml-search" placeholder="Search seller name..." oninput="filterMyLots(this.value)">
       <button type="button" class="sx-clear" id="ml-search-clear" aria-label="Clear search">✕</button>
     </div></div>
     <div id="ml-actions" style="display:none;margin-bottom:8px;gap:6px;align-items:center;flex-wrap:wrap">
@@ -405,7 +410,7 @@ select:focus{border-color:var(--green)}
       <div id="ed-seller-search" style="display:none">
         <div class="sx">
           <span class="sx-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
-          <input type="text" id="ed-seller-input" placeholder="Search seller by name, phone..." oninput="searchEditSeller(this.value)" autocomplete="off">
+          <input type="search" id="ed-seller-input" placeholder="Search seller by name, phone..." oninput="searchEditSeller(this.value)" autocomplete="off">
           <button type="button" class="sx-clear" id="ed-seller-input-clear" aria-label="Clear search">✕</button>
         </div>
         <div class="sr" id="ed-seller-res" style="display:none"></div>
