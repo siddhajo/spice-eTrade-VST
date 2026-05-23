@@ -1547,10 +1547,10 @@ app.post('/api/whatsapp/send-text', requireView, async (req, res) => {
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
-// Send a document. Body: { phone, caption, doc_url } where doc_url is a
-// publicly reachable URL Meta will fetch the PDF from. (For locally
-// generated PDFs you'd first POST /media to upload and use the returned
-// id — left as a TODO when you wire this up to the actual hosted URLs.)
+// Send a document by URL. Body: { phone, caption, doc_url } where
+// doc_url is a publicly reachable URL Meta will fetch the PDF from.
+// Kept for callers that already have a hosted URL; for locally-generated
+// PDFs use /api/whatsapp/send-pdf below (multipart upload → Meta /media).
 app.post('/api/whatsapp/send-document', requireView, async (req, res) => {
   if (!_waConfigured()) return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
   try {
@@ -1564,6 +1564,68 @@ app.post('/api/whatsapp/send-document', requireView, async (req, res) => {
     });
     res.json({ ok: true, id: out.messages && out.messages[0] && out.messages[0].id });
   } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// Send a locally-generated PDF via WhatsApp Cloud API. Two-step Meta
+// flow: (1) POST the file to /{phone-id}/media to get a media_id,
+// (2) POST a document message referencing that media_id.
+//
+// Body (multipart/form-data):
+//   file     — the PDF blob (required)
+//   phone    — recipient (required; 10-digit IN auto-prefixed with 91)
+//   caption  — text shown below the document in WhatsApp (optional)
+//   filename — display name for the attachment (optional)
+//
+// Same 501/502 contract as the other endpoints so the client can fall
+// back to the wa.me manual flow when API is unset / Meta rejects.
+app.post('/api/whatsapp/send-pdf', requireView, upload.single('file'), async (req, res) => {
+  if (!_waConfigured()) {
+    if (req.file) fs.unlink(req.file.path, () => {});
+    return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
+  }
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const phone = _waNormalizePhone(req.body.phone);
+    const caption = String(req.body.caption || '');
+    const filename = String(req.body.filename || req.file.originalname || 'document.pdf');
+    if (!phone) return res.status(400).json({ error: 'phone required' });
+
+    // Step 1: upload to Meta /media. Meta expects multipart with
+    // messaging_product/type/file fields. Node 18+ has native FormData
+    // and Blob — no extra deps required.
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const fd = new FormData();
+    fd.append('messaging_product', 'whatsapp');
+    fd.append('type', 'application/pdf');
+    fd.append('file', new Blob([fileBuffer], { type: 'application/pdf' }), filename);
+
+    const mediaUrl = `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_ID}/media`;
+    const mediaRes = await fetch(mediaUrl, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + process.env.WHATSAPP_TOKEN },
+      body: fd,
+    });
+    const mediaJson = await mediaRes.json().catch(() => ({}));
+    if (!mediaRes.ok || !mediaJson.id) {
+      const msg = (mediaJson.error && mediaJson.error.message) || `Media upload failed ${mediaRes.status}`;
+      throw new Error(msg);
+    }
+
+    // Step 2: send the document message referencing the media id.
+    const out = await _waPost('/messages', {
+      messaging_product: 'whatsapp', to: phone, type: 'document',
+      document: { id: mediaJson.id, caption, filename },
+    });
+    res.json({
+      ok: true,
+      id: out.messages && out.messages[0] && out.messages[0].id,
+      mediaId: mediaJson.id,
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  } finally {
+    if (req.file) fs.unlink(req.file.path, () => {});
+  }
 });
 
 app.get('/api/traders/:id', requireViewOrLotEntry, (req, res) => {

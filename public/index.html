@@ -15742,6 +15742,47 @@ async function _waCloudSendText(phone, message) {
   } catch (e) { showError(e); return false; }
 }
 
+// Cloud API — send a locally-generated PDF blob via Meta's media upload
+// pipeline. The server handles the two-step Meta flow (upload-to-media
+// → send-document); we just POST the blob as multipart. Returns true on
+// success; false on 501 (not configured) so the caller falls back to
+// the manual wa.me / Web Share flow.
+async function _waCloudSendDocument(phone, message, blob, filename) {
+  try {
+    const fd = new FormData();
+    fd.append('file', blob, filename);
+    fd.append('phone', phone || '');
+    fd.append('caption', message || '');
+    fd.append('filename', filename || 'document.pdf');
+    // Don't set Content-Type — the browser adds the multipart boundary.
+    const r = await fetch(B + '/api/whatsapp/send-pdf', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + T },
+      body: fd,
+    });
+    if (r.status === 501) return false; // not configured → manual fallback
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || 'Send failed'); }
+    return true;
+  } catch (e) { showError(e); return false; }
+}
+
+// Best-effort document dispatcher: try Cloud API first (PDF auto-sends,
+// no browser tab opens), fall back to _waOpenDocument (wa.me + manual
+// drag) on 501 / 502. Phone is required for the Cloud path — without a
+// phone Meta can't route, so we go straight to the fallback which can
+// at least let the user pick the recipient.
+async function _waSendDocument({ blob, filename, phone, message }) {
+  if (phone && await _waCloudApiAvailable()) {
+    const ok = await _waCloudSendDocument(_normalizePhoneForWa(phone), message, blob, filename);
+    if (ok) {
+      if (typeof toast === 'function') toast(`WhatsApp sent (+${_normalizePhoneForWa(phone)})`);
+      return true;
+    }
+  }
+  await _waOpenDocument({ blob, filename, phone, message });
+  return false;
+}
+
 // Manual flow for a TEXT-ONLY message (Payments format, no PDF).
 function _waOpenText(phone, message) {
   const waPhone = _normalizePhoneForWa(phone);
@@ -15830,9 +15871,16 @@ async function _runWaQueue(items, opts) {
 
     // action === 'send'
     if (useApi) {
-      const ok = await _waCloudSendText(it.phone, it.message);
-      // Cloud API doesn't (yet) ship the locally generated PDF; for
-      // document items the caller falls back to manual once API misses.
+      // Document items go through the upload-then-send pipeline so the
+      // PDF actually transmits; text-only items use the text endpoint.
+      // Either branch falls back to the manual flow on Cloud API
+      // failure (501 / 502) so the user can still finish the send.
+      let ok;
+      if (it.blob) {
+        ok = await _waCloudSendDocument(_normalizePhoneForWa(it.phone), it.message, it.blob, it.filename);
+      } else {
+        ok = await _waCloudSendText(it.phone, it.message);
+      }
       if (!ok) { it.blob ? await _waOpenDocument(it) : _waOpenText(it.phone, it.message); }
       sent++;
     } else {
@@ -15877,7 +15925,7 @@ async function whatsappDebitNote(id, dealerName, noteNo, totalAmt, ano) {
       _getCompanyName(),
     ]);
     const msg = `${ano || ''} ${decoded} ${company} DEBIT NOTE ${decNote} \u20B9${Number(totalAmt||0).toLocaleString('en-IN')}`.trim();
-    await _waOpenDocument({
+    await _waSendDocument({
       blob,
       filename: `DebitNote_${decoded}_${decNote || id}.pdf`,
       phone,
@@ -15906,7 +15954,7 @@ async function whatsappInvoice(id, buyerName, invNo, saleType, totalAmt, ano) {
       _lookupBuyerPhone(decoded), _getCompanyName(),
     ]);
     const msg = `${ano || ''} ${decoded} ${company} SALES INVOICE ${invLabel} ₹${Number(totalAmt||0).toLocaleString('en-IN')}`.trim();
-    await _waOpenDocument({ blob, filename: `SalesInvoice_${decoded}_${invLabel}.pdf`, phone, message: msg });
+    await _waSendDocument({ blob, filename: `SalesInvoice_${decoded}_${invLabel}.pdf`, phone, message: msg });
   } catch (e) { showError(e); }
 }
 async function whatsappPurchase(auctionId, sellerName, invNo, totalAmt, ano) {
@@ -15921,7 +15969,7 @@ async function whatsappPurchase(auctionId, sellerName, invNo, totalAmt, ano) {
       ano ? Promise.resolve(ano) : _getAuctionAno(auctionId),
     ]);
     const msg = `${anoVal} ${decoded} ${company} PURCHASE INVOICE ${decInv} ₹${Number(totalAmt||0).toLocaleString('en-IN')}`;
-    await _waOpenDocument({ blob, filename: `PurchaseInvoice_${decoded}_${decInv}.pdf`, phone, message: msg });
+    await _waSendDocument({ blob, filename: `PurchaseInvoice_${decoded}_${decInv}.pdf`, phone, message: msg });
   } catch (e) { showError(e); }
 }
 // Bulk Purchases — queue, one PDF per seller
