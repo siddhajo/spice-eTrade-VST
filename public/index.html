@@ -10344,19 +10344,36 @@ async function leApplyPickLots() {
 
   if (!_le.selectedForPrint) _le.selectedForPrint = new Set();
 
-  // Index the loaded page first — case-insensitive on the chance lot
-  // numbers are alphanumeric (legacy data sometimes has 'A12' etc).
+  // Index lots by lot_no using BOTH the canonical string ("001") AND
+  // the numeric-stripped form ("1") so "001-005" expanded into
+  // "1","2","3","4","5" matches rows stored as "001","002"… in
+  // legacy spreadsheets. Without the second key, the range
+  // expander silently misses every leading-zero row.
+  const indexBy = (l, map) => {
+    const raw = String(l.lot_no == null ? '' : l.lot_no).trim();
+    if (!raw) return;
+    const canonical = raw.toUpperCase();
+    map.set(canonical, l.id);
+    const n = Number(raw);
+    if (Number.isFinite(n) && String(n) !== canonical) map.set(String(n), l.id);
+  };
+  const tryMatch = (token, map) => {
+    const k = token.toUpperCase();
+    if (map.has(k)) return map.get(k);
+    const n = Number(token);
+    if (Number.isFinite(n) && map.has(String(n))) return map.get(String(n));
+    return null;
+  };
+
+  // Index the loaded page first.
   const byLotNo = new Map();
-  for (const l of (_le.recentLots || [])) {
-    const k = String(l.lot_no == null ? '' : l.lot_no).trim().toUpperCase();
-    if (k) byLotNo.set(k, l.id);
-  }
+  for (const l of (_le.recentLots || [])) indexBy(l, byLotNo);
 
   const matched = new Set();
   const missing = [];
   for (const t of tokens) {
-    const k = t.toUpperCase();
-    if (byLotNo.has(k)) matched.add(byLotNo.get(k));
+    const id = tryMatch(t, byLotNo);
+    if (id != null) matched.add(id);
     else missing.push(t);
   }
 
@@ -10369,14 +10386,11 @@ async function leApplyPickLots() {
       if (aid) {
         const all = await j('/api/lots/' + aid);
         const allMap = new Map();
-        for (const l of (Array.isArray(all) ? all : [])) {
-          const k = String(l.lot_no == null ? '' : l.lot_no).trim().toUpperCase();
-          if (k) allMap.set(k, l.id);
-        }
+        for (const l of (Array.isArray(all) ? all : [])) indexBy(l, allMap);
         const stillMissing = [];
         for (const t of missing) {
-          const k = t.toUpperCase();
-          if (allMap.has(k)) matched.add(allMap.get(k));
+          const id = tryMatch(t, allMap);
+          if (id != null) matched.add(id);
           else stillMissing.push(t);
         }
         missing.length = 0;
@@ -13997,6 +14011,33 @@ const _lotsPager = { page: 1, pageSize: 50, total: 0, totalPages: 0 };
 // second round-trip.
 let _lotsFull = [];
 
+// Persistent set of lot ids the operator bulk-ticked via the "Tick
+// lots:" input. Survives DataTable re-mounts inside loadLots so a
+// re-fetch (refresh button, branch filter change, post-action
+// recalc) still:
+//   • sorts those rows to the top of the table, and
+//   • re-ticks their checkboxes after mount.
+// Cleared on auction switch (the ids belong to a different trade).
+// Kept in sync with manual unticks via the change listener below.
+let _lotsTickedIds = new Set();
+// Tracks the auction id loadLots was last called for so we can wipe
+// _lotsTickedIds when the user switches trades.
+let _lotsLastAid = null;
+// Mirror direct DOM checkbox changes into the persistent set so
+// manually un-ticking a row sticks across re-renders. Without this,
+// the next loadLots would partition the un-ticked row right back
+// to the top and re-check it. Scoped to '.lot-select-cb' because
+// BulkActions reuses the `${id}-select-cb` class name for sellers /
+// buyers / auctions too — we only want the lots tab here.
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t || !t.classList || !t.classList.contains('lot-select-cb')) return;
+  const id = Number(t.value);
+  if (!Number.isFinite(id)) return;
+  if (t.checked) _lotsTickedIds.add(id);
+  else _lotsTickedIds.delete(id);
+});
+
 // Bulk-tick by lot number on the Lots tab. Mirrors the lot-entry
 // version (leApplyPickLots) but works on the DOM-checkbox-driven
 // BulkActions registry instead of the in-memory selectedForPrint
@@ -14018,50 +14059,59 @@ async function lotApplyPickLots() {
   const arr = Array.isArray(_lotsFull) ? _lotsFull : [];
   if (!arr.length) { toast('Load a trade first'); return; }
 
-  // Build a case-insensitive lot_no → id map. Legacy data sometimes
-  // has alphanumeric lot numbers (e.g. "A12"), so we don't coerce.
+  // Index lots by lot_no using BOTH the canonical string ("001") AND
+  // the numeric-stripped form ("1"). Legacy spreadsheets sometimes
+  // store lot numbers with leading zeros, while operators paste
+  // "001-005" expecting it to match. Without the second key, the
+  // range expander hands us "1","2","3","4","5" and the lookup
+  // misses every row stored as "001"/"002"/…
   const byLotNo = new Map();
   for (const l of arr) {
-    const k = String(l.lot_no == null ? '' : l.lot_no).trim().toUpperCase();
-    if (k) byLotNo.set(k, l.id);
+    const raw = String(l.lot_no == null ? '' : l.lot_no).trim();
+    if (!raw) continue;
+    const canonical = raw.toUpperCase();
+    byLotNo.set(canonical, l.id);
+    const n = Number(raw);
+    if (Number.isFinite(n) && String(n) !== canonical) {
+      byLotNo.set(String(n), l.id);
+    }
   }
 
   const matchedIds = new Set();
   const missing = [];
   for (const t of tokens) {
     const k = t.toUpperCase();
-    if (byLotNo.has(k)) matchedIds.add(byLotNo.get(k));
+    let id = byLotNo.get(k);
+    if (id == null) {
+      const n = Number(t);
+      if (Number.isFinite(n)) id = byLotNo.get(String(n));
+    }
+    if (id != null) matchedIds.add(id);
     else missing.push(t);
   }
 
-  // If any matched row isn't currently rendered, expand the pager
-  // to show every row before ticking. Re-running loadLots with the
-  // larger pageSize re-mounts DataTable so the new checkboxes exist
-  // when we go to tick them.
-  const visibleIds = new Set(
-    Array.from(document.querySelectorAll('.lot-select-cb')).map(cb => Number(cb.value))
-  );
-  const offPage = [...matchedIds].filter(id => !visibleIds.has(id));
-  if (offPage.length) {
-    _lotsPager.pageSize = Math.max(arr.length, _lotsPager.pageSize);
-    _lotsPager.page     = 1;
-    await loadLots({ keepPage: true });
+  if (matchedIds.size === 0) {
+    toast(missing.length ? `not found: ${missing.slice(0,8).join(', ')}${missing.length>8?'…':''}` : 'No lots matched');
+    return;
   }
 
-  // Tick matched rows. Doing this AFTER the (optional) re-mount so
-  // every matched id has a freshly-rendered checkbox in the DOM.
-  document.querySelectorAll('.lot-select-cb').forEach(cb => {
-    if (matchedIds.has(Number(cb.value))) cb.checked = true;
-  });
-  // Refresh the master checkbox + bulk-action toolbar counts.
-  if (typeof BulkActions !== 'undefined' && BulkActions._sync) BulkActions._sync('lot');
+  // Persist the ticked ids and re-render via loadLots. Expanding
+  // pageSize previously made the page tall enough to break the
+  // table's sticky/scroll layout; instead loadLots now partitions
+  // the loaded array so ticked rows always sit at the TOP and the
+  // operator can see them all on page 1 at the default page size.
+  for (const id of matchedIds) _lotsTickedIds.add(id);
+  // Restore the standard page size if a previous version of this
+  // function had grown it to fit every row. Without this the user
+  // would still see the old, broken full-rows view on re-render.
+  if (_lotsPager.pageSize > 50) _lotsPager.pageSize = 50;
+  _lotsPager.page = 1;
+  await loadLots({ keepPage: true });
 
-  if (matchedIds.size) input.value = '';
-
-  const parts = [];
-  if (matchedIds.size) parts.push(`ticked ${matchedIds.size} lot${matchedIds.size === 1 ? '' : 's'}`);
-  if (missing.length)  parts.push(`not found: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}`);
-  toast(parts.length ? parts.join(' · ') : 'No lots matched');
+  input.value = '';
+  const parts = [`ticked ${matchedIds.size} lot${matchedIds.size === 1 ? '' : 's'}`];
+  if (missing.length) parts.push(`not found: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}`);
+  toast(parts.join(' · '));
 }
 
 function gotoLotsPage(p){
@@ -14073,6 +14123,12 @@ function gotoLotsPage(p){
 async function loadLots(opts){
   const aid=document.getElementById('lot-auction').value;
   if(!aid)return;
+  // Switching trades clears the bulk-tick set — ids from a different
+  // auction are meaningless here. Same auction reload (refresh /
+  // branch filter / post-action recalc) keeps the set so the sort-
+  // to-top and re-tick survive.
+  if (_lotsLastAid && _lotsLastAid !== aid) _lotsTickedIds.clear();
+  _lotsLastAid = aid;
   // Price-check gate — disables Calculate All / generate buttons until
   // verify has cleared. Becomes a no-op when flag_price_check is OFF.
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-lots');
@@ -14102,7 +14158,23 @@ async function loadLots(opts){
   // Cache-buster ensures the browser actually hits the server (otherwise Refresh
   // may return stale cached JSON and nothing visibly changes)
   const d=await j(`/api/lots/${aid}?_=${Date.now()}${branchParam}${searchParam}`);
-  const arr = Array.isArray(d) ? d : [];
+  let arr = Array.isArray(d) ? d : [];
+  // Drop any tickedIds that no longer exist server-side (deleted
+  // since the operator ticked them). Without this, _lotsTickedIds
+  // would carry stale ids forever, distorting the toolbar counter.
+  if (_lotsTickedIds.size) {
+    const live = new Set(arr.map(l => l.id));
+    for (const id of [..._lotsTickedIds]) if (!live.has(id)) _lotsTickedIds.delete(id);
+  }
+  // Sort bulk-ticked rows to the TOP so the operator can see every
+  // row they ticked at a glance — no pagination jumping, no
+  // pageSize-expansion layout break. Preserves the server's
+  // ordering (lot_no ascending) within both halves.
+  if (_lotsTickedIds.size) {
+    const ticked = [], rest = [];
+    for (const l of arr) (_lotsTickedIds.has(l.id) ? ticked : rest).push(l);
+    arr = ticked.concat(rest);
+  }
   // Cache the full trade so bulk-tick (lotApplyPickLots) can resolve
   // lot_no → id without re-fetching. Replaced on every load so it
   // stays in sync with deletes / inserts / branch filter changes.
@@ -14319,6 +14391,17 @@ async function loadLots(opts){
     // striping.
     rowClass: (row) => row && row.locked_at ? 'row-locked' : '',
     columns });
+  // Re-tick bulk-ticked rows after the table mounts — DataTable
+  // renders fresh checkboxes every time, so DOM checked state is
+  // wiped and we rebuild it from _lotsTickedIds. The follow-up
+  // BulkActions._sync refreshes the master checkbox and bulk-action
+  // toolbar counts (Delete / Set Buyer / Lock counters).
+  if (_lotsTickedIds.size) {
+    document.querySelectorAll('.lot-select-cb').forEach(cb => {
+      if (_lotsTickedIds.has(Number(cb.value))) cb.checked = true;
+    });
+    if (typeof BulkActions !== 'undefined' && BulkActions._sync) BulkActions._sync('lot');
+  }
 }
 
 function openLotEdit(l){
