@@ -114,11 +114,15 @@ function getCompanyHeader(db) {
   // some deployments ship. NO hardcoded 'logo-ispl.png' fallback — a
   // fresh install with no Logo Code configured renders without a logo
   // rather than the legacy ISP image.
+  // resolveLogoPath checks SPICE_DATA_DIR/logos/<file> first (persistent
+  // user uploads), then /public/<file> (bundled defaults). Without this
+  // the cloud-uploaded logo would lose to /public on every redeploy.
+  const { resolveLogoPath } = require('./logo-paths');
   const tryPaths = [logoFile, 'logo.png'].filter(Boolean);
   let logoOnDisk = null;
   for (const f of tryPaths) {
-    const abs = path.join(__dirname, 'public', f);
-    if (fs.existsSync(abs)) { logoOnDisk = abs; break; }
+    const abs = resolveLogoPath(f);
+    if (abs) { logoOnDisk = abs; break; }
   }
 
   // The header object exposes `address1` and `address2` for backward

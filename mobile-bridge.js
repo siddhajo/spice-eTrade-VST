@@ -40,9 +40,11 @@ const PDFDocument = require('pdfkit');
 // (which is a verbatim port) doesn't need to know about the rename.
 
 // Spice-config logo location (single-company build — always ispl.png).
+// resolveLogoPath checks SPICE_DATA_DIR/logos first so cloud-persisted
+// uploads aren't shadowed by the bundled default of the same name.
+const { resolveLogoPath: _rlpMb } = require('./logo-paths');
 function getLogoPath() {
-  const p = path.join(__dirname, 'public', 'logo-ispl.png');
-  return fs.existsSync(p) ? p : null;
+  return _rlpMb('logo-ispl.png');
 }
 
 // Mask an account number for the receipt according to admin-set policy.
@@ -830,8 +832,18 @@ function mountMobile(app, deps) {
         emailClean,
       ]
     );
-    const created = db.get('SELECT * FROM traders WHERE id = ?', [info.lastInsertRowid]);
-    if (created) created.banks = [];
+    const newId = info.lastInsertRowid;
+    // Desktop UI sends `banks` as part of the trader payload. Persist
+    // them now so the response carries the populated array. PWA omits
+    // `banks` here and writes them via /api/traders/:id/banks instead,
+    // so the no-op branch in the helper covers that path.
+    syncTraderBanksFromArray(db, newId, t.banks);
+    const created = db.get('SELECT * FROM traders WHERE id = ?', [newId]);
+    if (created) {
+      created.banks = db.all(
+        'SELECT * FROM trader_banks WHERE trader_id = ? ORDER BY is_default DESC, id', [newId]
+      );
+    }
     res.status(201).json({ trader: created });
   });
 
@@ -886,11 +898,21 @@ function mountMobile(app, deps) {
     setField('holder_name', t.holder_name, (v) => String(v).trim());
     setField('whatsapp',    t.whatsapp,    (v) => String(v).trim());
     if (emailClean !== null) { sets.push('email = ?'); vals.push(emailClean); }
-    if (sets.length === 0) {
+    // No flat-field changes is fine — we may still have a `banks` array
+    // to sync below. Only short-circuit when neither flat fields nor
+    // banks were sent.
+    if (sets.length > 0) {
+      vals.push(id);
+      db.run(`UPDATE traders SET ${sets.join(', ')} WHERE id = ?`, vals);
+    } else if (!Array.isArray(t.banks)) {
       return res.json({ success: true, noop: true, trader });
     }
-    vals.push(id);
-    db.run(`UPDATE traders SET ${sets.join(', ')} WHERE id = ?`, vals);
+    // Desktop sends the whole banks array on every edit; persist it
+    // here so the bridge handler (which wins route-matching over
+    // server.js) keeps trader_banks in sync. Mobile PWA omits `banks`
+    // and edits rows individually via /api/traders/:id/banks, so the
+    // no-op branch in the helper covers that path.
+    syncTraderBanksFromArray(db, id, t.banks);
     const updated = db.get('SELECT * FROM traders WHERE id = ?', [id]);
     updated.banks = db.all(
       'SELECT * FROM trader_banks WHERE trader_id = ? ORDER BY is_default DESC, id', [id]
@@ -956,6 +978,49 @@ function mountMobile(app, deps) {
   // ── 10. TRADER BANK CRUD ───────────────────────────────────────
   // PWA exposes per-trader bank management. Spice-config does this through
   // a different route shape; replicate the PWA contract here.
+  // Replace the trader's bank-account rows from a `banks` array on the
+  // parent payload. Mirrors server.js's syncTraderBanks: clear existing
+  // rows, insert what was sent, then copy the FIRST bank back into the
+  // legacy traders.ifsc/acctnum/holder_name columns so callers that
+  // haven't been migrated to read trader_banks still see a valid
+  // primary account.
+  //
+  // The desktop UI sends the whole array in one shot via POST/PUT
+  // /api/traders ({...trader, banks: [...]}); the mobile PWA sends
+  // individual rows via /api/traders/:id/banks below. This helper is
+  // the single source of truth — keep both paths consistent.
+  //
+  // Skips entirely when `banks` is missing or not an array, so the PWA
+  // payload (which doesn't include `banks`) is unchanged.
+  function syncTraderBanksFromArray(db, traderId, banks) {
+    if (!Array.isArray(banks)) return;
+    const arr = banks.filter(b => b && (b.acctnum || b.ifsc));
+    db.run('DELETE FROM trader_banks WHERE trader_id = ?', [traderId]);
+    for (const b of arr) {
+      db.run(
+        `INSERT INTO trader_banks (trader_id, bank_name, acctnum, ifsc, holder_name)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          traderId,
+          String(b.bank_name || '').trim(),
+          String(b.acctnum || '').trim(),
+          String(b.ifsc || '').trim().toUpperCase(),
+          String(b.holder_name || '').trim(),
+        ]
+      );
+    }
+    const first = arr[0] || {};
+    db.run(
+      'UPDATE traders SET ifsc = ?, acctnum = ?, holder_name = ? WHERE id = ?',
+      [
+        String(first.ifsc || '').trim().toUpperCase(),
+        String(first.acctnum || '').trim(),
+        String(first.holder_name || '').trim(),
+        traderId,
+      ]
+    );
+  }
+
   app.post('/api/traders/:id/banks', requireAuth, (req, res) => {
     const db = getDb();
     const traderId = parseInt(req.params.id, 10);

@@ -56,15 +56,33 @@ app.use((req, res, next) => {
   next();
 });
 
+// Logo resolution helper — uploads go to a persistent volume
+// (SPICE_DATA_DIR/logos) so they survive Railway/Heroku redeploys,
+// which wipe everything outside the mounted volume. Without this the
+// uploaded logo would vanish on every container restart and fall back
+// to the bundled default (logo_kj.png). See logo-paths.js.
+const { resolveLogoPath: _resolveLogoPath, writePathFor: _logoWritePath } = require('./logo-paths');
+
 // When the user hasn't uploaded a custom logo, /logo-ispl.png falls
-// through to the bundled default (logo_kj.png). The upload widget still
-// writes to logo-ispl.png, and GET /api/company-settings/logo/ispl still
-// correctly returns exists:false until the user uploads, so the "Upload
-// your logo" UI state stays accurate.
-app.get('/logo-ispl.png', (req, res, next) => {
-  const userLogo = path.join(__dirname, 'public', 'logo-ispl.png');
-  if (fs.existsSync(userLogo)) return next();
-  res.sendFile(path.join(__dirname, 'public', 'logo_kj.png'));
+// through to the bundled default (logo_kj.png). The upload widget
+// writes to logo-ispl.png in the persistent volume (or /public on
+// local installs), and GET /api/company-settings/logo/ispl still
+// returns exists:false until the user uploads, so the "Upload your
+// logo" UI state stays accurate.
+app.get('/logo-ispl.png', (req, res) => {
+  const userLogo = _resolveLogoPath('logo-ispl.png');
+  if (userLogo) return res.sendFile(userLogo);
+  const fallback = _resolveLogoPath('logo_kj.png');
+  if (fallback) return res.sendFile(fallback);
+  res.status(404).end();
+});
+// Mirror handler for ASP logo — without this, an uploaded
+// logo-asp.png in the persistent dir would never be served (the
+// static middleware only knows about /public).
+app.get('/logo-asp.png', (req, res, next) => {
+  const userLogo = _resolveLogoPath('logo-asp.png');
+  if (userLogo) return res.sendFile(userLogo);
+  next();   // fall through to static-serve if /public has the file
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1093,9 +1111,13 @@ app.put('/api/company-presets/:code', requireSettingsWrite, (_req, res) => {
 // e-Trade-only build: a single 'ispl' logo. The 'asp' slot is preserved so
 // older client code that still POSTs there gets a clean error rather than
 // an unhandled exception.
+// Upload destinations — _logoWritePath returns the persistent path
+// (SPICE_DATA_DIR/logos/X) on cloud installs and /public/X on local /
+// Electron installs. Both branches make uploads survive what they need
+// to survive in their respective deployment models.
 const LOGO_FILES = {
-  ispl: path.join(__dirname, 'public', 'logo-ispl.png'),
-  asp:  path.join(__dirname, 'public', 'logo-asp.png'),
+  ispl: _logoWritePath('logo-ispl.png'),
+  asp:  _logoWritePath('logo-asp.png'),
 };
 app.post('/api/company-settings/logo/:which', requireSettingsWrite, upload.single('file'), (req, res) => {
   const which = req.params.which;
@@ -7686,11 +7708,9 @@ app.get('/api/reports/summary-pdf/:auctionId', (req, res, next) => {
     [auctionId, ...bParamsPdf]
   );
 
-  // Logo for the header — spice-config single-company convention.
-  const logoPath = (function () {
-    const p = path.join(__dirname, 'public', 'logo-ispl.png');
-    return fs.existsSync(p) ? p : null;
-  })();
+  // Logo for the header — resolves persistent-volume upload first,
+  // bundled default second, null if neither exists.
+  const logoPath = _resolveLogoPath('logo-ispl.png') || _resolveLogoPath('logo_kj.png');
 
   const PDFDocument = require('pdfkit');
   const doc = new PDFDocument({ size: 'A4', margin: 40 });

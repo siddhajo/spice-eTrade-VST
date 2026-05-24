@@ -565,13 +565,14 @@ function generateCropReceiptPDF(lot, cfg) {
   doc.fontSize(8).font('Helvetica').text(`Sl.No: ${lot.crop || ''}`, x + w - 100, y - 10, { width: 90, align: 'right' });
 
   // ── Logo (settings-driven; same file the sales invoice uses) ──
-  const fsMod = require('fs');
-  const pathMod = require('path');
+  // resolveLogoPath checks the persistent volume first so cloud
+  // uploads aren't shadowed by the bundled default of the same name.
+  const { resolveLogoPath: _rlp1 } = require('./logo-paths');
   const candidates = ['logo-ispl.png', 'logo_kj.png', 'logo-asp.png'];
   let logoDrawn = false;
   for (const f of candidates) {
-    const p = pathMod.join(__dirname, 'public', f);
-    if (fsMod.existsSync(p)) {
+    const p = _rlp1(f);
+    if (p) {
       try { doc.image(p, x + 6, y - 2, { fit: [44, 44] }); logoDrawn = true; break; }
       catch (_) { /* fall through */ }
     }
@@ -868,13 +869,14 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
                   && false; // e-Trade-only build: no sister-company context
   const logoFile = useASPLogo ? 'logo-asp.png' : 'logo-ispl.png';
   const fs = require('fs');
-  const _pathMod = require('path');
+  const { resolveLogoPath: _rlp2 } = require('./logo-paths');
   // Try the configured logo first; fall through to the bundled default
   // (logo_kj.png) so invoices still get a logo before the user uploads.
-  let logoPath = _pathMod.join(__dirname, 'public', logoFile);
-  if (!fs.existsSync(logoPath)) logoPath = _pathMod.join(__dirname, 'public', 'logo_kj.png');
+  // resolveLogoPath checks the persistent volume first so an uploaded
+  // logo always wins over the bundled stale default.
+  let logoPath = _rlp2(logoFile) || _rlp2('logo_kj.png');
   let logoDrawn = false;
-  if (fs.existsSync(logoPath)) {
+  if (logoPath && fs.existsSync(logoPath)) {
     try {
       doc.image(logoPath, leftX + 4, topY + 4, { fit: [60, 60] });
       logoDrawn = true;
@@ -1791,10 +1793,10 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
   const headerStartY = y;
   // Logo: Bill of Supply is always issued by the sister, so always use the sister's
   // logo. Optional — falls through silently if the file isn't present.
-  const _logoPath = require('path').join(__dirname, 'public', 'logo-asp.png');
+  const _logoPath = require('./logo-paths').resolveLogoPath('logo-asp.png');
   const _fs = require('fs');
   let logoOffsetX = 0;
-  if (_fs.existsSync(_logoPath)) {
+  if (_logoPath && _fs.existsSync(_logoPath)) {
     try {
       doc.image(_logoPath, x0 + 6, headerStartY, { fit: [60, 60] });
       logoOffsetX = 0; // logo lives in left gutter — text still centered
