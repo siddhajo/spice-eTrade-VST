@@ -2751,6 +2751,113 @@ app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
   res.json({ allocations: saved });
 });
 
+// ══════════════════════════════════════════════════════════════
+// GENERATION LOCK — once any invoice/purchase/bill/debit-note has
+// been generated for a trade, the matching "Generate" actions are
+// blocked. Admin can grant ONE regeneration at a time by inserting
+// a row into generation_overrides; the row is consumed (deleted)
+// the first time the corresponding generate endpoint runs.
+//
+// Doc types: 'invoices' | 'purchases' | 'bills' | 'debit_notes'.
+// Payments aren't generated (they're a derived view of lots) so
+// they're outside this gate.
+// ══════════════════════════════════════════════════════════════
+const _GEN_TABLE = {
+  invoices:    'invoices',
+  purchases:   'purchases',
+  bills:       'bills',
+  debit_notes: 'debit_notes',
+};
+function _hasGeneratedDocs(db, docType, auctionId) {
+  const table = _GEN_TABLE[docType];
+  if (!table || !auctionId) return false;
+  return !!db.get(`SELECT 1 FROM ${table} WHERE auction_id = ? LIMIT 1`, [auctionId]);
+}
+function _getGenerationOverride(db, docType, auctionId) {
+  if (!auctionId) return null;
+  return db.get(
+    'SELECT auction_id, doc_type, granted_at, granted_by FROM generation_overrides WHERE auction_id = ? AND doc_type = ?',
+    [auctionId, docType]
+  );
+}
+function _consumeGenerationOverride(db, docType, auctionId) {
+  if (!auctionId) return;
+  db.run('DELETE FROM generation_overrides WHERE auction_id = ? AND doc_type = ?', [auctionId, docType]);
+}
+// Pre-flight gate check used at the top of every generate endpoint.
+// Returns { allowed: true } when (a) no prior docs exist or (b) an
+// admin override is present (which is consumed here, one-shot).
+// Returns { allowed: false, error } with a 412 payload to send.
+function _checkGenerationGate(db, docType, auctionId) {
+  if (!auctionId) return { allowed: true };
+  if (!_hasGeneratedDocs(db, docType, auctionId)) return { allowed: true };
+  const override = _getGenerationOverride(db, docType, auctionId);
+  if (override) {
+    _consumeGenerationOverride(db, docType, auctionId);
+    return { allowed: true, usedOverride: true };
+  }
+  const labels = {
+    invoices: 'Invoices', purchases: 'Purchases',
+    bills: 'Bills of Supply', debit_notes: 'Debit Notes',
+  };
+  const label = labels[docType] || docType;
+  return {
+    allowed: false,
+    error: {
+      error: 'Generation locked',
+      detail: `${label} have already been generated for this trade. An admin must click 🔓 Allow regeneration before another generate can run.`,
+      auctionId, docType, gate: 'generation',
+    },
+  };
+}
+
+// Status endpoint — drives the client's button-disable state.
+// Returns { invoices: {has, override}, purchases:{...}, ... } per doc type.
+app.get('/api/auctions/:id/generation-status', requireView, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  if (!auctionId) return res.status(400).json({ error: 'Invalid auction id' });
+  const out = {};
+  for (const docType of Object.keys(_GEN_TABLE)) {
+    out[docType] = {
+      has: _hasGeneratedDocs(db, docType, auctionId),
+      override: !!_getGenerationOverride(db, docType, auctionId),
+    };
+  }
+  res.json({ auctionId, ...out });
+});
+
+// Admin: grant one regeneration for (auction, doc_type). Idempotent —
+// re-granting before consumption is a no-op (PRIMARY KEY collision is
+// handled by INSERT OR REPLACE).
+app.post('/api/auctions/:id/generation-override', requireAdmin, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const docType = String(req.body.docType || '').trim();
+  if (!auctionId) return res.status(400).json({ error: 'Invalid auction id' });
+  if (!_GEN_TABLE[docType]) return res.status(400).json({ error: `Invalid docType: ${docType}` });
+  const grantedBy = (req.user && (req.user.username || req.user.name)) || 'admin';
+  db.run(
+    `INSERT OR REPLACE INTO generation_overrides
+       (auction_id, doc_type, granted_at, granted_by)
+       VALUES (?, ?, datetime('now','localtime'), ?)`,
+    [auctionId, docType, grantedBy]
+  );
+  res.json({ ok: true, auctionId, docType, grantedBy });
+});
+
+// Admin: revoke an unused override. Useful if admin clicks unlock by
+// mistake and wants to take it back before the operator regenerates.
+app.delete('/api/auctions/:id/generation-override', requireAdmin, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  const docType = String(req.body.docType || '').trim();
+  if (!auctionId) return res.status(400).json({ error: 'Invalid auction id' });
+  if (!_GEN_TABLE[docType]) return res.status(400).json({ error: `Invalid docType: ${docType}` });
+  _consumeGenerationOverride(db, docType, auctionId);
+  res.json({ ok: true, auctionId, docType });
+});
+
 // Auto-fill allocations from existing lots. Walks every lot in the
 // auction, groups uncovered ones by (branch, prefix), and APPENDS one
 // new allocation per group covering 001..999 (or higher if any
@@ -4167,8 +4274,11 @@ app.post('/api/invoices/generate/:auctionId',
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
   (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionIdForGate = parseInt(req.params.auctionId, 10);
+  const _gen = _checkGenerationGate(db, 'invoices', auctionIdForGate);
+  if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { saleType, buyerCode, invoiceNo } = req.body;
-  
+
   if (!saleType || !buyerCode || !invoiceNo) {
     return res.status(400).json({ error: 'saleType, buyerCode, and invoiceNo are required' });
   }
@@ -4385,6 +4495,9 @@ app.post('/api/invoices/generate-all/:auctionId',
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
   (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionIdForGate = parseInt(req.params.auctionId, 10);
+  const _gen = _checkGenerationGate(db, 'invoices', auctionIdForGate);
+  if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { startInvoiceNo, saleType } = req.body;
   
   let nextNo = parseInt(startInvoiceNo);
@@ -5166,6 +5279,9 @@ app.post('/api/purchases/generate/:auctionId',
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
   (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionIdForGate = parseInt(req.params.auctionId, 10);
+  const _gen = _checkGenerationGate(db, 'purchases', auctionIdForGate);
+  if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { sellerName, invoiceNo } = req.body;
   const invoice = buildPurchaseInvoice(db, req.params.auctionId, sellerName, cfg);
   if (!invoice) return res.status(404).json({ error: 'No data for this seller' });
@@ -5271,6 +5387,9 @@ app.post('/api/purchases/generate-all/:auctionId',
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
   (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionIdForGate = parseInt(req.params.auctionId, 10);
+  const _gen = _checkGenerationGate(db, 'purchases', auctionIdForGate);
+  if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { startInvoiceNo } = req.body;
   
   let nextNo = parseInt(startInvoiceNo);
@@ -5607,6 +5726,9 @@ app.post('/api/bills/generate/:auctionId',
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
   (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionIdForGate = parseInt(req.params.auctionId, 10);
+  const _gen = _checkGenerationGate(db, 'bills', auctionIdForGate);
+  if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { sellerName, billNo } = req.body;
   
   if (!sellerName || !billNo) {
@@ -5671,6 +5793,9 @@ app.post('/api/bills/generate-all/:auctionId',
   requirePriceChecked(req => parseInt(req.params.auctionId, 10)),
   (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionIdForGate = parseInt(req.params.auctionId, 10);
+  const _gen = _checkGenerationGate(db, 'bills', auctionIdForGate);
+  if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { startBillNo } = req.body;
   
   let nextNo = parseInt(startBillNo);
@@ -5929,6 +6054,14 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
         gate: 'price_check',
       });
     }
+  }
+
+  // Generation lock: once any debit note exists for this trade the
+  // generate is blocked until an admin grants a one-shot override.
+  const _dnAuc = db.get('SELECT id FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
+  if (_dnAuc) {
+    const _gen = _checkGenerationGate(db, 'debit_notes', _dnAuc.id);
+    if (!_gen.allowed) return res.status(412).json(_gen.error);
   }
 
   // Look up the purchase. We find ALL rows with this purchno (in case of
@@ -6190,6 +6323,16 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
         auctionId: ga.id,
         gate: 'price_check',
       });
+    }
+  }
+
+  // Generation lock — admin must grant an override before re-running
+  // generate-all once any debit note already exists for this trade.
+  {
+    const _dnAuc = db.get('SELECT id FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
+    if (_dnAuc) {
+      const _gen = _checkGenerationGate(db, 'debit_notes', _dnAuc.id);
+      if (!_gen.allowed) return res.status(412).json(_gen.error);
     }
   }
 

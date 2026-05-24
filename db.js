@@ -240,6 +240,22 @@ async function initDb() {
     price_check_first_passed_at TEXT DEFAULT ''
   )`);
 
+  // ── GENERATION OVERRIDES ──────────────────────────────────────
+  // Per-trade, per-doc-type "admin grants one regeneration" rows.
+  // Each row authorizes a single subsequent generate call for that
+  // (auction_id, doc_type) and is consumed (deleted) when the
+  // generation endpoint runs successfully. Once consumed, the
+  // generate buttons re-lock until admin grants again. Without a
+  // row, generation is allowed by default; the row only exists when
+  // there's an active "skip the already-generated lock" allowance.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS generation_overrides (
+    auction_id INTEGER NOT NULL,
+    doc_type   TEXT NOT NULL,
+    granted_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    granted_by TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (auction_id, doc_type)
+  )`);
+
   // ── LOTS (CPA1.DBF — main lot data, before + after trade) ─
   wrapped.exec(`CREATE TABLE IF NOT EXISTS lots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

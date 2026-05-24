@@ -3533,8 +3533,11 @@ input[type="search"]:focus{
 
           <!-- Create group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-inv-one" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenInvModal()">+ Generate Invoice</button>
-            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-inv-all" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('invoices')">⚡ Generate for All Buyers</button>
+            <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-inv-one" data-gen-doctype="invoices" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenInvModal()">+ Generate Invoice</button>
+            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-inv-all" data-gen-doctype="invoices" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('invoices')">⚡ Generate for All Buyers</button>
+            <!-- Admin-only unlock button — shown by JS only when an existing
+                 generation is blocking a re-run. Grants ONE regenerate. -->
+            <button class="needs-admin btn" data-gen-admin-unlock="invoices" style="display:none !important;height:38px;padding:0 14px;background:#FEF3C7;color:#7C2D12;border:1px solid #F59E0B;font-weight:600" onclick="adminAllowRegeneration('invoices')" title="Admin: clear the lock so the operator can generate invoices again for this trade. One-shot — the lock re-engages after the next successful generate.">🔓 Allow regeneration</button>
           </div>
 
           <!-- Print group -->
@@ -3626,8 +3629,9 @@ input[type="search"]:focus{
           </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-pur-one" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenPurModal()">+ Generate Purchase</button>
-            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-pur-all" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('purchases')">⚡ Generate for All Dealers</button>
+            <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-pur-one" data-gen-doctype="purchases" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenPurModal()">+ Generate Purchase</button>
+            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-pur-all" data-gen-doctype="purchases" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('purchases')">⚡ Generate for All Dealers</button>
+            <button class="needs-admin btn" data-gen-admin-unlock="purchases" style="display:none !important;height:38px;padding:0 14px;background:#FEF3C7;color:#7C2D12;border:1px solid #F59E0B;font-weight:600" onclick="adminAllowRegeneration('purchases')" title="Admin: clear the lock so the operator can generate purchases again for this trade. One-shot — the lock re-engages after the next successful generate.">🔓 Allow regeneration</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -4012,8 +4016,9 @@ input[type="search"]:focus{
           </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="btn btn-g needs-price-check" id="btn-gen-bill-one" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('gen-bill-modal')">+ Generate Bill</button>
-            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-bill-all" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('bills')">⚡ Generate for All Agri Sellers</button>
+            <button class="btn btn-g needs-price-check" id="btn-gen-bill-one" data-gen-doctype="bills" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('gen-bill-modal')">+ Generate Bill</button>
+            <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-bill-all" data-gen-doctype="bills" style="height:38px;padding:0 16px;font-weight:600" onclick="openGenAllModal('bills')">⚡ Generate for All Agri Sellers</button>
+            <button class="needs-admin btn" data-gen-admin-unlock="bills" style="display:none !important;height:38px;padding:0 14px;background:#FEF3C7;color:#7C2D12;border:1px solid #F59E0B;font-weight:600" onclick="adminAllowRegeneration('bills')" title="Admin: clear the lock so the operator can generate bills again for this trade. One-shot — the lock re-engages after the next successful generate.">🔓 Allow regeneration</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -4047,12 +4052,13 @@ input[type="search"]:focus{
                purchase invoice number (modal). Generates ONE DN for the
                specified purchase, validated to belong to the selected
                trade. -->
-          <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-dn-one" onclick="openGenDebitSingleModal()">+ Generate Debit Note</button>
+          <button class="needs-invoice-write btn btn-g needs-price-check" id="btn-gen-dn-one" data-gen-doctype="debit_notes" onclick="openGenDebitSingleModal()">+ Generate Debit Note</button>
 
           <!-- Generate All (trade-scoped): input = trade (dropdown).
                Generates one DN per eligible purchase IN THAT TRADE ONLY.
                No cross-trade data. -->
-          <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-dn-all" onclick="openGenDebitAllModal()">⚡ Generate All</button>
+          <button class="needs-invoice-write btn btn-a needs-price-check" id="btn-gen-dn-all" data-gen-doctype="debit_notes" onclick="openGenDebitAllModal()">⚡ Generate All</button>
+          <button class="needs-admin btn" data-gen-admin-unlock="debit_notes" style="display:none !important;height:38px;padding:0 14px;background:#FEF3C7;color:#7C2D12;border:1px solid #F59E0B;font-weight:600" onclick="adminAllowRegeneration('debit_notes')" title="Admin: clear the lock so the operator can generate debit notes again for this trade. One-shot — the lock re-engages after the next successful generate.">🔓 Allow regeneration</button>
 
           <!-- Bulk actions on ticked rows. Hidden until at least one row
                is selected; the count badge updates live as boxes toggle. -->
@@ -12572,6 +12578,93 @@ async function loadDeleteLog(){
   }
 }
 
+// ── Generation lock (per-trade, per-doc-type) ───────────────────
+// Once any invoice/purchase/bill/DN exists for a trade, the matching
+// Generate buttons are disabled with a tooltip. Admin can click the
+// "🔓 Allow regeneration" button (visible only when locked AND user
+// is admin) to grant a one-shot unlock. The server enforces the same
+// rule; the buttons are a courtesy.
+//
+// Coexists with the price-check gate via data-* markers — each gate
+// owns its own data-X-locked attribute, and the button is enabled
+// only when no gate has it locked.
+const _GEN_LOCK_TOOLTIP = {
+  invoices:    'Invoices have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  purchases:   'Purchase invoices have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  bills:       'Bills of supply have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  debit_notes: 'Debit notes have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
+};
+const _GEN_STATUS_CACHE = new Map();   // auctionId → {status, ts}
+function _genApplyLock(btn, locked, reason) {
+  if (!btn) return;
+  if (!btn.dataset.genOrigTitle && btn.title) btn.dataset.genOrigTitle = btn.title;
+  if (locked) {
+    btn.setAttribute('data-gen-locked', '1');
+    btn.disabled = true;
+    btn.style.opacity = '0.55';
+    btn.style.cursor = 'not-allowed';
+    btn.title = reason || 'Already generated for this trade.';
+  } else {
+    btn.removeAttribute('data-gen-locked');
+    // Only re-enable if no other gate (price-check) still wants it locked.
+    if (!btn.hasAttribute('data-pc-locked')) {
+      btn.disabled = false;
+      btn.style.opacity = '';
+      btn.style.cursor = '';
+      btn.title = btn.dataset.genOrigTitle || '';
+    }
+  }
+}
+async function refreshGenerationLocks(auctionId, tabScope, docTypes) {
+  const tabEl = tabScope ? document.querySelector(tabScope) : document;
+  if (!tabEl) return;
+  const types = Array.isArray(docTypes) ? docTypes : [docTypes];
+  let status = null;
+  if (auctionId) {
+    try {
+      status = await j(`/api/auctions/${encodeURIComponent(auctionId)}/generation-status`);
+      _GEN_STATUS_CACHE.set(String(auctionId), { status, ts: Date.now() });
+    } catch (_) { status = null; }
+  }
+  for (const dt of types) {
+    const s = status && status[dt];
+    const locked = !!(s && s.has && !s.override);
+    const reason = _GEN_LOCK_TOOLTIP[dt] || 'Already generated for this trade.';
+    tabEl.querySelectorAll(`[data-gen-doctype="${dt}"]`).forEach(btn => _genApplyLock(btn, locked, reason));
+    const adminBtn = tabEl.querySelector(`[data-gen-admin-unlock="${dt}"]`);
+    if (adminBtn) _bulkBtnSetVisible(adminBtn, locked);
+  }
+}
+async function adminAllowRegeneration(docType) {
+  // Find the current auction for the tab the user is on. The button is
+  // tab-scoped, so we look up the ancestor tab and read its auction
+  // selector. Falls back to global lookup if scope detection misses.
+  const adminBtn = document.querySelector(`[data-gen-admin-unlock="${docType}"]:not([style*="display: none"])`);
+  let auctionId = null, tabScope = null;
+  if (adminBtn) {
+    const tabEl = adminBtn.closest('.tc');
+    if (tabEl) {
+      tabScope = '#' + tabEl.id;
+      // Each tab has its own auction-selector id (inv-auction, pur-auction, etc.)
+      const sel = tabEl.querySelector('select[id$="-auction"], select[id$="-auctions"], select[id$="auc"]');
+      if (sel && sel.value) auctionId = sel.value;
+    }
+  }
+  if (!auctionId) { toast('Pick a trade first'); return; }
+  const label = ({invoices:'invoices', purchases:'purchase invoices', bills:'bills', debit_notes:'debit notes'})[docType] || docType;
+  if (!confirm(`Allow operator to regenerate ${label} for this trade?\n\nThis is a ONE-SHOT unlock — the gate re-engages automatically after the next successful generate.`)) return;
+  try {
+    await j(`/api/auctions/${encodeURIComponent(auctionId)}/generation-override`, {
+      method: 'POST',
+      body: JSON.stringify({ docType }),
+    });
+    toast(`🔓 ${label.charAt(0).toUpperCase() + label.slice(1)} generation unlocked — one regenerate allowed ✓`);
+    await refreshGenerationLocks(auctionId, tabScope, [docType]);
+  } catch (e) {
+    showError(e);
+  }
+}
+
 // Force-toggle visibility on a bulk-action button. The permission CSS
 // (.needs-lot-write / .needs-admin / .needs-delete, etc.) applies
 // `display: inline-flex !important` to authorized users, which would
@@ -14582,6 +14675,7 @@ async function loadInvoices(opts){
   if (typeof showSkeleton === 'function') showSkeleton('invoices-list', 8);
   const aid=document.getElementById('inv-auction')?.value;
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-invoices');
+  if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(aid, '#tc-invoices', ['invoices']);
   // Sale-type filter — empty means no filter. Read live each load so a
   // dropdown change re-fires loadInvoices() and the URL picks up the
   // new value without needing a separate state variable.
@@ -15609,6 +15703,7 @@ async function loadPurchases(opts){
   if (!opts || !opts.keepPage) _purchasesPager.page = 1;
   const aid=document.getElementById('pur-auction')?.value;
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-purchases');
+  if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(aid, '#tc-purchases', ['purchases']);
   // Sale-type filter for purchases — same pattern as invoices.
   // Server derives the type from the row's GST columns since
   // purchases don't carry a sale column directly.
@@ -16493,6 +16588,7 @@ async function loadBills(opts){
   if (!opts || !opts.keepPage) _billsPager.page = 1;
   const __billAid = document.getElementById('bill-auction')?.value;
   if (typeof pcRefreshGate === 'function') pcRefreshGate(__billAid, '#tc-bills');
+  if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(__billAid, '#tc-bills', ['bills']);
   // Populate the branch dropdown from Settings → Branches & Contacts so
   // every configured branch shows up (even ones with no bills yet).
   // Done on every load so new branches added in Settings appear
@@ -16633,6 +16729,7 @@ async function loadDebitNotes(opts){
   if (!opts || !opts.keepPage) _debitPager.page = 1;
   const aid = document.getElementById('dn-auction')?.value || '';
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-debit');
+  if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(aid, '#tc-debit', ['debit_notes']);
   // Search filters within the currently-selected trade. The trade
   // filter still applies client-side (debit_notes has no auction_id
   // column — only `ano`, which we resolve from the dropdown option).
