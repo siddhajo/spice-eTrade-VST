@@ -211,6 +211,13 @@ const DEFAULTS = [
   // affects how dates are rendered. Tally XML keeps its own YYYYMMDD
   // format because Tally itself requires it (machine-to-machine).
   { key: 'date_format',     value: 'DD/MM/YYYY',     category: 'display',   label: 'Date format',              type: 'select', options: ['DD/MM/YYYY','DD-MM-YYYY','YYYY-MM-DD'] },
+  // Default rows per page for every paginated table (Sellers, Buyers,
+  // Trades, Lots, Sales, Purchases, Payments, Bills, Debit Notes).
+  // Individual users can still override per-list via the dropdown in
+  // each pager footer — that choice is stored in localStorage and wins
+  // over this default. New installs / users with no override yet use
+  // this value as their starting size.
+  { key: 'default_page_size', value: '50',            category: 'display',   label: 'Default rows per page',    type: 'select', options: ['20','50','100','200'] },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
