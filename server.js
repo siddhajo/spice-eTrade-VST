@@ -2711,26 +2711,28 @@ app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
     }
   }
 
-  // Safety: every lot that's already been entered must remain covered
-  // by SOME allocation in the new set. Previously the guard checked
-  // "is this old allocation still in the new set by id?" which falsely
-  // rejected the marked-for-delete chunk-emit flow — splitting one
-  // alloc into two smaller ones (around dropped chips) doesn't lose
-  // any used lots, but the old guard treated it as a removal.
-  //
-  // New rule: for every used lot, find a matching alloc in the
-  // incoming `allocations` list. If none, the save would orphan that
-  // lot — refuse.
+  // Safety: a save must not strip coverage from a lot that is currently
+  // covered. We compute orphans BEFORE and AFTER the proposed change.
+  // Only lots that become NEWLY orphaned (covered now, uncovered after)
+  // block the save. Lots already orphaned before the save — typically
+  // the import-before-allocate case where lots entered the DB without
+  // any matching allocation — stay orphaned and don't block; the user
+  // can fix those separately by adding ranges that cover them.
   const existing = db.all('SELECT * FROM lot_allocations WHERE auction_id = ?', [auctionId]);
   const usedLots = db.all('SELECT lot_no, branch FROM lots WHERE auction_id = ?', [auctionId]);
-  const orphans = [];
+  const orphansBefore = new Set();
   for (const ul of usedLots) {
-    const covered = allocations.some(a => isLotInRange(ul.lot_no, a.start_lot, a.end_lot));
-    if (!covered) orphans.push(ul.lot_no);
+    const coveredBefore = existing.some(a => isLotInRange(ul.lot_no, a.start_lot, a.end_lot));
+    if (!coveredBefore) orphansBefore.add(ul.lot_no);
   }
-  if (orphans.length > 0) {
+  const newlyOrphaned = [];
+  for (const ul of usedLots) {
+    const coveredAfter = allocations.some(a => isLotInRange(ul.lot_no, a.start_lot, a.end_lot));
+    if (!coveredAfter && !orphansBefore.has(ul.lot_no)) newlyOrphaned.push(ul.lot_no);
+  }
+  if (newlyOrphaned.length > 0) {
     return res.status(400).json({
-      error: `Cannot save — ${orphans.length} entered lot${orphans.length === 1 ? '' : 's'} would be orphaned: ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? '…' : ''}`
+      error: `Cannot save — ${newlyOrphaned.length} lot${newlyOrphaned.length === 1 ? '' : 's'} that ${newlyOrphaned.length === 1 ? 'is' : 'are'} currently covered would lose ${newlyOrphaned.length === 1 ? 'its' : 'their'} branch assignment: ${newlyOrphaned.slice(0, 5).join(', ')}${newlyOrphaned.length > 5 ? '…' : ''}. Adjust the ranges so they still include ${newlyOrphaned.length === 1 ? 'this lot' : 'these lots'}.`
     });
   }
 
@@ -2747,6 +2749,62 @@ app.post('/api/auctions/:id/allocations', requireAuctionWrite, (req, res) => {
     [auctionId]
   );
   res.json({ allocations: saved });
+});
+
+// Auto-fill allocations from existing lots. Walks every lot in the
+// auction, groups uncovered ones by (branch, prefix), and APPENDS one
+// new allocation per group covering 001..999 (or higher if any
+// uncovered lot exceeds that). Existing allocations are kept as-is so
+// the operator's manual setup isn't overwritten.
+//
+// Idempotent: if every lot is already covered, returns the existing
+// list with `created: 0`. Useful as a one-click rescue for trades that
+// arrived with imported lots and no allocations — the same fill the
+// import endpoint now applies, available after the fact for older
+// data.
+app.post('/api/auctions/:id/allocations/auto-fill', requireAuctionWrite, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.id, 10);
+  if (!auctionId) return res.status(400).json({ error: 'Invalid auction id' });
+  const auc = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+  if (!auc) return res.status(404).json({ error: 'Auction not found' });
+
+  const existing = db.all('SELECT * FROM lot_allocations WHERE auction_id = ?', [auctionId]);
+  const lots = db.all('SELECT lot_no, branch FROM lots WHERE auction_id = ?', [auctionId]);
+
+  // Same grouping logic as the post-import auto-allocate so the two
+  // paths converge on identical ranges.
+  const groups = new Map(); // key = `${branch}||${prefix}` → { branch, prefix, padLen, max }
+  for (const l of lots) {
+    const covered = existing.some(a => isLotInRange(l.lot_no, a.start_lot, a.end_lot));
+    if (covered) continue;
+    const p = parseLotNo(l.lot_no);
+    if (!p) continue;
+    const branch = String(l.branch || '').trim();
+    const key = `${branch}||${p.prefix}`;
+    const g = groups.get(key);
+    if (!g) groups.set(key, { branch, prefix: p.prefix, padLen: p.padLen, max: p.num });
+    else if (p.num > g.max) g.max = p.num;
+  }
+
+  let created = 0;
+  for (const g of groups.values()) {
+    const end = g.max > 999 ? 9999 : 999;
+    const padLen = Math.max(g.padLen, String(end).length);
+    const startLot = buildLotNo(g.prefix, 1, padLen);
+    const endLot   = buildLotNo(g.prefix, end, padLen);
+    db.run(
+      'INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+      [auctionId, g.branch, startLot, endLot]
+    );
+    created++;
+  }
+
+  const allocations = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot',
+    [auctionId]
+  );
+  res.json({ created, allocations });
 });
 
 // Allocation stats (used/total per branch + per-lot grid)
@@ -3189,6 +3247,57 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
       }
     }
 
+    // Auto-allocate (full import only). For each auction that received
+    // NEW lots in this import AND has no existing allocations, create
+    // one allocation per (branch, lot-prefix) pair covering 001..999 of
+    // that prefix (or 0001..9999 if any imported lot exceeds 999). This
+    // saves operators from the orphan-on-first-allocation-edit trap —
+    // without it, imported trades start with zero coverage and any
+    // later attempt to add allocations runs into the "lots would be
+    // orphaned" guard.
+    //
+    // Skipped in 'price' mode (it only updates existing lots, never
+    // adds new ones, so coverage status doesn't change).
+    //
+    // The empty-string branch is included so trades imported without a
+    // BR column still get covered. The lot-entry guard treats blank
+    // branch as "no allocation enforcement" anyway, but having a row
+    // means the Allocations modal isn't blank for the user.
+    let autoAllocCreated = 0;
+    if (mode !== 'price') {
+      for (const auc of auctionCache.values()) {
+        if (!auc || !auc.id) continue;
+        const hasAny = db.get('SELECT 1 FROM lot_allocations WHERE auction_id = ? LIMIT 1', [auc.id]);
+        if (hasAny) continue;     // respect existing setup
+        const lots = db.all('SELECT lot_no, branch FROM lots WHERE auction_id = ?', [auc.id]);
+        // Group lots by (branch, prefix) → track the max numeric part.
+        const groups = new Map(); // key = `${branch}||${prefix}` → { branch, prefix, padLen, max }
+        for (const l of lots) {
+          const p = parseLotNo(l.lot_no);
+          if (!p) continue;
+          const branch = String(l.branch || '').trim();
+          const key = `${branch}||${p.prefix}`;
+          const g = groups.get(key);
+          if (!g) groups.set(key, { branch, prefix: p.prefix, padLen: p.padLen, max: p.num });
+          else if (p.num > g.max) g.max = p.num;
+        }
+        for (const g of groups.values()) {
+          // End range = 999 (or 9999 if anything went above), so future
+          // hand-entered lots up to that ceiling are covered without
+          // needing a second allocation save.
+          const end = g.max > 999 ? 9999 : 999;
+          const padLen = Math.max(g.padLen, String(end).length);
+          const startLot = buildLotNo(g.prefix, 1, padLen);
+          const endLot   = buildLotNo(g.prefix, end, padLen);
+          db.run(
+            'INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+            [auc.id, g.branch, startLot, endLot]
+          );
+          autoAllocCreated++;
+        }
+      }
+    }
+
     // Build auction breakdown for the response
     const auctionBreakdown = [];
     for (const [key, count] of auctionStats) {
@@ -3199,12 +3308,13 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
     auctionBreakdown.sort((a,b) => String(a.ano).localeCompare(String(b.ano), undefined, {numeric:true}));
 
     fs.unlink(req.file.path, () => {});
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       imported, updated, skipped, total: rows.length,
       auctionCount: auctionBreakdown.length,
       auctionBreakdown,
-      skipReasons 
+      autoAllocCreated,
+      skipReasons
     });
   } catch (e) {
     if (req.file) fs.unlink(req.file.path, () => {});
