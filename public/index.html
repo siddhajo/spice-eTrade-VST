@@ -6127,15 +6127,6 @@ async function applyFeatureFlags() {
   if (cfg && cfg.date_format) {
     window._dateFmt = String(cfg.date_format).toUpperCase();
   }
-  // Company-wide default rows per page. Stash on window and re-hydrate
-  // every pager so lists without a per-user override pick up the
-  // admin-chosen default. Pagers with a localStorage override are left
-  // alone — the user's per-list choice always wins.
-  const dps = parseInt(cfg && cfg.default_page_size, 10);
-  if (dps && typeof _PAGE_SIZE_OPTIONS !== 'undefined' && _PAGE_SIZE_OPTIONS.includes(dps)) {
-    window._defaultPageSize = dps;
-    if (typeof _hydratePagerSizes === 'function') _hydratePagerSizes();
-  }
 }
 
 // Public branding (no auth) — drives the login + topbar from settings.
@@ -12083,9 +12074,10 @@ const T_IDS={name:'t-name',cr:'t-cr',pan:'t-pan',tel:'t-tel',aadhar:'t-aadhar',p
 // function MUST be at module scope (not an arrow / closure) for the
 // inline handlers to resolve.
 // Allowed page-size options for the "Rows per page" dropdown that
-// renderPager emits. Keep small + medium + large + jumbo — covers
-// "I just want a few rows" through "fit everything on one page".
-const _PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+// renderPager emits. Covers "tiny preview" through "fit everything on
+// one page". Any persisted localStorage value outside this list is
+// ignored on hydrate so an old/invalid value can't poison the UI.
+const _PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200];
 
 // Registry: hostId → { state, gotoFn }. Populated by renderPager on
 // every render so the dropdown's inline onchange handler can find the
@@ -16777,23 +16769,14 @@ function gotoDebitPage(p){
   loadDebitNotes({ keepPage: true });
 }
 
-// Hydrate each pager's "rows per page" with the correct starting value.
-// Priority order, highest first:
-//   1. Per-list localStorage override (user picked from the dropdown)
-//   2. Company-wide default from Settings (Display → Default rows per
-//      page), stashed on window._defaultPageSize by applyFeatureFlags
-//   3. Hardcoded fallback (50)
-//
-// Called once at script-eval time so the initial tab render gets the
-// right page size, and AGAIN from applyFeatureFlags after the company
-// settings arrive — so pagers without a user override pick up an
-// admin-changed company default. Re-running it doesn't disturb pagers
-// that already have a user override; their localStorage value wins.
-function _getCompanyDefaultPageSize() {
-  const v = parseInt(window._defaultPageSize, 10);
-  return (v && _PAGE_SIZE_OPTIONS.includes(v)) ? v : 50;
-}
-function _hydratePagerSizes() {
+// One-shot: restore each pager's last-used "rows per page" from
+// localStorage so the user's per-list preference survives across
+// reloads. Runs once at script-eval time, AFTER every _xPager const
+// above is initialized but BEFORE any load fires (loads are tab-
+// activation triggered, which can't happen until the user interacts).
+// Anything stored that isn't in _PAGE_SIZE_OPTIONS is ignored so an
+// old invalid value can't poison the UI.
+(function _hydratePagerSizes() {
   const all = [
     ['traders-pager',   _tradersPager],
     ['buyers-pager',    _buyersPager],
@@ -16805,18 +16788,14 @@ function _hydratePagerSizes() {
     ['bills-pager',     _billsPager],
     ['debit-pager',     _debitPager],
   ];
-  const companyDefault = _getCompanyDefaultPageSize();
   for (const [hostId, state] of all) {
     if (!state) continue;
-    let size = companyDefault;
     try {
       const saved = parseInt(localStorage.getItem('pageSize:' + hostId), 10);
-      if (saved && _PAGE_SIZE_OPTIONS.includes(saved)) size = saved;   // user override wins
-    } catch (_) { /* localStorage may be blocked — fall through to companyDefault */ }
-    state.pageSize = size;
+      if (saved && _PAGE_SIZE_OPTIONS.includes(saved)) state.pageSize = saved;
+    } catch (_) { /* localStorage may be blocked — fall back to default */ }
   }
-}
-_hydratePagerSizes();   // initial: uses fallback 50 until settings arrive
+})();
 // loadDebitNotes — list view. Filters by the dn-auction dropdown's
 // selected trade ID (resolved to its `ano`) so users only see DNs for
 // the trade they're currently working on. With no selection, shows all.

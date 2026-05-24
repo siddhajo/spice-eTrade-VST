@@ -211,13 +211,6 @@ const DEFAULTS = [
   // affects how dates are rendered. Tally XML keeps its own YYYYMMDD
   // format because Tally itself requires it (machine-to-machine).
   { key: 'date_format',     value: 'DD/MM/YYYY',     category: 'display',   label: 'Date format',              type: 'select', options: ['DD/MM/YYYY','DD-MM-YYYY','YYYY-MM-DD'] },
-  // Default rows per page for every paginated table (Sellers, Buyers,
-  // Trades, Lots, Sales, Purchases, Payments, Bills, Debit Notes).
-  // Individual users can still override per-list via the dropdown in
-  // each pager footer — that choice is stored in localStorage and wins
-  // over this default. New installs / users with no override yet use
-  // this value as their starting size.
-  { key: 'default_page_size', value: '50',            category: 'display',   label: 'Default rows per page',    type: 'select', options: ['20','50','100','200'] },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
@@ -461,6 +454,13 @@ function initCompanySettings(db) {
   // identifier — no fabricated code appearing where they never typed
   // one.
   db.prepare("UPDATE company_settings SET value = '' WHERE key = 'logo' AND UPPER(COALESCE(value,'')) = 'ASP'").run();
+
+  // Drop the short-lived `default_page_size` row if a previous build
+  // seeded it. Per-list pagination is now managed entirely via the
+  // pager footer dropdown (localStorage); the company-wide default was
+  // removed because changes to it weren't propagating reliably and the
+  // footer-level control covers the use case on its own.
+  db.prepare("DELETE FROM company_settings WHERE key = 'default_page_size'").run();
 
   // Clear the legacy AMAZING SPICE PARK default that was seeded into
   // `tn_dispatch` by earlier builds. We only clear when the value
