@@ -12073,9 +12073,39 @@ const T_IDS={name:'t-name',cr:'t-cr',pan:'t-pan',tel:'t-tel',aadhar:'t-aadhar',p
 // `.name` is interpolated into the button's onclick attribute, so the
 // function MUST be at module scope (not an arrow / closure) for the
 // inline handlers to resolve.
+// Allowed page-size options for the "Rows per page" dropdown that
+// renderPager emits. Keep small + medium + large + jumbo — covers
+// "I just want a few rows" through "fit everything on one page".
+const _PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+
+// Registry: hostId → { state, gotoFn }. Populated by renderPager on
+// every render so the dropdown's inline onchange handler can find the
+// right pager state to mutate without each caller having to pass a
+// separate setSize callback. Re-registering is idempotent — the entry
+// is overwritten on each render, which is fine because state & gotoFn
+// are stable references.
+const _PAGERS = new Map();
+
+// Handler invoked from the dropdown. Mutates the pager state, persists
+// the choice per-host in localStorage (so the user's preference
+// survives reloads), and re-triggers a load via the gotoFn.
+function _pagerSetSize(hostId, newSize) {
+  const entry = _PAGERS.get(hostId);
+  if (!entry) return;
+  const size = parseInt(newSize, 10);
+  if (!size || size < 1) return;
+  entry.state.pageSize = size;
+  entry.state.page = 1;
+  try { localStorage.setItem('pageSize:' + hostId, String(size)); } catch (_) {}
+  if (typeof entry.gotoFn === 'function') entry.gotoFn(1);
+}
+
 function renderPager(hostId, state, gotoFn, query){
   const host = document.getElementById(hostId);
   if (!host) return;
+  // Re-register on every render so the size dropdown handler can find
+  // the live state object even after pager objects are reassigned.
+  _PAGERS.set(hostId, { state, gotoFn });
   const { page, pageSize, total, totalPages } = state;
   if (!total) {
     host.innerHTML = query
@@ -12088,8 +12118,22 @@ function renderPager(hostId, state, gotoFn, query){
   const fmt  = n => Number(n).toLocaleString();
   const caption = '<span>Showing <b>'+fmt(from)+'–'+fmt(to)+'</b> of <b>'+fmt(total)+'</b>' +
                   (query ? ' &middot; matching &ldquo;<i>'+esc(query)+'</i>&rdquo;' : '') + '</span>';
+  // "Rows per page" dropdown. Always shown when there's data so the
+  // user can switch sizes even on single-page lists (e.g. dropping
+  // from 100→20 to see pagination kick in). Persisted per-host via
+  // _pagerSetSize → localStorage.
+  const sizeSelect = '<select onchange="_pagerSetSize(\''+hostId+'\', this.value)" ' +
+    'style="height:30px;padding:0 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff;font-weight:600;cursor:pointer" ' +
+    'title="How many rows to show per page (saved for this list).">' +
+    _PAGE_SIZE_OPTIONS.map(n =>
+      '<option value="'+n+'"'+(n === pageSize ? ' selected' : '')+'>'+n+' / page</option>'
+    ).join('') +
+    '</select>';
   if (totalPages <= 1) {
-    host.innerHTML = caption;
+    // Single page — caption + size selector only (no Prev/Next).
+    host.innerHTML =
+      '<div>'+caption+'</div>' +
+      '<div style="display:flex;align-items:center;gap:6px">'+sizeSelect+'</div>';
     return;
   }
   // Page input lets the user jump to any page directly — vital for
@@ -12102,6 +12146,7 @@ function renderPager(hostId, state, gotoFn, query){
   host.innerHTML =
     '<div>'+caption+'</div>' +
     '<div style="display:flex;align-items:center;gap:6px">' +
+      sizeSelect +
       mk('« First', 1, page <= 1) +
       mk('‹ Prev',  page - 1, page <= 1) +
       '<span>Page <input type="number" min="1" max="'+totalPages+'" value="'+page+'" ' +
@@ -16722,6 +16767,34 @@ function gotoDebitPage(p){
   _debitPager.page = Math.max(1, Math.min(max, p|0));
   loadDebitNotes({ keepPage: true });
 }
+
+// One-shot: restore each pager's last-used "rows per page" from
+// localStorage so the user's preference survives across reloads.
+// Runs at script-eval time, AFTER every _xPager const above is
+// initialized but BEFORE any load fires (loads are tab-activation
+// triggered, which can't happen until the user interacts). Anything
+// stored that isn't in _PAGE_SIZE_OPTIONS is ignored so an old
+// invalid value can't poison the UI.
+(function _hydratePagerSizes() {
+  const all = [
+    ['traders-pager',   _tradersPager],
+    ['buyers-pager',    _buyersPager],
+    ['auctions-pager',  _auctionsPager],
+    ['lots-pager',      _lotsPager],
+    ['invoices-pager',  _invoicesPager],
+    ['purchases-pager', _purchasesPager],
+    ['payments-pager',  _paymentsPager],
+    ['bills-pager',     _billsPager],
+    ['debit-pager',     _debitPager],
+  ];
+  for (const [hostId, state] of all) {
+    if (!state) continue;
+    try {
+      const saved = parseInt(localStorage.getItem('pageSize:' + hostId), 10);
+      if (saved && _PAGE_SIZE_OPTIONS.includes(saved)) state.pageSize = saved;
+    } catch (_) { /* localStorage may be blocked — fall back to default */ }
+  }
+})();
 // loadDebitNotes — list view. Filters by the dn-auction dropdown's
 // selected trade ID (resolved to its `ano`) so users only see DNs for
 // the trade they're currently working on. With no selection, shows all.
