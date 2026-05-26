@@ -20038,7 +20038,36 @@ async function pcApplyCodeOnly(btn, lotId, fileCode){
   if (btn && btn.disabled && !before) {
     // pcApplyFix leaves btn.disabled=true only on success (✓ state).
     _pcKeepDb.add(Number(lotId));
+    if (_pcLastSummary) _pcRenderPreview(_pcLastSummary);
   }
+}
+
+// Reflect a successful apply into _pcLastSummary so banner totals and
+// the "Keep DB price for all N" button drop the resolved row right
+// away — without this, the row keeps its server_diff / server_empty
+// status client-side and "Keep DB price for all" still counts it,
+// even though the operator already took action.
+function _pcReflectApplied(lotId, appliedPrice, appliedCode){
+  if (!_pcLastSummary || !Array.isArray(_pcLastSummary.rows)) return;
+  const id = Number(lotId);
+  const rw = _pcLastSummary.rows.find(r => r && Number(r.lot_id) === id);
+  if (!rw) return;
+  if (appliedPrice != null) {
+    rw.db_price = Number(appliedPrice);
+    rw.diff = 0;
+    if (rw.status === 'server_diff' || rw.status === 'server_empty') {
+      rw.status = 'match';
+      rw.issues = (rw.issues || []).filter(x => x !== 'server_diff' && x !== 'server_empty');
+    }
+    // A manually-applied price supersedes any KEEP DB flag — the user
+    // has effectively chosen a value, not "keep whatever was in DB".
+    _pcKeepDb.delete(id);
+  }
+  if (appliedCode != null) {
+    rw.db_code = String(appliedCode).trim();
+    rw.code_status = 'match';
+  }
+  _pcRenderPreview(_pcLastSummary);
 }
 
 async function pcApplyFix(btn, lotId, fileCode, filePrice){
@@ -20078,6 +20107,7 @@ async function pcApplyFix(btn, lotId, fileCode, filePrice){
       btn.style.background = '#15803d';
       btn.style.borderColor = '#15803d';
     }
+    _pcReflectApplied(lotId, filePrice, fileCode);
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = origLabel; }
     if (typeof showError === 'function') showError(e);
