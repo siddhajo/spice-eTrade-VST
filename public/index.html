@@ -8803,18 +8803,38 @@ async function loadLeRecent(){
     const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
     const offset = (page - 1) * pageSize;
     const search = String(_le.recentSearch || '').trim();
-    // Backed by /api/lots's `name` LIKE filter so the search runs across
-    // the WHOLE trade, not just this page. Combined with paginated=1 so
-    // the server returns { rows, total } for the current window.
-    const qs = `paginated=1&limit=${pageSize}&offset=${offset}` +
-               (search ? `&name=${encodeURIComponent(search)}` : '');
-    const data = await j(`/api/lots/${aid}?${qs}`);
-    if (Array.isArray(data)) {
-      _le.recentLots  = data;
-      _le.recentTotal = data.length;
+    const tickActive = !!(_le.selectedForPrint && _le.selectedForPrint.size);
+
+    if (tickActive) {
+      // Bulk-tick is active — switch to client-side mode so we can
+      // always pin the ticked rows to the TOP of page 1, no matter
+      // where they live in the server's default lot_no DESC order.
+      // We fetch the whole trade (server returns a plain array when
+      // paginated isn't set), partition (ticked first), then slice
+      // client-side for the current page. A few hundred rows of JSON
+      // is fine for the field-staff workflow that triggered this.
+      const allUrl = `/api/lots/${aid}` + (search ? `?name=${encodeURIComponent(search)}` : '');
+      const all = await j(allUrl);
+      const list = Array.isArray(all) ? all : (Array.isArray(all && all.rows) ? all.rows : []);
+      const ticked = [], rest = [];
+      for (const l of list) (_le.selectedForPrint.has(l.id) ? ticked : rest).push(l);
+      const sorted = ticked.concat(rest);
+      _le.recentTotal = sorted.length;
+      _le.recentLots  = sorted.slice(offset, offset + pageSize);
     } else {
-      _le.recentLots  = Array.isArray(data.rows) ? data.rows : [];
-      _le.recentTotal = Number(data.total) || _le.recentLots.length;
+      // Backed by /api/lots's `name` LIKE filter so the search runs across
+      // the WHOLE trade, not just this page. Combined with paginated=1 so
+      // the server returns { rows, total } for the current window.
+      const qs = `paginated=1&limit=${pageSize}&offset=${offset}` +
+                 (search ? `&name=${encodeURIComponent(search)}` : '');
+      const data = await j(`/api/lots/${aid}?${qs}`);
+      if (Array.isArray(data)) {
+        _le.recentLots  = data;
+        _le.recentTotal = data.length;
+      } else {
+        _le.recentLots  = Array.isArray(data.rows) ? data.rows : [];
+        _le.recentTotal = Number(data.total) || _le.recentLots.length;
+      }
     }
     // Clamp page to last available page when filter / deletes shrink the
     // result set below the current page (e.g. user was on page 5, filter
@@ -9051,7 +9071,19 @@ function renderLeRecent(){
   // page; the footer below shows Prev / page indicator / Next.
   const sortMode  = leGetSortMode();
   const sortDir   = leGetSortDir();
-  const visible   = leSortRecent(_le.recentLots, sortMode, sortDir);
+  let visible     = leSortRecent(_le.recentLots, sortMode, sortDir);
+  // Ticked rows always sit at the top of the visible page, even
+  // when the user has chosen a non-default sort column. We partition
+  // AFTER leSortRecent so the chosen sort still orders rows WITHIN
+  // each partition (ticked block + rest block). JS sort is stable
+  // in modern engines so the within-partition order is preserved.
+  if (_le.selectedForPrint && _le.selectedForPrint.size) {
+    visible = visible.slice().sort((a, b) => {
+      const at = _le.selectedForPrint.has(a.id) ? 0 : 1;
+      const bt = _le.selectedForPrint.has(b.id) ? 0 : 1;
+      return at - bt;
+    });
+  }
   // Direction arrow + per-header style helper. Active column shows in
   // the primary theme color so the field user can see at a glance how
   // the list is currently ordered.
@@ -10344,11 +10376,16 @@ async function leApplyPickLots() {
 
   if (!_le.selectedForPrint) _le.selectedForPrint = new Set();
 
-  // Index lots by lot_no using BOTH the canonical string ("001") AND
-  // the numeric-stripped form ("1") so "001-005" expanded into
-  // "1","2","3","4","5" matches rows stored as "001","002"… in
-  // legacy spreadsheets. Without the second key, the range
-  // expander silently misses every leading-zero row.
+  // Index lots by lot_no using THREE keys per row so the lookup
+  // tolerates the formats this auction-hall data actually shows up
+  // in. Without all three, "001-005" silently misses real rows.
+  //   1. Canonical:    "001"          (raw, upper-cased)
+  //   2. Numeric:      "1"            (Number(raw) — strips leading zeros)
+  //   3. Digits-only:  "1" from "1A"  (only digits, then numeric form)
+  // Conflicts (e.g. "1A" and "1B" both digit-collapse to "1") simply
+  // overwrite — last one wins. That's fine because the canonical and
+  // numeric keys are checked first, and digits-only is the desperate
+  // fallback that lets the user keep going on legacy data.
   const indexBy = (l, map) => {
     const raw = String(l.lot_no == null ? '' : l.lot_no).trim();
     if (!raw) return;
@@ -10356,12 +10393,25 @@ async function leApplyPickLots() {
     map.set(canonical, l.id);
     const n = Number(raw);
     if (Number.isFinite(n) && String(n) !== canonical) map.set(String(n), l.id);
+    const digits = raw.replace(/\D+/g, '');
+    if (digits) {
+      const dn = Number(digits);
+      if (Number.isFinite(dn)) {
+        const ds = String(dn);
+        if (!map.has(ds)) map.set(ds, l.id);
+      }
+    }
   };
   const tryMatch = (token, map) => {
     const k = token.toUpperCase();
     if (map.has(k)) return map.get(k);
     const n = Number(token);
     if (Number.isFinite(n) && map.has(String(n))) return map.get(String(n));
+    const digits = String(token).replace(/\D+/g, '');
+    if (digits) {
+      const dn = Number(digits);
+      if (Number.isFinite(dn) && map.has(String(dn))) return map.get(String(dn));
+    }
     return null;
   };
 
@@ -10403,18 +10453,16 @@ async function leApplyPickLots() {
 
   for (const id of matched) _le.selectedForPrint.add(id);
 
-  // Re-tick the checkboxes for any matches in the current view.
-  document.querySelectorAll('.le-recent-cb').forEach(cb => {
-    const id = Number(cb.dataset.lotId);
-    if (_le.selectedForPrint.has(id)) cb.checked = true;
-  });
-  // Keep the header master in sync with the visible state.
-  const all = document.getElementById('le-recent-select-all');
-  if (all) {
-    const total = _le.recentLots.length;
-    const inWindow = _le.recentLots.filter(l => _le.selectedForPrint.has(l.id)).length;
-    all.checked = inWindow > 0 && inWindow === total;
-    all.indeterminate = inWindow > 0 && inWindow < total;
+  // Re-render so loadLeRecent's client-side mode kicks in: it sees
+  // selectedForPrint is non-empty, fetches the full trade, and
+  // partitions ticked rows to the top of page 1. Resetting page=1
+  // guarantees the operator lands on the page that now holds the
+  // ticked rows. renderLeRecent reads selectedForPrint to set each
+  // checkbox's `checked` attribute, so we don't need a separate
+  // post-render tick pass.
+  if (matched.size) {
+    _le.recentPage = 1;
+    await loadLeRecent();
   }
   leUpdatePrintToolbar();
 
@@ -12639,20 +12687,21 @@ async function loadDeleteLog(){
 }
 
 // ── Generation lock (per-trade, per-doc-type) ───────────────────
-// Once any invoice/purchase/bill/DN exists for a trade, the matching
-// Generate buttons are disabled with a tooltip. Admin can click the
-// "🔓 Allow regeneration" button (visible only when locked AND user
-// is admin) to grant a one-shot unlock. The server enforces the same
-// rule; the buttons are a courtesy.
+// Once EVERY eligible party in a trade has its invoice/purchase/bill/DN,
+// the matching Generate buttons are disabled with a tooltip. While
+// any party is still un-documented, generate stays enabled. Admin
+// can click the "🔓 Allow regeneration" button (visible only when
+// locked AND user is admin) to grant a one-shot unlock. The server
+// enforces the same rule; the buttons are a courtesy.
 //
 // Coexists with the price-check gate via data-* markers — each gate
 // owns its own data-X-locked attribute, and the button is enabled
 // only when no gate has it locked.
 const _GEN_LOCK_TOOLTIP = {
-  invoices:    'Invoices have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
-  purchases:   'Purchase invoices have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
-  bills:       'Bills of supply have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
-  debit_notes: 'Debit notes have already been generated for this trade. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  invoices:    'All buyers in this trade have been invoiced. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  purchases:   'All registered dealers in this trade have purchase invoices. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  bills:       'All agriculturist sellers in this trade have bills of supply. Ask an admin to click 🔓 Allow regeneration to unlock.',
+  debit_notes: 'Every purchase in this trade has a debit note. Ask an admin to click 🔓 Allow regeneration to unlock.',
 };
 const _GEN_STATUS_CACHE = new Map();   // auctionId → {status, ts}
 function _genApplyLock(btn, locked, reason) {
@@ -14059,12 +14108,12 @@ async function lotApplyPickLots() {
   const arr = Array.isArray(_lotsFull) ? _lotsFull : [];
   if (!arr.length) { toast('Load a trade first'); return; }
 
-  // Index lots by lot_no using BOTH the canonical string ("001") AND
-  // the numeric-stripped form ("1"). Legacy spreadsheets sometimes
-  // store lot numbers with leading zeros, while operators paste
-  // "001-005" expecting it to match. Without the second key, the
-  // range expander hands us "1","2","3","4","5" and the lookup
-  // misses every row stored as "001"/"002"/…
+  // Index lots by lot_no using THREE keys per row so the lookup
+  // tolerates every format that shows up in real data — canonical
+  // ("001"), numeric ("1"), and digits-only ("1" from "1A" /
+  // "JM-001"). The shared digits-only fallback handles legacy lot
+  // numbers with prefixes or suffixes; conflicts are resolved by
+  // priority (canonical wins over numeric, numeric over digits).
   const byLotNo = new Map();
   for (const l of arr) {
     const raw = String(l.lot_no == null ? '' : l.lot_no).trim();
@@ -14072,8 +14121,14 @@ async function lotApplyPickLots() {
     const canonical = raw.toUpperCase();
     byLotNo.set(canonical, l.id);
     const n = Number(raw);
-    if (Number.isFinite(n) && String(n) !== canonical) {
-      byLotNo.set(String(n), l.id);
+    if (Number.isFinite(n) && String(n) !== canonical) byLotNo.set(String(n), l.id);
+    const digits = raw.replace(/\D+/g, '');
+    if (digits) {
+      const dn = Number(digits);
+      if (Number.isFinite(dn)) {
+        const ds = String(dn);
+        if (!byLotNo.has(ds)) byLotNo.set(ds, l.id);
+      }
     }
   }
 
@@ -14085,6 +14140,13 @@ async function lotApplyPickLots() {
     if (id == null) {
       const n = Number(t);
       if (Number.isFinite(n)) id = byLotNo.get(String(n));
+    }
+    if (id == null) {
+      const digits = String(t).replace(/\D+/g, '');
+      if (digits) {
+        const dn = Number(digits);
+        if (Number.isFinite(dn)) id = byLotNo.get(String(dn));
+      }
     }
     if (id != null) matchedIds.add(id);
     else missing.push(t);
@@ -19240,6 +19302,13 @@ async function plDownload(){
 // live DB.
 // ════════════════════════════════════════════════════════════════
 let _pcLastSummary = null;
+// Lot ids the operator has explicitly chosen to keep at the DB price
+// (file SERVER PRICE is treated as wrong, DB is right). Lives only on
+// the client for the current uploaded file — cleared by Clear or by a
+// new file pick. Kept rows still apply code fixes if needed, but never
+// overwrite lots.price.
+const _pcKeepDb = new Set();
+const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
 
 async function loadPriceCheckAuctions(){
   const sel = document.getElementById('pc-auction');
@@ -19260,6 +19329,7 @@ async function loadPriceCheckAuctions(){
 
 function pcOnFileChange(){
   _pcLastSummary = null;
+  _pcKeepDb.clear();
   const btn = document.getElementById('pc-download-btn');
   if (btn) btn.disabled = true;
   const result  = document.getElementById('pc-result');
@@ -19358,11 +19428,18 @@ function _pcRenderPreview(data){
   const isFullyMatched = rw => rw.status === 'match'
     && rw.code_status !== 'diff'
     && rw.code_status !== 'db_blank';
+  // A row's price is "kept" when the operator has chosen to leave the
+  // DB price as-is (file is wrong / DB is right). Kept rows still
+  // surface code fixes when applicable.
+  const isKept = rw =>
+    rw && rw.lot_id != null && _pcKeepDb.has(Number(rw.lot_id));
   const rowFixable = rw =>
     rw && rw.lot_id && (
       (rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'))
-      || (rw.status === 'server_diff' && rw.file_server_price != null)
+      || (rw.status === 'server_diff' && rw.file_server_price != null && !isKept(rw))
     );
+  const isKeepableNow = rw =>
+    rw && rw.lot_id && rw.status === 'server_diff' && rw.file_server_price != null && !isKept(rw);
 
   // Gate banner — green when this run cleared the transaction lock,
   // red otherwise. Auto-stamped on the server when verify runs against
@@ -19414,14 +19491,30 @@ function _pcRenderPreview(data){
 
   // Apply-all toolbar — lives ABOVE the detail row table.
   const fixable = (data.rows || []).filter(rowFixable);
-  if (fixable.length) {
-    html += '<div style="display:flex;gap:8px;margin:-2px 0 10px 0;align-items:center">'+
-      '<button class="btn btn-g btn-sm" onclick="pcApplyAllFixes()" '+
-      'title="For each fixable row: write the file\'s server PRICE and/or CODE onto the matching lot. Buyer / sale-type are re-resolved from the buyer master when a code changes.">'+
-      '✓ Apply all '+fixable.length+' fix'+(fixable.length===1?'':'es')+
-      '</button>'+
-      '<span style="font-size:11.5px;color:#555">Writes file price + code onto matched lots, re-resolving buyer details. Skips rows without a DB lot or with nothing fixable.</span>'+
-      '</div>';
+  const keepableNow = (data.rows || []).filter(isKeepableNow);
+  const keptCount   = (data.rows || []).filter(isKept).length;
+  if (fixable.length || keepableNow.length || keptCount) {
+    html += '<div style="display:flex;gap:8px;margin:-2px 0 10px 0;align-items:center;flex-wrap:wrap">';
+    if (fixable.length) {
+      html += '<button class="btn btn-g btn-sm" onclick="pcApplyAllFixes()" '+
+        'title="For each fixable row: write the file\'s server PRICE (skipping rows you marked KEEP DB) and/or CODE onto the matching lot. Buyer / sale-type are re-resolved from the buyer master when a code changes.">'+
+        '✓ Apply all '+fixable.length+' fix'+(fixable.length===1?'':'es')+
+        '</button>';
+    }
+    if (keepableNow.length) {
+      html += '<button class="btn btn-o btn-sm" onclick="pcKeepDbAll()" '+
+        'title="Mark every remaining price-diff row as KEEP DB — DB price stays as-is, file SERVER PRICE is treated as wrong. Does not touch the database.">'+
+        'Keep DB price for all '+keepableNow.length+' price diff'+(keepableNow.length===1?'':'es')+
+        '</button>';
+    }
+    if (keptCount) {
+      html += '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:#374151;background:#e5e7eb;padding:3px 10px;border-radius:12px">'+
+        '<b>'+keptCount+'</b> kept (DB price preserved)'+
+        ' <a href="#" onclick="pcUnkeepDbAll();return false" style="color:#374151;text-decoration:underline">undo all</a>'+
+        '</span>';
+    }
+    html += '<span style="font-size:11.5px;color:#555">Apply writes file price + code onto matched lots. Keep DB leaves the lot untouched. Use either path to clear remaining red rows.</span>';
+    html += '</div>';
   } else if (codeIssues === 0 && (data.mismatched || 0) === 0) {
     html += '<div style="margin:-2px 0 10px 0;font-size:12px;color:#15803d">✓ Prices and buyer codes both reconcile with the server.</div>';
   }
@@ -19467,18 +19560,26 @@ function _pcRenderPreview(data){
     '</tr></thead><tbody>';
   for (const rw of rows) {
     const display = isFullyMatched(rw) ? 'display:none' : '';
-    const bg = _pcRowBg(rw.status);
+    const kept = isKept(rw);
+    const bg = kept && rw.status === 'server_diff' ? '#f3f4f6' : _pcRowBg(rw.status);
     const issues = rw.issues || [];
-    const badge = _pcStatusBadge(rw);
+    const badge = (kept && rw.status === 'server_diff')
+      ? '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">KEPT (DB)</span>'
+      : _pcStatusBadge(rw);
+    const diffMuted = kept && rw.status === 'server_diff';
     const diffCell = rw.diff == null ? '—'
       : (rw.diff === 0 ? '<span style="color:#15803d">0</span>'
-         : '<span style="color:#c00;font-weight:700">'+(rw.diff > 0 ? '+' : '')+rw.diff+'</span>');
+         : (diffMuted
+            ? '<span style="color:#888;text-decoration:line-through">'+(rw.diff > 0 ? '+' : '')+rw.diff+'</span>'
+            : '<span style="color:#c00;font-weight:700">'+(rw.diff > 0 ? '+' : '')+rw.diff+'</span>'));
 
     const manualCell = rw.manual_price == null ? '<span style="color:#aaa">—</span>' : rw.manual_price;
     const filePriceVal = rw.file_server_price;
     const fileEmpty = filePriceVal == null;
-    const fileMismatch = issues.includes('server_diff') || issues.includes('server_empty');
-    const fileCell = fileEmpty ? '<span style="color:#a16207">blank</span>' : filePriceVal;
+    const fileMismatch = (issues.includes('server_diff') && !diffMuted) || issues.includes('server_empty');
+    const fileCell = fileEmpty
+      ? '<span style="color:#a16207">blank</span>'
+      : (diffMuted ? '<span style="color:#888">'+filePriceVal+'</span>' : filePriceVal);
 
     const fileCodeRaw = rw.file_code || '';
     const dbCodeRaw   = rw.db_code   || '';
@@ -19499,21 +19600,58 @@ function _pcRenderPreview(data){
     else codeBadge = '<span style="color:#aaa;font-size:11px">—</span>';
 
     const fixCode  = !!(fileCodeRaw && (codeStatus === 'diff' || codeStatus === 'db_blank'));
-    const fixPrice = !!(rw.status === 'server_diff' && filePriceVal != null);
-    const canFix   = rw.lot_id && (fixCode || fixPrice);
-    let btnLabel = 'Apply';
-    if (fixCode && fixPrice) btnLabel = 'Apply price + code';
-    else if (fixCode)        btnLabel = 'Apply code';
-    else if (fixPrice)       btnLabel = 'Apply price';
-    const fixCell = canFix
-      ? '<button class="btn btn-g btn-sm" style="padding:2px 10px;font-size:11px;white-space:nowrap" '+
-        'onclick="pcApplyFix(this,'+rw.lot_id+
-          ','+(fixCode ? '\''+escAttr(fileCodeRaw)+'\'' : 'null')+
-          ','+(fixPrice ? Number(filePriceVal) : 'null')+
-          ')">'+btnLabel+'</button>'
-      : '<span style="color:#aaa">—</span>';
+    const hasPriceDiff = !!(rw.status === 'server_diff' && filePriceVal != null);
+    const fixPrice = hasPriceDiff && !kept;
+    // Build the Fix-cell action(s). Three shapes:
+    //   1. Both diffs, not kept → split: Apply price + code | Apply code only
+    //   2. Code only            → single: Apply code
+    //   3. Price only, not kept → split: Apply price | Keep DB
+    //   4. Price only, kept     → KEPT badge + Undo
+    //   5. Both diffs, kept     → single: Apply code (price kept)
+    let fixCell;
+    if (!rw.lot_id) {
+      fixCell = '<span style="color:#aaa">—</span>';
+    } else if (fixCode && fixPrice) {
+      const codeArg = "'"+escAttr(fileCodeRaw)+"'";
+      const priceArg = Number(filePriceVal);
+      fixCell =
+        '<div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center">'+
+          '<button class="btn btn-g btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcApplyFix(this,'+rw.lot_id+','+codeArg+','+priceArg+')" '+
+          'title="Write file price AND code onto the matching lot">Apply price + code</button>'+
+          '<button class="btn btn-o btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcApplyCodeOnly(this,'+rw.lot_id+','+codeArg+')" '+
+          'title="Apply file code only — keep DB price as-is (treat file price as wrong)">Apply code only</button>'+
+        '</div>';
+    } else if (fixCode) {
+      const codeArg = "'"+escAttr(fileCodeRaw)+"'";
+      fixCell =
+        '<button class="btn btn-g btn-sm" style="padding:2px 10px;font-size:11px;white-space:nowrap" '+
+        'onclick="pcApplyFix(this,'+rw.lot_id+','+codeArg+',null)">Apply code</button>';
+    } else if (fixPrice) {
+      const priceArg = Number(filePriceVal);
+      fixCell =
+        '<div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center">'+
+          '<button class="btn btn-g btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcApplyFix(this,'+rw.lot_id+',null,'+priceArg+')" '+
+          'title="Write file SERVER PRICE onto the matching lot">Apply price</button>'+
+          '<button class="btn btn-o btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcKeepDb('+rw.lot_id+')" '+
+          'title="Keep DB price as-is (file SERVER PRICE is wrong)">Keep DB</button>'+
+        '</div>';
+    } else if (kept && hasPriceDiff) {
+      fixCell =
+        '<div style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:center">'+
+          '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">KEPT</span>'+
+          '<button class="btn btn-o btn-sm" style="padding:1px 8px;font-size:11px" '+
+          'onclick="pcUnkeepDb('+rw.lot_id+')" title="Undo — return to needing review">Undo</button>'+
+        '</div>';
+    } else {
+      fixCell = '<span style="color:#aaa">—</span>';
+    }
 
-    html += '<tr class="pc-row pc-'+rw.status+'" data-code-status="'+codeStatus+'" style="'+display+';background:'+bg+'">'+
+    const rowStatusClass = (kept && rw.status === 'server_diff') ? 'pc-kept' : 'pc-'+rw.status;
+    html += '<tr class="pc-row '+rowStatusClass+'" data-code-status="'+codeStatus+'" style="'+display+';background:'+bg+'">'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+(rw.row || '+')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.auction_ano || rw.ano || '—')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace;font-weight:600">'+escAttr(rw.lot || '—')+'</td>'+
@@ -19533,6 +19671,7 @@ function _pcRenderPreview(data){
   html += '<div style="margin-top:10px;font-size:11.5px;color:#555;display:flex;gap:14px;flex-wrap:wrap">'+
     '<span><span style="display:inline-block;width:12px;height:12px;background:#fee2e2;border:1px solid #fecaca;vertical-align:middle"></span> File price ≠ DB price (or lot missing from DB)</span>'+
     '<span><span style="display:inline-block;width:12px;height:12px;background:#fef3c7;border:1px solid #fde68a;vertical-align:middle"></span> Blank price / missing in file / no auction match</span>'+
+    '<span><span style="display:inline-block;width:12px;height:12px;background:#f3f4f6;border:1px solid #d1d5db;vertical-align:middle"></span> Kept (DB price preserved — file SERVER PRICE ignored)</span>'+
     '<span><span style="display:inline-block;width:12px;height:12px;background:#dcfce7;border:1px solid #bbf7d0;vertical-align:middle"></span> Match</span>'+
   '</div>';
 
@@ -19715,6 +19854,67 @@ async function _pcEnsureBuyerCache(){
   return _pcBuyerCache;
 }
 
+// Keep-DB actions — purely client-side. Marking a row as KEPT
+// means: "the DB price is correct, the file's SERVER PRICE is
+// wrong; don't write file → DB but treat the row as resolved."
+// The Set survives re-verify within the same uploaded file so the
+// row keeps its KEPT badge after a refresh. pcClear / new file pick
+// flush it (see pcOnFileChange).
+function pcKeepDb(lotId){
+  if (lotId == null) return;
+  _pcKeepDb.add(Number(lotId));
+  if (_pcLastSummary) _pcRenderPreview(_pcLastSummary);
+}
+function pcUnkeepDb(lotId){
+  if (lotId == null) return;
+  _pcKeepDb.delete(Number(lotId));
+  if (_pcLastSummary) _pcRenderPreview(_pcLastSummary);
+}
+function pcKeepDbAll(){
+  if (!_pcLastSummary || !Array.isArray(_pcLastSummary.rows)) {
+    if (typeof toast === 'function') toast('Run Verify Prices first.');
+    return;
+  }
+  let added = 0;
+  for (const rw of _pcLastSummary.rows) {
+    if (rw && rw.lot_id != null
+        && rw.status === 'server_diff'
+        && rw.file_server_price != null
+        && !_pcKeepDb.has(Number(rw.lot_id))) {
+      _pcKeepDb.add(Number(rw.lot_id));
+      added++;
+    }
+  }
+  if (typeof toast === 'function') {
+    toast(added
+      ? 'Kept DB price on '+added+' row'+(added===1?'':'s')+'.'
+      : 'No price-diff rows left to keep.');
+  }
+  _pcRenderPreview(_pcLastSummary);
+}
+function pcUnkeepDbAll(){
+  const n = _pcKeepDb.size;
+  _pcKeepDb.clear();
+  if (typeof toast === 'function' && n) toast('Cleared '+n+' kept row'+(n===1?'':'s')+'.');
+  if (_pcLastSummary) _pcRenderPreview(_pcLastSummary);
+}
+
+// "Apply code only" — writes the file CODE onto the lot, leaves
+// lots.price untouched, and marks the lot as KEPT so the row keeps
+// its DB-price badge after the next verify. Wraps pcApplyFix so all
+// the buyer-master resolution / button state handling is shared.
+// We mark KEPT only after the apply resolves so a failed POST
+// doesn't leave a phantom "kept" row with no code applied.
+async function pcApplyCodeOnly(btn, lotId, fileCode){
+  if (lotId == null) return;
+  const before = !!btn && btn.disabled;
+  await pcApplyFix(btn, lotId, fileCode, null);
+  if (btn && btn.disabled && !before) {
+    // pcApplyFix leaves btn.disabled=true only on success (✓ state).
+    _pcKeepDb.add(Number(lotId));
+  }
+}
+
 async function pcApplyFix(btn, lotId, fileCode, filePrice){
   if (!lotId) return;
   if (fileCode == null && filePrice == null) return;
@@ -19764,23 +19964,30 @@ async function pcApplyAllFixes(){
     if (typeof toast === 'function') toast('Run Verify Prices first.');
     return;
   }
+  const isKeptId = id => id != null && _pcKeepDb.has(Number(id));
   const fixable = _pcLastSummary.rows.filter(rw =>
     rw && rw.lot_id && (
       (rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'))
-      || (rw.status === 'server_diff' && rw.file_server_price != null)
+      || (rw.status === 'server_diff' && rw.file_server_price != null && !isKeptId(rw.lot_id))
     ));
   if (!fixable.length) {
     if (typeof toast === 'function') toast('Nothing to fix.');
     return;
   }
-  if (!confirm('Apply '+fixable.length+' fix'+(fixable.length===1?'':'es')+'? Each row\'s lot will be updated with the file\'s PRICE and/or CODE (with buyer details re-resolved from the buyer master).')) return;
+  const keptSkips = fixable.filter(rw =>
+    rw.status === 'server_diff' && rw.file_server_price != null && isKeptId(rw.lot_id)
+  ).length;
+  const confirmMsg = 'Apply '+fixable.length+' fix'+(fixable.length===1?'':'es')+'?'+
+    ' Each row\'s lot is updated with the file\'s PRICE and/or CODE (buyer details re-resolved from the buyer master).'+
+    (keptSkips ? '\n\nNote: '+keptSkips+' kept row'+(keptSkips===1?'':'s')+' will only get code updates — DB price stays as-is.' : '');
+  if (!confirm(confirmMsg)) return;
 
   const cache = await _pcEnsureBuyerCache();
   // Group rows by exact payload so one POST handles every lot needing the same write.
   const groups = new Map();
   for (const rw of fixable) {
     const wantCode  = !!(rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'));
-    const wantPrice = !!(rw.status === 'server_diff' && rw.file_server_price != null);
+    const wantPrice = !!(rw.status === 'server_diff' && rw.file_server_price != null && !isKeptId(rw.lot_id));
     const code  = wantCode ? String(rw.file_code).trim() : '';
     const price = wantPrice ? Number(rw.file_server_price) : '';
     const hit   = wantCode ? (cache.get(code.toUpperCase()) || null) : null;
