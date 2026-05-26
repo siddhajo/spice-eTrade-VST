@@ -2802,6 +2802,11 @@ function _hasGeneratedDocs(db, docType, auctionId) {
 // its doc. Mirrors each generate-all endpoint's "what's left to do"
 // query, so the gate engages exactly when those endpoints would
 // return "nothing to do".
+//
+// Withdrawn lots (code = 'WD') are excluded — they don't need any
+// invoice / purchase / bill, so a party whose only lots are WD must
+// not count as "remaining work" or the gate would never engage.
+const _NOT_WD = `UPPER(TRIM(COALESCE(l.code,''))) != 'WD'`;
 function _hasRemainingParties(db, docType, auctionId) {
   if (!auctionId) return false;
   if (docType === 'invoices') {
@@ -2813,7 +2818,8 @@ function _hasRemainingParties(db, docType, auctionId) {
     return !!db.get(
       `SELECT 1 FROM lots l
        WHERE l.auction_id = ? AND l.buyer IS NOT NULL AND l.buyer != ''
-         AND l.amount > 0 AND l.locked_at IS NULL AND ${uninvoicedExpr}
+         AND l.amount > 0 AND l.locked_at IS NULL AND ${_NOT_WD}
+         AND ${uninvoicedExpr}
        LIMIT 1`,
       [auctionId]
     );
@@ -2821,7 +2827,7 @@ function _hasRemainingParties(db, docType, auctionId) {
   if (docType === 'purchases') {
     return !!db.get(
       `SELECT 1 FROM lots l
-       WHERE l.auction_id = ? AND l.amount > 0
+       WHERE l.auction_id = ? AND l.amount > 0 AND ${_NOT_WD}
          AND l.name IS NOT NULL AND l.name != ''
          AND (UPPER(l.cr) LIKE 'GSTIN%' OR (l.cr GLOB '[0-9][0-9]*' AND LENGTH(l.cr) >= 15))
          AND NOT EXISTS (
@@ -2834,7 +2840,7 @@ function _hasRemainingParties(db, docType, auctionId) {
   if (docType === 'bills') {
     return !!db.get(
       `SELECT 1 FROM lots l
-       WHERE l.auction_id = ? AND l.amount > 0
+       WHERE l.auction_id = ? AND l.amount > 0 AND ${_NOT_WD}
          AND l.name IS NOT NULL AND l.name != ''
          AND (l.cr IS NULL OR l.cr = ''
               OR (UPPER(l.cr) NOT LIKE 'GSTIN%' AND l.cr NOT GLOB '[0-9][0-9]*'))
