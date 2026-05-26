@@ -8184,15 +8184,24 @@ async function loadLotEntry(){
     // because lot save requires a branch.
     const branchSel = document.getElementById('le-branch');
     if (branches.length) {
+      // "All branches" sits between the placeholder and the real list.
+      // It's a *view-only* mode — the allocation bar shows every branch
+      // without highlighting one as "mine", and the lot-chip grid is
+      // disabled because you can't enter a lot under "All branches".
+      // Saving a lot in this mode is blocked with a helpful error.
       branchSel.innerHTML = '<option value="">— select —</option>' +
+        '<option value="__ALL__">All branches</option>' +
         branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
       // Restore last-used branch from localStorage if it's still in the
       // list (admin may have removed it). Otherwise default to the first
       // configured branch so the field user doesn't have to pick on
-      // every page load.
+      // every page load. "__ALL__" is also a valid restored value.
       const savedBranch = (typeof localStorage !== 'undefined') ? (localStorage.getItem('le_branch') || '') : '';
-      if (savedBranch && branches.includes(savedBranch.toUpperCase())) {
-        branchSel.value = savedBranch.toUpperCase();
+      const savedUpper = savedBranch ? savedBranch.toUpperCase() : '';
+      if (savedUpper === '__ALL__') {
+        branchSel.value = '__ALL__';
+      } else if (savedUpper && branches.includes(savedUpper)) {
+        branchSel.value = savedUpper;
       } else if (branches[0]) {
         branchSel.value = branches[0];
       }
@@ -8410,7 +8419,7 @@ function leRenderBankPicker(t){
 // We only fall through to the local heuristic when no allocation exists.
 async function leAutoSuggestLotNo(){
   const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
-  if (!branch) return; // can't suggest without a branch
+  if (!branch || branch === '__ALL__') return; // can't suggest without a specific branch
 
   // Server-driven suggestion (allocation-aware). When the server
   // returns a value, that wins — it knows about ranges the local
@@ -8490,6 +8499,7 @@ async function leSaveLot(){
   if (!_le.selectedSeller) { leShowError('Search and pick a seller'); return; }
   const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
   if (!branch) { leShowError('Enter a branch code'); return; }
+  if (branch === '__ALL__') { leShowError('Pick a specific branch (not "All branches") to save a lot'); return; }
   const lotNo = (document.getElementById('le-lotno').value || '').trim();
   if (!lotNo) { leShowError('Enter the lot number'); return; }
   const grade = document.getElementById('le-grade').value || '1';
@@ -9860,7 +9870,9 @@ async function leOpenAddLots() {
   const aid = document.getElementById('le-auction').value;
   if (!aid) { toast('Select a trade first'); return; }
   const cur = (document.getElementById('le-branch')?.value || '').trim();
-  return _openAddLotsModal(aid, 'le', cur);
+  // "__ALL__" is a view-only sentinel — don't seed it as a real branch
+  // into the Add Extra Lots modal.
+  return _openAddLotsModal(aid, 'le', cur === '__ALL__' ? '' : cur);
 }
 
 // (saveQuickAddLots — the unified context-aware version — lives next
@@ -9967,6 +9979,16 @@ async function leLoadAllocBar() {
   // branch is missing or has no allocation, render an inline hint
   // *inside* the grid section so the user sees what to do next.
   gridSection.style.display = 'block';
+  if (myBr === '__ALL__') {
+    // View-only mode — the allocation bar above already shows every
+    // branch's usage. The chip grid is disabled because picking a chip
+    // writes to le-lotno, which only makes sense under a specific
+    // branch context.
+    gridLabel.textContent = 'All branches';
+    gridHelp.textContent = '';
+    gridHost.innerHTML = '<div class="le-lot-grid-empty">Viewing all branches. Pick a specific branch above to enable lot selection.</div>';
+    return;
+  }
   if (!myBr) {
     gridLabel.textContent = '—';
     gridHelp.textContent = 'select your branch above to see available lots';
@@ -10062,7 +10084,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function leNextLotNo() {
   const aid = document.getElementById('le-auction').value;
   const branch = (document.getElementById('le-branch').value || '').trim().toUpperCase();
-  if (!aid || !branch) return null;
+  if (!aid || !branch || branch === '__ALL__') return null;
   try {
     const d = await j(`/api/auctions/${aid}/next-lot/${encodeURIComponent(branch)}`);
     if (d && d.next_lot) return d.next_lot;
