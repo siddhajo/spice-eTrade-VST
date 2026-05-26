@@ -19438,25 +19438,81 @@ function _pcRenderPreview(data){
       (rw.file_code && (rw.code_status === 'diff' || rw.code_status === 'db_blank'))
       || (rw.status === 'server_diff' && rw.file_server_price != null && !isKept(rw))
     );
+  // Both "price differs" and "file price blank" rows can be marked
+  // KEEP DB — in both cases the DB price stays as-is. Blank-price rows
+  // additionally get an inline input so the operator can enter a new
+  // price instead of keeping the DB value.
   const isKeepableNow = rw =>
-    rw && rw.lot_id && rw.status === 'server_diff' && rw.file_server_price != null && !isKept(rw);
+    rw && rw.lot_id && !isKept(rw) && (
+      (rw.status === 'server_diff' && rw.file_server_price != null) ||
+      rw.status === 'server_empty'
+    );
+  const isBlankPriceRow = rw => rw && rw.status === 'server_empty';
 
-  // Gate banner — green when this run cleared the transaction lock,
-  // red otherwise. Auto-stamped on the server when verify runs against
-  // a forced auction AND there are no fixable code issues left.
+  // Completion banner — folds the legacy gate banner into a single
+  // status read that also accounts for client-side KEPT rows.
+  // "Complete" means every row is either: matched, fully kept, or has
+  // had its file fix applied. The breakdown below tells the operator
+  // exactly which buckets still need attention.
+  const rowsArr = data.rows || [];
+  const remPriceDiff   = rowsArr.filter(rw => !isKept(rw) && rw.status === 'server_diff').length;
+  const remBlankPrice  = rowsArr.filter(rw => !isKept(rw) && rw.status === 'server_empty').length;
+  const remCodeIssues  = (data.codeMismatched || 0) + (data.codeDbBlank || 0);
+  const remMissingSrv  = data.missingServer || 0;
+  const remMissingFile = data.missingFile   || 0;
+  const remNoAuction   = data.noAuction     || 0;
+  const totalRemaining = remPriceDiff + remBlankPrice + remCodeIssues +
+                         remMissingSrv + remMissingFile + remNoAuction;
+  const total          = data.total || 0;
+  const keptCount      = rowsArr.filter(isKept).length;
+  const isComplete     = total > 0 && totalRemaining === 0;
+
   let html = '';
-  if (data.forcedAuction) {
-    if (data.gateReady) {
-      html += '<div style="margin-bottom:10px;padding:10px 14px;background:#DCFCE7;border:1px solid #86EFAC;border-radius:8px;color:#14532D;font-size:13px;line-height:1.5">'+
-        '<b>✓ Price check passed.</b> Calculate, invoice, purchase, agri-bill, and debit-note generation are now unlocked for this auction.'+
+  if (total > 0) {
+    if (isComplete) {
+      let gateMsg = '';
+      if (data.forcedAuction) {
+        gateMsg = data.gateReady
+          ? ' Calculate, invoice, purchase, agri-bill, and debit-note generation are unlocked for this auction.'
+          : ' Re-run Verify Prices to refresh the transaction gate.';
+      }
+      const keptNote = keptCount
+        ? ' <span style="font-weight:400">('+keptCount+' row'+(keptCount===1?'':'s')+' kept at DB price.)</span>'
+        : '';
+      html += '<div style="margin-bottom:10px;padding:12px 16px;background:#DCFCE7;border:1px solid #86EFAC;border-radius:8px;color:#14532D;font-size:14px;line-height:1.55">'+
+        '<b>✓ Price check complete</b> — all '+total+' row'+(total===1?'':'s')+' reconciled with the database.'+
+        keptNote+
+        (gateMsg ? '<div style="margin-top:4px;font-size:12.5px">'+gateMsg+'</div>' : '')+
         '</div>';
     } else {
-      const pend = data.codeFixesPending || 0;
-      html += '<div style="margin-bottom:10px;padding:10px 14px;background:#FEE2E2;border:1px solid #FECACA;border-radius:8px;color:#7F1D1D;font-size:13px;line-height:1.5">'+
-        '<b>✕ Transactions locked.</b> '+
-        (pend > 0
-          ? pend + ' code fix' + (pend===1?'':'es') + ' still pending. Apply them (or re-upload a clean file) to unlock Calculate / Invoice / Purchase / Bill / Debit Note generation.'
-          : 'Run verify again after fixing flagged rows to unlock transaction generation.')+
+      const parts = [];
+      if (remPriceDiff)   parts.push(remPriceDiff   +' price diff'   +(remPriceDiff===1?'':'s'));
+      if (remBlankPrice)  parts.push(remBlankPrice  +' blank price'  +(remBlankPrice===1?'':'s'));
+      if (remCodeIssues)  parts.push(remCodeIssues  +' code issue'   +(remCodeIssues===1?'':'s'));
+      if (remMissingSrv)  parts.push(remMissingSrv  +' missing in server');
+      if (remMissingFile) parts.push(remMissingFile +' missing in file');
+      if (remNoAuction)   parts.push(remNoAuction   +' no auction');
+      const codeBlocking = data.forcedAuction && remCodeIssues > 0;
+      const tone = codeBlocking
+        ? { bg:'#FEE2E2', border:'#FECACA', fg:'#7F1D1D', icon:'✕' }
+        : { bg:'#FEF3C7', border:'#FDE68A', fg:'#78350F', icon:'⚠' };
+      let gateMsg = '';
+      if (data.forcedAuction) {
+        gateMsg = data.gateReady
+          ? 'Transactions are unlocked for this auction (no code issues), but resolve the rows below for a clean record.'
+          : 'Transactions are LOCKED for this auction until '+remCodeIssues+' code fix'+(remCodeIssues===1?'':'es')+' '+(remCodeIssues===1?'is':'are')+' applied.';
+      } else {
+        gateMsg = 'Pre-pick an auction above to enable the transaction gate.';
+      }
+      const keptNote = keptCount
+        ? '<div style="margin-top:4px;font-size:12px;color:'+tone.fg+'"><b>'+keptCount+'</b> row'+(keptCount===1?'':'s')+' already marked KEEP DB.</div>'
+        : '';
+      html += '<div style="margin-bottom:10px;padding:12px 16px;background:'+tone.bg+';border:1px solid '+tone.border+';border-radius:8px;color:'+tone.fg+';font-size:14px;line-height:1.55">'+
+        '<b>'+tone.icon+' Price check incomplete</b> — '+totalRemaining+' row'+(totalRemaining===1?'':'s')+' need'+(totalRemaining===1?'s':'')+' attention'+
+        ' ('+parts.join(', ')+').'+
+        '<div style="margin-top:4px;font-size:12.5px">'+gateMsg+'</div>'+
+        '<div style="margin-top:6px;font-size:12px;opacity:0.9">Per-row options: <b>Apply</b> writes the file value onto the lot, <b>Set price</b> writes a value you type, <b>Keep DB</b> preserves the database value.</div>'+
+        keptNote+
         '</div>';
     }
   }
@@ -19492,7 +19548,6 @@ function _pcRenderPreview(data){
   // Apply-all toolbar — lives ABOVE the detail row table.
   const fixable = (data.rows || []).filter(rowFixable);
   const keepableNow = (data.rows || []).filter(isKeepableNow);
-  const keptCount   = (data.rows || []).filter(isKept).length;
   if (fixable.length || keepableNow.length || keptCount) {
     html += '<div style="display:flex;gap:8px;margin:-2px 0 10px 0;align-items:center;flex-wrap:wrap">';
     if (fixable.length) {
@@ -19502,9 +19557,15 @@ function _pcRenderPreview(data){
         '</button>';
     }
     if (keepableNow.length) {
+      const blanks = keepableNow.filter(rw => rw.status === 'server_empty').length;
+      const diffs  = keepableNow.length - blanks;
+      const partLabels = [];
+      if (diffs)  partLabels.push(diffs +' price diff'+(diffs===1?'':'s'));
+      if (blanks) partLabels.push(blanks+' blank price'+(blanks===1?'':'s'));
       html += '<button class="btn btn-o btn-sm" onclick="pcKeepDbAll()" '+
-        'title="Mark every remaining price-diff row as KEEP DB — DB price stays as-is, file SERVER PRICE is treated as wrong. Does not touch the database.">'+
-        'Keep DB price for all '+keepableNow.length+' price diff'+(keepableNow.length===1?'':'es')+
+        'title="Mark every remaining price-diff and blank-price row as KEEP DB — DB price stays as-is, file SERVER PRICE is treated as wrong or missing. Does not touch the database.">'+
+        'Keep DB price for all '+keepableNow.length+' row'+(keepableNow.length===1?'':'s')+
+        ' ('+partLabels.join(' + ')+')'+
         '</button>';
     }
     if (keptCount) {
@@ -19561,12 +19622,13 @@ function _pcRenderPreview(data){
   for (const rw of rows) {
     const display = isFullyMatched(rw) ? 'display:none' : '';
     const kept = isKept(rw);
-    const bg = kept && rw.status === 'server_diff' ? '#f3f4f6' : _pcRowBg(rw.status);
+    const isPriceRow = rw.status === 'server_diff' || rw.status === 'server_empty';
+    const bg = kept && isPriceRow ? '#f3f4f6' : _pcRowBg(rw.status);
     const issues = rw.issues || [];
-    const badge = (kept && rw.status === 'server_diff')
+    const badge = (kept && isPriceRow)
       ? '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">KEPT (DB)</span>'
       : _pcStatusBadge(rw);
-    const diffMuted = kept && rw.status === 'server_diff';
+    const diffMuted = kept && isPriceRow;
     const diffCell = rw.diff == null ? '—'
       : (rw.diff === 0 ? '<span style="color:#15803d">0</span>'
          : (diffMuted
@@ -19601,16 +19663,62 @@ function _pcRenderPreview(data){
 
     const fixCode  = !!(fileCodeRaw && (codeStatus === 'diff' || codeStatus === 'db_blank'));
     const hasPriceDiff = !!(rw.status === 'server_diff' && filePriceVal != null);
+    const blankPrice   = rw.status === 'server_empty';
     const fixPrice = hasPriceDiff && !kept;
-    // Build the Fix-cell action(s). Three shapes:
-    //   1. Both diffs, not kept → split: Apply price + code | Apply code only
-    //   2. Code only            → single: Apply code
-    //   3. Price only, not kept → split: Apply price | Keep DB
-    //   4. Price only, kept     → KEPT badge + Undo
-    //   5. Both diffs, kept     → single: Apply code (price kept)
+    // Build the Fix-cell action(s). Shapes:
+    //   A. Blank price + code diff, not kept → [input] + Apply price+code | Apply code only
+    //   B. Blank price, not kept             → [input] + Apply price | Keep DB
+    //   C. Both diffs, not kept              → Apply price+code | Apply code only
+    //   D. Code only                          → Apply code
+    //   E. Price diff only, not kept          → Apply price | Keep DB
+    //   F. Kept (price diff OR blank price)  → KEPT badge + Undo
+    //   G. Anything else                      → —
+    const priceInputId = 'pc-new-price-' + rw.lot_id;
+    const priceInputHtml = '<input type="number" min="0" step="any" id="'+priceInputId+'" '+
+      'placeholder="new price" autocomplete="off" '+
+      'style="width:80px;padding:2px 6px;font-size:11px;border:1px solid #d1d5db;border-radius:4px;text-align:right">';
     let fixCell;
     if (!rw.lot_id) {
       fixCell = '<span style="color:#aaa">—</span>';
+    } else if (kept && isPriceRow) {
+      // Kept first so the Undo button is always reachable, even when
+      // the row still has a code fix pending (otherwise the kept user
+      // can't roll back without re-uploading).
+      const codeBtn = fixCode
+        ? '<button class="btn btn-g btn-sm" style="padding:1px 8px;font-size:11px;white-space:nowrap" '+
+            'onclick="pcApplyFix(this,'+rw.lot_id+",'"+escAttr(fileCodeRaw)+"'"+',null)" '+
+            'title="Apply file code (price stays KEPT)">Apply code</button>'
+        : '';
+      fixCell =
+        '<div style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:center">'+
+          '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">KEPT</span>'+
+          codeBtn+
+          '<button class="btn btn-o btn-sm" style="padding:1px 8px;font-size:11px" '+
+          'onclick="pcUnkeepDb('+rw.lot_id+')" title="Undo — return to needing review">Undo</button>'+
+        '</div>';
+    } else if (blankPrice && fixCode && !kept) {
+      const codeArg = "'"+escAttr(fileCodeRaw)+"'";
+      fixCell =
+        '<div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center;align-items:center">'+
+          priceInputHtml+
+          '<button class="btn btn-g btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcApplyNewPrice(this,'+rw.lot_id+','+codeArg+')" '+
+          'title="Write the price you typed AND the file code onto the matching lot">Apply price + code</button>'+
+          '<button class="btn btn-o btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcApplyCodeOnly(this,'+rw.lot_id+','+codeArg+')" '+
+          'title="Apply file code only — leave DB price as-is (file has no SERVER PRICE)">Apply code only</button>'+
+        '</div>';
+    } else if (blankPrice && !kept) {
+      fixCell =
+        '<div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center;align-items:center">'+
+          priceInputHtml+
+          '<button class="btn btn-g btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcApplyNewPrice(this,'+rw.lot_id+',null)" '+
+          'title="Write the price you typed onto the matching lot">Apply price</button>'+
+          '<button class="btn btn-o btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap" '+
+          'onclick="pcKeepDb('+rw.lot_id+')" '+
+          'title="Keep DB price as-is (file has no SERVER PRICE — accept the database value)">Keep DB</button>'+
+        '</div>';
     } else if (fixCode && fixPrice) {
       const codeArg = "'"+escAttr(fileCodeRaw)+"'";
       const priceArg = Number(filePriceVal);
@@ -19639,18 +19747,11 @@ function _pcRenderPreview(data){
           'onclick="pcKeepDb('+rw.lot_id+')" '+
           'title="Keep DB price as-is (file SERVER PRICE is wrong)">Keep DB</button>'+
         '</div>';
-    } else if (kept && hasPriceDiff) {
-      fixCell =
-        '<div style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:center">'+
-          '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">KEPT</span>'+
-          '<button class="btn btn-o btn-sm" style="padding:1px 8px;font-size:11px" '+
-          'onclick="pcUnkeepDb('+rw.lot_id+')" title="Undo — return to needing review">Undo</button>'+
-        '</div>';
     } else {
       fixCell = '<span style="color:#aaa">—</span>';
     }
 
-    const rowStatusClass = (kept && rw.status === 'server_diff') ? 'pc-kept' : 'pc-'+rw.status;
+    const rowStatusClass = (kept && isPriceRow) ? 'pc-kept' : 'pc-'+rw.status;
     html += '<tr class="pc-row '+rowStatusClass+'" data-code-status="'+codeStatus+'" style="'+display+';background:'+bg+'">'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+(rw.row || '+')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.auction_ano || rw.ano || '—')+'</td>'+
@@ -19875,20 +19976,21 @@ function pcKeepDbAll(){
     if (typeof toast === 'function') toast('Run Verify Prices first.');
     return;
   }
+  // Covers both "file price differs" and "file price blank" rows — in
+  // both cases the operator is accepting whatever lots.price currently
+  // holds and treating the file as the wrong/missing side.
   let added = 0;
   for (const rw of _pcLastSummary.rows) {
-    if (rw && rw.lot_id != null
-        && rw.status === 'server_diff'
-        && rw.file_server_price != null
-        && !_pcKeepDb.has(Number(rw.lot_id))) {
-      _pcKeepDb.add(Number(rw.lot_id));
-      added++;
-    }
+    if (!rw || rw.lot_id == null) continue;
+    if (_pcKeepDb.has(Number(rw.lot_id))) continue;
+    const keep = (rw.status === 'server_diff' && rw.file_server_price != null)
+              || rw.status === 'server_empty';
+    if (keep) { _pcKeepDb.add(Number(rw.lot_id)); added++; }
   }
   if (typeof toast === 'function') {
     toast(added
       ? 'Kept DB price on '+added+' row'+(added===1?'':'s')+'.'
-      : 'No price-diff rows left to keep.');
+      : 'No price-diff or blank-price rows left to keep.');
   }
   _pcRenderPreview(_pcLastSummary);
 }
@@ -19897,6 +19999,30 @@ function pcUnkeepDbAll(){
   _pcKeepDb.clear();
   if (typeof toast === 'function' && n) toast('Cleared '+n+' kept row'+(n===1?'':'s')+'.');
   if (_pcLastSummary) _pcRenderPreview(_pcLastSummary);
+}
+
+// "Apply new price" — used for blank-price rows. Reads the value the
+// operator typed into the inline input, validates it, then writes it
+// to lots.price via the shared pcApplyFix path (optionally along with
+// a code fix). Unlike pcApplyCodeOnly, this row is NOT marked KEPT —
+// after re-verify it should appear as MATCH.
+async function pcApplyNewPrice(btn, lotId, fileCode){
+  if (lotId == null) return;
+  const input = document.getElementById('pc-new-price-' + lotId);
+  const raw = input ? String(input.value || '').trim() : '';
+  if (!raw) {
+    if (typeof toast === 'function') toast('Enter a price first.');
+    if (input) input.focus();
+    return;
+  }
+  const price = Number(raw);
+  if (!Number.isFinite(price) || price < 0) {
+    if (typeof toast === 'function') toast('Enter a valid non-negative price.');
+    if (input) { input.focus(); input.select && input.select(); }
+    return;
+  }
+  if (input) input.disabled = true;
+  return pcApplyFix(btn, lotId, fileCode, price);
 }
 
 // "Apply code only" — writes the file CODE onto the lot, leaves
