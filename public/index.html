@@ -2716,11 +2716,11 @@ input[type="search"]:focus{
         <div style="font-size:12px;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:10px 12px;margin:6px 0 14px 0">
           <strong>Expected columns:</strong> LOT and SERVER PRICE (required) &nbsp;·&nbsp;
           KERALA/STATE, TNO/ANO, DATE, BAG, QTY, PRICE, CODE (optional, kept for context) &nbsp;·&nbsp;
-          If <code>SERVER PRICE</code> is absent, falls back to <code>PRICE</code>. Pre-pick an auction below to ignore TNO/DATE in the file.
+          If <code>SERVER PRICE</code> is absent, falls back to <code>PRICE</code>. Pre-pick a trade below to ignore TNO/DATE in the file.
         </div>
 
         <div class="sgrid" style="margin-bottom:14px">
-          <div class="fg"><label>Auction (optional — leave blank to resolve per row from TNO + DATE)</label>
+          <div class="fg"><label>Trade (optional — leave blank to resolve per row from TNO + DATE)</label>
             <select id="pc-auction" style="height:38px;padding:0 10px;border-radius:6px;border:1px solid var(--border)">
               <option value="">— Any (use TNO + DATE columns) —</option>
             </select>
@@ -19379,6 +19379,12 @@ async function pcVerify(){
     // tab visit / load function re-reads fresh state from the server.
     if (data.forcedAuction && data.forcedAuction.id) {
       _PC_STATUS_CACHE.delete(String(data.forcedAuction.id));
+      // Any tab whose gate scope is currently in the DOM may be
+      // holding a stale "Lots changed since last Price Check" banner
+      // from before this verify. Refresh those gates so a successful
+      // verify clears the banner immediately — otherwise it lingers
+      // until the operator manually re-triggers a tab load.
+      _pcRefreshOpenGates(data.forcedAuction.id);
     }
     _pcRenderPreview(data);
     const priceIssues = (data.mismatched || 0) + (data.missingServer || 0) + (data.missingFile || 0) + (data.noAuction || 0);
@@ -19499,7 +19505,7 @@ function _pcRenderPreview(data){
       let gateMsg = '';
       if (data.forcedAuction) {
         gateMsg = data.gateReady
-          ? 'Transactions are unlocked for this auction (no code issues), but resolve the rows below for a clean record.'
+          ? 'Transactions are unlocked for this trade (no code issues), but resolve the rows below for a clean record.'
           : 'Transactions are LOCKED for this auction until '+remCodeIssues+' code fix'+(remCodeIssues===1?'':'es')+' '+(remCodeIssues===1?'is':'are')+' applied.';
       } else {
         gateMsg = 'Pre-pick an auction above to enable the transaction gate.';
@@ -19583,7 +19589,7 @@ function _pcRenderPreview(data){
   if (hasCodeSignal || (data.missingServer||0) > 0 || (data.noAuction||0) > 0) {
     html += '<div style="margin:-2px 0 12px 0;padding:8px 12px;background:#FEF3C7;border:1px solid #FDE68A;border-radius:6px;font-size:11.5px;color:#78350F;line-height:1.55">'+
       '<b>Note:</b> Apply only handles rows that have a matching DB lot.'+
-      ' Rows tagged <b>NOT IN SERVER</b> or <b>NO AUCTION</b> have no DB lot to update — create the lot in Lot Entry first, then re-verify.'+
+      ' Rows tagged <b>NOT IN SERVER</b> or <b>NO TRADE</b> have no DB lot to update — create the lot in Lot Entry first, then re-verify.'+
       ' Rows where the file CODE is <b>FILE BLANK</b> have nothing to write — use'+
       ' <i>Lots → Set Buyer Code</i> with a manually-picked code instead.'+
       '</div>';
@@ -19607,7 +19613,7 @@ function _pcRenderPreview(data){
   html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
   html += '<table id="pc-table" style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">#</th>'+
-    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Auction</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Trade</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lot</th>'+
     (showManualCol ? '<th style="text-align:right;padding:4px 8px;border:1px solid #ddd;color:#999">Manual PRICE</th>' : '')+
     '<th style="text-align:right;padding:4px 8px;border:1px solid #ddd">'+validatedHeader+'</th>'+
@@ -19930,6 +19936,32 @@ async function pcRefreshGate(auctionId, tabScope){
   _pcApplyDisable('.needs-price-check', tabScope, state, reason);
   _pcRenderStaleBanner(tabScope, state);
   return state === 'clean' || state === 'stale';
+}
+
+// Re-run pcRefreshGate against every gated tab scope that is currently
+// in the DOM, but only when that scope's auction selector points at
+// the auction we just verified. Used right after pcVerify so a clean
+// pass clears any "Lots changed since last Price Check" banner that
+// was rendered before — without this, the banner lingers in the lots
+// tab until the operator changes auctions or reloads it.
+function _pcRefreshOpenGates(verifiedAuctionId){
+  if (!verifiedAuctionId) return;
+  const target = String(verifiedAuctionId);
+  const gates = [
+    { scope: '#tc-lots',      auctionSel: '#lot-auction' },
+    { scope: '#tc-invoices',  auctionSel: '#inv-auction' },
+    { scope: '#tc-purchases', auctionSel: '#pur-auction' },
+    { scope: '#tc-bills',     auctionSel: '#bill-auction' },
+    { scope: '#tc-debit',     auctionSel: '#dn-auction' },
+  ];
+  for (const g of gates) {
+    const scopeEl = document.querySelector(g.scope);
+    if (!scopeEl) continue;
+    const aucEl = scopeEl.querySelector(g.auctionSel) || document.querySelector(g.auctionSel);
+    const aid = aucEl && aucEl.value ? String(aucEl.value) : '';
+    if (aid !== target) continue;
+    if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, g.scope);
+  }
 }
 
 // ── Price Check — Apply CODE fixes ──────────────────────────
