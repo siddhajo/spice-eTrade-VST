@@ -3947,12 +3947,16 @@ app.post('/api/lots/calculate/:auctionId',
   // Admins also skip locked rows here intentionally: recalc is a batch
   // refresh, not a "force-edit one row" action; admins can still hit
   // PUT /api/lots/:id directly if they need to override.
-  const lots = db.all('SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND locked_at IS NULL', [req.params.auctionId]);
+  // Gate on qty*price>0 instead of amount>0 — a price edit through Price
+  // Check (bulk-set-buyer only writes `price`) can leave `amount` stale
+  // at 0 while qty and the new price are both valid; we want to recalc
+  // those rows and heal `amount` rather than skip them.
+  const lots = db.all('SELECT * FROM lots WHERE auction_id = ? AND (amount > 0 OR (qty > 0 AND price > 0)) AND locked_at IS NULL', [req.params.auctionId]);
   let count = 0;
   for (const lot of lots) {
     const calc = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
+    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
+      [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
     count++;
   }
   res.json({ success: true, calculated: count });
@@ -3963,17 +3967,19 @@ app.post('/api/lots/calculate/:auctionId',
 // like CGST/SGST/IGST and prate are state-sensitive (intra vs inter), so
 // the saved values become stale on a state flip and must be refreshed.
 //
-// Only touches lots with `amount > 0` (skips empty/auction-floor entries).
-// Returns total lots calculated across all auctions.
+// Picks up lots with `amount > 0` OR `qty*price > 0` so a stale `amount`
+// (e.g. after a Price Check price write) doesn't hide a row that has
+// otherwise valid qty + price. Returns total lots calculated across all
+// auctions.
 app.post('/api/lots/calculate-all', requireLotWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   // Skip locked lots (same rationale as the per-auction calculate above).
-  const lots = db.all('SELECT * FROM lots WHERE amount > 0 AND locked_at IS NULL');
+  const lots = db.all('SELECT * FROM lots WHERE (amount > 0 OR (qty > 0 AND price > 0)) AND locked_at IS NULL');
   let count = 0;
   for (const lot of lots) {
     const calc = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
+    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
+      [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
     count++;
   }
   res.json({ success: true, calculated: count });

@@ -114,6 +114,11 @@ function calculateLot(lot, cfg) {
   result.prate = round0(rawRate);
   // PurAmt = P_Qty × P_Rate (sample refund INCLUDED — direct purchase)
   result.puramt = round2(result.pqty * result.prate);
+  // Sale amount (raw, pre-deduction) — kept in sync with qty × price so a
+  // price edit via Price Check Apply / Set price doesn't leave `amount`
+  // stale. The validate endpoint flags `ROUND(qty*price,2) <> ROUND(amount,2)`
+  // as a data-integrity bug; Calculate All is the natural place to heal it.
+  result.amount = round2((lot.qty || 0) * (lot.price || 0));
   result.com = 0;
   result.sertax = 0;
 
