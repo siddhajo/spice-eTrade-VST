@@ -39,12 +39,14 @@ const PDFDocument = require('pdfkit');
 // The query selects these aliased fields directly so renderSellerReceipt
 // (which is a verbatim port) doesn't need to know about the rename.
 
-// Spice-config logo location (single-company build — always ispl.png).
-// resolveLogoPath checks SPICE_DATA_DIR/logos first so cloud-persisted
-// uploads aren't shadowed by the bundled default of the same name.
-const { resolveLogoPath: _rlpMb } = require('./logo-paths');
+// Spice-config logo source for receipt PDFs (single-company build —
+// always the ispl slot). getLogoSource returns the uploaded BLOB from
+// company_logos when present, else falls back to the bundled
+// /public/logo-ispl.png. PDFKit's doc.image accepts both Buffer and
+// path forms, so call sites pass the result through verbatim.
+const { getLogoSource: _glsMb } = require('./logo-paths');
 function getLogoPath() {
-  return _rlpMb('logo-ispl.png');
+  return _glsMb('ispl', ['logo-ispl.png', 'logo_kj.png']);
 }
 
 // Mask an account number for the receipt according to admin-set policy.

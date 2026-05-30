@@ -109,21 +109,15 @@ function getCompanyHeader(db) {
     }
   }
 
-  // Resolve the logo to an absolute path on disk; null if missing.
-  // Try the user's configured logo first, then a generic logo.png that
-  // some deployments ship. NO hardcoded 'logo-ispl.png' fallback — a
-  // fresh install with no Logo Code configured renders without a logo
-  // rather than the legacy ISP image.
-  // resolveLogoPath checks SPICE_DATA_DIR/logos/<file> first (persistent
-  // user uploads), then /public/<file> (bundled defaults). Without this
-  // the cloud-uploaded logo would lose to /public on every redeploy.
-  const { resolveLogoPath } = require('./logo-paths');
+  // Resolve the logo to either a Buffer (uploaded BLOB from company_logos)
+  // or an absolute path on disk (bundled default). Returns null if
+  // missing — a fresh install with no Logo Code configured renders
+  // without a logo rather than the legacy ISP image.
+  // getLogoSource prefers DB BLOB so cloud-uploaded logos survive
+  // redeploys without needing a persistent filesystem mount.
+  const { getLogoSource } = require('./logo-paths');
   const tryPaths = [logoFile, 'logo.png'].filter(Boolean);
-  let logoOnDisk = null;
-  for (const f of tryPaths) {
-    const abs = resolveLogoPath(f);
-    if (abs) { logoOnDisk = abs; break; }
-  }
+  const logoOnDisk = getLogoSource('ispl', tryPaths);
 
   // The header object exposes `address1` and `address2` for backward
   // compatibility with PDF/XLSX renderers — `address2` carries the

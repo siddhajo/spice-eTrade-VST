@@ -565,17 +565,15 @@ function generateCropReceiptPDF(lot, cfg) {
   doc.fontSize(8).font('Helvetica').text(`Sl.No: ${lot.crop || ''}`, x + w - 100, y - 10, { width: 90, align: 'right' });
 
   // ── Logo (settings-driven; same file the sales invoice uses) ──
-  // resolveLogoPath checks the persistent volume first so cloud
-  // uploads aren't shadowed by the bundled default of the same name.
-  const { resolveLogoPath: _rlp1 } = require('./logo-paths');
-  const candidates = ['logo-ispl.png', 'logo_kj.png', 'logo-asp.png'];
+  // getLogoSource pulls the uploaded BLOB from company_logos when
+  // present, else falls back to the bundled candidates in /public.
+  // PDFKit's doc.image accepts both Buffer and filesystem-path forms.
+  const { getLogoSource: _gls1 } = require('./logo-paths');
+  const _logoSrc = _gls1('ispl', ['logo-ispl.png', 'logo_kj.png', 'logo-asp.png']);
   let logoDrawn = false;
-  for (const f of candidates) {
-    const p = _rlp1(f);
-    if (p) {
-      try { doc.image(p, x + 6, y - 2, { fit: [44, 44] }); logoDrawn = true; break; }
-      catch (_) { /* fall through */ }
-    }
+  if (_logoSrc) {
+    try { doc.image(_logoSrc, x + 6, y - 2, { fit: [44, 44] }); logoDrawn = true; }
+    catch (_) { /* fall through */ }
   }
 
   // ── Company block (centered, all fields from settings) ──
@@ -867,18 +865,17 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   // purchase view (issuer is the home company) → home logo.
   const useASPLogo = !isPurchaseView
                   && false; // e-Trade-only build: no sister-company context
-  const logoFile = useASPLogo ? 'logo-asp.png' : 'logo-ispl.png';
-  const fs = require('fs');
-  const { resolveLogoPath: _rlp2 } = require('./logo-paths');
-  // Try the configured logo first; fall through to the bundled default
-  // (logo_kj.png) so invoices still get a logo before the user uploads.
-  // resolveLogoPath checks the persistent volume first so an uploaded
-  // logo always wins over the bundled stale default.
-  let logoPath = _rlp2(logoFile) || _rlp2('logo_kj.png');
+  const _slot = useASPLogo ? 'asp' : 'ispl';
+  const _file = useASPLogo ? 'logo-asp.png' : 'logo-ispl.png';
+  const { getLogoSource: _gls2 } = require('./logo-paths');
+  // getLogoSource returns the uploaded BLOB from company_logos when
+  // present, else the bundled default in /public. logo_kj.png is the
+  // ultimate fallback so invoices still render a logo before any upload.
+  const logoSource = _gls2(_slot, [_file, 'logo_kj.png']);
   let logoDrawn = false;
-  if (logoPath && fs.existsSync(logoPath)) {
+  if (logoSource) {
     try {
-      doc.image(logoPath, leftX + 4, topY + 4, { fit: [60, 60] });
+      doc.image(logoSource, leftX + 4, topY + 4, { fit: [60, 60] });
       logoDrawn = true;
     } catch (_) { /* fall through to text */ }
   }
@@ -1792,13 +1789,12 @@ function generateAgriBillPDF(billData, cfg, billNo, externalDoc) {
   // alongside the text block (vertically centered against it).
   const headerStartY = y;
   // Logo: Bill of Supply is always issued by the sister, so always use the sister's
-  // logo. Optional — falls through silently if the file isn't present.
-  const _logoPath = require('./logo-paths').resolveLogoPath('logo-asp.png');
-  const _fs = require('fs');
+  // logo. Optional — falls through silently if not present (DB or disk).
+  const _logoSrc = require('./logo-paths').getLogoSource('asp', ['logo-asp.png']);
   let logoOffsetX = 0;
-  if (_logoPath && _fs.existsSync(_logoPath)) {
+  if (_logoSrc) {
     try {
-      doc.image(_logoPath, x0 + 6, headerStartY, { fit: [60, 60] });
+      doc.image(_logoSrc, x0 + 6, headerStartY, { fit: [60, 60] });
       logoOffsetX = 0; // logo lives in left gutter — text still centered
     } catch (_) { /* fall through silently */ }
   }

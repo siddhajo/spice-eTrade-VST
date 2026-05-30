@@ -168,28 +168,9 @@ async function twoUpSlipPdf(db, auctionId, opts) {
   const pageH = doc.page.height;
   const halfW = (pageW - m * 2 - gutter) / 2;
 
-  // Proportional column widths normalised to halfW. Narrow columns get
-  // bumped to MIN_COL and the wider columns donate the deficit pro-rata
-  // so single-digit values never collapse to nothing.
-  const totalWeight = columns.reduce((s, c) => s + (c.width || 12), 0);
-  const MIN_COL = 18;
-  let colW = columns.map(c => (c.width || 12) / totalWeight * halfW);
-  const deficit = colW.reduce((s, w) => s + Math.max(0, MIN_COL - w), 0);
-  if (deficit > 0) {
-    const donatePool = colW.reduce((s, w) => s + Math.max(0, w - MIN_COL), 0);
-    if (donatePool > 0) {
-      colW = colW.map(w => {
-        if (w < MIN_COL) return MIN_COL;
-        const share = (w - MIN_COL) / donatePool;
-        return w - deficit * share;
-      });
-    }
-  }
-  colW = colW.map(w => Math.max(MIN_COL, Math.floor(w)));
-  // Final pixel-correction so column widths sum exactly to halfW.
-  const diff = halfW - colW.reduce((s, w) => s + w, 0);
-  colW[colW.length - 1] = Math.max(MIN_COL, colW[colW.length - 1] + diff);
-
+  // Single font size used everywhere inside the table — header,
+  // body, totals — so the report reads as one consistent unit.
+  // Brand band / meta lines above the table keep their own sizes.
   const BASE_FONT = 8;
   const LINE_H = 9.5;
   const PAD = 6;
@@ -197,6 +178,54 @@ async function twoUpSlipPdf(db, auctionId, opts) {
   const HEAD_H = 18;
   const TOP_H = 50 + (title ? 12 : 0);
   const BODY_TOP = m + TOP_H;
+
+  // Per-column minimum width = whatever the bold header at BASE_FONT
+  // actually measures, plus 6pt padding. Earlier this was a single
+  // hard-coded MIN_COL=18, which left headers like AMOUNT (~28pt) and
+  // PRICE (~22pt) wider than their proportional column allotments —
+  // they truncated to "AMO…" / "PRI…" on the ~260pt half-page. By
+  // measuring the actual header width up front, every column is
+  // guaranteed to fit its label without an ellipsis at BASE_FONT.
+  doc.font('Helvetica-Bold').fontSize(BASE_FONT);
+  const HARD_MIN_COL = 14;   // floor for empty-header / icon-only columns
+  const minColW = columns.map(c => {
+    const w = doc.widthOfString(String(c.header || ''));
+    return Math.max(HARD_MIN_COL, Math.ceil(w + 6));
+  });
+  // The first column also has to hold the totals-row label (e.g.
+  // "Total"). Without this bump it would still get clipped to "Tot…"
+  // even though the header itself fits.
+  if (totalKeys.length && columns.length) {
+    const labelW = doc.widthOfString(String(totalLabel || ''));
+    minColW[0] = Math.max(minColW[0], Math.ceil(labelW + 6));
+  }
+
+  // Proportional column widths normalised to halfW. Narrow columns get
+  // bumped to their per-header minimum and the wider columns donate
+  // the deficit pro-rata so headers stay readable.
+  const totalWeight = columns.reduce((s, c) => s + (c.width || 12), 0);
+  let colW = columns.map(c => (c.width || 12) / totalWeight * halfW);
+  const deficit = colW.reduce((s, w, i) => s + Math.max(0, minColW[i] - w), 0);
+  if (deficit > 0) {
+    const donatePool = colW.reduce((s, w, i) => s + Math.max(0, w - minColW[i]), 0);
+    if (donatePool > 0) {
+      colW = colW.map((w, i) => {
+        if (w < minColW[i]) return minColW[i];
+        const share = (w - minColW[i]) / donatePool;
+        return w - deficit * share;
+      });
+    }
+  }
+  colW = colW.map((w, i) => Math.max(minColW[i], Math.floor(w)));
+  // Final pixel-correction so column widths sum exactly to halfW. Apply
+  // it to the widest column (not the last) so we don't squeeze code/br
+  // back below its header minimum.
+  const diff = halfW - colW.reduce((s, w) => s + w, 0);
+  if (diff !== 0) {
+    let widestIdx = 0;
+    for (let i = 1; i < colW.length; i++) if (colW[i] > colW[widestIdx]) widestIdx = i;
+    colW[widestIdx] = Math.max(minColW[widestIdx], colW[widestIdx] + diff);
+  }
   // Reserve a little extra space at the bottom for the totals strip when
   // present — otherwise it collides with the page margin on dense pages.
   const BODY_MAX_Y = pageH - m - (totalKeys.length ? 26 : 8);
@@ -297,17 +326,20 @@ async function twoUpSlipPdf(db, auctionId, opts) {
        .text(`e-TRADE No:${auction.ano}`, xOrigin, afterY + 12, { width: halfW / 2, align: 'left' });
     doc.text(`Date:${fmtDateDMY(auction.date)}`, xOrigin + halfW / 2, afterY + 12, { width: halfW / 2, align: 'right' });
     if (title) {
-      doc.font('Helvetica-Bold').fontSize(8.5)
+      doc.font('Helvetica-Bold').fontSize(BASE_FONT)
          .text(title, xOrigin, afterY + 24, { width: halfW, align: 'center' });
     }
 
     const hy = BODY_TOP;
     doc.rect(xOrigin, hy, halfW, HEAD_H).fillAndStroke('#E8E4DD', '#444');
-    doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5);
+    // BASE_FONT for the header strip — matches body cells so the table
+    // reads as one consistent unit. Column widths are guaranteed to
+    // accommodate the header at this size (see minColW above), so a
+    // plain text() call is enough; no fitText / ellipsis fallback.
+    doc.fillColor('#000').font('Helvetica-Bold').fontSize(BASE_FONT);
     let cx = xOrigin;
     columns.forEach((c, i) => {
-      const head = fitText(doc, String(c.header || ''), colW[i] - 4);
-      doc.text(head, cx + 2, hy + 5, {
+      doc.text(String(c.header || ''), cx + 2, hy + 5, {
         width: colW[i] - 4, align: 'center', lineBreak: false,
       });
       cx += colW[i];

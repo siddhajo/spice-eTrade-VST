@@ -174,6 +174,21 @@ async function initDb() {
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
+  // ── COMPANY LOGOS ──────────────────────────────────────────
+  // Uploaded company logos live in the DB as BLOBs so they persist
+  // wherever the SQLite file persists — survives Railway/Heroku
+  // redeploys without needing a separately-mounted volume for the
+  // filesystem upload directory. `key` is the logo slot ('ispl',
+  // 'asp'); `mime` is the response Content-Type; `data` is the raw
+  // bytes. Falls through to the bundled /public default when no row
+  // exists for the slot.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS company_logos (
+    key TEXT PRIMARY KEY,
+    mime TEXT NOT NULL DEFAULT 'image/png',
+    data BLOB NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
   // ── TRADER BANKS ───────────────────────────────────────────
   wrapped.exec(`CREATE TABLE IF NOT EXISTS trader_banks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

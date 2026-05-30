@@ -42,4 +42,37 @@ function resolveLogoPath(name) {
   return null;
 }
 
-module.exports = { resolveLogoPath, writePathFor, PERSISTENT_DIR, PUBLIC_DIR };
+// Read an uploaded logo BLOB from the company_logos table. Returns a
+// Buffer (which PDFKit's doc.image accepts directly) or null when no
+// row exists for the slot. Lazy require of ./db keeps this module
+// loadable even if the DB hasn't been initialised yet (e.g. during
+// startup ordering). The catch swallows pre-init failures and returns
+// null so callers always have a clean filesystem fallback path.
+function getLogoBytes(slot) {
+  try {
+    const { getDb } = require('./db');
+    const db = getDb();
+    if (!db) return null;
+    const row = db.get('SELECT data FROM company_logos WHERE key = ?', [slot]);
+    if (row && row.data && row.data.length) return Buffer.from(row.data);
+  } catch (_) { /* DB not ready or table missing — fall through */ }
+  return null;
+}
+
+// Resolve the image source for a given logo slot. Returns either a
+// Buffer (DB-stored upload) or a filesystem path string (bundled
+// default). Both forms are accepted by PDFKit's doc.image() and by
+// express's res.sendFile / res.end. `slot` is 'ispl' or 'asp';
+// `candidates` is an ordered list of filenames to try on disk if no
+// DB row exists. Returns null when nothing is available.
+function getLogoSource(slot, candidates) {
+  const buf = getLogoBytes(slot);
+  if (buf) return buf;
+  for (const f of (candidates || [])) {
+    const p = resolveLogoPath(f);
+    if (p) return p;
+  }
+  return null;
+}
+
+module.exports = { resolveLogoPath, writePathFor, getLogoBytes, getLogoSource, PERSISTENT_DIR, PUBLIC_DIR };

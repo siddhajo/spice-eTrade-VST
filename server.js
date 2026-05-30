@@ -61,28 +61,34 @@ app.use((req, res, next) => {
 // which wipe everything outside the mounted volume. Without this the
 // uploaded logo would vanish on every container restart and fall back
 // to the bundled default (logo_kj.png). See logo-paths.js.
-const { resolveLogoPath: _resolveLogoPath, writePathFor: _logoWritePath } = require('./logo-paths');
+const { resolveLogoPath: _resolveLogoPath, getLogoSource: _getLogoSource } = require('./logo-paths');
 
-// When the user hasn't uploaded a custom logo, /logo-ispl.png falls
-// through to the bundled default (logo_kj.png). The upload widget
-// writes to logo-ispl.png in the persistent volume (or /public on
-// local installs), and GET /api/company-settings/logo/ispl still
-// returns exists:false until the user uploads, so the "Upload your
+// Uploaded logos live in the company_logos BLOB table so they persist
+// across Railway/Heroku redeploys. These routes try the DB first, then
+// fall back to the bundled /public file (logo_kj.png is the ultimate
+// default when no custom upload exists). GET /api/company-settings/logo/:which
+// still returns exists:false until the user uploads, so the "Upload your
 // logo" UI state stays accurate.
+function _serveLogoBlob(req, res, which, nextOrFallback) {
+  try {
+    const row = getDb().get('SELECT mime, data FROM company_logos WHERE key = ?', [which]);
+    if (row && row.data && row.data.length) {
+      res.setHeader('Content-Type', row.mime || 'image/png');
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.end(Buffer.from(row.data));
+    }
+  } catch (_) { /* DB not ready yet — fall through to filesystem default */ }
+  nextOrFallback();
+}
 app.get('/logo-ispl.png', (req, res) => {
-  const userLogo = _resolveLogoPath('logo-ispl.png');
-  if (userLogo) return res.sendFile(userLogo);
-  const fallback = _resolveLogoPath('logo_kj.png');
-  if (fallback) return res.sendFile(fallback);
-  res.status(404).end();
+  _serveLogoBlob(req, res, 'ispl', () => {
+    const bundled = _resolveLogoPath('logo-ispl.png') || _resolveLogoPath('logo_kj.png');
+    if (bundled) return res.sendFile(bundled);
+    res.status(404).end();
+  });
 });
-// Mirror handler for ASP logo — without this, an uploaded
-// logo-asp.png in the persistent dir would never be served (the
-// static middleware only knows about /public).
 app.get('/logo-asp.png', (req, res, next) => {
-  const userLogo = _resolveLogoPath('logo-asp.png');
-  if (userLogo) return res.sendFile(userLogo);
-  next();   // fall through to static-serve if /public has the file
+  _serveLogoBlob(req, res, 'asp', () => next());
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1108,49 +1114,66 @@ app.put('/api/company-presets/:code', requireSettingsWrite, (_req, res) => {
 });
 
 // ── Logo upload/delete ────────────────────────────────────────
+// Logos are stored as BLOBs in the company_logos table so they persist
+// wherever the SQLite DB persists — no separate volume mount needed for
+// the filesystem upload directory on Railway / Heroku / Fly. The
+// historical /public/logo-*.png defaults still ship in the bundle and
+// are served as a fallback by the /logo-ispl.png and /logo-asp.png
+// routes when no DB row exists for the slot.
 // e-Trade-only build: a single 'ispl' logo. The 'asp' slot is preserved so
 // older client code that still POSTs there gets a clean error rather than
 // an unhandled exception.
-// Upload destinations — _logoWritePath returns the persistent path
-// (SPICE_DATA_DIR/logos/X) on cloud installs and /public/X on local /
-// Electron installs. Both branches make uploads survive what they need
-// to survive in their respective deployment models.
-const LOGO_FILES = {
-  ispl: _logoWritePath('logo-ispl.png'),
-  asp:  _logoWritePath('logo-asp.png'),
-};
+const LOGO_SLOTS = new Set(['ispl', 'asp']);
+function _logoMimeForExt(ext) {
+  return (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : 'image/png';
+}
 app.post('/api/company-settings/logo/:which', requireSettingsWrite, upload.single('file'), (req, res) => {
   const which = req.params.which;
-  if (!LOGO_FILES[which]) return res.status(400).json({ error: 'Invalid logo type (use ispl or asp)' });
+  if (!LOGO_SLOTS.has(which)) return res.status(400).json({ error: 'Invalid logo type (use ispl or asp)' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  // Only allow image types
   const ext = (req.file.originalname.split('.').pop() || '').toLowerCase();
   if (!['png', 'jpg', 'jpeg'].includes(ext)) {
     fs.unlinkSync(req.file.path);
     return res.status(400).json({ error: 'Only PNG or JPG images allowed' });
   }
-  // Always save as .png at the fixed path (PDFKit handles both PNG and JPEG from PNG extension? No — rename to real ext)
-  // Simpler: keep .png in the PDF code always pointing to PNG. For JPEG uploads, save as .jpg alongside.
-  const target = LOGO_FILES[which];
-  fs.copyFileSync(req.file.path, target);
-  fs.unlinkSync(req.file.path);
-  res.json({ success: true, path: `/logo-${which}.png`, size: fs.statSync(target).size });
+  // Read the uploaded file into memory and persist as a BLOB. Multer's
+  // tmp file is removed afterwards regardless of DB success so we don't
+  // leak disk space.
+  let bytes;
+  try {
+    bytes = fs.readFileSync(req.file.path);
+  } finally {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+  }
+  const mime = _logoMimeForExt(ext);
+  const db = getDb();
+  db.run(
+    `INSERT INTO company_logos (key, mime, data, updated_at)
+     VALUES (?, ?, ?, datetime('now','localtime'))
+     ON CONFLICT(key) DO UPDATE SET
+       mime = excluded.mime,
+       data = excluded.data,
+       updated_at = excluded.updated_at`,
+    [which, mime, bytes]
+  );
+  res.json({ success: true, path: `/logo-${which}.png`, size: bytes.length });
 });
 app.delete('/api/company-settings/logo/:which', requireSettingsWrite, (req, res) => {
   const which = req.params.which;
-  if (!LOGO_FILES[which]) return res.status(400).json({ error: 'Invalid logo type' });
-  const target = LOGO_FILES[which];
-  if (fs.existsSync(target)) fs.unlinkSync(target);
+  if (!LOGO_SLOTS.has(which)) return res.status(400).json({ error: 'Invalid logo type' });
+  getDb().run('DELETE FROM company_logos WHERE key = ?', [which]);
   res.json({ success: true });
 });
 // Quick probe so the UI knows whether a logo is uploaded
 app.get('/api/company-settings/logo/:which', requireView, (req, res) => {
   const which = req.params.which;
-  if (!LOGO_FILES[which]) return res.status(400).json({ error: 'Invalid logo type' });
-  const target = LOGO_FILES[which];
-  if (!fs.existsSync(target)) return res.json({ exists: false });
-  const stat = fs.statSync(target);
-  res.json({ exists: true, size: stat.size, mtime: stat.mtime });
+  if (!LOGO_SLOTS.has(which)) return res.status(400).json({ error: 'Invalid logo type' });
+  const row = getDb().get(
+    'SELECT LENGTH(data) AS size, updated_at AS mtime FROM company_logos WHERE key = ?',
+    [which]
+  );
+  if (!row || !row.size) return res.json({ exists: false });
+  res.json({ exists: true, size: row.size, mtime: row.mtime });
 });
 
 app.get('/api/company-settings/export', requireExport, (req, res) => {
