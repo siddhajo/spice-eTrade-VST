@@ -3572,11 +3572,18 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
   if (name)   { q += ' AND lots.name LIKE ?'; p.push(`%${name}%`); }
   if (buyer)  { q += ' AND lots.buyer = ?'; p.push(buyer); }
   // Free-text search within the trade — lot no, seller name, buyer
-  // code/trade name, short code, invoice no, branch. The "Code" column
+  // (short trade name), code, invoice no, branch. The "Code" column
   // shown in the Lots table is sourced from either `lots.code` (set by
   // price-import / set-buyer flows) or a join to `buyers.code` keyed
   // by `lots.buyer`. Both surfaces are searched so a user typing the
   // short alias they see on screen reliably gets a hit.
+  //
+  // `lots.buyer1` (the denormalised long buyer name) is intentionally
+  // NOT searched. The Lots table only displays the short `buyer`
+  // column; matching against `buyer1` produced rows that looked
+  // irrelevant to the operator (e.g. searching "spices" hit lots
+  // whose short buyer was "CHINNAMUTHU1" because their *full* name was
+  // "CHINNAMUTHU SPICES"). Long-name search lives on the Buyers tab.
   const searchTerm = String(search || '').trim();
   if (searchTerm) {
     const wild = `%${searchTerm}%`;
@@ -3584,7 +3591,6 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
             COALESCE(lots.lot_no,'') LIKE ?
             OR COALESCE(lots.name,'')   LIKE ?
             OR COALESCE(lots.buyer,'')  LIKE ?
-            OR COALESCE(lots.buyer1,'') LIKE ?
             OR COALESCE(lots.code,'')   LIKE ?
             OR COALESCE(lots.invo,'')   LIKE ?
             OR COALESCE(lots.branch,'') LIKE ?
@@ -3594,14 +3600,14 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
                  AND COALESCE(b.code,'') LIKE ?
             )
           )`;
-    p.push(wild, wild, wild, wild, wild, wild, wild, wild);
+    p.push(wild, wild, wild, wild, wild, wild, wild);
   }
 
   // Summary mode — returns aggregate counts only (cheap, no row data).
   // Used by the Lot Entry stats badge so it shows true totals even when
   // only a 25-row window of lots is loaded client-side. The WHERE
   // clauses below MUST stay in lockstep with the placeholders pushed
-  // onto `p` above (auction_id + branch + name + buyer + search×8) —
+  // onto `p` above (auction_id + branch + name + buyer + search×7) —
   // a mismatch silently drops or swallows parameters.
   if (summary === '1') {
     let aggSql =
@@ -3614,11 +3620,12 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
       + (name   ? ' AND lots.name LIKE ?' : '')
       + (buyer  ? ' AND lots.buyer = ?' : '');
     if (searchTerm) {
+      // Same column set as the main GET — buyer1 intentionally excluded
+      // so the summary count matches what the operator sees in the table.
       aggSql += ` AND (
             COALESCE(lots.lot_no,'') LIKE ?
             OR COALESCE(lots.name,'')   LIKE ?
             OR COALESCE(lots.buyer,'')  LIKE ?
-            OR COALESCE(lots.buyer1,'') LIKE ?
             OR COALESCE(lots.code,'')   LIKE ?
             OR COALESCE(lots.invo,'')   LIKE ?
             OR COALESCE(lots.branch,'') LIKE ?
