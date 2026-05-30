@@ -7441,17 +7441,22 @@ async function loadTradeSummary(){
     return;
   }
   body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--spice-text-hint)">Loading…</div>';
+  // Indian-style comma formatting (1,23,456 / 1,23,456.789). Used
+  // across totals, branch/grade/seller/user tables so big numbers
+  // stay readable at a glance.
+  const fmtInt = n => Number(n||0).toLocaleString('en-IN');
+  const fmtKg  = n => Number(n||0).toLocaleString('en-IN', { minimumFractionDigits:3, maximumFractionDigits:3 });
   try{
     const qs = branch ? `?branch=${encodeURIComponent(branch)}` : '';
     const d = await j('/api/reports/trade-summary/' + aid + qs);
     // Totals strip
     const t = d.totals || {};
     const items = [
-      { l:'Lots',       v: t.lot_count||0 },
-      { l:'Bags',       v: t.total_bags||0 },
-      { l:'Qty (kg)',   v: Number(t.total_qty||0).toFixed(3) },
-      { l:'Sellers',    v: t.seller_count||0 },
-      { l:'Branches',   v: t.branch_count||0 },
+      { l:'Lots',       v: fmtInt(t.lot_count) },
+      { l:'Bags',       v: fmtInt(t.total_bags) },
+      { l:'Qty (kg)',   v: fmtKg(t.total_qty) },
+      { l:'Sellers',    v: fmtInt(t.seller_count) },
+      { l:'Branches',   v: fmtInt(t.branch_count) },
     ];
     totalsBox.style.display = 'grid';
     totalsBox.innerHTML = items.map(i =>
@@ -7460,8 +7465,8 @@ async function loadTradeSummary(){
     const ba = d.branchAggregates || {};
     const baScope = ba.branch ? `Branch: ${esc(ba.branch)}` : 'All Branches';
     const aggCells = [
-      { l:'Sold (kg)',      v: Number((ba.sold && ba.sold.qty)||0).toFixed(3) },
-      { l:'Withdrawn (kg)', v: Number((ba.withdrawn && ba.withdrawn.qty)||0).toFixed(3) },
+      { l:'Sold (kg)',      v: fmtKg((ba.sold && ba.sold.qty)||0) },
+      { l:'Withdrawn (kg)', v: fmtKg((ba.withdrawn && ba.withdrawn.qty)||0) },
       { l:'Min Price',      v: Number(ba.min||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
       { l:'Max Price',      v: Number(ba.max||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
       { l:'Avg Price',      v: Number(ba.avg||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) },
@@ -7499,7 +7504,7 @@ async function loadTradeSummary(){
       const minP = Number(b.min_price||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
       const maxP = Number(b.max_price||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
       const avgP = Number(b.avg_price||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
-      branchTable += `<tr><td><strong>${esc(b.branch||'-')}</strong></td><td style="text-align:right">${b.lot_count}</td><td style="text-align:right;font-weight:600">${Number(b.sold_qty||0).toFixed(3)}</td><td style="text-align:right">${Number(b.withdrawn_qty||0).toFixed(3)}</td><td style="text-align:right">${minP}</td><td style="text-align:right">${maxP}</td><td style="text-align:right">${avgP}</td><td style="text-align:right">${b.seller_count||0}</td></tr>`;
+      branchTable += `<tr><td><strong>${esc(b.branch||'-')}</strong></td><td style="text-align:right">${fmtInt(b.lot_count)}</td><td style="text-align:right;font-weight:600">${fmtKg(b.sold_qty)}</td><td style="text-align:right">${fmtKg(b.withdrawn_qty)}</td><td style="text-align:right">${minP}</td><td style="text-align:right">${maxP}</td><td style="text-align:right">${avgP}</td><td style="text-align:right">${fmtInt(b.seller_count)}</td></tr>`;
     });
     branchTable += '</tbody></table>';
     html += section('Per-Branch', bw.length + ' branch' + (bw.length===1?'':'es'), branchTable, { open: true });
@@ -7508,7 +7513,7 @@ async function loadTradeSummary(){
     const gw = d.gradeWise || [];
     if (gw.length) {
       let gradeTable = '<table><thead><tr><th>Grade</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th><th style="text-align:right">Sellers</th></tr></thead><tbody>';
-      gw.forEach(g => { gradeTable += `<tr><td>${esc(g.grade||'-')}</td><td style="text-align:right">${g.lot_count}</td><td style="text-align:right">${g.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(g.total_qty||0).toFixed(3)}</td><td style="text-align:right">${g.seller_count||0}</td></tr>`; });
+      gw.forEach(g => { gradeTable += `<tr><td>${esc(g.grade||'-')}</td><td style="text-align:right">${fmtInt(g.lot_count)}</td><td style="text-align:right">${fmtInt(g.total_bags)}</td><td style="text-align:right;font-weight:600">${fmtKg(g.total_qty)}</td><td style="text-align:right">${fmtInt(g.seller_count)}</td></tr>`; });
       gradeTable += '</tbody></table>';
       html += section('By Grade', gw.length + ' grade' + (gw.length===1?'':'s'), gradeTable, { open: false });
     }
@@ -7523,14 +7528,14 @@ async function loadTradeSummary(){
       const lim = savedLimit === 'all' ? sw.length : Math.min(parseInt(savedLimit,10) || 25, sw.length);
       const visible = savedLimit === 'all' ? sw : sw.slice(0, lim);
       let sellerTable = '<table><thead><tr><th style="width:32px;text-align:right">#</th><th>Seller</th><th>Branch</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th></tr></thead><tbody>';
-      visible.forEach((s, i) => { sellerTable += `<tr><td style="text-align:right;color:var(--text3);font-size:11px">${i+1}</td><td><strong>${esc(s.seller_name)}</strong></td><td>${esc(s.branch||'')}</td><td style="text-align:right">${s.lot_count}</td><td style="text-align:right">${s.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(s.total_qty||0).toFixed(3)}</td></tr>`; });
+      visible.forEach((s, i) => { sellerTable += `<tr><td style="text-align:right;color:var(--text3);font-size:11px">${i+1}</td><td><strong>${esc(s.seller_name)}</strong></td><td>${esc(s.branch||'')}</td><td style="text-align:right">${fmtInt(s.lot_count)}</td><td style="text-align:right">${fmtInt(s.total_bags)}</td><td style="text-align:right;font-weight:600">${fmtKg(s.total_qty)}</td></tr>`; });
       sellerTable += '</tbody></table>';
       const opts = ['5','10','25','50','100','all'].map(v => {
         const lbl = v==='all' ? 'All' : 'Top '+v;
         const sel = v===savedLimit ? ' selected' : '';
         return `<option value="${v}"${sel}>${lbl}</option>`;
       }).join('');
-      const limitCtrl = `Showing ${visible.length} of ${sw.length}`
+      const limitCtrl = `Showing ${fmtInt(visible.length)} of ${fmtInt(sw.length)}`
         + ` &nbsp;<select onchange="event.stopPropagation();repSetTopSellersLimit(this.value)" onclick="event.stopPropagation()"`
         + ` style="height:24px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--text);margin-left:6px">${opts}</select>`;
       html += section('Top Sellers', limitCtrl, sellerTable, { open: false });
@@ -7543,7 +7548,8 @@ async function loadTradeSummary(){
       let hourlyBars = '<div style="display:flex;gap:4px;align-items:flex-end;height:120px;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow-x:auto">';
       hr.forEach(h => {
         const pct = (Number(h.total_qty) || 0) / maxQty * 100;
-        hourlyBars += `<div style="flex:1;min-width:36px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end"><div title="${h.lot_count} lots · ${Number(h.total_qty||0).toFixed(1)} kg" style="width:100%;height:${pct}%;background:var(--green);border-radius:3px 3px 0 0;min-height:2px"></div><div style="font-size:10px;color:var(--spice-text-mute);margin-top:4px">${esc(h.hour)}h</div></div>`;
+        const qtyTxt = Number(h.total_qty||0).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1});
+        hourlyBars += `<div style="flex:1;min-width:36px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end"><div title="${fmtInt(h.lot_count)} lots · ${qtyTxt} kg" style="width:100%;height:${pct}%;background:var(--green);border-radius:3px 3px 0 0;min-height:2px"></div><div style="font-size:10px;color:var(--spice-text-mute);margin-top:4px">${esc(h.hour)}h</div></div>`;
       });
       hourlyBars += '</div>';
       html += section('Hourly Pace', hr.length + ' hour' + (hr.length===1?'':'s'), hourlyBars, { open: false });
@@ -7553,7 +7559,7 @@ async function loadTradeSummary(){
     const uw = d.userWise || [];
     if (d.showUsername && uw.length) {
       let userTable = '<table><thead><tr><th>User</th><th style="text-align:right">Lots</th><th style="text-align:right">Bags</th><th style="text-align:right">Qty (kg)</th></tr></thead><tbody>';
-      uw.forEach(u => { userTable += `<tr><td><strong>${esc(u.user_id||'')}</strong></td><td style="text-align:right">${u.lot_count}</td><td style="text-align:right">${u.total_bags||0}</td><td style="text-align:right;font-weight:600">${Number(u.total_qty||0).toFixed(3)}</td></tr>`; });
+      uw.forEach(u => { userTable += `<tr><td><strong>${esc(u.user_id||'')}</strong></td><td style="text-align:right">${fmtInt(u.lot_count)}</td><td style="text-align:right">${fmtInt(u.total_bags)}</td><td style="text-align:right;font-weight:600">${fmtKg(u.total_qty)}</td></tr>`; });
       userTable += '</tbody></table>';
       html += section('By Operator', uw.length + ' operator' + (uw.length===1?'':'s'), userTable, { open: false });
     }
