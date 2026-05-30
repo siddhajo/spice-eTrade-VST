@@ -849,8 +849,20 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
 
 async function exportPdf(db, type, auctionId, cfg, extra = {}) {
   // Specialized renderers — these don't use the generic table layout.
+  // lot_slip + lot_slip_after + lot_buyer + lot_name all share the
+  // carbon-copy two-up layout (twoUpSlipPdf in auction-reports.js) so
+  // the office staff get the same tear-off shape on every lot report.
   if (type === 'lot_slip') {
     return auctionReports.lotSlipPdf(db, auctionId, cfg, extra);
+  }
+  if (type === 'lot_slip_after') {
+    return auctionReports.lotSlipAfterPdf(db, auctionId, cfg, extra);
+  }
+  if (type === 'lot_buyer') {
+    return auctionReports.lotBuyerPdf(db, auctionId);
+  }
+  if (type === 'lot_name') {
+    return auctionReports.lotNamePdf(db, auctionId);
   }
   if (type === 'collection') {
     return auctionReports.collectionPdf(db, auctionId);

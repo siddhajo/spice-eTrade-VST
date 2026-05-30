@@ -124,9 +124,36 @@ function getLotSlipPreRows(db, auctionId, state) {
   );
 }
 
-async function lotSlipPdf(db, auctionId, _cfg, extra) {
+// Generic carbon-copy two-up slip renderer. Two identical halves per A4
+// page so the operator can tear the page down the gutter and hand one
+// half to the seller / buyer / etc. lotSlipPdf (pre-trade) was the only
+// caller originally; lot-slip-after, lot-buyer and lot-name now share
+// the same layout so the office staff don't have to remember which
+// report uses which format.
+//
+// opts = {
+//   title,      — optional string shown under the brand band on each half
+//   columns,    — [{ key, header, width, align?, fmt?, blank? }]
+//                 width is a relative weight, normalised to half-page width.
+//                 blank=true renders an empty cell (pre-trade PRICE column).
+//                 fmt is an optional formatter; falls back to header-driven
+//                 defaults (QTY → 3-decimal, money → 2-decimal-comma, etc.)
+//   rows,       — data rows (objects keyed by columns[*].key)
+//   totalKeys,  — column keys to sum and surface in the totals strip
+//   totalLabel, — text shown in the first column of the totals strip
+// }
+async function twoUpSlipPdf(db, auctionId, opts) {
   const auction = getAuctionHeader(db, auctionId);
-  const rows = getLotSlipPreRows(db, auctionId, extra && extra.state);
+  const {
+    title = '',
+    columns,
+    rows,
+    totalKeys = [],
+    totalLabel = 'Total',
+  } = opts;
+  if (!Array.isArray(columns) || !columns.length) {
+    throw new Error('twoUpSlipPdf: columns is required');
+  }
 
   const doc = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 18 });
   const buffers = [];
@@ -141,21 +168,36 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
   const pageH = doc.page.height;
   const halfW = (pageW - m * 2 - gutter) / 2;
 
-  // 4 cols: LOT | BAG | QTY | PRICE
-  const colW = [
-    Math.floor(halfW * 0.20),
-    Math.floor(halfW * 0.18),
-    Math.floor(halfW * 0.30),
-    0,
-  ];
-  colW[3] = halfW - colW[0] - colW[1] - colW[2];
+  // Proportional column widths normalised to halfW. Narrow columns get
+  // bumped to MIN_COL and the wider columns donate the deficit pro-rata
+  // so single-digit values never collapse to nothing.
+  const totalWeight = columns.reduce((s, c) => s + (c.width || 12), 0);
+  const MIN_COL = 18;
+  let colW = columns.map(c => (c.width || 12) / totalWeight * halfW);
+  const deficit = colW.reduce((s, w) => s + Math.max(0, MIN_COL - w), 0);
+  if (deficit > 0) {
+    const donatePool = colW.reduce((s, w) => s + Math.max(0, w - MIN_COL), 0);
+    if (donatePool > 0) {
+      colW = colW.map(w => {
+        if (w < MIN_COL) return MIN_COL;
+        const share = (w - MIN_COL) / donatePool;
+        return w - deficit * share;
+      });
+    }
+  }
+  colW = colW.map(w => Math.max(MIN_COL, Math.floor(w)));
+  // Final pixel-correction so column widths sum exactly to halfW.
+  const diff = halfW - colW.reduce((s, w) => s + w, 0);
+  colW[colW.length - 1] = Math.max(MIN_COL, colW[colW.length - 1] + diff);
 
   const ROW_H = 16;
   const HEAD_H = 18;
-  const TOP_H = 50;
+  const TOP_H = 50 + (title ? 12 : 0);
   const BODY_TOP = m + TOP_H;
-  const BODY_MAX_Y = pageH - m - 8;
-  const ROWS_PER_HALF = Math.floor((BODY_MAX_Y - BODY_TOP - HEAD_H) / ROW_H);
+  // Reserve a little extra space at the bottom for the totals strip when
+  // present — otherwise it collides with the page margin on dense pages.
+  const BODY_MAX_Y = pageH - m - (totalKeys.length ? 24 : 8);
+  const ROWS_PER_HALF = Math.max(1, Math.floor((BODY_MAX_Y - BODY_TOP - HEAD_H) / ROW_H));
   const totalPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_HALF));
 
   // Resolve company branding once. The lot-slip carbon-copy halves are
@@ -163,26 +205,52 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
   // multi-line address — only the company name fits.
   const companyHeader = getCompanyHeader(db);
 
+  // Header-driven default formatter — QTY → 3-decimal, money columns →
+  // 2-decimal Indian commas, otherwise stringify. Per-column .fmt wins.
+  function fmtCell(val, col) {
+    if (col.blank) return '';
+    if (val == null || val === '') return '';
+    if (typeof col.fmt === 'function') return col.fmt(val);
+    const h = String(col.header || '').toUpperCase();
+    if (typeof val === 'number') {
+      if (h === 'QTY' || h === 'KILOS' || h === 'QUANTITY' || h === 'PQTY' || h === 'LITRE') return fmtQty(val);
+      if (Number.isInteger(val) && (h === 'BAG' || h === 'BAGS' || h === 'LOTS')) return String(val);
+      if (h === 'LOT') return String(val);
+      return fmtMoney(val);
+    }
+    return String(val);
+  }
+  function alignFor(col, ci) {
+    if (col.align) return col.align;
+    return ci === 0 ? 'center' : 'right';
+  }
+
   function drawHalfHeader(xOrigin, page) {
-    // Compact company brand band (no title/meta — too narrow for three cols).
+    // Compact company brand band (no full address — too narrow).
     const afterY = drawCompanyHeader(doc, companyHeader, {
       x: xOrigin, y: m, width: halfW,
       logoH: 22, logoW: 22, showAddress: false,
     });
     // Page / e-TRADE / Date metadata stacks beneath the brand band.
-    doc.font('Helvetica').fontSize(8)
+    doc.font('Helvetica').fontSize(8).fillColor('#000')
        .text(`Page: ${page}`, xOrigin, afterY, { width: halfW, align: 'right' });
     doc.font('Helvetica-Bold').fontSize(9)
        .text(`e-TRADE No:${auction.ano}`, xOrigin, afterY + 12, { width: halfW / 2, align: 'left' });
     doc.text(`Date:${fmtDateDMY(auction.date)}`, xOrigin + halfW / 2, afterY + 12, { width: halfW / 2, align: 'right' });
+    if (title) {
+      doc.font('Helvetica-Bold').fontSize(8.5)
+         .text(title, xOrigin, afterY + 24, { width: halfW, align: 'center' });
+    }
 
     const hy = BODY_TOP;
     doc.rect(xOrigin, hy, halfW, HEAD_H).fillAndStroke('#E8E4DD', '#444');
-    doc.fillColor('#000').font('Helvetica-Bold').fontSize(9);
-    const heads = ['LOT', 'BAG', 'QTY', 'PRICE'];
+    doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5);
     let cx = xOrigin;
-    heads.forEach((h, i) => {
-      doc.text(h, cx + 2, hy + 5, { width: colW[i] - 4, align: 'center', lineBreak: false });
+    columns.forEach((c, i) => {
+      const head = fitText(doc, String(c.header || ''), colW[i] - 4);
+      doc.text(head, cx + 2, hy + 5, {
+        width: colW[i] - 4, align: 'center', lineBreak: false,
+      });
       cx += colW[i];
     });
   }
@@ -193,20 +261,13 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
 
     sliceRows.forEach((r, i) => {
       if (i % 2 === 1) doc.rect(xOrigin, ry, halfW, ROW_H).fill('#F7F5F2');
-      doc.fillColor('#000').font('Helvetica').fontSize(9);
-      const cells = [
-        String(r.lot),
-        String(r.bag || 0),
-        fmtQty(r.qty),
-        '', // PRICE intentionally blank
-      ];
+      doc.fillColor('#000').font('Helvetica').fontSize(8.5);
       let cx = xOrigin;
-      cells.forEach((v, ci) => {
-        const align = ci === 0 ? 'center' : 'right';
-        doc.text(v, cx + 2, ry + 4, {
-          width: colW[ci] - 4,
-          align,
-          lineBreak: false, ellipsis: true,
+      columns.forEach((c, ci) => {
+        const raw = fmtCell(r[c.key], c);
+        const text = fitText(doc, raw, colW[ci] - 4);
+        doc.text(text, cx + 2, ry + 4, {
+          width: colW[ci] - 4, align: alignFor(c, ci), lineBreak: false,
         });
         cx += colW[ci];
       });
@@ -227,19 +288,27 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
     doc.rect(xOrigin, tblTop, halfW, ry - tblTop)
        .lineWidth(0.5).strokeColor('#444').stroke();
 
-    // Grand total on the last page
-    if (isLastPage) {
-      const totBag = rows.reduce((s, r) => s + (Number(r.bag) || 0), 0);
-      const totQty = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    // Grand total on the last page only
+    if (isLastPage && totalKeys.length) {
+      const tot = {};
+      for (const k of totalKeys) tot[k] = rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
       const ty = ry + 2;
       doc.rect(xOrigin, ty, halfW, ROW_H + 2).fillAndStroke('#FFF3CD', '#E0B020');
-      doc.fillColor('#000').font('Helvetica-Bold').fontSize(9);
-      // Distribute totals: 'Total' label in LOT col, then BAG, QTY (PRICE blank)
-      const cells = ['Total', String(totBag), fmtQty(totQty), ''];
+      doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5);
       let cx = xOrigin;
-      cells.forEach((v, ci) => {
-        const align = ci === 0 ? 'center' : 'right';
-        doc.text(v, cx + 2, ty + 5, { width: colW[ci] - 4, align, lineBreak: false });
+      columns.forEach((c, ci) => {
+        let txt;
+        if (ci === 0) {
+          txt = totalLabel;
+        } else if (totalKeys.includes(c.key)) {
+          txt = fmtCell(tot[c.key], c);
+        } else {
+          txt = '';
+        }
+        txt = fitText(doc, txt, colW[ci] - 4);
+        doc.text(txt, cx + 2, ty + 5, {
+          width: colW[ci] - 4, align: alignFor(c, ci), lineBreak: false,
+        });
         cx += colW[ci];
       });
       // Verticals through the total row too
@@ -278,6 +347,118 @@ async function lotSlipPdf(db, auctionId, _cfg, extra) {
   return new Promise(resolve => {
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.end();
+  });
+}
+
+// Pre-trade lot slip — LOT | BAG | QTY | PRICE (PRICE blank for hand-fill).
+// Now a thin wrapper around twoUpSlipPdf so the layout stays in sync with
+// the after-trade / by-buyer / by-name variants.
+async function lotSlipPdf(db, auctionId, _cfg, extra) {
+  const rows = getLotSlipPreRows(db, auctionId, extra && extra.state);
+  return twoUpSlipPdf(db, auctionId, {
+    columns: [
+      { key: 'lot',   header: 'LOT',   width: 20, align: 'center' },
+      { key: 'bag',   header: 'BAG',   width: 18, align: 'right' },
+      { key: 'qty',   header: 'QTY',   width: 30, align: 'right', fmt: fmtQty },
+      { key: 'price', header: 'PRICE', width: 32, align: 'right', blank: true },
+    ],
+    rows,
+    totalKeys: ['bag', 'qty'],
+  });
+}
+
+// Post-trade lot slip — adds PRICE, AMOUNT, CODE. NAME stays alongside so
+// the operator can audit per-seller hammer rates without flipping reports.
+// STATE is dropped from the slip-style layout (state is either filtered
+// via the URL or uniform per row — adds noise without adding info on a
+// narrow half-page).
+async function lotSlipAfterPdf(db, auctionId, _cfg, extra) {
+  const state = extra && extra.state;
+  const rows = db.all(
+    `SELECT lot_no AS lot, COALESCE(name,'') AS name,
+            bags AS bag, qty, price, amount, COALESCE(code,'') AS code
+       FROM lots
+      WHERE auction_id = ? ${state ? 'AND state = ?' : ''}
+      ORDER BY CAST(lot_no AS INTEGER), lot_no`,
+    state ? [auctionId, state] : [auctionId]
+  );
+  return twoUpSlipPdf(db, auctionId, {
+    title: 'LOT SLIP (AFTER TRADE)',
+    columns: [
+      { key: 'lot',    header: 'LOT',    width: 10, align: 'center' },
+      { key: 'name',   header: 'NAME',   width: 36, align: 'left' },
+      { key: 'bag',    header: 'BAG',    width: 8,  align: 'right' },
+      { key: 'qty',    header: 'QTY',    width: 16, align: 'right', fmt: fmtQty },
+      { key: 'price',  header: 'PRICE',  width: 12, align: 'right', fmt: fmtPrice },
+      { key: 'amount', header: 'AMOUNT', width: 20, align: 'right', fmt: fmtMoney },
+      { key: 'code',   header: 'CODE',   width: 10, align: 'center' },
+    ],
+    rows,
+    totalKeys: ['bag', 'qty', 'amount'],
+  });
+}
+
+// Lot Buyer — LOT | BUYER | BR | BAG | QTY. BR is the state abbreviation
+// (KL / TN / etc.) so a tear-off slip is small enough to stuff into a
+// trade pouch without folding.
+async function lotBuyerPdf(db, auctionId) {
+  const rows = db.all(
+    `SELECT lot_no AS lot, COALESCE(buyer,'') AS buyer,
+            CASE UPPER(COALESCE(state,''))
+              WHEN 'KERALA'     THEN 'KL'
+              WHEN 'TAMIL NADU' THEN 'TN'
+              ELSE UPPER(SUBSTR(COALESCE(state,''), 1, 2))
+            END AS br,
+            bags AS bag, qty
+       FROM lots
+      WHERE auction_id = ?
+      ORDER BY CAST(lot_no AS INTEGER), lot_no`,
+    [auctionId]
+  );
+  return twoUpSlipPdf(db, auctionId, {
+    title: 'LOT BUYER',
+    columns: [
+      { key: 'lot',   header: 'LOT',   width: 10, align: 'center' },
+      { key: 'buyer', header: 'BUYER', width: 36, align: 'left' },
+      { key: 'br',    header: 'BR',    width: 8,  align: 'center' },
+      { key: 'bag',   header: 'BAG',   width: 8,  align: 'right' },
+      { key: 'qty',   header: 'QTY',   width: 16, align: 'right', fmt: fmtQty },
+    ],
+    rows,
+    totalKeys: ['bag', 'qty'],
+  });
+}
+
+// Lot Name — LOT | NAME | BR | BAG | QTY | PRICE | CONTROL.
+// CONTROL is intentionally blank — it's a hand-write column for the
+// auctioneer's control number (matches the FoxPro report layout).
+async function lotNamePdf(db, auctionId) {
+  const rows = db.all(
+    `SELECT lot_no AS lot, COALESCE(name,'') AS name,
+            CASE UPPER(COALESCE(state,''))
+              WHEN 'KERALA'     THEN 'KL'
+              WHEN 'TAMIL NADU' THEN 'TN'
+              ELSE UPPER(SUBSTR(COALESCE(state,''), 1, 2))
+            END AS br,
+            bags AS bag, qty, price
+       FROM lots
+      WHERE auction_id = ?
+      ORDER BY CAST(lot_no AS INTEGER), lot_no`,
+    [auctionId]
+  );
+  return twoUpSlipPdf(db, auctionId, {
+    title: 'LOT NAME',
+    columns: [
+      { key: 'lot',     header: 'LOT',     width: 10, align: 'center' },
+      { key: 'name',    header: 'NAME',    width: 36, align: 'left' },
+      { key: 'br',      header: 'BR',      width: 7,  align: 'center' },
+      { key: 'bag',     header: 'BAG',     width: 7,  align: 'right' },
+      { key: 'qty',     header: 'QTY',     width: 14, align: 'right', fmt: fmtQty },
+      { key: 'price',   header: 'PRICE',   width: 10, align: 'right', fmt: fmtPrice },
+      { key: 'control', header: 'CONTROL', width: 12, align: 'center', blank: true },
+    ],
+    rows,
+    totalKeys: ['bag', 'qty'],
   });
 }
 
@@ -1298,6 +1479,13 @@ async function tradeReportPdf(db, auctionId) {
 module.exports = {
   // Lot slip — PDF only (XLSX stays in exports.js)
   lotSlipPdf,
+  // After-trade / by-buyer / by-name variants share the carbon-copy
+  // two-up layout via twoUpSlipPdf — exported so exports-pdf.js can
+  // route the corresponding export types to them instead of the
+  // generic single-column renderTablePdf.
+  lotSlipAfterPdf,
+  lotBuyerPdf,
+  lotNamePdf,
   // Collection — both formats
   collectionXlsx,
   collectionPdf,
