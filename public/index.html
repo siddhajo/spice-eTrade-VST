@@ -12498,18 +12498,65 @@ function appendBankRow(b){
   row.className = 'bank-row';
   row.style.cssText = 'display:grid;grid-template-columns:1.2fr 1.4fr 1fr 1.2fr auto;gap:8px;align-items:end;padding:8px;background:#fff;border:1px solid var(--border);border-radius:6px';
   // Use fieldsets so the inputs are clearly grouped, with mini-labels.
+  // The bank-branch hint sits under Bank Name and is populated by the
+  // IFSC auto-lookup (Razorpay public API) when the IFSC field changes.
   row.innerHTML = `
-    <div class="fg" style="margin:0"><label style="font-size:11px">Bank Name</label><input class="bank-name" value="${esc(b.bank_name||'')}" placeholder="e.g. HDFC"></div>
+    <div class="fg" style="margin:0">
+      <label style="font-size:11px">Bank Name</label>
+      <input class="bank-name" value="${esc(b.bank_name||'')}" placeholder="e.g. HDFC">
+      <div class="bank-branch-hint" style="font-size:11px;color:var(--text3);margin-top:2px;min-height:14px">${b.branch ? 'Branch: '+esc(b.branch) : ''}</div>
+      <input type="hidden" class="bank-branch" value="${esc(b.branch||'')}">
+    </div>
     <div class="fg" style="margin:0"><label style="font-size:11px">Account No</label><input class="bank-acctnum" value="${esc(b.acctnum||'')}"></div>
-    <div class="fg" style="margin:0"><label style="font-size:11px">IFSC</label><input class="bank-ifsc" value="${esc(b.ifsc||'')}" style="text-transform:uppercase"></div>
+    <div class="fg" style="margin:0"><label style="font-size:11px">IFSC</label><input class="bank-ifsc" value="${esc(b.ifsc||'')}" style="text-transform:uppercase" oninput="onBankIfscInput(this)" onblur="lookupBankByIfsc(this)"></div>
     <div class="fg" style="margin:0"><label style="font-size:11px">Holder Name</label><input class="bank-holder" value="${esc(b.holder_name||'')}"></div>
     <button type="button" class="btn btn-o" onclick="this.closest('.bank-row').remove()" title="Remove this bank" style="padding:6px 10px;font-size:12px">✕</button>
   `;
   c.appendChild(row);
 }
-// Collect the current bank rows into an array of {bank_name, acctnum,
-// ifsc, holder_name}. Skips rows where both acctnum and ifsc are blank
-// (treated as "never filled in").
+
+// IFSC → bank/branch auto-lookup via Razorpay's free public IFSC API.
+// Fires once the user types a full 11-char IFSC code (debounced via the
+// input event) and again on blur as a safety net. The lookup populates
+// the Bank Name field (only if blank, to avoid stomping a manual entry)
+// and the read-only branch hint below it. Failures (offline, 404, bad
+// code) are silent — user can still fill the fields manually.
+const _ifscLookupCache = new Map(); // ifsc → {BANK, BRANCH} or null
+let _ifscLookupTimer = null;
+function onBankIfscInput(input){
+  const v = input.value.trim().toUpperCase();
+  if (v.length < 11) return;
+  clearTimeout(_ifscLookupTimer);
+  _ifscLookupTimer = setTimeout(() => lookupBankByIfsc(input), 350);
+}
+async function lookupBankByIfsc(input){
+  const row = input.closest('.bank-row');
+  if (!row) return;
+  const ifsc = input.value.trim().toUpperCase();
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return;
+  const nameEl   = row.querySelector('.bank-name');
+  const hintEl   = row.querySelector('.bank-branch-hint');
+  const branchEl = row.querySelector('.bank-branch');
+  let data;
+  if (_ifscLookupCache.has(ifsc)) {
+    data = _ifscLookupCache.get(ifsc);
+  } else {
+    try {
+      const r = await fetch('https://ifsc.razorpay.com/' + encodeURIComponent(ifsc));
+      data = r.ok ? await r.json() : null;
+    } catch (_) { data = null; }
+    _ifscLookupCache.set(ifsc, data);
+  }
+  if (!data) { hintEl.textContent = ''; return; }
+  // Only overwrite Bank Name when blank — preserves any manual edit.
+  if (nameEl && !nameEl.value.trim() && data.BANK) nameEl.value = data.BANK;
+  if (branchEl) branchEl.value = data.BRANCH || '';
+  if (hintEl)   hintEl.textContent = data.BRANCH ? 'Branch: ' + data.BRANCH : '';
+}
+
+// Collect the current bank rows into an array of {bank_name, branch,
+// acctnum, ifsc, holder_name}. Skips rows where both acctnum and ifsc
+// are blank (treated as "never filled in").
 function collectBankRows(){
   const c = document.getElementById('t-banks-container');
   if (!c) return [];
@@ -12517,11 +12564,12 @@ function collectBankRows(){
   const banks = [];
   for (const r of rows) {
     const bank_name   = r.querySelector('.bank-name').value.trim();
+    const branch      = (r.querySelector('.bank-branch')?.value || '').trim();
     const acctnum     = r.querySelector('.bank-acctnum').value.trim();
     const ifsc        = r.querySelector('.bank-ifsc').value.trim().toUpperCase();
     const holder_name = r.querySelector('.bank-holder').value.trim();
     if (!acctnum && !ifsc) continue; // blank row — skip
-    banks.push({ bank_name, acctnum, ifsc, holder_name });
+    banks.push({ bank_name, branch, acctnum, ifsc, holder_name });
   }
   return banks;
 }

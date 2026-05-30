@@ -1430,7 +1430,7 @@ app.get('/api/traders', requireViewOrLotEntry, (req, res) => {
     const ids = rows.map(r => r.id);
     const placeholders = ids.map(() => '?').join(',');
     const banks = db.all(
-      `SELECT id, trader_id, bank_name, acctnum, ifsc, holder_name, is_default
+      `SELECT id, trader_id, bank_name, branch, acctnum, ifsc, holder_name, is_default
        FROM trader_banks WHERE trader_id IN (${placeholders})
        ORDER BY trader_id, is_default DESC, id`, ids
     );
@@ -1656,7 +1656,7 @@ app.get('/api/traders/:id', requireViewOrLotEntry, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Not found' });
   // Attach banks array so the edit modal sees all bank accounts.
   row.banks = db.all(
-    'SELECT id, trader_id, bank_name, acctnum, ifsc, holder_name, is_default FROM trader_banks WHERE trader_id = ? ORDER BY is_default DESC, id',
+    'SELECT id, trader_id, bank_name, branch, acctnum, ifsc, holder_name, is_default FROM trader_banks WHERE trader_id = ? ORDER BY is_default DESC, id',
     [row.id]
   );
   res.json(row);
@@ -1673,8 +1673,8 @@ function syncTraderBanks(db, traderId, banks) {
   db.run('DELETE FROM trader_banks WHERE trader_id = ?', [traderId]);
   for (const b of arr) {
     db.run(
-      'INSERT INTO trader_banks (trader_id, bank_name, acctnum, ifsc, holder_name) VALUES (?,?,?,?,?)',
-      [traderId, b.bank_name||'', String(b.acctnum||''), String(b.ifsc||''), b.holder_name||'']
+      'INSERT INTO trader_banks (trader_id, bank_name, branch, acctnum, ifsc, holder_name) VALUES (?,?,?,?,?,?)',
+      [traderId, b.bank_name||'', b.branch||'', String(b.acctnum||''), String(b.ifsc||''), b.holder_name||'']
     );
   }
   // Mirror first bank into traders row for legacy compatibility
@@ -3762,6 +3762,13 @@ const LOT_UPDATE_COLUMNS = new Set([
   'isp_pqty','isp_prate','isp_puramt','asp_pqty','asp_prate','asp_puramt'
 ]);
 
+// Fields that feed calculateLot. When a PUT touches any of these, the
+// endpoint re-runs the planter-side calc so the dependent columns
+// (prate/puramt/com/cgst/sgst/igst/bilamt/advance/balance) stay
+// consistent with the new inputs. Kept in sync with the reads inside
+// calculations.js → calculateLot.
+const CALC_TRIGGER_FIELDS = ['price','qty','grade','refud','cr'];
+
 app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   const l = req.body; const sets = []; const vals = [];
   const db = getDb();
@@ -3811,6 +3818,27 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   if (sets.length === 0) return res.json({ success: true });
   vals.push(lotId);
   db.run(`UPDATE lots SET ${sets.join(',')} WHERE id=?`, vals);
+  // If a field that feeds calculateLot changed, refresh the planter-side
+  // columns in-place. Otherwise `prate`/`puramt`/`com`/`cgst`/`sgst`/
+  // `igst`/`bilamt`/`advance`/`balance` stay frozen at their pre-edit
+  // values until the operator clicks Calculate All — and the generate
+  // endpoints' auto-calc only heals rows where `puramt = 0`, so a
+  // stale-but-non-zero puramt would silently flow into purchase
+  // invoices / bills / debit notes after a price tweak.
+  //
+  // Skip locked lots (same rule Calculate All uses — finalised planter
+  // numbers must not be overwritten). Admins editing a locked lot must
+  // unlock + Calculate All explicitly if they want the cascade.
+  if (current && !current.locked_at &&
+      CALC_TRIGGER_FIELDS.some(f => Object.prototype.hasOwnProperty.call(l, f))) {
+    const fresh = db.get('SELECT * FROM lots WHERE id = ?', [lotId]);
+    if (fresh && ((fresh.amount > 0) || (fresh.qty > 0 && fresh.price > 0))) {
+      const cfg = getSettingsFlat(db);
+      const calc = calculateLot(fresh, cfg);
+      db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
+        [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lotId]);
+    }
+  }
   // Any lot edit invalidates a previous price-check stamp — the data
   // the verify run looked at has changed. Operator must re-verify
   // before the next calculate/invoice/etc.

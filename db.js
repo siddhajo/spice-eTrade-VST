@@ -179,6 +179,7 @@ async function initDb() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trader_id INTEGER NOT NULL,
     bank_name TEXT DEFAULT '',
+    branch TEXT DEFAULT '',
     acctnum TEXT NOT NULL,
     ifsc TEXT NOT NULL,
     holder_name TEXT DEFAULT '',
@@ -625,6 +626,11 @@ async function initDb() {
     // for audit/UI display; permission is decided from req.user.role.
     'ALTER TABLE lots ADD COLUMN locked_at TEXT DEFAULT NULL',
     'ALTER TABLE lots ADD COLUMN locked_by TEXT DEFAULT NULL',
+    // Branch name for a seller's bank account. Auto-populated in the
+    // Sellers add/edit modal when the user types a valid IFSC (Razorpay
+    // public IFSC API). Saved so reports / invoices can show the branch
+    // without re-querying the network.
+    "ALTER TABLE trader_banks ADD COLUMN branch TEXT DEFAULT ''",
   ];
   for (const m of migrations) {
     try { wrapped.exec(m); console.log('Migration applied:', m); }
