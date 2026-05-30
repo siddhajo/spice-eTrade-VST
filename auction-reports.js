@@ -190,15 +190,16 @@ async function twoUpSlipPdf(db, auctionId, opts) {
   const diff = halfW - colW.reduce((s, w) => s + w, 0);
   colW[colW.length - 1] = Math.max(MIN_COL, colW[colW.length - 1] + diff);
 
-  const ROW_H = 16;
+  const BASE_FONT = 8;
+  const LINE_H = 9.5;
+  const PAD = 6;
+  const MIN_ROW_H = 14;
   const HEAD_H = 18;
   const TOP_H = 50 + (title ? 12 : 0);
   const BODY_TOP = m + TOP_H;
   // Reserve a little extra space at the bottom for the totals strip when
   // present — otherwise it collides with the page margin on dense pages.
-  const BODY_MAX_Y = pageH - m - (totalKeys.length ? 24 : 8);
-  const ROWS_PER_HALF = Math.max(1, Math.floor((BODY_MAX_Y - BODY_TOP - HEAD_H) / ROW_H));
-  const totalPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_HALF));
+  const BODY_MAX_Y = pageH - m - (totalKeys.length ? 26 : 8);
 
   // Resolve company branding once. The lot-slip carbon-copy halves are
   // narrow, so the brand band uses a small (22pt) logo and skips the
@@ -224,6 +225,64 @@ async function twoUpSlipPdf(db, auctionId, opts) {
     if (col.align) return col.align;
     return ci === 0 ? 'center' : 'right';
   }
+  // Match the renderTablePdf semantics: numeric headers render single-line
+  // with font auto-shrink, everything else word-wraps. Without this, a
+  // 6-digit AMOUNT or a long NAME on a ~260pt half-page would either get
+  // chopped by ellipsis (the reported bug) or wrap into a meaningless
+  // fragment.
+  function isNumericCol(col) {
+    const h = String(col.header || '').toUpperCase();
+    return /^(QTY|BAG|BAGS|PRICE|RATE|AMOUNT|PQTY|PRATE|PURAMT|PURCHAMT|CGST|SGST|IGST|TCS|TOTAL|DISCOUNT|PAYABLE|ADVANCE|BALANCE|LITRE|LOTS|TDS|COST|NET|GUNNY|TRANSPORT|INSURANCE|CARDAMOM|ROUND|BILAMT|COM|KILOS)$/.test(h);
+  }
+  // Shrink the font for a numeric value until the rendered string fits on
+  // one line — `fmtMoney(537540) → "5,37,540.00"` is wider than the half-
+  // page AMOUNT column at the base size. Falls back to 5pt minimum (below
+  // that the digit shapes start melting into each other).
+  function fitNumericFontSize(text, maxWidth, baseSize, isBold) {
+    doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica');
+    let size = baseSize;
+    doc.fontSize(size);
+    while (size > 5 && doc.widthOfString(text) > maxWidth) {
+      size -= 0.5;
+      doc.fontSize(size);
+    }
+    return size;
+  }
+
+  // Pre-measure rows: text cells wrap onto multiple lines if needed,
+  // numeric cells stay single-line. Row height is driven by the tallest
+  // cell in each row.
+  doc.font('Helvetica').fontSize(BASE_FONT);
+  const measured = rows.map(r => {
+    const wrapped = columns.map((c, ci) => {
+      const text = fmtCell(r[c.key], c);
+      const cellW = colW[ci] - 4;
+      if (isNumericCol(c)) return [String(text)];   // single-line; shrink at draw
+      return wrapText(doc, String(text), cellW);
+    });
+    const maxLines = Math.max(1, ...wrapped.map(ls => ls.length));
+    const rowH = Math.max(MIN_ROW_H, maxLines * LINE_H + PAD);
+    return { wrapped, rowH };
+  });
+
+  // Group rows into pages — fit as many as the half-page can hold given
+  // each row's measured height. Carbon-copy halves get the SAME slice on
+  // both sides so the tear-off duplicate is identical to the original.
+  const pages = [];
+  let currentPage = [];
+  let pageHeightUsed = 0;
+  const usableYPerPage = BODY_MAX_Y - (BODY_TOP + HEAD_H);
+  measured.forEach((mr, idx) => {
+    if (pageHeightUsed + mr.rowH > usableYPerPage && currentPage.length) {
+      pages.push(currentPage);
+      currentPage = [];
+      pageHeightUsed = 0;
+    }
+    currentPage.push({ row: rows[idx], measured: mr });
+    pageHeightUsed += mr.rowH;
+  });
+  if (currentPage.length) pages.push(currentPage);
+  if (!pages.length) pages.push([]);   // empty result still gets one page
 
   function drawHalfHeader(xOrigin, page) {
     // Compact company brand band (no full address — too narrow).
@@ -255,26 +314,42 @@ async function twoUpSlipPdf(db, auctionId, opts) {
     });
   }
 
-  function drawHalfRows(xOrigin, sliceRows, isLastPage) {
+  function drawHalfRows(xOrigin, pageEntries, isLastPage) {
     let ry = BODY_TOP + HEAD_H;
     const tblTop = BODY_TOP;
 
-    sliceRows.forEach((r, i) => {
-      if (i % 2 === 1) doc.rect(xOrigin, ry, halfW, ROW_H).fill('#F7F5F2');
-      doc.fillColor('#000').font('Helvetica').fontSize(8.5);
+    pageEntries.forEach((entry, i) => {
+      const { measured: mr } = entry;
+      if (i % 2 === 1) doc.rect(xOrigin, ry, halfW, mr.rowH).fill('#F7F5F2');
       let cx = xOrigin;
       columns.forEach((c, ci) => {
-        const raw = fmtCell(r[c.key], c);
-        const text = fitText(doc, raw, colW[ci] - 4);
-        doc.text(text, cx + 2, ry + 4, {
-          width: colW[ci] - 4, align: alignFor(c, ci), lineBreak: false,
-        });
+        const lines = mr.wrapped[ci];
+        const cellW = colW[ci] - 4;
+        const align = alignFor(c, ci);
+        if (isNumericCol(c) && lines.length === 1) {
+          // Numeric: single-line + shrink-to-fit so totals never get
+          // chopped to "…" mid-number.
+          const size = fitNumericFontSize(lines[0], cellW, BASE_FONT, false);
+          doc.fillColor('#000').font('Helvetica').fontSize(size);
+          doc.text(lines[0], cx + 2, ry + 4, {
+            width: cellW, align, lineBreak: false,
+          });
+        } else {
+          // Text: render every wrapped line so long names don't get
+          // truncated. NAME / BUYER columns are the main consumers.
+          doc.fillColor('#000').font('Helvetica').fontSize(BASE_FONT);
+          lines.forEach((line, li) => {
+            doc.text(line, cx + 2, ry + 4 + li * LINE_H, {
+              width: cellW, align, lineBreak: false,
+            });
+          });
+        }
         cx += colW[ci];
       });
       // Horizontal row separator
-      doc.moveTo(xOrigin, ry + ROW_H).lineTo(xOrigin + halfW, ry + ROW_H)
+      doc.moveTo(xOrigin, ry + mr.rowH).lineTo(xOrigin + halfW, ry + mr.rowH)
          .lineWidth(0.25).strokeColor('#999').stroke();
-      ry += ROW_H;
+      ry += mr.rowH;
     });
 
     // Vertical column separators
@@ -292,43 +367,48 @@ async function twoUpSlipPdf(db, auctionId, opts) {
     if (isLastPage && totalKeys.length) {
       const tot = {};
       for (const k of totalKeys) tot[k] = rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+      const TOT_H = 16;
       const ty = ry + 2;
-      doc.rect(xOrigin, ty, halfW, ROW_H + 2).fillAndStroke('#FFF3CD', '#E0B020');
-      doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5);
+      doc.rect(xOrigin, ty, halfW, TOT_H + 2).fillAndStroke('#FFF3CD', '#E0B020');
       let cx = xOrigin;
       columns.forEach((c, ci) => {
         let txt;
-        if (ci === 0) {
-          txt = totalLabel;
-        } else if (totalKeys.includes(c.key)) {
-          txt = fmtCell(tot[c.key], c);
+        if (ci === 0) txt = totalLabel;
+        else if (totalKeys.includes(c.key)) txt = fmtCell(tot[c.key], c);
+        else txt = '';
+        const cellW = colW[ci] - 4;
+        const align = alignFor(c, ci);
+        if (isNumericCol(c) && txt) {
+          // Bold totals also auto-shrink — at the base size, the SUM of
+          // AMOUNT for a busy trade can easily exceed the column width.
+          const size = fitNumericFontSize(txt, cellW, BASE_FONT, true);
+          doc.fillColor('#000').font('Helvetica-Bold').fontSize(size);
+          doc.text(txt, cx + 2, ty + 5, { width: cellW, align, lineBreak: false });
         } else {
-          txt = '';
+          doc.fillColor('#000').font('Helvetica-Bold').fontSize(BASE_FONT);
+          doc.text(fitText(doc, txt, cellW), cx + 2, ty + 5, {
+            width: cellW, align, lineBreak: false,
+          });
         }
-        txt = fitText(doc, txt, colW[ci] - 4);
-        doc.text(txt, cx + 2, ty + 5, {
-          width: colW[ci] - 4, align: alignFor(c, ci), lineBreak: false,
-        });
         cx += colW[ci];
       });
       // Verticals through the total row too
       let vx2 = xOrigin;
       for (let ci = 0; ci < colW.length - 1; ci++) {
         vx2 += colW[ci];
-        doc.moveTo(vx2, ty).lineTo(vx2, ty + ROW_H + 2)
+        doc.moveTo(vx2, ty).lineTo(vx2, ty + TOT_H + 2)
            .lineWidth(0.25).strokeColor('#E0B020').stroke();
       }
     }
   }
 
-  for (let i = 0; i < totalPages; i++) {
+  pages.forEach((pageRows, i) => {
     if (i > 0) doc.addPage();
-    const slice = rows.slice(i * ROWS_PER_HALF, (i + 1) * ROWS_PER_HALF);
-    const isLast = (i === totalPages - 1);
+    const isLast = (i === pages.length - 1);
     drawHalfHeader(m, i + 1);
-    drawHalfRows(m, slice, isLast);
+    drawHalfRows(m, pageRows, isLast);
     drawHalfHeader(m + halfW + gutter, i + 1);
-    drawHalfRows(m + halfW + gutter, slice, isLast);
+    drawHalfRows(m + halfW + gutter, pageRows, isLast);
 
     // Vertical dashed cut-line down the middle of the gutter — a tearing
     // guide so the page can be split into two copies. A small "✂" hint at
@@ -342,7 +422,7 @@ async function twoUpSlipPdf(db, auctionId, opts) {
     doc.restore();
     doc.font('Helvetica').fontSize(10).fillColor('#888')
        .text('✂', cutX - 4, m - 12, { lineBreak: false });
-  }
+  });
 
   return new Promise(resolve => {
     doc.on('end', () => resolve(Buffer.concat(buffers)));
