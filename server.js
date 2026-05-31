@@ -8914,6 +8914,259 @@ app.get('/api/stats/revenue-trend', requireView, (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// INSIGHTS — per-trade × per-branch analytics
+// ══════════════════════════════════════════════════════════════
+//
+// Powers the Insights tab. Single endpoint that returns everything
+// the page renders so the UI is one fetch + one render instead of
+// N coordinated calls. Date range defaults to the current calendar
+// month; clamped to a sane window so a runaway query string can't
+// pull a multi-year scan.
+//
+// Returns:
+//   range            — {from, to} actually used (after clamping)
+//   totals           — overall KPIs across the range
+//   perTrade         — one row per auction in range, with branch-level
+//                      sub-breakdown baked in (saves a second round
+//                      trip when the user expands a trade row)
+//   perBranch        — branch-level rollup across all trades in range,
+//                      including SUM(lots.balance) as payable_to_sellers
+//   branchStacked    — pre-shaped {labels, datasets} for a stacked
+//                      Chart.js bar (each trade is a bar, each branch
+//                      a stack segment).
+//   outstandingByBuyer — sales totals per buyer in the range. Without
+//                      a payment-tracking table the totals double as
+//                      "outstanding" (every invoice is treated as
+//                      unpaid); the column label in the UI makes that
+//                      assumption explicit.
+//   buyerActivity    — top buyers by value across the range with lots
+//                      / qty / value (mirrors the existing top-sellers
+//                      leaderboard on the regular dashboard, but on
+//                      the buy-side).
+//
+// All SUM/aggregation happens in SQL where it can (one pass per scope)
+// and the final pivot for the stacked bar happens in JS so the
+// branches-on-X-axis logic stays readable.
+app.get('/api/insights', requireView, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const db = getDb();
+
+  // Date window — default to the current calendar month. Server-side
+  // clamping is the source of truth; the UI date pickers can pass
+  // anything but a malformed string falls back to defaults silently.
+  const today = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const isoMonthStart = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
+  const isoToday      = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const from = dateRe.test(String(req.query.from || '')) ? String(req.query.from) : isoMonthStart;
+  const to   = dateRe.test(String(req.query.to   || '')) ? String(req.query.to)   : isoToday;
+
+  // Helper SQL fragment — "is this lot actually sold?" Code blank
+  // means no buyer was assigned; "WD" means withdrawn. Anything else
+  // is a real hammer transaction and counts towards min/max/avg price.
+  const SOLD = `(UPPER(COALESCE(l.code,'')) <> '' AND UPPER(COALESCE(l.code,'')) <> 'WD')`;
+  const WD   = `(UPPER(COALESCE(l.code,'')) = 'WD')`;
+
+  // ── Per-trade rollup ──────────────────────────────────────
+  const tradeRows = db.all(
+    `SELECT
+       a.id AS auction_id, a.ano, a.date, COALESCE(a.state, '') AS state,
+       COUNT(l.id) AS lots,
+       SUM(CASE WHEN ${SOLD} THEN 1 ELSE 0 END) AS sold,
+       SUM(CASE WHEN ${WD}   THEN 1 ELSE 0 END) AS withdrawn,
+       SUM(CASE WHEN COALESCE(l.code,'') = '' THEN 1 ELSE 0 END) AS unsold,
+       COALESCE(SUM(l.qty), 0) AS qty,
+       MIN(CASE WHEN l.price > 0 AND ${SOLD} THEN l.price END) AS min_price,
+       MAX(CASE WHEN l.price > 0 AND ${SOLD} THEN l.price END) AS max_price,
+       COALESCE(SUM(CASE WHEN ${SOLD} THEN l.amount ELSE 0 END), 0) AS sold_value,
+       COALESCE(SUM(CASE WHEN ${SOLD} THEN l.qty    ELSE 0 END), 0) AS sold_qty,
+       COALESCE(SUM(l.amount), 0) AS value
+     FROM auctions a
+     LEFT JOIN lots l ON l.auction_id = a.id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     GROUP BY a.id, a.ano, a.date, a.state
+     ORDER BY a.date DESC, CAST(a.ano AS INTEGER) DESC, a.ano DESC`,
+    [from, to]
+  );
+
+  // ── Per-trade × per-branch breakdown — fetched in one pass and
+  // bucketed onto the parent trade so the UI can expand a trade
+  // row to see its branch contributions without another fetch.
+  const tradeBranchRows = db.all(
+    `SELECT
+       l.auction_id,
+       COALESCE(NULLIF(TRIM(l.branch),''), '—') AS branch,
+       COUNT(l.id) AS lots,
+       COALESCE(SUM(l.qty), 0) AS qty,
+       COALESCE(SUM(l.amount), 0) AS value
+     FROM lots l
+     JOIN auctions a ON a.id = l.auction_id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     GROUP BY l.auction_id, COALESCE(NULLIF(TRIM(l.branch),''), '—')`,
+    [from, to]
+  );
+  const branchesByTrade = new Map();
+  for (const r of tradeBranchRows) {
+    if (!branchesByTrade.has(r.auction_id)) branchesByTrade.set(r.auction_id, []);
+    branchesByTrade.get(r.auction_id).push({
+      branch: r.branch,
+      lots:   Number(r.lots) || 0,
+      qty:    Number(r.qty)  || 0,
+      value:  Number(r.value)|| 0,
+    });
+  }
+  const perTrade = tradeRows.map(t => ({
+    auction_id: t.auction_id,
+    ano:   t.ano,
+    date:  t.date,
+    state: t.state,
+    lots:      Number(t.lots)      || 0,
+    sold:      Number(t.sold)      || 0,
+    withdrawn: Number(t.withdrawn) || 0,
+    unsold:    Number(t.unsold)    || 0,
+    qty:       Number(t.qty)       || 0,
+    min_price: t.min_price == null ? null : Number(t.min_price),
+    max_price: t.max_price == null ? null : Number(t.max_price),
+    avg_price: Number(t.sold_qty) > 0 ? Number(t.sold_value) / Number(t.sold_qty) : 0,
+    value:     Number(t.value)     || 0,
+    branches: (branchesByTrade.get(t.auction_id) || []).sort((a, b) => b.value - a.value),
+  }));
+
+  // ── Per-branch rollup across the entire window ────────────
+  const branchRows = db.all(
+    `SELECT
+       COALESCE(NULLIF(TRIM(l.branch),''), '—') AS branch,
+       COUNT(l.id) AS lots,
+       SUM(CASE WHEN ${SOLD} THEN 1 ELSE 0 END) AS sold,
+       SUM(CASE WHEN ${WD}   THEN 1 ELSE 0 END) AS withdrawn,
+       SUM(CASE WHEN COALESCE(l.code,'') = '' THEN 1 ELSE 0 END) AS unsold,
+       COALESCE(SUM(l.qty), 0) AS qty,
+       MIN(CASE WHEN l.price > 0 AND ${SOLD} THEN l.price END) AS min_price,
+       MAX(CASE WHEN l.price > 0 AND ${SOLD} THEN l.price END) AS max_price,
+       COALESCE(SUM(CASE WHEN ${SOLD} THEN l.amount ELSE 0 END), 0) AS sold_value,
+       COALESCE(SUM(CASE WHEN ${SOLD} THEN l.qty    ELSE 0 END), 0) AS sold_qty,
+       COALESCE(SUM(l.amount), 0) AS value,
+       COALESCE(SUM(l.balance), 0) AS payable_to_sellers
+     FROM lots l
+     JOIN auctions a ON a.id = l.auction_id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     GROUP BY COALESCE(NULLIF(TRIM(l.branch),''), '—')
+     ORDER BY value DESC`,
+    [from, to]
+  );
+  const perBranch = branchRows.map(r => ({
+    branch:    r.branch,
+    lots:      Number(r.lots)      || 0,
+    sold:      Number(r.sold)      || 0,
+    withdrawn: Number(r.withdrawn) || 0,
+    unsold:    Number(r.unsold)    || 0,
+    qty:       Number(r.qty)       || 0,
+    min_price: r.min_price == null ? null : Number(r.min_price),
+    max_price: r.max_price == null ? null : Number(r.max_price),
+    avg_price: Number(r.sold_qty) > 0 ? Number(r.sold_value) / Number(r.sold_qty) : 0,
+    value:     Number(r.value)     || 0,
+    payable_to_sellers: Number(r.payable_to_sellers) || 0,
+  }));
+
+  // ── Stacked bar series — pivot perTrade × perBranch into a
+  // Chart.js-ready {labels, datasets} shape. Cap to the top 20
+  // trades by date so the chart stays readable; the user can
+  // narrow the date window to see more.
+  const stackedTrades = perTrade.slice(0, 20);
+  const branchUniverse = Array.from(new Set(
+    stackedTrades.flatMap(t => t.branches.map(b => b.branch))
+  )).sort();
+  const branchStacked = {
+    labels: stackedTrades.map(t => `${t.ano} · ${String(t.date || '').slice(5)}`),
+    branches: branchUniverse,
+    datasets: branchUniverse.map(name => ({
+      label: name,
+      data: stackedTrades.map(t => {
+        const hit = t.branches.find(b => b.branch === name);
+        return hit ? hit.value : 0;
+      }),
+    })),
+  };
+
+  // ── Outstanding by buyer — invoices in the window, summed per
+  // buyer code. Without a payments table every invoice total is
+  // treated as outstanding; the UI labels the column accordingly.
+  const outstandingByBuyer = db.all(
+    `SELECT
+       COALESCE(NULLIF(TRIM(i.buyer1), ''), TRIM(i.buyer)) AS buyer_code,
+       COALESCE(NULLIF(TRIM(i.buyer1), ''), TRIM(i.buyer)) AS buyer_name,
+       COUNT(*) AS invoices,
+       COALESCE(SUM(i.tot), 0) AS value
+     FROM invoices i
+     WHERE date(i.date) BETWEEN date(?) AND date(?)
+     GROUP BY COALESCE(NULLIF(TRIM(i.buyer1), ''), TRIM(i.buyer))
+     HAVING buyer_code IS NOT NULL AND buyer_code <> ''
+     ORDER BY value DESC
+     LIMIT 50`,
+    [from, to]
+  ).map(r => ({
+    buyer_code: r.buyer_code,
+    buyer_name: r.buyer_name,
+    invoices: Number(r.invoices) || 0,
+    value: Number(r.value) || 0,
+  }));
+
+  // ── Buyer activity leaderboard — same source as outstanding but
+  // pulled from lots (one row per lot the buyer hammered) so we
+  // can show lots + qty + value, not just invoice totals.
+  const buyerActivity = db.all(
+    `SELECT
+       COALESCE(NULLIF(TRIM(l.buyer1), ''), TRIM(l.buyer)) AS buyer_name,
+       COALESCE(NULLIF(TRIM(l.code),  ''), TRIM(l.buyer))  AS buyer_code,
+       COUNT(l.id) AS lots,
+       COALESCE(SUM(l.qty), 0) AS qty,
+       COALESCE(SUM(l.amount), 0) AS value
+     FROM lots l
+     JOIN auctions a ON a.id = l.auction_id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)
+       AND ${SOLD}
+     GROUP BY COALESCE(NULLIF(TRIM(l.buyer1), ''), TRIM(l.buyer))
+     HAVING buyer_name IS NOT NULL AND buyer_name <> ''
+     ORDER BY value DESC
+     LIMIT 10`,
+    [from, to]
+  ).map(r => ({
+    buyer_code: r.buyer_code,
+    buyer_name: r.buyer_name,
+    lots: Number(r.lots) || 0,
+    qty:  Number(r.qty)  || 0,
+    value: Number(r.value) || 0,
+  }));
+
+  // ── Overall KPIs — derived from perTrade so totals always agree
+  // with the per-trade table the user is looking at.
+  const totals = perTrade.reduce((a, t) => ({
+    trades:    a.trades + 1,
+    lots:      a.lots      + t.lots,
+    sold:      a.sold      + t.sold,
+    withdrawn: a.withdrawn + t.withdrawn,
+    qty:       a.qty       + t.qty,
+    value:     a.value     + t.value,
+  }), { trades: 0, lots: 0, sold: 0, withdrawn: 0, qty: 0, value: 0 });
+  totals.payable_to_sellers = perBranch.reduce((s, b) => s + b.payable_to_sellers, 0);
+  totals.outstanding_by_buyers = outstandingByBuyer.reduce((s, b) => s + b.value, 0);
+  // Weighted avg price across sold lots in the window.
+  const totalSoldValue = perTrade.reduce((s, t) => s + (t.avg_price > 0 ? (t.avg_price * (t.qty * (t.sold / Math.max(1, t.lots)))) : 0), 0);
+  totals.avg_price = totals.qty > 0 ? (totals.value / totals.qty) : 0;
+
+  res.json({
+    range: { from, to },
+    totals,
+    perTrade,
+    perBranch,
+    branchStacked,
+    outstandingByBuyer,
+    buyerActivity,
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
 // START
 // ══════════════════════════════════════════════════════════════
 function repairBadDates(db) {
