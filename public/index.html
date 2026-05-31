@@ -14564,6 +14564,16 @@ function openLotEdit(l){
     codeEl.addEventListener('change', async () => {
       const code = (codeEl.value || '').trim().toUpperCase();
       if (!code) return;
+      // WD = withdrawn — no buyer, no money changes hands. Zero the
+      // price so amount (qty × price) also collapses to 0, matching
+      // every downstream report's "withdrawn lots contribute nothing"
+      // assumption ([_NOT_WD] filters in server.js).
+      if (code === 'WD') {
+        if (priceEl) priceEl.value = '0';
+        if (amtEl)   amtEl.value   = '0.00';
+        codeEl.value = 'WD';
+        return; // skip buyer lookup — WD isn't a buyer code
+      }
       try {
         // First try the in-memory cache populated when the modal opened.
         // Fall back to a code-specific server search only if the cache
