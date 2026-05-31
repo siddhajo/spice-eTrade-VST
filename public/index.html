@@ -18022,15 +18022,23 @@ async function _renderInsights(){
     .ins-branch-scroll { max-height:560px; overflow:auto; padding:2px; margin:-2px }
 
     /* ── KPI tiles ───────────────────────────────────────── */
-    .ins-kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:18px }
-    .ins-kpi { position:relative; padding:16px 16px 16px 18px; border-radius:14px; display:flex; gap:12px; align-items:center; color:#fff; box-shadow:0 6px 16px var(--ins-glow,rgba(16,185,129,.28)); overflow:hidden; transition:transform .15s ease, box-shadow .15s ease }
+    .ins-kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin-bottom:18px }
+    .ins-kpi { position:relative; padding:16px 16px 16px 18px; border-radius:14px; display:flex; gap:12px; align-items:center; color:#fff; box-shadow:0 6px 16px var(--ins-glow,rgba(16,185,129,.28)); overflow:hidden; transition:transform .15s ease, box-shadow .15s ease; min-width:0 }
     .ins-kpi:hover { transform:translateY(-2px); box-shadow:0 10px 24px var(--ins-glow,rgba(16,185,129,.32)) }
     .ins-kpi::before { content:''; position:absolute; inset:0; background:radial-gradient(circle at 110% -10%, rgba(255,255,255,.22), transparent 55%); pointer-events:none }
     .ins-kpi::after  { content:''; position:absolute; right:-30px; bottom:-30px; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.08); pointer-events:none }
     .ins-kpi-icon { width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.22); display:flex; align-items:center; justify-content:center; font-size:22px; flex-shrink:0; backdrop-filter:blur(6px); position:relative; z-index:1 }
-    .ins-kpi-body { position:relative; z-index:1 }
-    .ins-kpi-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; opacity:.92 }
-    .ins-kpi-value { font-size:22px; font-weight:800; letter-spacing:-.5px; margin-top:2px; line-height:1.1 }
+    /* min-width:0 lets the body shrink inside the flex parent;
+       without it the value text refuses to wrap and gets clipped by
+       the parent's overflow:hidden, hiding the right end of large
+       numbers like "₹6,944,006.10". */
+    .ins-kpi-body { position:relative; z-index:1; flex:1; min-width:0 }
+    .ins-kpi-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; opacity:.92; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    /* Use clamp() so the value shrinks gracefully on narrow tiles
+       (small laptops, dashboards) without going below readable size.
+       overflow-wrap:anywhere is a safety net for very long currency
+       strings that have no natural break points. */
+    .ins-kpi-value { font-size:clamp(16px, 1.6vw, 22px); font-weight:800; letter-spacing:-.5px; margin-top:2px; line-height:1.15; overflow-wrap:anywhere; word-break:break-word }
 
     /* ── Filter strip ────────────────────────────────────── */
     .ins-filter { padding:14px 18px; margin-bottom:16px; border-radius:14px; background:linear-gradient(135deg, #ECFDF5 0%, #F0F9FF 100%); border:1px solid #BBF7D0 }
@@ -18102,10 +18110,14 @@ async function _renderInsights(){
   </style>`;
 
   // ── KPI tile builder — gradient background + icon + value.
+  // Strip HTML entities for the title attribute so the hover tooltip
+  // shows the human-readable value even on tiles where the rendered
+  // text was wrapped or shrunk by clamp().
   const kpi = (icon, label, value, theme) => {
     const t = _INS_THEMES[theme] || _INS_THEMES.emerald;
+    const plain = String(value).replace(/<[^>]+>/g, '');
     return `
-      <div class="ins-kpi" style="background:${_insGrad(theme)}; --ins-glow:${t.glow}">
+      <div class="ins-kpi" style="background:${_insGrad(theme)}; --ins-glow:${t.glow}" title="${esc(label)}: ${esc(plain)}">
         <div class="ins-kpi-icon">${icon}</div>
         <div class="ins-kpi-body">
           <div class="ins-kpi-label">${esc(label)}</div>
