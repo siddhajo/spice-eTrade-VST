@@ -3761,11 +3761,29 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
     }
   }
 
-  db.run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,moisture,user_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [auctionId,lotNoStr,l.crop||'',l.grade||'',l.crpt||'',branch,l.state||'TAMIL NADU',l.trader_id||null,l.name||'',l.padd||'',l.ppla||'',l.ppin||'',l.pstate||'',l.pst_code||'',l.cr||'',l.pan||'',l.tel||'',l.aadhar||'',l.bags||0,l.litre||'',l.qty||0,l.gross_wt||0,l.sample_wt||0,l.moisture||'',l.user_id||'']);
+  // Crop receipt number — per-trade running counter. Auto-assigned at
+  // INSERT time so it's atomic and race-free across concurrent saves
+  // (the SELECT MAX + INSERT runs inside a single JS turn, and SQLite
+  // serialises writes). If the client supplied an explicit value, honour
+  // it (allows backfill / manual override during edits / imports).
+  let cropReceiptNo = null;
+  if (l.crop_receipt_no != null && l.crop_receipt_no !== '') {
+    const n = parseInt(l.crop_receipt_no, 10);
+    if (Number.isFinite(n) && n > 0) cropReceiptNo = n;
+  }
+  if (cropReceiptNo == null) {
+    const maxRow = db.get(
+      'SELECT MAX(crop_receipt_no) AS m FROM lots WHERE auction_id = ?',
+      [auctionId]
+    );
+    cropReceiptNo = ((maxRow && maxRow.m) || 0) + 1;
+  }
+
+  db.run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,weight_with_gunny,moisture,crop_receipt_no,reserved_price,user_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [auctionId,lotNoStr,l.crop||'',l.grade||'',l.crpt||'',branch,l.state||'TAMIL NADU',l.trader_id||null,l.name||'',l.padd||'',l.ppla||'',l.ppin||'',l.pstate||'',l.pst_code||'',l.cr||'',l.pan||'',l.tel||'',l.aadhar||'',l.bags||0,l.litre||'',l.qty||0,l.gross_wt||0,l.sample_wt||0,Number(l.weight_with_gunny)||0,l.moisture||'',cropReceiptNo,Number(l.reserved_price)||0,l.user_id||'']);
   pcClearGate(db, auctionId);
-  res.json({ success: true });
+  res.json({ success: true, crop_receipt_no: cropReceiptNo });
 });
 
 // Whitelist of columns that PUT /api/lots/:id is allowed to update.
@@ -3777,7 +3795,8 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
 const LOT_UPDATE_COLUMNS = new Set([
   'lot_no','crop','grade','crpt','branch','state','trader_id',
   'name','padd','ppla','ppin','pstate','pst_code','cr','pan','tel','aadhar',
-  'bags','litre','qty','gross_wt','sample_wt','moisture',
+  'bags','litre','qty','gross_wt','sample_wt','weight_with_gunny','moisture',
+  'crop_receipt_no','reserved_price',
   'price','amount','code','buyer','buyer1','sale','invo',
   'pqty','prate','puramt','com','sertax','cgst','sgst','igst',
   'dcgst','dsgst','digst','refud','refund','advance','balance','bilamt','paid',
@@ -7380,7 +7399,7 @@ app.get('/api/payments/bank/:auctionId', requireView, (req, res) => {
 // Lightweight A4 PDF showing the payment due to one seller for one
 // auction: header, seller block, lots breakdown, totals. Powers both
 // "Print" and "WhatsApp" actions on the Payments tab.
-function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
+function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]) || { ano:'', date:'' };
   // The lots schema has no `rate` column — alias `prate` (per-kg purchase
   // rate post-calculation) as `rate` for the cols->key mapping below.
@@ -7390,15 +7409,27 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg) {
   // Match seller by trimmed/case-insensitive name so legacy rows whose
   // `name` was stored with trailing whitespace or mixed case still pair
   // up — same fallback the trader lookup below already uses.
-  const lots = db.all(
-    `SELECT lot_no, qty, prate AS rate, amount, puramt, refund, balance, cgst, sgst, igst
+  //
+  // Optional `lotIds` narrows the statement to a caller-chosen subset of
+  // the seller's lots — supports the Payments tab's "partial payment"
+  // flow where the operator picks specific lots to settle now and leaves
+  // the rest for a later visit.
+  const lotIdFilter = Array.isArray(lotIds)
+    ? lotIds.map(n => parseInt(n, 10)).filter(Number.isFinite)
+    : [];
+  let lotSql = `SELECT id, lot_no, qty, prate AS rate, amount, puramt, refund, balance, cgst, sgst, igst
        FROM lots
       WHERE auction_id = ?
         AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?))
-        AND amount > 0
-      ORDER BY CAST(lot_no AS INTEGER), lot_no`,
-    [auctionId, sellerName]
-  ) || [];
+        AND amount > 0`;
+  const lotParams = [auctionId, sellerName];
+  if (lotIdFilter.length) {
+    const placeholders = lotIdFilter.map(() => '?').join(',');
+    lotSql += ` AND id IN (${placeholders})`;
+    lotParams.push(...lotIdFilter);
+  }
+  lotSql += ' ORDER BY CAST(lot_no AS INTEGER), lot_no';
+  const lots = db.all(lotSql, lotParams) || [];
   const trader = db.get('SELECT * FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [sellerName]);
   const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
@@ -7485,6 +7516,39 @@ app.get('/api/payments/pdf/:auctionId/:sellerName', requireView, (req, res) => {
     doc.pipe(res); piped = true;
     res.on('close', () => { try { doc.destroy(); } catch(_){} });
     _renderPaymentStatement(doc, db, auctionId, sellerName, cfg);
+    doc.end();
+  } catch (e) {
+    if (piped && doc) { try { doc.end(); } catch(_){} }
+    else if (!res.headersSent) res.status(500).json({ error: e.message || 'PDF failed' });
+  }
+});
+
+// Per-seller, lot-filtered PDF. Body { auction_id, seller_name, lot_ids: [...] }
+// Powers the Payments tab's "partial payment" flow — operator opens the
+// lots-detail modal for one seller, ticks the lots they're settling now,
+// and prints a statement that only covers that subset. Remaining lots
+// can be paid in a later run with the same flow.
+app.post('/api/payments/pdf-lots', requireView, (req, res) => {
+  let doc, piped = false;
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const auctionId = Number(req.body.auction_id);
+    const sellerName = String(req.body.seller_name || '').trim();
+    const lotIds = Array.isArray(req.body.lot_ids) ? req.body.lot_ids : [];
+    if (!auctionId || !sellerName || !lotIds.length) {
+      return res.status(400).json({ error: 'auction_id, seller_name and lot_ids[] are required' });
+    }
+    const auction = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+    if (!auction) return res.status(404).json({ error: 'Auction not found' });
+    const PDFDocument = require('pdfkit');
+    doc = new PDFDocument({ size: 'A4', margin: 30 });
+    res.setHeader('Content-Type', 'application/pdf');
+    const safeName = sellerName.replace(/[^\w]/g, '_').slice(0, 80) || 'seller';
+    res.setHeader('Content-Disposition', `inline; filename="Payment_${safeName}_${auctionId}_partial.pdf"`);
+    doc.pipe(res); piped = true;
+    res.on('close', () => { try { doc.destroy(); } catch(_){} });
+    _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds);
     doc.end();
   } catch (e) {
     if (piped && doc) { try { doc.end(); } catch(_){} }

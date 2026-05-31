@@ -593,7 +593,9 @@ function mountMobile(app, deps) {
       editTimeout:     parseInt(get('edit_timeout_sec', '0'), 10) || 0,
       editEnabled:     getBool('edit_enabled', true),
       sampleWeight:    getNum('sample_weight', 0),
+      gunnyWeight:     getNum('gunny_weight', 0),
       showMoisture:    getBool('show_moisture', false),
+      showExtraLotFields: getBool('show_extra_lot_fields', false),
       defaultLitre:    get('default_litre', ''),
       // PWA defaults — surfaced here for completeness; not currently
       // backed by spice-config settings, so static-ish values are fine.

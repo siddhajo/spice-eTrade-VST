@@ -219,7 +219,16 @@ const DEFAULTS = [
   // for grading, typically a constant per season. Moisture, default
   // litre, and edit timeout match the PWA's config keys 1:1.
   { key: 'sample_weight',   value: '0.000',          category: 'lot_entry', label: 'Default Sample Weight (kg)', type: 'number' },
+  { key: 'gunny_weight',    value: '0.000',          category: 'lot_entry', label: 'Default Gunny Weight (kg)', type: 'number' },
   { key: 'show_moisture',   value: 'false',          category: 'lot_entry', label: 'Show Moisture Column',     type: 'boolean' },
+  // Master toggle for the extra lot-entry fields (Crop Receipt no.,
+  // Reserved Price, Weight with Gunny). When ON, both desktop and
+  // mobile lot-entry forms show the three inputs, Recent Entries adds
+  // the matching columns, and net weight auto-calcs as
+  // (weight_with_gunny - gunny_weight). When OFF, the fields are
+  // hidden but still stored on each lot (so toggling back ON later
+  // doesn't lose data).
+  { key: 'show_extra_lot_fields', value: 'false',    category: 'lot_entry', label: 'Show Extra Lot Fields (Crop Receipt, Reserved Price, Weight with Gunny)', type: 'boolean' },
   { key: 'default_litre',   value: '',               category: 'lot_entry', label: 'Default Litre Weight',     type: 'text' },
   { key: 'default_crop_type', value: '',             category: 'lot_entry', label: 'Default Crop Type',        type: 'text' },
   { key: 'edit_enabled',    value: 'true',           category: 'lot_entry', label: 'Allow Lot Edits (non-admin)', type: 'boolean' },

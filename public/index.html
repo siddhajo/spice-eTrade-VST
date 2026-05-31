@@ -3273,6 +3273,26 @@ input[type="search"]:focus{
           </div>
         </div>
 
+        <!-- Extra lot fields — Crop Receipt, Reserved Price, Weight with
+             Gunny. Visibility driven by the `show_extra_lot_fields`
+             setting in Settings → Lot Entry Defaults. When ON, Net Wt
+             above becomes read-only and is auto-calculated as
+             (Weight with Gunny − Default Gunny Weight). -->
+        <div id="le-extra-wrap" style="display:none;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Crop Receipt No</div>
+            <input type="number" id="le-crop-receipt" min="0" placeholder="auto" readonly style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--text3);font-family:monospace;font-weight:600">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Reserved Price (₹)</div>
+            <input type="number" id="le-reserved-price" step="0.01" min="0" placeholder="0.00" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Weight w/ Gunny (kg)</div>
+            <input type="number" id="le-wwg" step="0.001" min="0" placeholder="0.000" oninput="leCalcNetFromGunny()" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+          </div>
+        </div>
+
         <!-- Moisture row — visibility driven by 'show_moisture' setting.
              Hidden by default so the form stays compact for trades that
              don't track moisture (most cardamom auctions). -->
@@ -4357,6 +4377,25 @@ input[type="search"]:focus{
 </div>
 
 <!-- MODALS -->
+<!-- Per-seller lot detail / partial payment picker.
+     Opened from the 📋 action on a Payments row. Lists every lot for
+     that seller in the active trade with a checkbox so the operator can
+     pick which lots to settle right now ("Print Selected"). Remaining
+     lots stay payable and can be picked up in a later visit. -->
+<div class="modal-bg" id="pay-lots-modal"><div class="modal" style="max-width:900px">
+  <h2 style="display:flex;align-items:center;gap:10px">
+    <span style="width:32px;height:32px;border-radius:10px;background:var(--spice-turmeric-lt);display:inline-flex;align-items:center;justify-content:center">📋</span>
+    Lots for <span id="pay-lots-seller" style="color:var(--spice-cardamom-dk)">—</span>
+    <span id="pay-lots-trade" style="font-weight:400;font-size:12px;color:var(--text3);margin-left:auto"></span>
+  </h2>
+  <div id="pay-lots-body" style="margin-top:10px;max-height:60vh;overflow:auto"></div>
+  <div id="pay-lots-totals" style="margin-top:10px;padding:10px 14px;background:var(--spice-cream);border:1px solid var(--spice-line);border-radius:8px;font-size:13px"></div>
+  <div class="actions" style="margin-top:14px">
+    <button class="btn btn-o" onclick="hideModal('pay-lots-modal')">Close</button>
+    <button class="btn btn-a" onclick="printSelectedPayLots()" id="pay-lots-print-btn" title="PDF payment statement covering only the ticked lots">🖨 Print Payment for Selected</button>
+  </div>
+</div></div>
+
 <div class="modal-bg" id="trader-view-modal"><div class="modal" style="max-width:560px">
   <h2 id="trader-view-title">Seller</h2>
   <div id="trader-view-body"></div>
@@ -8008,7 +8047,10 @@ const _le = {
   recentLots: [],          // currently-loaded page of lots (server-paginated, lot_no DESC)
   recentTotal: 0,          // total rows matching current filter (from server)
   recentPage: 1,           // 1-based current page in the recent-entries panel
-  recentPageSize: 25,      // rows per page
+  recentPageSize: (function(){
+    try { const v = parseInt(localStorage.getItem('le_recent_page_size'), 10); return [10,20,25,50,100].includes(v) ? v : 25; }
+    catch(_) { return 25; }
+  })(),      // rows per page (persisted across reloads via localStorage)
   recentSearch: '',        // active seller filter (LIKE on lots.name via API)
   recentSearchTimer: null, // debounce for the seller-filter input
   changeSellerPick: null,  // trader chosen in the Change Seller modal
@@ -8160,8 +8202,10 @@ async function loadLotEntry(){
       const cfg = await j('/api/company-settings/flat');
       // Sample weight — accept legacy 'sample_wt' key too for older DBs
       _le.sampleWeight = Number(cfg.sample_weight ?? cfg.sample_wt ?? cfg.sampleWeight ?? 0) || 0;
+      _le.gunnyWeight  = Number(cfg.gunny_weight ?? 0) || 0;
       _le.defaultLitre  = String(cfg.default_litre || '').trim();
       _le.showMoisture  = String(cfg.show_moisture || 'false') === 'true';
+      _le.showExtraFields = String(cfg.show_extra_lot_fields || 'false') === 'true';
       _le.editEnabled   = String(cfg.edit_enabled  || 'true')  === 'true';
       _le.editTimeoutSec = parseInt(cfg.edit_timeout_sec, 10) || 0;
       // Receipt format pre-selection. Defaults to "detailed" if the
@@ -8174,8 +8218,10 @@ async function loadLotEntry(){
       }
     } catch(e) {
       _le.sampleWeight = 0;
+      _le.gunnyWeight = 0;
       _le.defaultLitre = '';
       _le.showMoisture = false;
+      _le.showExtraFields = false;
       _le.editEnabled  = true;
       _le.editTimeoutSec = 0;
       _le.receiptFormat = 'detailed';
@@ -8185,6 +8231,11 @@ async function loadLotEntry(){
     // workflow doesn't need moisture.
     const moistureWrap = document.getElementById('le-moisture-wrap');
     if (moistureWrap) moistureWrap.style.display = _le.showMoisture ? '' : 'none';
+    // Extra-fields visibility + dependent net-weight gating. When ON,
+    // Net Wt becomes read-only and is derived from Weight w/ Gunny minus
+    // the configured gunny weight. When OFF, Net Wt is operator-typed
+    // as before.
+    leApplyExtraFieldsVisibility();
     // Render branch dropdown. Show a helpful empty state if no branches
     // are configured yet — the field user can't proceed without one
     // because lot save requires a branch.
@@ -8485,6 +8536,41 @@ function leClearSeller(){
   setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
 }
 
+// Show or hide the extra-fields row (Crop Receipt / Reserved Price /
+// Weight w/ Gunny) and flip Net Wt's read-only state to match. When
+// the toggle is ON, Net Wt is derived from (weight_with_gunny -
+// gunny_weight) so the operator can't desync the two. When OFF, the
+// row is hidden and Net Wt goes back to operator-typed.
+function leApplyExtraFieldsVisibility(){
+  const wrap = document.getElementById('le-extra-wrap');
+  const qtyEl = document.getElementById('le-qty');
+  if (!wrap || !qtyEl) return;
+  if (_le.showExtraFields) {
+    wrap.style.display = 'grid';
+    qtyEl.readOnly = true;
+    qtyEl.style.background = 'var(--bg)';
+    qtyEl.style.color = 'var(--text3)';
+    qtyEl.title = 'Net = Weight w/ Gunny − Gunny Weight (auto-calculated)';
+  } else {
+    wrap.style.display = 'none';
+    qtyEl.readOnly = false;
+    qtyEl.style.background = '';
+    qtyEl.style.color = 'var(--green)';
+    qtyEl.title = '';
+  }
+}
+
+// Auto-calculate Net = Weight w/ Gunny − Gunny Weight whenever the
+// operator types into Weight w/ Gunny. Result feeds Net Wt, which in
+// turn re-runs the Gross calc via leCalcGross.
+function leCalcNetFromGunny(){
+  const wwg = parseFloat(document.getElementById('le-wwg').value) || 0;
+  const gunny = Number(_le.gunnyWeight) || 0;
+  const net = Math.max(0, wwg - gunny);
+  document.getElementById('le-qty').value = wwg > 0 ? net.toFixed(3) : '';
+  leCalcGross();
+}
+
 function leCalcGross(){
   const qty = parseFloat(document.getElementById('le-qty').value) || 0;
   const sample = parseFloat(document.getElementById('le-sample').value) || 0;
@@ -8524,6 +8610,15 @@ async function leSaveLot(){
   const moisture = (_le.showMoisture && moistureRaw.trim() !== '')
     ? String(parseFloat(moistureRaw) || '')
     : '';
+  // Extra-fields payload — sent regardless of the toggle so a row that
+  // had values set while the toggle was on isn't silently zeroed when
+  // someone flips it off mid-session. Empty inputs map to 0/null.
+  const wwgRaw = document.getElementById('le-wwg')?.value || '';
+  const reservedRaw = document.getElementById('le-reserved-price')?.value || '';
+  const cropReceiptRaw = document.getElementById('le-crop-receipt')?.value || '';
+  const weightWithGunny = parseFloat(wwgRaw) || 0;
+  const reservedPrice = parseFloat(reservedRaw) || 0;
+  const cropReceiptNo = parseInt(cropReceiptRaw, 10);
 
   const btn = document.getElementById('le-save-btn');
   btn.disabled = true;
@@ -8545,6 +8640,13 @@ async function leSaveLot(){
       // doesn't silently default these to 0.
       sample_wt: sample,
       gross_wt: gross,
+      weight_with_gunny: weightWithGunny,
+      reserved_price: reservedPrice,
+      // crop_receipt_no: omitted on create so server auto-assigns the
+      // next per-trade sequence. On edit (when we have an existing
+      // value), preserve it explicitly so nothing renumbers.
+      ...(_le.editingLotId && Number.isFinite(cropReceiptNo) && cropReceiptNo > 0
+          ? { crop_receipt_no: cropReceiptNo } : {}),
       moisture: moisture,
       state: _le.selectedSeller.pstate || getDefaultBusinessState(),
       // Pull seller's denormalised fields onto the lot row so existing
@@ -8597,6 +8699,14 @@ async function leSaveLot(){
     document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
     const moistureEl = document.getElementById('le-moisture');
     if (moistureEl) moistureEl.value = '';
+    // Clear extra-fields inputs so the next entry starts fresh. Crop
+    // Receipt is server-assigned, so the field stays placeholder='auto'.
+    const wwgEl = document.getElementById('le-wwg');
+    const reservedEl = document.getElementById('le-reserved-price');
+    const cropEl = document.getElementById('le-crop-receipt');
+    if (wwgEl)      wwgEl.value = '';
+    if (reservedEl) reservedEl.value = '';
+    if (cropEl)     cropEl.value = '';
     setTimeout(() => document.getElementById('le-lotno').focus(), 50);
     await loadLeRecent();
     // After a successful create (not edit), auto-suggest the next lot
@@ -8622,6 +8732,12 @@ function leResetForm(){
   document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
   const moistureEl = document.getElementById('le-moisture');
   if (moistureEl) moistureEl.value = '';
+  const wwgEl = document.getElementById('le-wwg');
+  const reservedEl = document.getElementById('le-reserved-price');
+  const cropEl = document.getElementById('le-crop-receipt');
+  if (wwgEl)      wwgEl.value = '';
+  if (reservedEl) reservedEl.value = '';
+  if (cropEl)     cropEl.value = '';
   document.getElementById('le-err').style.display = 'none';
   // Drop edit mode if active
   _le.editingLotId = null;
@@ -8668,6 +8784,14 @@ async function leEditLot(lotId){
   document.getElementById('le-sample').value = lot.sample_wt ?? (_le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000');
   const moistureEl = document.getElementById('le-moisture');
   if (moistureEl) moistureEl.value = lot.moisture || '';
+  // Populate extra fields. Always loaded (even when toggle is off) so an
+  // admin who later flips the toggle on doesn't lose the stored values.
+  const wwgEl = document.getElementById('le-wwg');
+  const reservedEl = document.getElementById('le-reserved-price');
+  const cropEl = document.getElementById('le-crop-receipt');
+  if (wwgEl)      wwgEl.value      = (lot.weight_with_gunny != null && Number(lot.weight_with_gunny) > 0) ? Number(lot.weight_with_gunny).toFixed(3) : '';
+  if (reservedEl) reservedEl.value = (lot.reserved_price != null && Number(lot.reserved_price) > 0) ? Number(lot.reserved_price).toFixed(2) : '';
+  if (cropEl)     cropEl.value     = lot.crop_receipt_no ?? '';
   leCalcGross();
   // Branch may differ from the toolbar — pre-fill so the user sees what
   // this lot's branch is. Don't overwrite the toolbar branch input
@@ -8876,6 +9000,21 @@ function leGotoRecentPage(p){
   const target = Math.max(1, Math.min(lastPage, parseInt(p, 10) || 1));
   if (target === _le.recentPage) return;
   _le.recentPage = target;
+  loadLeRecent();
+}
+
+// Change rows-per-page in the recent-entries panel. Allowed values
+// mirror the <select> options in renderLeRecent's pager footer.
+// Persisted via localStorage so the operator's choice survives
+// reloads. Jumps back to page 1 because the current page index is
+// no longer meaningful once the window size changes.
+function leSetRecentPageSize(v){
+  const n = parseInt(v, 10);
+  if (![10, 20, 25, 50, 100].includes(n)) return;
+  if (n === _le.recentPageSize) return;
+  _le.recentPageSize = n;
+  _le.recentPage = 1;
+  try { localStorage.setItem('le_recent_page_size', String(n)); } catch(_) {}
   loadLeRecent();
 }
 
@@ -9117,19 +9256,26 @@ function renderLeRecent(){
       ? ` matching <b>${esc(_le.recentSearch)}</b>` : '';
     count.innerHTML = `Showing ${fromRow}–${toRow} of ${total}${filterTail}`;
   }
-  // 8-column grid: [select] [lot] [seller] [branch] [bags] [litre] [qty] [actions]
-  // Header row + scrollable rows region. The wrapping container holds
-  // the header outside the scroll area so column titles stay visible
-  // while the user scrolls through hundreds of lots. Max-height tuned
-  // to ~9 rows visible (≈ a screenful on a typical 13" laptop) so the
-  // form stays in the viewport above.
+  // Base 8-column grid: [select] [lot] [seller] [branch] [bags] [litre] [qty] [actions]
+  // When `show_extra_lot_fields` is ON, three extra columns are inserted
+  // before the actions column: [receipt] [reserved] [w/ gunny]. Header
+  // row sits outside the scroll area so column titles stay visible
+  // while the user scrolls through hundreds of lots.
   // Drop any selected ids that no longer exist in the loaded window so
   // the "Print Selected" count never lies after a reload.
   if (_le.selectedForPrint && _le.selectedForPrint.size) {
     const live = new Set(visible.map(l => l.id));
     for (const id of [..._le.selectedForPrint]) if (!live.has(id)) _le.selectedForPrint.delete(id);
   }
-  const COLS = 'grid-template-columns:32px 80px 1fr 90px 70px 70px 80px 88px';
+  const showExtra = !!_le.showExtraFields;
+  const COLS = showExtra
+    ? 'grid-template-columns:32px 80px 1fr 90px 60px 60px 80px 70px 90px 90px 88px'
+    : 'grid-template-columns:32px 80px 1fr 90px 70px 70px 80px 88px';
+  const extraHdr = showExtra
+    ? '<div style="text-align:right" title="Crop receipt number (auto-assigned per trade)">Receipt</div>' +
+      '<div style="text-align:right" title="Reserved price set at entry">Reserved (₹)</div>' +
+      '<div style="text-align:right" title="Weight including gunny">W/ Gunny</div>'
+    : '';
   host.innerHTML = `
     <div style="display:grid;${COLS};gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:1">
       <div style="text-align:center"><input type="checkbox" id="le-recent-select-all" onchange="leToggleSelectAll(this.checked)" title="Select all visible" style="cursor:pointer"></div>
@@ -9139,12 +9285,18 @@ function renderLeRecent(){
       <div onclick="leSortByColumn('bags')"   title="Sort by Bags"   style="${hdrStyle('bags','text-align:right;')}">Bags${arrow('bags')}</div>
       <div onclick="leSortByColumn('litre')"  title="Sort by Litre"  style="${hdrStyle('litre','text-align:right;')}">Litre${arrow('litre')}</div>
       <div onclick="leSortByColumn('qty')"    title="Sort by Qty"    style="${hdrStyle('qty','text-align:right;')}">Qty (kg)${arrow('qty')}</div>
+      ${extraHdr}
       <div></div>
     </div>
     <div id="le-recent-scroll" style="max-height:360px;overflow-y:auto">
       ${visible.map(l => {
         const safeLotNo = String(l.lot_no || '').replace(/'/g, "\\'");
         const checked = _le.selectedForPrint && _le.selectedForPrint.has(l.id) ? 'checked' : '';
+        const extraCells = showExtra
+          ? `<div style="text-align:right;font-family:monospace;font-size:12px;color:var(--text2)">${l.crop_receipt_no != null ? esc(String(l.crop_receipt_no)) : '—'}</div>` +
+            `<div style="text-align:right">${Number(l.reserved_price) > 0 ? Number(l.reserved_price).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'}</div>` +
+            `<div style="text-align:right">${Number(l.weight_with_gunny) > 0 ? Number(l.weight_with_gunny).toFixed(3) : '—'}</div>`
+          : '';
         return `
         <div class="le-recent-row" data-lot-id="${l.id}" style="display:grid;${COLS};gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .1s" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''" onclick="leEditLot(${l.id})" title="Click to edit">
           <div style="text-align:center" onclick="event.stopPropagation()"><input type="checkbox" class="le-recent-cb" data-lot-id="${l.id}" ${checked} onchange="leToggleLotSelected(${l.id}, this.checked)" style="cursor:pointer"></div>
@@ -9154,6 +9306,7 @@ function renderLeRecent(){
           <div style="text-align:right">${esc(String(l.bags ?? ''))}</div>
           <div style="text-align:right">${esc(String(l.litre ?? l.lit ?? ''))}</div>
           <div style="text-align:right;font-weight:600">${Number(l.qty || 0).toFixed(3)}</div>
+          ${extraCells}
           <div style="text-align:right;display:flex;gap:2px;justify-content:flex-end" onclick="event.stopPropagation()">
             <button onclick="event.stopPropagation();lePrintLot(${l.id})" title="Print receipt" style="background:transparent;border:none;cursor:pointer;color:var(--text2);padding:2px 6px;border-radius:4px;font-size:13px">🖨</button>
             <button class="needs-delete" onclick="event.stopPropagation();leDeleteLot(${l.id},'${safeLotNo}')" title="Delete this lot" style="background:transparent;border:none;cursor:pointer;color:var(--spice-chili);padding:2px 6px;border-radius:4px;font-size:14px">✕</button>
@@ -9162,24 +9315,34 @@ function renderLeRecent(){
       }).join('')}
     </div>
   `;
-  // Pager footer (Prev / page indicator / Next). Hidden when only one
-  // page worth of rows. Page input lets the operator jump directly so
-  // a 200-row trade doesn't need 8 Next clicks to reach the end.
+  // Pager footer (page-size selector + Prev / page indicator / Next).
+  // Stays visible whenever there is at least one row so the operator can
+  // always change the page size from here — even on a 5-row trade that
+  // fits on one page.
   const pagerHost = document.getElementById('le-recent-pager');
   if (pagerHost) {
-    if (lastPage <= 1) {
-      pagerHost.style.display = 'none';
-      pagerHost.innerHTML = '';
-    } else {
-      pagerHost.style.display = 'flex';
-      const btnStyle = 'height:30px;padding:0 12px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer';
-      const disStyle = ';opacity:.4;cursor:not-allowed';
-      const mk = (label, target, dis) =>
-        '<button type="button" style="' + btnStyle + (dis ? disStyle : '') + '"' +
-          (dis ? ' disabled' : ` onclick="leGotoRecentPage(${target})"`) + '>' + label + '</button>';
-      pagerHost.innerHTML =
-        '<div>Page <b>' + page + '</b> of <b>' + lastPage + '</b> · ' + total + ' lot' + (total === 1 ? '' : 's') + '</div>' +
-        '<div style="display:flex;align-items:center;gap:6px">' +
+    pagerHost.style.display = 'flex';
+    const btnStyle = 'height:30px;padding:0 12px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer';
+    const disStyle = ';opacity:.4;cursor:not-allowed';
+    const mk = (label, target, dis) =>
+      '<button type="button" style="' + btnStyle + (dis ? disStyle : '') + '"' +
+        (dis ? ' disabled' : ` onclick="leGotoRecentPage(${target})"`) + '>' + label + '</button>';
+    // Page-size selector — matches the page-size widget used in other
+    // listing screens. Persisted via localStorage so the operator's
+    // choice survives reloads.
+    const sizeOpts = [10, 20, 25, 50, 100].map(n =>
+      `<option value="${n}"${n === pageSize ? ' selected' : ''}>${n} / page</option>`
+    ).join('');
+    const pageSizeCtrl =
+      '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);font-weight:600">' +
+        'Show:' +
+        '<select onchange="leSetRecentPageSize(this.value)" style="height:30px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:12px;font-weight:600;color:var(--text);cursor:pointer">' +
+          sizeOpts +
+        '</select>' +
+      '</label>';
+    const navHtml = lastPage <= 1
+      ? '<div></div>'
+      : '<div style="display:flex;align-items:center;gap:6px">' +
           mk('« First', 1, page <= 1) +
           mk('‹ Prev',  page - 1, page <= 1) +
           '<input type="number" min="1" max="' + lastPage + '" value="' + page + '" ' +
@@ -9189,7 +9352,12 @@ function renderLeRecent(){
           mk('Next ›', page + 1, page >= lastPage) +
           mk('Last »', lastPage,  page >= lastPage) +
         '</div>';
-    }
+    pagerHost.innerHTML =
+      '<div style="display:flex;align-items:center;gap:14px">' +
+        pageSizeCtrl +
+        '<span>Page <b>' + page + '</b> of <b>' + lastPage + '</b> · ' + total + ' lot' + (total === 1 ? '' : 's') + '</span>' +
+      '</div>' +
+      navHtml;
   }
   // Sync the master "select all" checkbox state with current selection.
   const all = document.getElementById('le-recent-select-all');
@@ -16490,6 +16658,143 @@ async function whatsappSelectedPayments() {
   await _runWaQueue(items);
 }
 
+// ── Per-seller lot detail / partial payment ───────────────────
+// The "📋" action on each Payments row opens this modal. It lists
+// every lot for the chosen seller in the active trade and lets the
+// operator tick the lots they're collecting payment for right now.
+// "Print Payment for Selected" calls the lot-filtered PDF endpoint
+// so the printed statement only covers the chosen lots — remaining
+// lots stay in the Payments summary and can be settled later.
+const _payLotsState = { aid: 0, seller: '', lots: [] };
+async function openPayLotsModal(auctionId, sellerName) {
+  _payLotsState.aid = Number(auctionId) || 0;
+  _payLotsState.seller = String(sellerName || '');
+  _payLotsState.lots = [];
+  document.getElementById('pay-lots-seller').textContent = _payLotsState.seller || '—';
+  const tradeLabel = document.getElementById('pay-lots-trade');
+  if (tradeLabel) {
+    const sel = document.getElementById('pay-auction');
+    const opt = sel ? sel.options[sel.selectedIndex] : null;
+    tradeLabel.textContent = opt ? opt.textContent : '';
+  }
+  const body = document.getElementById('pay-lots-body');
+  body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3)">Loading lots…</div>';
+  document.getElementById('pay-lots-totals').innerHTML = '';
+  showModal('pay-lots-modal');
+  try {
+    // /api/lots/:aid?name= filters by partial name LIKE — we then narrow
+    // to exact-name matches client-side so a seller "BOSE SPICES" isn't
+    // mixed with "BOSE SPICES-CUMBUM" in the picker.
+    const all = await j(`/api/lots/${_payLotsState.aid}?name=${encodeURIComponent(_payLotsState.seller)}`);
+    const arr = Array.isArray(all) ? all : (all && all.rows) || [];
+    const target = _payLotsState.seller.trim().toLowerCase();
+    // Only include lots with amount > 0 — matches what the Payments
+    // summary aggregates, so the totals here line up with what's shown
+    // on the parent table.
+    const filtered = arr.filter(l =>
+      String(l.name || '').trim().toLowerCase() === target &&
+      (Number(l.amount) || 0) > 0
+    );
+    // Newest lot_no first (numeric-aware) so common workflows — pay the
+    // most recent lots first — start at the top.
+    filtered.sort((a, b) => {
+      const an = parseInt(a.lot_no, 10), bn = parseInt(b.lot_no, 10);
+      if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
+      return String(a.lot_no || '').localeCompare(String(b.lot_no || ''));
+    });
+    _payLotsState.lots = filtered;
+    _renderPayLotsTable();
+  } catch (e) {
+    body.innerHTML = `<div style="padding:24px;text-align:center;color:var(--spice-chili)">Failed to load lots: ${esc(e.message || String(e))}</div>`;
+  }
+}
+function _renderPayLotsTable() {
+  const body = document.getElementById('pay-lots-body');
+  if (!_payLotsState.lots.length) {
+    body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3)">No payable lots found for this seller in this trade.</div>';
+    document.getElementById('pay-lots-totals').innerHTML = '';
+    return;
+  }
+  const rows = _payLotsState.lots.map(l => {
+    const tax = (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
+    return `<tr>
+      <td style="text-align:center"><input type="checkbox" class="pay-lot-cb" data-id="${l.id}" checked onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
+      <td style="font-family:monospace;font-weight:600">${esc(l.lot_no || '')}</td>
+      <td>${esc(l.branch || '')}</td>
+      <td style="text-align:right">${fmtI(Number(l.qty)||0, 3)}</td>
+      <td style="text-align:right">${fmtI(Number(l.prate)||0, 2)}</td>
+      <td style="text-align:right">${fmtI(Number(l.amount)||0, 2)}</td>
+      <td style="text-align:right;color:#B45309">${fmtI(Number(l.refund)||0, 2)}</td>
+      <td style="text-align:right;color:#0891B2">${fmtI(tax, 2)}</td>
+      <td style="text-align:right;font-weight:700;color:var(--spice-cardamom-dk)">${fmtI(Number(l.balance)||0, 2)}</td>
+    </tr>`;
+  }).join('');
+  body.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead style="position:sticky;top:0;background:#fff;z-index:1">
+        <tr style="border-bottom:2px solid var(--border);text-align:left">
+          <th style="width:36px;text-align:center"><input type="checkbox" id="pay-lot-select-all" checked onchange="togglePayLotSelectAll(this.checked)" title="Select / clear all" style="cursor:pointer"></th>
+          <th>Lot</th>
+          <th>Branch</th>
+          <th style="text-align:right">Qty</th>
+          <th style="text-align:right">Rate</th>
+          <th style="text-align:right">Amount</th>
+          <th style="text-align:right">Discount</th>
+          <th style="text-align:right">GST</th>
+          <th style="text-align:right">Payable</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  updatePayLotsTotals();
+}
+function togglePayLotSelectAll(checked) {
+  document.querySelectorAll('.pay-lot-cb').forEach(cb => { cb.checked = !!checked; });
+  updatePayLotsTotals();
+}
+function updatePayLotsTotals() {
+  const selectedIds = new Set(
+    Array.from(document.querySelectorAll('.pay-lot-cb:checked')).map(cb => Number(cb.dataset.id))
+  );
+  let qty = 0, amt = 0, disc = 0, tax = 0, payable = 0;
+  for (const l of _payLotsState.lots) {
+    if (!selectedIds.has(l.id)) continue;
+    qty     += Number(l.qty)     || 0;
+    amt     += Number(l.amount)  || 0;
+    disc    += Number(l.refund)  || 0;
+    tax     += (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
+    payable += Number(l.balance) || 0;
+  }
+  const n = selectedIds.size;
+  const totalN = _payLotsState.lots.length;
+  document.getElementById('pay-lots-totals').innerHTML =
+    `<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center">
+      <div><strong>${n}</strong> of ${totalN} lots selected</div>
+      <div>Qty: <strong>${fmtI(qty, 3)} kg</strong></div>
+      <div>Amount: <strong>₹${fmtI(amt, 2)}</strong></div>
+      <div>Discount: <strong style="color:#B45309">₹${fmtI(disc, 2)}</strong></div>
+      <div>GST: <strong style="color:#0891B2">₹${fmtI(tax, 2)}</strong></div>
+      <div style="margin-left:auto;font-size:14px">Payable now: <strong style="color:var(--spice-cardamom-dk)">₹${fmtI(payable, 2)}</strong></div>
+    </div>`;
+  // Disable Print when nothing is selected — no point in firing a PDF
+  // request that the server would reject as "lot_ids[] required".
+  const btn = document.getElementById('pay-lots-print-btn');
+  if (btn) btn.disabled = (n === 0);
+}
+async function printSelectedPayLots() {
+  const lot_ids = Array.from(document.querySelectorAll('.pay-lot-cb:checked'))
+    .map(cb => Number(cb.dataset.id))
+    .filter(Number.isFinite);
+  if (!lot_ids.length) { alert('Tick at least one lot first'); return; }
+  if (!_payLotsState.aid || !_payLotsState.seller) { alert('Open this from the Payments tab'); return; }
+  const safe = _payLotsState.seller.replace(/[^\w]/g, '_').slice(0, 40);
+  await fetchAndPrint(
+    '/api/payments/pdf-lots',
+    `Payment_${safe}_${_payLotsState.aid}_partial.pdf`,
+    { auction_id: _payLotsState.aid, seller_name: _payLotsState.seller, lot_ids }
+  );
+}
+
 // ── Payments ──────────────────────────────────────────────
 // ── Payments bulk actions ────────────────────────────────────────
 // "Delete Selected" on the Payments tab acts on the underlying lots
@@ -16673,7 +16978,12 @@ async function loadPayments(opts){
             const aid = Number((document.getElementById('pay-auction')||{}).value)||0;
             const nm = encodeURIComponent(p.name||'');
             const pay = Number(p.total_payable)||0;
-            return iconBtn('print','Print payment statement',`printPayment(${aid},decodeURIComponent('${nm}'))`)
+            // 📋 opens the per-seller lots modal — lets the operator pick
+            // specific lots to settle now and print a partial statement,
+            // leaving the rest for a later visit.
+            const lotsBtn = `<button class="icon-btn" title="See lots · pay selected only" onclick="openPayLotsModal(${aid},decodeURIComponent('${nm}'))">📋</button>`;
+            return lotsBtn
+                 + iconBtn('print','Print full payment statement',`printPayment(${aid},decodeURIComponent('${nm}'))`)
                  + iconBtn('whatsapp','Send via WhatsApp',`whatsappPayment(${aid},decodeURIComponent('${nm}'),${pay})`);
           } }
       ]

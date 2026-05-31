@@ -298,7 +298,10 @@ async function initDb() {
     qty REAL DEFAULT 0,
     gross_wt REAL DEFAULT 0,
     sample_wt REAL DEFAULT 0,
+    weight_with_gunny REAL DEFAULT 0,
     moisture TEXT DEFAULT '',
+    crop_receipt_no INTEGER DEFAULT NULL,
+    reserved_price REAL DEFAULT 0,
     price REAL DEFAULT 0,
     amount REAL DEFAULT 0,
     code TEXT DEFAULT '',
@@ -646,11 +649,50 @@ async function initDb() {
     // public IFSC API). Saved so reports / invoices can show the branch
     // without re-querying the network.
     "ALTER TABLE trader_banks ADD COLUMN branch TEXT DEFAULT ''",
+    // Extra lot-entry fields — surfaced in the form behind the
+    // `show_extra_lot_fields` setting. `crop_receipt_no` is a per-trade
+    // running counter auto-assigned on INSERT; `weight_with_gunny` is
+    // the weight including the empty bag and feeds the auto-calc
+    // (net = weight_with_gunny - gunny_weight) when the toggle is on;
+    // `reserved_price` is the seller's minimum acceptable price and is
+    // shown in Recent Entries for reference (not used in calc/invoice
+    // gating).
+    'ALTER TABLE lots ADD COLUMN weight_with_gunny REAL DEFAULT 0',
+    'ALTER TABLE lots ADD COLUMN crop_receipt_no INTEGER DEFAULT NULL',
+    'ALTER TABLE lots ADD COLUMN reserved_price REAL DEFAULT 0',
   ];
   for (const m of migrations) {
     try { wrapped.exec(m); console.log('Migration applied:', m); }
     catch (e) { /* column already exists — ignore */ }
   }
+
+  // One-time backfill: assign crop_receipt_no to every lot that doesn't
+  // have one yet, per auction, ordered by id (creation order). Without
+  // this, existing rows would all read NULL and the new Recent Entries
+  // "Receipt" column would be blank for historical data. Idempotent:
+  // only rows where crop_receipt_no IS NULL are touched, so re-runs are
+  // no-ops once the column is populated.
+  try {
+    const auctionsNeedingBackfill = wrapped.all(
+      `SELECT DISTINCT auction_id FROM lots WHERE crop_receipt_no IS NULL`
+    );
+    for (const { auction_id } of auctionsNeedingBackfill) {
+      if (!auction_id) continue;
+      const startRow = wrapped.get(
+        `SELECT COALESCE(MAX(crop_receipt_no), 0) AS m FROM lots WHERE auction_id = ?`,
+        [auction_id]
+      );
+      let next = (startRow && startRow.m) || 0;
+      const rows = wrapped.all(
+        `SELECT id FROM lots WHERE auction_id = ? AND crop_receipt_no IS NULL ORDER BY id`,
+        [auction_id]
+      );
+      for (const r of rows) {
+        next += 1;
+        wrapped.run(`UPDATE lots SET crop_receipt_no = ? WHERE id = ?`, [next, r.id]);
+      }
+    }
+  } catch (e) { /* fresh DB — no lots yet, nothing to backfill */ }
 
   // Re-attempt indexes that depend on migration-added columns. The
   // indexes block above runs BEFORE migrations, so on upgrade-paths
