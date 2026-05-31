@@ -3755,11 +3755,16 @@ input[type="search"]:focus{
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="pay-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print Selected</button>
             <button id="pay-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600" onclick="whatsappSelectedPayments()" title="Send merged payment statements via WhatsApp">📱 WhatsApp Selected</button>
-            <!-- Subset exports — only the ticked sellers. Hidden until the
-                 operator selects at least one row (synced with the other
-                 bulk buttons by updatePaymentBulkButtons). -->
-            <button id="pay-bulk-bank-export" class="btn btn-a" style="display:none;height:38px;padding:0 16px;font-weight:600" onclick="exportBankPaymentSelected()" title="Export the bank RTGS/NEFT file containing ONLY the ticked sellers">📤 Export Bank Payment (Selected)</button>
-            <button id="pay-bulk-xlsx-export" class="btn btn-a" style="display:none;height:38px;padding:0 16px;font-weight:600" onclick="exportPaymentXlsxSelected()" title="Export the per-lot Payment XLSX containing ONLY the ticked sellers">📊 Export Payment XLSX (Selected)</button>
+            <!-- Subset exports — only the ticked sellers. Hidden until
+                 the operator selects at least one row (synced with the
+                 other bulk buttons by updatePaymentBulkButtons). Styled
+                 with a darker outline + cardamom background so they're
+                 unmistakably different from the regular full-export
+                 buttons to the right of the divider — operators were
+                 hitting the full-export button and getting confused by
+                 the "full payable + every seller" output. -->
+            <button id="pay-bulk-bank-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportBankPaymentSelected()" title="Export the bank RTGS/NEFT file containing ONLY the ticked sellers (and only their picked lots, if any)">📤 Bank Payment ← <span id="pay-bulk-bank-export-cnt">0</span> sellers</button>
+            <button id="pay-bulk-xlsx-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentXlsxSelected()" title="Export the per-lot Payment XLSX containing ONLY the ticked sellers (and only their picked lots, if any)">📊 Payment XLSX ← <span id="pay-bulk-xlsx-export-cnt">0</span> sellers</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -16930,7 +16935,17 @@ async function _payDownloadSelected(type, format, aid, names) {
     });
     if (!r.ok) {
       const errBody = await r.json().catch(() => ({}));
-      alert(`Export failed: ${errBody.error || ('HTTP ' + r.status)}`);
+      // 404 specifically means the POST route doesn't exist on the
+      // running server — usually because the operator updated the
+      // code but didn't restart the Node process. Without this hint
+      // the symptom looks like a generic "Export failed" alert AND
+      // (worse) the operator can fall back to the full-export button
+      // and not notice it skipped the filter.
+      if (r.status === 404) {
+        alert(`Selected export not available on this server (HTTP 404). The server process is running an older build — restart it (kill + npm start / pm2 restart / Electron app reopen) and try again. The full-export buttons to the right are NOT filtered.`);
+      } else {
+        alert(`Export failed: ${errBody.error || ('HTTP ' + r.status)}`);
+      }
       return;
     }
     const blob = await r.blob();
@@ -17247,7 +17262,7 @@ function updatePayLotsTotals() {
 // route filters via `lot_no IN (…)` SQL — lot_no is stable across
 // re-imports while ids can change. Auto-ticks the seller row in the
 // Payments table so the next "Export Selected" picks it up.
-function saveSelectedPayLots() {
+async function saveSelectedPayLots() {
   const aid    = _payLotsState.aid;
   const seller = _payLotsState.seller;
   if (!aid || !seller) return;
@@ -17256,32 +17271,38 @@ function saveSelectedPayLots() {
     .filter(Boolean);
   if (!lotNos.length) { alert('Tick at least one lot first.'); return; }
   _paySetLotPicks(aid, seller, lotNos);
-  toast(`Saved ${lotNos.length} lot${lotNos.length === 1 ? '' : 's'} for ${seller}. Tick the row and use Export Selected.`);
-  // Auto-tick this seller's row in the Payments table so the next
-  // "Export Selected" pass picks up the new filter without a manual click.
+  // Re-render the Payments table FIRST so the lot-pick badge appears
+  // and the row HTML is fresh — THEN tick the seller's checkbox.
+  // Doing it the other way around races the async re-render, which
+  // replaces the row HTML and silently wipes the tick we just set.
+  // That's why the previous version's auto-tick "did nothing" from
+  // the operator's point of view.
+  if (typeof loadPayments === 'function') await loadPayments();
+  let autoTicked = false;
   const body = document.getElementById('payments-list');
   if (body) {
     const cb = Array.from(body.querySelectorAll('.pay-select-cb'))
       .find(c => c.value === seller);
-    if (cb && !cb.disabled && !cb.checked) {
+    if (cb && !cb.disabled) {
       cb.checked = true;
+      autoTicked = true;
       if (typeof updatePaymentBulkButtons === 'function') updatePaymentBulkButtons();
     }
   }
-  // Re-render the Payments table so the seller's lot-pick badge appears.
-  if (typeof loadPayments === 'function') loadPayments();
+  toast(`Saved ${lotNos.length} lot${lotNos.length === 1 ? '' : 's'} for ${seller}.` +
+        (autoTicked ? ' Row auto-ticked — use Export Selected.' : ' Tick the row to include it in Export Selected.'));
   updatePayLotsTotals();
 }
 
 // Drop this seller's export filter so the next Export Selected pulls
 // every payable lot for them. Doesn't change the row's tick state.
-function clearSelectedPayLots() {
+async function clearSelectedPayLots() {
   const aid    = _payLotsState.aid;
   const seller = _payLotsState.seller;
   if (!aid || !seller) return;
   _paySetLotPicks(aid, seller, null);
   toast(`Cleared lot filter for ${seller}.`);
-  if (typeof loadPayments === 'function') loadPayments();
+  if (typeof loadPayments === 'function') await loadPayments();
   updatePayLotsTotals();
 }
 async function printSelectedPayLots() {
@@ -17324,6 +17345,13 @@ function updatePaymentBulkButtons() {
   _bulkBtnSetVisible(document.getElementById('pay-bulk-whatsapp'), checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-bank-export'), checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-xlsx-export'), checked > 0);
+  // Live-update the seller count inside each Selected button label so
+  // the operator can see at a glance how many sellers the next click
+  // will export. Helps catch "wait, I forgot to tick one" before firing.
+  const bcnt = document.getElementById('pay-bulk-bank-export-cnt');
+  if (bcnt) bcnt.textContent = String(checked);
+  const xcnt = document.getElementById('pay-bulk-xlsx-export-cnt');
+  if (xcnt) xcnt.textContent = String(checked);
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');
