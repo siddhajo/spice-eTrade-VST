@@ -17903,6 +17903,30 @@ function _insightsApplyDateInputs(){
   _renderInsights();
 }
 
+// Toggle one Insights section open/closed. State persists in
+// localStorage so the user's expand/collapse choices survive reload.
+// Called from the section header (delegated via inline onclick).
+function toggleInsightsSection(id, headEl){
+  const section = headEl && headEl.closest('.ins-section');
+  if (!section) return;
+  const collapsed = section.getAttribute('data-collapsed') === '1';
+  if (collapsed) section.removeAttribute('data-collapsed');
+  else section.setAttribute('data-collapsed', '1');
+  // Persist the diff.
+  let set;
+  try { set = new Set(JSON.parse(localStorage.getItem('ins_collapsed') || '[]')); }
+  catch(_) { set = new Set(); }
+  if (collapsed) set.delete(id); else set.add(id);
+  try { localStorage.setItem('ins_collapsed', JSON.stringify([...set])); } catch(_) {}
+  // Chart.js doesn't redraw automatically when its hidden canvas
+  // becomes visible again — force a resize so the bar chart fits
+  // the freshly-revealed container width. `collapsed` is the
+  // pre-toggle state, so resizing here means we just expanded.
+  if (id === 'chart' && collapsed && _insightsBarChart) {
+    try { _insightsBarChart.resize(); } catch(_) {}
+  }
+}
+
 function _insightsQuickRange(kind){
   const today = new Date();
   const pad = n => String(n).padStart(2, '0');
@@ -17973,11 +17997,29 @@ async function _renderInsights(){
     @keyframes ins-fade-in { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
     #insights-host { animation:ins-fade-in .25s ease-out }
     .ins-section { position:relative; padding:18px 20px; margin-bottom:16px; border-radius:16px; background:#fff; border:1px solid var(--border); box-shadow:0 1px 2px rgba(15,23,42,.04) }
-    .ins-section-head { display:flex; align-items:center; gap:12px; margin-bottom:14px }
+    .ins-section-head { display:flex; align-items:center; gap:12px; margin-bottom:14px; cursor:pointer; user-select:none; border-radius:10px; padding:4px; margin:-4px -4px 10px; transition:background .12s ease }
+    .ins-section-head:hover { background:rgba(15,23,42,.03) }
     .ins-section-icon { width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:18px; color:#fff; flex-shrink:0; box-shadow:0 4px 12px var(--ins-glow,rgba(16,185,129,.28)) }
     .ins-section-title { flex:1 }
     .ins-section-title h3 { margin:0; font-size:15px; font-weight:800; letter-spacing:-.2px; color:var(--text) }
     .ins-section-title .sub { font-size:11.5px; color:var(--text3); margin-top:1px }
+    .ins-chev { width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; color:var(--text2); background:rgba(15,23,42,.04); transition:transform .2s ease, background .12s ease; font-weight:800; flex-shrink:0 }
+    .ins-section-head:hover .ins-chev { background:rgba(15,23,42,.08) }
+    .ins-section[data-collapsed="1"] .ins-section-body { display:none }
+    .ins-section[data-collapsed="1"] .ins-section-head { margin-bottom:0 }
+    .ins-section[data-collapsed="1"] .ins-chev { transform:rotate(-90deg) }
+
+    /* Custom scrollbars — chunky enough to grab, themed to match the
+       page accent so they don't feel like the OS default appearing
+       randomly inside a colorful card. */
+    .ins-scroll { scrollbar-width:thin; scrollbar-color:#94A3B8 #F1F5F9 }
+    .ins-scroll::-webkit-scrollbar { width:10px; height:10px }
+    .ins-scroll::-webkit-scrollbar-track { background:#F1F5F9; border-radius:5px }
+    .ins-scroll::-webkit-scrollbar-thumb { background:linear-gradient(180deg, #94A3B8, #64748B); border-radius:5px; border:2px solid #F1F5F9 }
+    .ins-scroll::-webkit-scrollbar-thumb:hover { background:linear-gradient(180deg, #64748B, #475569) }
+    .ins-scroll::-webkit-scrollbar-corner { background:#F1F5F9 }
+    .ins-list-scroll { max-height:380px; overflow:auto; border:1px solid var(--border); border-radius:10px; background:#fff }
+    .ins-branch-scroll { max-height:560px; overflow:auto; padding:2px; margin:-2px }
 
     /* ── KPI tiles ───────────────────────────────────────── */
     .ins-kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:18px }
@@ -18185,13 +18227,26 @@ async function _renderInsights(){
     }).join('');
   };
 
-  // ── Section header builder — colored icon + title + subtitle.
-  const sectionHead = (icon, title, sub, theme) => {
+  // Read persisted collapsed-section state. Stored as a JSON array of
+  // section IDs so we can restore the same expand/collapse pattern on
+  // every render without losing it across reloads. Failures are silent
+  // — the only consequence is sections start expanded.
+  let collapsedSet;
+  try { collapsedSet = new Set(JSON.parse(localStorage.getItem('ins_collapsed') || '[]')); }
+  catch(_) { collapsedSet = new Set(); }
+  const sectionAttrs = (id) => `data-ins-section="${id}"${collapsedSet.has(id) ? ' data-collapsed="1"' : ''}`;
+
+  // ── Section header builder — colored icon + title + subtitle + chevron.
+  // Click anywhere on the head toggles the section open/closed. Each
+  // section opts in via `id` so callers can group related sections
+  // (KPI vs Chart vs Branches…) and keep their state independently.
+  const sectionHead = (icon, title, sub, theme, id) => {
     const t = _INS_THEMES[theme] || _INS_THEMES.emerald;
     return `
-      <div class="ins-section-head">
+      <div class="ins-section-head" onclick="toggleInsightsSection('${id}', this)" title="Click to collapse / expand">
         <div class="ins-section-icon" style="background:${_insGrad(theme)};--ins-glow:${t.glow}">${icon}</div>
         <div class="ins-section-title"><h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div></div>
+        <div class="ins-chev" aria-hidden="true">▾</div>
       </div>`;
   };
 
@@ -18215,71 +18270,88 @@ async function _renderInsights(){
       </div>
     </div>
 
-    <!-- KPI tiles -->
-    <div class="ins-kpi-grid">
-      ${kpi('📊', 'Trades',      fmtI(t.trades, 0),                                            'emerald')}
-      ${kpi('🌾', 'Lots',        fmtI(t.lots, 0),                                              'indigo')}
-      ${kpi('✅', 'Sold',        fmtI(t.sold, 0),                                              'teal')}
-      ${kpi('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                                         'amber')}
-      ${kpi('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                               'sky')}
-      ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 0),                                       'emerald')}
-      ${kpi('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 0) : '—',           'violet')}
-      ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 0),                          'orange')}
-      ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 0),                       'rose')}
+    <!-- KPI tiles (in their own collapsible section) -->
+    <div class="ins-section" ${sectionAttrs('kpis')}>
+      ${sectionHead('🎯', 'Headline metrics', 'At-a-glance totals for the selected range.', 'emerald', 'kpis')}
+      <div class="ins-section-body">
+        <div class="ins-kpi-grid" style="margin-bottom:0">
+          ${kpi('📊', 'Trades',      fmtI(t.trades, 0),                                            'emerald')}
+          ${kpi('🌾', 'Lots',        fmtI(t.lots, 0),                                              'indigo')}
+          ${kpi('✅', 'Sold',        fmtI(t.sold, 0),                                              'teal')}
+          ${kpi('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                                         'amber')}
+          ${kpi('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                               'sky')}
+          ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 0),                                       'emerald')}
+          ${kpi('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 0) : '—',           'violet')}
+          ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 0),                          'orange')}
+          ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 0),                       'rose')}
+        </div>
+      </div>
     </div>
 
     ${data.perTrade.length ? '' : '<div class="ins-section"><div class="ins-empty"><div class="ins-empty-icon">📭</div>No trades fall in this date range. Pick a wider window above.</div></div>'}
 
     <!-- Stacked bar chart -->
     ${data.perTrade.length ? `
-    <div class="ins-section">
-      ${sectionHead('📊', 'Branch contribution per trade', 'Each segment is a branch\'s value contribution. Top 20 trades by date.', 'indigo')}
-      <div style="height:320px;position:relative"><canvas id="ins-stacked-canvas"></canvas></div>
+    <div class="ins-section" ${sectionAttrs('chart')}>
+      ${sectionHead('📊', 'Branch contribution per trade', 'Each segment is a branch\'s value contribution. Top 20 trades by date.', 'indigo', 'chart')}
+      <div class="ins-section-body">
+        <div style="height:320px;position:relative"><canvas id="ins-stacked-canvas"></canvas></div>
+      </div>
     </div>` : ''}
 
     <!-- Per-branch cards -->
     ${data.perBranch.length ? `
-    <div class="ins-section">
-      ${sectionHead('🏪', 'Per-branch summary', 'Rolled up across every trade in the date range.', 'teal')}
-      <div class="ins-branch-grid">
-        ${data.perBranch.map(branchCard).join('')}
+    <div class="ins-section" ${sectionAttrs('branches')}>
+      ${sectionHead('🏪', 'Per-branch summary', 'Rolled up across every trade in the date range.', 'teal', 'branches')}
+      <div class="ins-section-body">
+        <div class="ins-branch-scroll ins-scroll">
+          <div class="ins-branch-grid">
+            ${data.perBranch.map(branchCard).join('')}
+          </div>
+        </div>
       </div>
     </div>` : ''}
 
     <!-- Per-trade table -->
     ${data.perTrade.length ? `
-    <div class="ins-section">
-      ${sectionHead('📋', 'Per-trade details', 'Each row is one trade with branch composition (top 4 by value).', 'violet')}
-      <div class="ins-table-wrap">
-        <table class="ins-table">
-          <thead><tr>
-            <th>Trade</th>
-            <th>Date</th>
-            <th>State</th>
-            <th style="text-align:right">Lots</th>
-            <th style="text-align:right">Sold</th>
-            <th style="text-align:right">WD</th>
-            <th style="text-align:right">Qty (kg)</th>
-            <th style="text-align:right">Min ₹</th>
-            <th style="text-align:right">Max ₹</th>
-            <th style="text-align:right">Avg ₹</th>
-            <th style="text-align:right">Value (₹)</th>
-            <th>Branches</th>
-          </tr></thead>
-          <tbody>${data.perTrade.map(tradeRow).join('')}</tbody>
-        </table>
+    <div class="ins-section" ${sectionAttrs('trades')}>
+      ${sectionHead('📋', 'Per-trade details', 'Each row is one trade with branch composition (top 4 by value).', 'violet', 'trades')}
+      <div class="ins-section-body">
+        <div class="ins-table-wrap ins-scroll">
+          <table class="ins-table">
+            <thead><tr>
+              <th>Trade</th>
+              <th>Date</th>
+              <th>State</th>
+              <th style="text-align:right">Lots</th>
+              <th style="text-align:right">Sold</th>
+              <th style="text-align:right">WD</th>
+              <th style="text-align:right">Qty (kg)</th>
+              <th style="text-align:right">Min ₹</th>
+              <th style="text-align:right">Max ₹</th>
+              <th style="text-align:right">Avg ₹</th>
+              <th style="text-align:right">Value (₹)</th>
+              <th>Branches</th>
+            </tr></thead>
+            <tbody>${data.perTrade.map(tradeRow).join('')}</tbody>
+          </table>
+        </div>
       </div>
     </div>` : ''}
 
     <!-- Two-column row: outstanding by buyer + buyer leaderboard -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px">
-      <div class="ins-section" style="margin-bottom:0">
-        ${sectionHead('💳', 'Outstanding by buyer', 'Sales invoices in this range — treated as outstanding (no per-invoice payment tracking yet).', 'amber')}
-        ${outstandingTable(data.outstandingByBuyer)}
+      <div class="ins-section" style="margin-bottom:0" ${sectionAttrs('outstanding')}>
+        ${sectionHead('💳', 'Outstanding by buyer', 'Sales invoices in this range — treated as outstanding (no per-invoice payment tracking yet).', 'amber', 'outstanding')}
+        <div class="ins-section-body">
+          <div class="ins-list-scroll ins-scroll">${outstandingTable(data.outstandingByBuyer)}</div>
+        </div>
       </div>
-      <div class="ins-section" style="margin-bottom:0">
-        ${sectionHead('🏆', 'Top buyer activity', 'Ranked by value across all trades in range.', 'pink')}
-        ${buyerLeaderboard(data.buyerActivity)}
+      <div class="ins-section" style="margin-bottom:0" ${sectionAttrs('leaderboard')}>
+        ${sectionHead('🏆', 'Top buyer activity', 'Ranked by value across all trades in range.', 'pink', 'leaderboard')}
+        <div class="ins-section-body">
+          <div class="ins-list-scroll ins-scroll" style="padding:0 12px">${buyerLeaderboard(data.buyerActivity)}</div>
+        </div>
       </div>
     </div>
   `;
