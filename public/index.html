@@ -1801,16 +1801,33 @@ body[data-perm-invoice-revert="1"] .icon-btn.needs-invoice-revert{display:inline
    columns config supplies a rowClass that returns 'row-locked'. */
 tr.row-locked > td{background:#fffbeb !important;border-top:1px solid #fde68a}
 tr.row-locked:hover > td{background:#fef3c7 !important}
-/* Exported-payment row tint — pale slate with muted text and a left
-   ribbon so the operator can scan exported sellers at a glance. The
-   checkbox is disabled separately at the cell level (gated by the
-   per-row `data-exported` attribute on the row checkbox itself), not
-   by pointer-events:none, because we still want the per-row "↶ Undo"
-   icon in the Actions column to be clickable. */
-tr.pay-row-exported > td{background:#f3f4f6 !important;color:#6b7280}
-tr.pay-row-exported:hover > td{background:#e5e7eb !important}
-tr.pay-row-exported > td:first-child{box-shadow:inset 3px 0 0 #9ca3af}
-tr.pay-row-exported .pay-select-cb{cursor:not-allowed}
+/* Fully-exported payment row — "blocked" look. Warm-rose background
+   with a red left ribbon and faintly-muted text, picked so it reads
+   as a hard stop alongside the spice-cardamom theme rather than
+   "merely paused". The checkbox is disabled inline (via the render's
+   data-exported attribute) so the row still allows clicking the per-
+   row "↶ Undo" icon in the Actions column. */
+tr.pay-row-exported > td{background:#fef2f2 !important;color:#7f1d1d}
+tr.pay-row-exported:hover > td{background:#fee2e2 !important}
+tr.pay-row-exported > td:first-child{box-shadow:inset 4px 0 0 #b91c1c}
+tr.pay-row-exported .pay-select-cb{cursor:not-allowed;opacity:.6}
+/* Partial-export row — soft amber, kept tickable. Highlights that
+   the seller has more lots payable but at least one batch has gone
+   out. The left ribbon is amber so a quick glance distinguishes it
+   from the rose "fully exported" rows above. */
+tr.pay-row-exported-partial > td{background:#fff7ed !important}
+tr.pay-row-exported-partial:hover > td{background:#ffedd5 !important}
+tr.pay-row-exported-partial > td:first-child{box-shadow:inset 4px 0 0 #d97706}
+/* Status badges sitting next to a seller's name. Full = solid rose
+   with the 🚫 prefix; Partial = amber pill with the running count. */
+.pay-exported-badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:700;margin-left:6px;letter-spacing:.2px;cursor:help}
+.pay-exported-full   {background:#7f1d1d;color:#fff}
+.pay-exported-partial{background:#fed7aa;color:#7c2d12;border:1px solid #fdba74}
+/* Per-lot "blocked" marker rendered next to the Lot # in the lot-
+   picker modal so the operator can see at a glance which lots have
+   already gone out. */
+.pay-lot-exported-tag{display:inline-block;font-size:11px;margin-left:4px;cursor:help}
+input.pay-lot-cb-exported{accent-color:#b91c1c}
 /* Small badge shown next to a seller's name when explicit lot picks
    are saved for that seller (i.e. the next Export Selected will only
    include those lots, not all of them). Spice-yellow so it doesn't
@@ -1908,6 +1925,12 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 .le-collapsible.is-collapsed .le-collapse-chev{transform:rotate(-90deg);transition:transform .15s}
 .le-collapse-chev{transition:transform .15s}
 .le-collapse-head:hover{background:#F8FAFC}
+/* Themed (cardamom-tinted) collapsible header — used by the
+   Recent-entries card so the section reads as on-brand. Hover
+   nudges the background a touch darker without leaving the theme. */
+.le-collapse-head-themed{background:var(--green-bg) !important}
+.le-collapse-head-themed:hover{filter:brightness(.96)}
+.le-collapsible.is-collapsed > .le-collapse-head-themed{border-radius:14px !important}
 
 /* ── Lot-entry print toolbar (Print Selected / by Seller / Clear) ── */
 .le-toolbar-btn{
@@ -3334,12 +3357,15 @@ input[type="search"]:focus{
         </div><!-- /le-collapse-body -->
       </div>
 
-      <!-- Recent entries — today's lots from this auction. Collapsible. -->
+      <!-- Recent entries — today's lots from this auction. Collapsible.
+           Header uses the cardamom palette so it reads as part of the
+           app theme (matches green-bg / cardamom-dk variables that all
+           theme variants override). -->
       <div class="card le-collapsible" id="le-recent-card" data-section="le-recent" style="padding:0;margin-top:16px">
-        <div class="le-collapse-head" onclick="leToggleSection('le-recent')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 20px;cursor:pointer">
-          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
-          <span style="font-weight:700;font-size:14px">Recent entries — this trade</span>
-          <span id="le-recent-count" style="font-weight:400;color:var(--text3);font-size:12px;margin-left:4px"></span>
+        <div class="le-collapse-head le-collapse-head-themed" onclick="leToggleSection('le-recent')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 20px;cursor:pointer;background:var(--green-bg);color:var(--spice-cardamom-dk);border-radius:14px 14px 0 0">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--spice-cardamom-dk)">▾</span>
+          <span style="font-weight:700;font-size:14px;color:var(--spice-cardamom-dk)">Recent entries — this trade</span>
+          <span id="le-recent-count" style="font-weight:400;color:var(--spice-cardamom-dk);opacity:.7;font-size:12px;margin-left:4px"></span>
           <span style="flex:1"></span>
           <!-- Bulk actions — shown only when ≥1 lot is checked. The N
                badges update live. Styling is unified into the
@@ -16858,7 +16884,9 @@ async function printSelectedPayments() {
 function undoPaymentExport(sellerName) {
   const aid = Number(document.getElementById('pay-auction')?.value || 0);
   if (!aid || !sellerName) return;
-  _payUnmarkExported(aid, [sellerName]);
+  // _payUnmarkExported now takes a single seller name (per-lot model)
+  // instead of the legacy name array. Same surgical-restore semantics.
+  _payUnmarkExported(aid, sellerName);
   toast(`Restored ${sellerName} — can be exported again.`);
   if (typeof loadPayments === 'function') loadPayments();
   if (typeof updatePaymentBulkButtons === 'function') updatePaymentBulkButtons();
@@ -16871,7 +16899,8 @@ function undoLastPaymentExport() {
     toast('Nothing left to undo for this trade.');
     return;
   }
-  toast(`Undid last export — restored ${batch.names.length} seller${batch.names.length === 1 ? '' : 's'}.`);
+  const sellerCount = Object.keys(batch.exports || {}).length;
+  toast(`Undid last export — restored ${sellerCount} seller${sellerCount === 1 ? '' : 's'}.`);
   if (typeof loadPayments === 'function') loadPayments();
   if (typeof updatePaymentBulkButtons === 'function') updatePaymentBulkButtons();
   // Refresh the toolbar Undo button enabled state.
@@ -16889,7 +16918,8 @@ function _payRefreshUndoButton() {
     btn.style.display = '';
     btn.disabled = false;
     const last = batches[batches.length - 1];
-    btn.title = `Undo most recent export (${last.names.length} seller${last.names.length === 1 ? '' : 's'}) — restores them to selectable.`;
+    const lastSellerCount = Object.keys(last.exports || {}).length;
+    btn.title = `Undo most recent export (${lastSellerCount} seller${lastSellerCount === 1 ? '' : 's'}) — restores them to selectable.`;
     btn.textContent = `↶ Undo Last Export (${batches.length})`;
   } else {
     btn.style.display = 'none';
@@ -16961,11 +16991,25 @@ async function _payDownloadSelected(type, format, aid, names) {
     ok = true;
   });
   if (ok) {
-    // Record the export so the rows render greyed out and the toolbar
-    // batch-Undo button knows what to roll back. Re-render so the
-    // visual state updates immediately.
-    _payMarkExported(aid, names);
-    toast(`Exported ${names.length} seller${names.length === 1 ? '' : 's'} — rows marked.`);
+    // Record the export per-seller-per-lot. Sellers without picks were
+    // exported in full → '*' sentinel; sellers WITH picks contribute
+    // their lot_no list so the row stays partially-tickable for any
+    // remaining (un-paid) lots.
+    const exportsMap = {};
+    for (const n of names) {
+      const picksForN = Array.isArray(lots[n]) ? lots[n] : null;
+      exportsMap[n] = (picksForN && picksForN.length) ? picksForN.slice() : '*';
+    }
+    _payMarkExported(aid, exportsMap);
+    // Clear the now-consumed lot picks so the modal doesn't re-pre-tick
+    // the same lots if the operator opens it again — the saved picks
+    // were "next export filter" and we just used them. Sellers without
+    // picks are no-ops (delete on undefined).
+    for (const n of names) if (Array.isArray(lots[n]) && lots[n].length) _paySetLotPicks(aid, n, null);
+    const partialCount = Object.keys(lots).length;
+    toast(`Exported ${names.length} seller${names.length === 1 ? '' : 's'}` +
+          (partialCount ? ` (${partialCount} partial)` : '') +
+          ' — rows marked.');
     if (typeof loadPayments === 'function') loadPayments();
   }
 }
@@ -17008,11 +17052,15 @@ async function whatsappSelectedPayments() {
 //              Sellers absent from this map (or with an empty array)
 //              export with ALL their lots. Sellers present override
 //              with ONLY the listed lots.
-//   exported : ['sellerName', 'sellerName', ...]
-//              Sellers whose payments have already been exported.
-//              Their rows render greyed-out + checkbox-disabled until
-//              they're undone.
-//   batches  : [{ id, names: [...], ts }, ...]
+//   exportedLots : { sellerName: '*' | ['lot_no', ...] }
+//              What has actually been exported per seller. '*' is the
+//              sentinel for "every payable lot was exported in one
+//              shot" (fully exported — row greys out + checkbox is
+//              disabled). An array tracks the specific lots that left
+//              the building when a partial export happened (row stays
+//              tickable + shows a "🚫 X/Y" badge so the operator can
+//              continue paying the remaining lots in a follow-up).
+//   batches  : [{ id, exports: { sellerName: '*' | [...] }, ts }, ...]
 //              History of export batches in chronological order.
 //              The toolbar "↶ Undo Last Export" button pops the most
 //              recent entry off the end.
@@ -17021,18 +17069,34 @@ async function whatsappSelectedPayments() {
 // exactly what was exported / picked before. Switching to a different
 // auction in the picker loads that auction's state in turn.
 const _PAY_STATE_KEY = (aid) => `pay.state.${aid}`;
+const _PAY_EMPTY = () => ({ picks: {}, exportedLots: {}, batches: [] });
 function _payLoadState(aid) {
-  if (!aid) return { picks: {}, exported: [], batches: [] };
+  if (!aid) return _PAY_EMPTY();
   try {
     const raw = localStorage.getItem(_PAY_STATE_KEY(aid));
-    if (!raw) return { picks: {}, exported: [], batches: [] };
+    if (!raw) return _PAY_EMPTY();
     const obj = JSON.parse(raw);
+    // Migrate legacy state (seller-level `exported` array → per-lot
+    // `exportedLots` map with '*' sentinel since the old shape didn't
+    // know which lots had been exported).
+    let exportedLots = (obj && typeof obj.exportedLots === 'object' && obj.exportedLots) ? obj.exportedLots : {};
+    if (Array.isArray(obj && obj.exported)) {
+      for (const n of obj.exported) if (!exportedLots[n]) exportedLots[n] = '*';
+    }
+    // Migrate legacy batches: `batch.names: [name]` → `batch.exports: { name: '*' }`.
+    const rawBatches = Array.isArray(obj && obj.batches) ? obj.batches : [];
+    const batches = rawBatches.map(b => {
+      if (b && b.exports && typeof b.exports === 'object') return b;
+      const exp = {};
+      if (Array.isArray(b && b.names)) for (const n of b.names) exp[n] = '*';
+      return { id: (b && b.id) || ('b' + Date.now()), exports: exp, ts: (b && b.ts) || '' };
+    });
     return {
-      picks:    obj && typeof obj.picks === 'object' && obj.picks    ? obj.picks    : {},
-      exported: Array.isArray(obj && obj.exported) ? obj.exported : [],
-      batches:  Array.isArray(obj && obj.batches)  ? obj.batches  : [],
+      picks: obj && typeof obj.picks === 'object' && obj.picks ? obj.picks : {},
+      exportedLots,
+      batches,
     };
-  } catch (_) { return { picks: {}, exported: [], batches: [] }; }
+  } catch (_) { return _PAY_EMPTY(); }
 }
 function _paySaveState(aid, state) {
   if (!aid) return;
@@ -17053,49 +17117,120 @@ function _paySetLotPicks(aid, sellerName, lotNos) {
   }
   _paySaveState(aid, s);
 }
-function _payIsExported(aid, sellerName) {
+// Lots already exported for this seller. Returns:
+//   '*'             — all lots exported in one shot (sentinel)
+//   ['lot_no', ...] — partial: these specific lots have been exported
+//   null            — nothing exported yet
+function _payExportedLotsFor(aid, sellerName) {
   const s = _payLoadState(aid);
-  return s.exported.includes(sellerName);
+  const ex = s.exportedLots[sellerName];
+  if (ex === '*' || (Array.isArray(ex) && ex.length)) return ex;
+  return null;
 }
-function _payMarkExported(aid, names) {
-  if (!Array.isArray(names) || !names.length) return null;
+// Tri-state status used by the Payments-row render. 'full' greys +
+// disables the row; 'partial' keeps the row tickable but shows the
+// "🚫 X/Y" badge so the operator knows more lots can still be paid;
+// 'none' is the default unexported state.
+//
+// totalLots is the seller's payable-lot count from the Payments
+// summary; with it, an array of length === totalLots is promoted to
+// 'full' (every lot WAS exported, the operator just did it via a
+// fully-ticked picks set). When totalLots is unknown we conservatively
+// treat any array as 'partial'.
+function _payExportStatus(aid, sellerName, totalLots) {
+  const ex = _payExportedLotsFor(aid, sellerName);
+  if (ex == null) return 'none';
+  if (ex === '*') return 'full';
+  if (Array.isArray(ex)) {
+    if (Number(totalLots) > 0 && ex.length >= Number(totalLots)) return 'full';
+    return 'partial';
+  }
+  return 'none';
+}
+// Record an export. `exportsMap` matches what was sent to the server:
+//   { sellerName: '*' | ['lot_no', ...] }
+// New lots merge into any existing array; a '*' promotion is sticky.
+// The batch is pushed onto the undo stack so a single Undo can roll
+// only this export back.
+function _payMarkExported(aid, exportsMap) {
+  const keys = exportsMap && typeof exportsMap === 'object' ? Object.keys(exportsMap) : [];
+  if (!keys.length) return null;
   const s = _payLoadState(aid);
-  // Idempotent — same seller exported twice doesn't double-stack in
-  // the exported list (Set semantics) but DOES go into batches both
-  // times, since each export is its own undo-able unit.
-  const set = new Set(s.exported);
-  for (const n of names) set.add(n);
-  s.exported = Array.from(set);
-  const batch = { id: 'b' + Date.now() + '-' + Math.floor(Math.random() * 1000), names: names.slice(), ts: new Date().toISOString() };
+  for (const n of keys) {
+    const next = exportsMap[n];
+    const existing = s.exportedLots[n];
+    if (next === '*') {
+      s.exportedLots[n] = '*';
+    } else if (Array.isArray(next) && next.length) {
+      if (existing === '*') {
+        // Already fully exported; keep '*'.
+      } else if (Array.isArray(existing)) {
+        const union = new Set(existing.map(String));
+        for (const v of next) union.add(String(v));
+        s.exportedLots[n] = Array.from(union);
+      } else {
+        s.exportedLots[n] = next.map(String);
+      }
+    }
+  }
+  const batch = {
+    id: 'b' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    exports: keys.reduce((acc, n) => { acc[n] = exportsMap[n]; return acc; }, {}),
+    ts: new Date().toISOString(),
+  };
   s.batches.push(batch);
   _paySaveState(aid, s);
   return batch;
 }
-function _payUnmarkExported(aid, names) {
-  if (!Array.isArray(names) || !names.length) return;
+// Surgical unmark for one seller — wipes their entry from exportedLots
+// AND strips them from every batch's exports map. Used by the per-row
+// "↶" icon when the operator wants to restore a single seller fully.
+function _payUnmarkExported(aid, sellerName) {
+  if (!sellerName) return;
   const s = _payLoadState(aid);
-  const drop = new Set(names);
-  s.exported = s.exported.filter(n => !drop.has(n));
-  // Also strip those names from any batch in the history. An empty
-  // batch is removed entirely so the toolbar Undo button doesn't get
-  // stuck on no-op restores.
+  delete s.exportedLots[sellerName];
   s.batches = s.batches
-    .map(b => ({ ...b, names: b.names.filter(n => !drop.has(n)) }))
-    .filter(b => b.names.length > 0);
+    .map(b => {
+      const ex = Object.assign({}, b.exports || {});
+      delete ex[sellerName];
+      return Object.assign({}, b, { exports: ex });
+    })
+    .filter(b => Object.keys(b.exports || {}).length > 0);
   _paySaveState(aid, s);
 }
+// Pop the most recent batch and roll back exactly what it added. The
+// older batches' claims on the same seller (if any) are honoured so
+// undo-once doesn't accidentally erase older partial exports.
 function _payUndoLastBatch(aid) {
   const s = _payLoadState(aid);
   const batch = s.batches.pop();
   if (!batch) { _paySaveState(aid, s); return null; }
-  const dropSet = new Set(batch.names);
-  // Only un-export a name if no OTHER batch still references it. This
-  // matters when a seller was exported twice and the operator only
-  // wants to undo the most recent export — the older batch's claim
-  // remains valid so the seller stays greyed out.
-  const stillClaimed = new Set();
-  for (const b of s.batches) for (const n of b.names) if (dropSet.has(n)) stillClaimed.add(n);
-  s.exported = s.exported.filter(n => !dropSet.has(n) || stillClaimed.has(n));
+  for (const sellerName of Object.keys(batch.exports || {})) {
+    const existing = s.exportedLots[sellerName];
+    if (!existing) continue;
+    // What older batches still claim for this seller — used to
+    // reconstruct exportedLots[seller] after subtracting this batch.
+    const olderClaims = [];
+    for (const b of s.batches) {
+      const v = b.exports && b.exports[sellerName];
+      if (v) olderClaims.push(v);
+    }
+    if (!olderClaims.length) {
+      // No older claim left → fully unmark this seller.
+      delete s.exportedLots[sellerName];
+      continue;
+    }
+    // Reconstruct from older claims. Any '*' claim wins; otherwise
+    // union all the per-lot arrays.
+    if (olderClaims.some(v => v === '*')) {
+      s.exportedLots[sellerName] = '*';
+    } else {
+      const merged = new Set();
+      for (const v of olderClaims) if (Array.isArray(v)) for (const lot of v) merged.add(String(lot));
+      if (merged.size) s.exportedLots[sellerName] = Array.from(merged);
+      else delete s.exportedLots[sellerName];
+    }
+  }
   _paySaveState(aid, s);
   return batch;
 }
@@ -17163,12 +17298,33 @@ function _renderPayLotsTable() {
   // print flow keeps working unchanged.
   const savedPicks = _payGetLotPicks(_payLotsState.aid, _payLotsState.seller);
   const savedSet = savedPicks ? new Set(savedPicks.map(String)) : null;
+  // Lots already shipped in a previous export. '*' means every lot
+  // has been exported (modal is then a record-keeping view rather than
+  // a pick affordance — the operator should use ↶ first if they want
+  // to re-export). An array names the specific lot_nos that left.
+  const exportedLotsRaw = _payExportedLotsFor(_payLotsState.aid, _payLotsState.seller);
+  const exportedAll = exportedLotsRaw === '*';
+  const exportedSet = Array.isArray(exportedLotsRaw)
+    ? new Set(exportedLotsRaw.map(String))
+    : (exportedAll ? null : new Set());
   const rows = _payLotsState.lots.map(l => {
     const tax = (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
-    const checked = savedSet ? savedSet.has(String(l.lot_no)) : true;
-    return `<tr>
-      <td style="text-align:center"><input type="checkbox" class="pay-lot-cb" data-id="${l.id}" data-lot="${esc(l.lot_no || '')}"${checked ? ' checked' : ''} onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
-      <td style="font-family:monospace;font-weight:600">${esc(l.lot_no || '')}</td>
+    const lotKey = String(l.lot_no || '');
+    const isExported = exportedAll || (exportedSet && exportedSet.has(lotKey));
+    // Exported lots are locked: pre-ticked, disabled, and visually
+    // marked with the 🚫 badge so the operator can see what's already
+    // gone out. Default ticking comes from savedPicks; falls back to
+    // "every non-exported lot" so the operator can save-and-go.
+    const checked = isExported ? true : (savedSet ? savedSet.has(lotKey) : true);
+    const dis = isExported ? ' disabled' : '';
+    const cls = isExported ? 'pay-lot-cb pay-lot-cb-exported' : 'pay-lot-cb';
+    const rowStyle = isExported ? ' style="background:#fef2f2"' : '';
+    const expCell = isExported
+      ? `<span class="pay-lot-exported-tag" title="This lot has already been included in a previous export.">🚫</span>`
+      : '';
+    return `<tr${rowStyle}>
+      <td style="text-align:center"><input type="checkbox" class="${cls}" data-id="${l.id}" data-lot="${esc(lotKey)}"${checked ? ' checked' : ''}${dis} onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
+      <td style="font-family:monospace;font-weight:600">${esc(lotKey)} ${expCell}</td>
       <td>${esc(l.branch || '')}</td>
       <td style="text-align:right">${fmtI(Number(l.qty)||0, 3)}</td>
       <td style="text-align:right">${fmtI(Number(l.prate)||0, 2)}</td>
@@ -17198,7 +17354,12 @@ function _renderPayLotsTable() {
   updatePayLotsTotals();
 }
 function togglePayLotSelectAll(checked) {
-  document.querySelectorAll('.pay-lot-cb').forEach(cb => { cb.checked = !!checked; });
+  // Don't override the disabled "already-exported" rows — they stay
+  // pre-ticked as a visual record but can't be un-ticked or re-saved.
+  document.querySelectorAll('.pay-lot-cb').forEach(cb => {
+    if (cb.disabled) return;
+    cb.checked = !!checked;
+  });
   updatePayLotsTotals();
 }
 function updatePayLotsTotals() {
@@ -17266,10 +17427,13 @@ async function saveSelectedPayLots() {
   const aid    = _payLotsState.aid;
   const seller = _payLotsState.seller;
   if (!aid || !seller) return;
-  const lotNos = Array.from(document.querySelectorAll('.pay-lot-cb:checked'))
+  // Only the tickable (non-exported) checkboxes count as picks. The
+  // disabled ones are historical record — including them in the save
+  // would re-export already-paid lots on the next "Export Selected".
+  const lotNos = Array.from(document.querySelectorAll('.pay-lot-cb:not([disabled]):checked'))
     .map(cb => String(cb.dataset.lot || '').trim())
     .filter(Boolean);
-  if (!lotNos.length) { alert('Tick at least one lot first.'); return; }
+  if (!lotNos.length) { alert('Tick at least one not-yet-exported lot first.'); return; }
   _paySetLotPicks(aid, seller, lotNos);
   // Re-render the Payments table FIRST so the lot-pick badge appears
   // and the row HTML is fresh — THEN tick the seller's checkbox.
@@ -17467,45 +17631,64 @@ async function loadPayments(opts){
     // pick badge next to each seller's name, and the per-row Undo icon.
     const _payCurAid = Number(document.getElementById('pay-auction').value) || 0;
     const _payCurState = _payLoadState(_payCurAid);
-    const _payExportedSet = new Set(_payCurState.exported || []);
     const _payCurPicks = _payCurState.picks || {};
+    // Resolve each seller's export status once. statusOf(p) → 'full'
+    // (row greyed + disabled), 'partial' (row tickable, "🚫 X/Y" badge
+    // shows remaining lots), or 'none'. Done at row-render time so the
+    // shape always matches the freshly-loaded state.
+    const _payStatusOf = (p) => _payExportStatus(_payCurAid, String(p.name || ''), Number(p.lot_count) || 0);
     const _paySlice = applyClientSidePagination(_paymentsPager, 'payments-pager', gotoPaymentsPage, arr, !!searchTerm);
     DataTable.mount('payments-list', _paySlice, {
       noSearch: true,
       emptyState: { icon: 'payments', title: "No payments to summarize yet", body: "Calculate the lots in this auction to see per-seller payable amounts here." },
-      // Exported sellers' rows render with the slate tint defined in
-      // .pay-row-exported. The class also disables the row checkbox via
-      // CSS cursor (the disabled attribute is set in the render below).
-      rowClass: (p) => p && _payExportedSet.has(String(p.name || '')) ? 'pay-row-exported' : '',
+      // Fully-exported rows get the "blocked" tint via .pay-row-exported;
+      // partially-exported rows get .pay-row-exported-partial (kept
+      // tickable so the operator can keep paying their remaining lots).
+      rowClass: (p) => {
+        const st = _payStatusOf(p);
+        if (st === 'full')    return 'pay-row-exported';
+        if (st === 'partial') return 'pay-row-exported-partial';
+        return '';
+      },
       columns: [
         // Selection column for bulk actions. Click on a checkbox toggles
         // the row's inclusion in the "Delete Selected" set; the master
         // checkbox in the column header toggles every visible row.
-        // Exported rows render with a disabled checkbox so the operator
-        // can't queue them for another export by accident — they have to
-        // click the row's "↶" Undo icon (or the toolbar batch Undo) to
-        // bring them back to selectable state.
+        // FULLY-exported rows render with a disabled checkbox so the
+        // operator can't accidentally re-export them; PARTIALLY-exported
+        // rows STAY enabled because there are still remaining lots to
+        // settle — the operator opens the modal, picks the remaining
+        // lots, saves, and runs another Export Selected.
         { key:'_select', label:'',
           labelHTML:'<input type="checkbox" id="pay-select-all" onclick="event.stopPropagation();toggleAllPayments(this.checked)" title="Select / clear all visible" style="cursor:pointer;width:16px;height:16px;vertical-align:middle;accent-color:var(--green)">',
           sortable:false, searchable:false,
           render:(p)=>{
-            const isExp = _payExportedSet.has(String(p.name || ''));
-            const dis = isExp ? ' disabled' : '';
-            const title = isExp ? ' title="Already exported — undo first to re-export"' : '';
+            const st = _payStatusOf(p);
+            const dis = st === 'full' ? ' disabled' : '';
+            const title = st === 'full'
+              ? ' title="Already exported — click ↶ to undo first"'
+              : (st === 'partial' ? ' title="Partially exported — tick to export remaining lots"' : '');
             return `<input type="checkbox" class="pay-select-cb" value="${esc(p.name||'')}"${dis}${title} onclick="event.stopPropagation();updatePaymentBulkButtons()" style="cursor:pointer">`;
           } },
         { key:'name', label:'Seller', sort:'text',
           render:(p)=>{
-            const picks = _payCurPicks[String(p.name || '')];
-            const lotN = p.lot_count != null ? Number(p.lot_count) || 0 : 0;
-            const badge = (Array.isArray(picks) && picks.length)
-              ? `<span class="pay-lot-pick-badge" title="Only ${picks.length} of ${lotN || picks.length} lot${(picks.length === 1) ? '' : 's'} will export for this seller — saved in the Lots modal.">📌 ${picks.length}/${lotN || picks.length}</span>`
+            const sellerName = String(p.name || '');
+            const totalLots = Number(p.lot_count) || 0;
+            const picks = _payCurPicks[sellerName];
+            const pickBadge = (Array.isArray(picks) && picks.length)
+              ? `<span class="pay-lot-pick-badge" title="Only ${picks.length} of ${totalLots || picks.length} lot${(picks.length === 1) ? '' : 's'} will export for this seller — saved in the Lots modal.">📌 ${picks.length}/${totalLots || picks.length}</span>`
               : '';
-            const isExp = _payExportedSet.has(String(p.name || ''));
-            const expBadge = isExp
-              ? `<span style="display:inline-block;padding:1px 6px;border-radius:9px;background:#e5e7eb;color:#374151;font-size:10.5px;font-weight:700;margin-left:6px" title="Exported. Use ↶ to undo.">✓ EXPORTED</span>`
-              : '';
-            return `<span style="font-weight:600;color:var(--spice-text-main)">${esc(p.name||'')}</span>${badge}${expBadge}`;
+            const st = _payStatusOf(p);
+            let expBadge = '';
+            if (st === 'full') {
+              expBadge = `<span class="pay-exported-badge pay-exported-full" title="Every payable lot has been exported. Use ↶ to undo.">🚫 EXPORTED</span>`;
+            } else if (st === 'partial') {
+              const exLots = _payExportedLotsFor(_payCurAid, sellerName);
+              const n = Array.isArray(exLots) ? exLots.length : 0;
+              const denom = totalLots || (n + ((Array.isArray(picks) && picks.length) ? picks.length : 1));
+              expBadge = `<span class="pay-exported-badge pay-exported-partial" title="${n} of ${denom} lots exported. Open 📋 to pick the remaining lots for the next export.">🚫 ${n}/${denom} EXPORTED</span>`;
+            }
+            return `<span style="font-weight:600;color:var(--spice-text-main)">${esc(sellerName)}</span>${pickBadge}${expBadge}`;
           } },
         { key:'lot_count', label:'Lots', sort:'number', numeric:true },
         { key:'total_qty', label:'Qty', sort:'number', numeric:true, fmt:(n)=>fmtI(n,3) },
@@ -17541,13 +17724,14 @@ async function loadPayments(opts){
             const aid = Number((document.getElementById('pay-auction')||{}).value)||0;
             const nm = encodeURIComponent(p.name||'');
             const pay = Number(p.total_payable)||0;
-            const isExp = _payExportedSet.has(String(p.name || ''));
-            // ↶ undo — surgical restore of one exported seller. Hidden
-            // unless the row is currently in the exported set. Sits at
-            // the LEFT so the operator's eye lands on the undo affordance
-            // first when scanning a greyed-out row.
-            const undoBtn = isExp
-              ? `<button class="icon-btn" title="Undo export — re-enable this seller for a new export" onclick="undoPaymentExport(decodeURIComponent('${nm}'))" style="color:#7c2d12">↶</button>`
+            const st = _payStatusOf(p);
+            // ↶ undo — surgical restore of one exported seller. Visible
+            // whenever there's anything to roll back (full OR partial).
+            // Tooltip is different for partial because the meaning is:
+            // "drop the per-lot export marker so EVERY lot can be
+            // exported again, including the ones already paid."
+            const undoBtn = (st !== 'none')
+              ? `<button class="icon-btn" title="${st === 'partial' ? 'Undo partial export — every lot becomes selectable again' : 'Undo export — re-enable this seller for a new export'}" onclick="undoPaymentExport(decodeURIComponent('${nm}'))" style="color:#7c2d12">↶</button>`
               : '';
             // 📋 opens the per-seller lots modal — lets the operator pick
             // specific lots to settle now and print a partial statement,
