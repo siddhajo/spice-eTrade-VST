@@ -38,6 +38,11 @@ const {
   buildSalesPartyLedgerRows, buildRDPartyLedgerRows, buildURDPartyLedgerRows,
   listAuctionParties,
 } = require('./tally-xml');
+// Per-install time-bombed licensing — see license.js for the model.
+// Token signing/verification + the license_state row helpers live there
+// so server.js, the CLI minter, and any future tooling all share one
+// codec.
+const license = require('./license');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -868,7 +873,48 @@ const loginLimiter = rateLimit({
 // previously kept it alive forever via the sliding-window sweep).
 const SESSION_TTL_DAYS = 30;
 
+// ══════════════════════════════════════════════════════════════
+// LICENSING — install ID, expiry probe, token apply
+// ══════════════════════════════════════════════════════════════
+//
+// Both endpoints are deliberately auth-free: the renewal page lives
+// outside the normal authenticated flow (the operator is locked out
+// of /api/login while expired, so they need a way to apply a new
+// token from a logged-out state). status is also used by the topbar
+// countdown pill on the main UI.
+app.get('/api/license/status', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const status = license.getStatus(getDb());
+    res.json(status);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+app.post('/api/license/apply', (req, res) => {
+  const token = (req.body && (req.body.token || req.body.license_token) || '').trim();
+  if (!token) return res.status(400).json({ error: 'token required' });
+  const result = license.applyToken(getDb(), token);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
 app.post('/api/login', loginLimiter, async (req, res) => {
+  // Hard licence gate before the credential check — when the install
+  // is expired we don't even pretend to authenticate. The frontend
+  // login script catches the 451 and redirects to /renew.html with
+  // the install ID pre-filled.
+  try {
+    const lstatus = license.getStatus(getDb());
+    if (lstatus.expired) {
+      return res.status(451).json({
+        error: 'license_expired',
+        message: `Your access window ended on ${lstatus.expires_at}. Send the install ID below to your provider to receive a renewal token.`,
+        install_id: lstatus.install_id,
+        expires_at: lstatus.expires_at,
+      });
+    }
+  } catch (_) { /* license check failed → let login through; fail-open is friendlier than a brick */ }
   const { username, password, device_label } = req.body || {};
   if (!username || !password) return res.status(401).json({ error: 'Invalid credentials' });
   const db = getDb();
@@ -10414,6 +10460,18 @@ const PORT = process.env.PORT || 3001;
   initCompanySettings(db);
   repairBadDates(db);
   assertSchemaSanity(db);
+  // Bootstrap the per-install license row on first boot. This generates
+  // the install_id, starts the trial window, and logs the current
+  // status so the operator can spot expiry-soon at deploy time.
+  try {
+    const lstatus = license.getStatus(db);
+    const tag = lstatus.expired
+      ? `EXPIRED (was ${lstatus.expires_at})`
+      : `${lstatus.days_remaining} day${lstatus.days_remaining === 1 ? '' : 's'} remaining (expires ${lstatus.expires_at})`;
+    console.log(`  License: install ${lstatus.install_id} — ${tag}`);
+  } catch (e) {
+    console.warn('  License bootstrap failed:', e.message);
+  }
   // Auto-backup poller — once a minute. The function itself decides
   // whether a snapshot is actually due based on the configured interval.
   setInterval(runBackupTickerOnce, 60 * 1000);
