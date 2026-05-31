@@ -339,36 +339,53 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       wanted.has(String(p.name || '').trim().toUpperCase())
     );
   }
-  // Optional per-seller lot-picks — when the operator picks specific
-  // lots inside a seller's detail modal, the bank transfer for THAT
-  // seller is partial: amount must sum only the picked lots' balances,
-  // not the seller's full payable. We re-query per picked seller and
-  // override the corresponding payments[] row in place. Sellers absent
-  // from opts.lots retain their full-payable row (already computed by
-  // getBankPaymentData above). For partial rows we also re-pick RTGS
-  // vs NEFT based on the new amount (the ₹2L threshold may move it),
-  // and re-roll the REMARKS string further down so it reflects the
-  // partial value.
+  // Optional per-seller lot-picks AND already-exported exclusions.
+  //
+  //   opts.lots[seller]        — operator-picked subset; only these
+  //                              lots' balances count for the bank row.
+  //   opts.excludeLots[seller] — lots that have already gone out in a
+  //                              previous export and must be skipped
+  //                              automatically so re-exporting the
+  //                              seller doesn't double-pay them.
+  //
+  // For each seller in either map we re-query SUM(balance) with the
+  // appropriate WHERE clauses and override the payments[] row in
+  // place. RTGS/NEFT is re-picked from the new amount (₹2L threshold).
+  // REMARKS is rebuilt later at row.map time using p.amount, so just
+  // updating p.amount + p.transactionType here is enough.
   const lotPicks = (opts && opts.lots && typeof opts.lots === 'object') ? opts.lots : null;
-  if (lotPicks) {
-    for (const sellerName of Object.keys(lotPicks)) {
-      const lotNos = Array.isArray(lotPicks[sellerName]) ? lotPicks[sellerName] : [];
-      if (!lotNos.length) continue;
+  const excludeLots = (opts && opts.excludeLots && typeof opts.excludeLots === 'object') ? opts.excludeLots : null;
+  if (lotPicks || excludeLots) {
+    const sellersToRecompute = new Set();
+    if (lotPicks)     for (const k of Object.keys(lotPicks))     sellersToRecompute.add(k);
+    if (excludeLots)  for (const k of Object.keys(excludeLots))  sellersToRecompute.add(k);
+    for (const sellerName of sellersToRecompute) {
+      const picksArr   = lotPicks    && Array.isArray(lotPicks[sellerName])    ? lotPicks[sellerName]    : null;
+      const excludeArr = excludeLots && Array.isArray(excludeLots[sellerName]) ? excludeLots[sellerName] : null;
+      if ((!picksArr || !picksArr.length) && (!excludeArr || !excludeArr.length)) continue;
       const wantedUpper = String(sellerName || '').trim().toUpperCase();
       const idx = payments.findIndex(p =>
         String(p.name || '').trim().toUpperCase() === wantedUpper
       );
       if (idx < 0) continue;   // seller not in the current payments set (e.g. fully paid)
-      const placeholders = lotNos.map(() => '?').join(',');
+      const params = [auctionId, wantedUpper];
+      let extraWhere = '';
+      if (picksArr && picksArr.length) {
+        extraWhere += ` AND l.lot_no IN (${picksArr.map(() => '?').join(',')})`;
+        for (const lot of picksArr) params.push(String(lot));
+      }
+      if (excludeArr && excludeArr.length) {
+        extraWhere += ` AND l.lot_no NOT IN (${excludeArr.map(() => '?').join(',')})`;
+        for (const lot of excludeArr) params.push(String(lot));
+      }
       const sub = db.get(
         `SELECT COALESCE(SUM(l.balance),0) AS payable,
                 COALESCE(SUM(l.puramt), 0) AS puramt
            FROM lots l
           WHERE l.auction_id = ? AND l.amount > 0
             AND (l.paid IS NULL OR l.paid = '')
-            AND UPPER(TRIM(l.name)) = ?
-            AND l.lot_no IN (${placeholders})`,
-        [auctionId, wantedUpper, ...lotNos.map(String)]
+            AND UPPER(TRIM(l.name)) = ?${extraWhere}`,
+        params
       ) || { payable: 0, puramt: 0 };
       const rawAmount = Number(sub.payable) || 0;
       const roundedAmount = cfg.flag_round ? Math.round(rawAmount) : rawAmount;
@@ -377,16 +394,12 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
         ...payments[idx],
         amount: roundedAmount,
         transactionType: isRTGS ? 'RTGS' : 'NEFT',
-        // REMARKS is rebuilt later at row.map time using `p.amount`
-        // and the (still-defined-below) `ano`/`shortTag` — overriding
-        // it here would also need access to those vars which haven't
-        // been computed yet, so just let the rebuild pick up the new
-        // amount automatically.
       };
     }
-    // Drop any zero-amount rows the lot-pick recompute produced (e.g.
-    // the operator picked only zero-balance lots) — banks reject
-    // zero-value RTGS rows.
+    // Drop any zero-amount rows produced by the recompute — banks reject
+    // zero-value RTGS rows, and a seller whose remaining lots all net to
+    // zero (everything already exported, or only zero-balance lots
+    // picked) shouldn't appear at all.
     payments = payments.filter(p => Number(p.amount) > 0);
   }
 
@@ -647,27 +660,34 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
      FROM lots WHERE auction_id = ? AND amount > 0${whereExtra}
      ORDER BY state, name`, params
   );
-  // Optional per-seller lot-picks — when the operator picks specific
-  // lots inside a seller's detail modal, the Payment XLSX should keep
-  // ONLY those lot rows for that seller; sellers without picks keep
-  // every lot as before. Filter in JS rather than push into the SQL —
-  // the WHERE clause for "(name=A AND lot IN (...)) OR (name=B AND lot
-  // IN (...))" gets ugly fast, and the post-filter is cheap at this
-  // volume. Match name case-insensitively to be safe.
-  const lotPicks = (opts && opts.lots && typeof opts.lots === 'object') ? opts.lots : null;
-  if (lotPicks) {
-    // Pre-compute upper-cased Sets per seller for O(1) lookup.
-    const picksUpper = {};
-    for (const k of Object.keys(lotPicks)) {
+  // Optional per-seller lot-picks AND already-exported exclusions.
+  // Same shape as exportBankPayment:
+  //   opts.lots[seller]        — keep ONLY these lot rows for the seller
+  //   opts.excludeLots[seller] — drop these lots (already shipped before)
+  // Both filters compose: if a seller has both, the row must satisfy
+  // BOTH conditions to survive. Match name case-insensitively to be
+  // tolerant of slight casing drift between localStorage and the DB.
+  const lotPicks    = (opts && opts.lots         && typeof opts.lots         === 'object') ? opts.lots         : null;
+  const excludeLots = (opts && opts.excludeLots  && typeof opts.excludeLots  === 'object') ? opts.excludeLots  : null;
+  if (lotPicks || excludeLots) {
+    const picksUpper   = {};
+    const excludeUpper = {};
+    if (lotPicks) for (const k of Object.keys(lotPicks)) {
       const arr = Array.isArray(lotPicks[k]) ? lotPicks[k] : [];
-      if (!arr.length) continue;
-      picksUpper[k.trim().toUpperCase()] = new Set(arr.map(x => String(x)));
+      if (arr.length) picksUpper[k.trim().toUpperCase()] = new Set(arr.map(x => String(x)));
+    }
+    if (excludeLots) for (const k of Object.keys(excludeLots)) {
+      const arr = Array.isArray(excludeLots[k]) ? excludeLots[k] : [];
+      if (arr.length) excludeUpper[k.trim().toUpperCase()] = new Set(arr.map(x => String(x)));
     }
     rows = rows.filter(r => {
       const key = String(r.poolername || '').trim().toUpperCase();
+      const lotKey = String(r.lot);
       const picks = picksUpper[key];
-      if (!picks) return true;   // no pick set for this seller → all lots
-      return picks.has(String(r.lot));
+      if (picks && !picks.has(lotKey)) return false;
+      const excl = excludeUpper[key];
+      if (excl && excl.has(lotKey)) return false;
+      return true;
     });
   }
   // Spread debit_notes amount across the seller's lots proportionally so

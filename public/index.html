@@ -8203,8 +8203,8 @@ const _le = {
   recentTotal: 0,          // total rows matching current filter (from server)
   recentPage: 1,           // 1-based current page in the recent-entries panel
   recentPageSize: (function(){
-    try { const v = parseInt(localStorage.getItem('le_recent_page_size'), 10); return [10,20,25,50,100].includes(v) ? v : 25; }
-    catch(_) { return 25; }
+    try { const v = parseInt(localStorage.getItem('le_recent_page_size'), 10); return [10,20,50,100,200].includes(v) ? v : 50; }
+    catch(_) { return 50; }
   })(),      // rows per page (persisted across reloads via localStorage)
   recentSearch: '',        // active seller filter (LIKE on lots.name via API)
   recentSearchTimer: null, // debounce for the seller-filter input
@@ -9073,7 +9073,7 @@ async function loadLeRecent(){
   if (!aid) return;
   try {
     const page = Math.max(1, parseInt(_le.recentPage, 10) || 1);
-    const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
+    const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 50);
     const offset = (page - 1) * pageSize;
     const search = String(_le.recentSearch || '').trim();
     const tickActive = !!(_le.selectedForPrint && _le.selectedForPrint.size);
@@ -9128,7 +9128,7 @@ async function loadLeRecent(){
 // Pager navigation — called from renderLeRecent's footer Prev/Next /
 // page-input. Clamped to [1, lastPage].
 function leGotoRecentPage(p){
-  const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
+  const pageSize = Math.max(5, parseInt(_le.recentPageSize, 10) || 50);
   const lastPage = Math.max(1, Math.ceil((_le.recentTotal || 0) / pageSize));
   const target = Math.max(1, Math.min(lastPage, parseInt(p, 10) || 1));
   if (target === _le.recentPage) return;
@@ -9143,7 +9143,7 @@ function leGotoRecentPage(p){
 // no longer meaningful once the window size changes.
 function leSetRecentPageSize(v){
   const n = parseInt(v, 10);
-  if (![10, 20, 25, 50, 100].includes(n)) return;
+  if (![10, 20, 50, 100, 200].includes(n)) return;
   if (n === _le.recentPageSize) return;
   _le.recentPageSize = n;
   _le.recentPage = 1;
@@ -9380,7 +9380,7 @@ function renderLeRecent(){
         (sortMode === col ? 'color:var(--green);' : '');
   const total     = _le.recentTotal != null ? _le.recentTotal : visible.length;
   const page      = Math.max(1, parseInt(_le.recentPage, 10) || 1);
-  const pageSize  = Math.max(5, parseInt(_le.recentPageSize, 10) || 25);
+  const pageSize  = Math.max(5, parseInt(_le.recentPageSize, 10) || 50);
   const lastPage  = Math.max(1, Math.ceil(total / pageSize));
   const fromRow   = (page - 1) * pageSize + 1;
   const toRow     = Math.min(total, (page - 1) * pageSize + visible.length);
@@ -9409,7 +9409,7 @@ function renderLeRecent(){
       '<div style="text-align:right" title="Reserved price set at entry">Reserved (₹)</div>'
     : '';
   host.innerHTML = `
-    <div style="display:grid;${COLS};gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:1">
+    <div style="display:grid;${COLS};gap:0;font-size:11px;font-weight:700;color:var(--spice-cardamom-dk);text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;border-bottom:1px solid var(--spice-cardamom-md, #BBF7D0);background:var(--spice-cardamom-lt);position:sticky;top:0;z-index:1">
       <div style="text-align:center"><input type="checkbox" id="le-recent-select-all" onchange="leToggleSelectAll(this.checked)" title="Select all visible" style="cursor:pointer"></div>
       <div onclick="leSortByColumn('lot_no')" title="Sort by Lot No" style="${hdrStyle('lot_no')}">Lot${arrow('lot_no')}</div>
       <div onclick="leSortByColumn('name')"   title="Sort by Seller" style="${hdrStyle('name')}">Seller${arrow('name')}</div>
@@ -9461,7 +9461,7 @@ function renderLeRecent(){
     // Page-size selector — matches the page-size widget used in other
     // listing screens. Persisted via localStorage so the operator's
     // choice survives reloads.
-    const sizeOpts = [10, 20, 25, 50, 100].map(n =>
+    const sizeOpts = [10, 20, 50, 100, 200].map(n =>
       `<option value="${n}"${n === pageSize ? ' selected' : ''}>${n} / page</option>`
     ).join('');
     const pageSizeCtrl =
@@ -16942,20 +16942,52 @@ async function exportPaymentXlsxSelected() {
 }
 async function _payDownloadSelected(type, format, aid, names) {
   const label = (typeof EXP_LABELS === 'object' && EXP_LABELS[type]) || type;
-  // Pull per-seller lot picks from local state. Only sellers with a
-  // saved pick set are sent — everyone else gets the default "all
-  // lots" behaviour server-side.
+  // Pull per-seller state. Two independent maps go into the body:
+  //   lots[seller]        — operator's explicit narrow (only these
+  //                         lots count). Always wins when set.
+  //   excludeLots[seller] — lots already shipped in earlier exports;
+  //                         the server subtracts them so re-clicking
+  //                         Export Selected on a partially-exported
+  //                         seller doesn't re-include the lots that
+  //                         have already gone out. This is what fixes
+  //                         the "7 lots → exported 2 → next click sent
+  //                         all 7 again" bug.
+  // Sellers whose every lot has already been exported ('*' sentinel)
+  // are dropped from `names` entirely with a clear message — there's
+  // nothing left to export for them, only Undo can re-enable.
   const state = _payLoadState(aid);
   const lots = {};
+  const excludeLots = {};
+  const skippedFully = [];
+  const effectiveNames = [];
   for (const n of names) {
+    const exported = state.exportedLots[n];
+    if (exported === '*') { skippedFully.push(n); continue; }
+    effectiveNames.push(n);
     const picks = Array.isArray(state.picks[n]) ? state.picks[n] : null;
     if (picks && picks.length) lots[n] = picks;
+    if (Array.isArray(exported) && exported.length) excludeLots[n] = exported;
   }
+  if (!effectiveNames.length) {
+    alert(`All ${names.length} ticked seller${names.length === 1 ? ' has' : 's have'} already been fully exported. Use the ↶ Undo icon on a row (or the toolbar ↶ Undo Last Export) before re-exporting.`);
+    return;
+  }
+  if (skippedFully.length) {
+    // Tell the operator we silently dropped fully-exported sellers from
+    // this batch so they aren't surprised when only N of M show up in
+    // the file. The export still proceeds for the rest.
+    toast(`Skipped ${skippedFully.length} fully-exported seller${skippedFully.length === 1 ? '' : 's'}: ${skippedFully.slice(0, 3).join(', ')}${skippedFully.length > 3 ? '…' : ''}`);
+  }
+  names = effectiveNames;
   const body = { names, format };
-  if (Object.keys(lots).length) body.lots = lots;
+  if (Object.keys(lots).length)        body.lots        = lots;
+  if (Object.keys(excludeLots).length)  body.excludeLots = excludeLots;
   const lotPickCount = Object.keys(lots).length;
+  const partialPartCount = Object.keys(excludeLots).length;
   const overlayLabel = `Exporting ${label} — ${names.length} seller${names.length === 1 ? '' : 's'}` +
-    (lotPickCount ? ` (${lotPickCount} with lot picks)` : '') + '…';
+    (lotPickCount   ? ` (${lotPickCount} with explicit picks)`         : '') +
+    (partialPartCount ? ` (${partialPartCount} continuing prior export)` : '') +
+    '…';
   let ok = false;
   await withOverlay(overlayLabel, async () => {
     const r = await fetch(B + `/api/exports/${type}/${aid}`, {
@@ -17390,10 +17422,14 @@ function updatePayLotsTotals() {
   // request that the server would reject as "lot_ids[] required".
   const btn = document.getElementById('pay-lots-print-btn');
   if (btn) btn.disabled = (n === 0);
-  // Save Lot Selection is only meaningful when the operator has
-  // actually narrowed the set — ticking every lot is the default.
+  // Save Lot Selection is enabled whenever the operator has any
+  // TICKABLE (non-disabled) lot checked. Previously this checked
+  // `n === totalN` which counted the disabled pre-ticks for already-
+  // exported lots — leaving the button greyed out the moment a seller
+  // had even one prior export, which made the workflow unworkable.
+  const tickableChecked = document.querySelectorAll('.pay-lot-cb:not([disabled]):checked').length;
   const saveBtn = document.getElementById('pay-lots-save-btn');
-  if (saveBtn) saveBtn.disabled = (n === 0) || (n === totalN);
+  if (saveBtn) saveBtn.disabled = (tickableChecked === 0);
   // Pick-state indicator below the totals strip. Three states:
   //   • saved + matches current ticks  → "✓ Lot selection saved (X lots)"
   //   • saved + differs from ticks     → "⚠ Saved selection differs — click Save to update"
@@ -17895,15 +17931,31 @@ function _insightsQuickRange(kind){
   _renderInsights();
 }
 
-// Branch chart palette — spice-tinted, distinguishable at thumbnail size.
-// Cycles when there are more branches than colors so two branches at the
-// far ends of the alphabet don't collide visually.
-const _INS_PALETTE = ['#15803d','#c2410c','#a16207','#1d4ed8','#7c3aed','#be123c','#0f766e','#9333ea','#65a30d','#0369a1'];
+// Branch chart palette — vibrant, distinguishable at thumbnail size.
+// Cycles when there are more branches than colors so two branches at
+// the far ends of the alphabet don't collide visually.
+const _INS_PALETTE = ['#10B981','#F97316','#6366F1','#EC4899','#14B8A6','#A855F7','#F59E0B','#0EA5E9','#EF4444','#84CC16'];
+
+// Themed gradient palette — keyed by `theme` string. Each entry pairs a
+// "from" and "to" stop plus a complementary shadow tint so KPI tiles +
+// section accents stay coherent across the page.
+const _INS_THEMES = {
+  emerald: { from:'#10B981', to:'#047857', glow:'rgba(16,185,129,.28)' },
+  rose:    { from:'#F43F5E', to:'#9F1239', glow:'rgba(244,63,94,.28)' },
+  amber:   { from:'#F59E0B', to:'#B45309', glow:'rgba(245,158,11,.28)' },
+  indigo:  { from:'#6366F1', to:'#3730A3', glow:'rgba(99,102,241,.28)' },
+  violet:  { from:'#A855F7', to:'#6B21A8', glow:'rgba(168,85,247,.28)' },
+  teal:    { from:'#14B8A6', to:'#0F766E', glow:'rgba(20,184,166,.28)' },
+  sky:     { from:'#0EA5E9', to:'#0369A1', glow:'rgba(14,165,233,.28)' },
+  orange:  { from:'#FB923C', to:'#C2410C', glow:'rgba(251,146,60,.28)' },
+  pink:    { from:'#EC4899', to:'#9D174D', glow:'rgba(236,72,153,.28)' },
+};
+function _insGrad(name){ const t = _INS_THEMES[name] || _INS_THEMES.emerald; return `linear-gradient(135deg, ${t.from} 0%, ${t.to} 100%)`; }
 
 async function _renderInsights(){
   const host = document.getElementById('insights-host');
   if (!host) return;
-  host.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text3)">Loading insights…</div>';
+  host.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text3);font-size:14px"><div style="font-size:32px;margin-bottom:8px;animation:ins-spin 1s linear infinite;display:inline-block">◐</div><div>Loading insights…</div></div><style>@keyframes ins-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}</style>';
   let data;
   try {
     const { from, to } = _insightsRange;
@@ -17913,47 +17965,137 @@ async function _renderInsights(){
     return;
   }
 
-  // ── KPI card builder (mirrors the existing .kpi style but inline so
-  // the Insights tab doesn't depend on dashboard-only CSS classes).
-  const kpiCard = (label, value, accent) => `
-    <div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:#fff;border-left:4px solid ${accent || '#15803d'}">
-      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;font-weight:700">${esc(label)}</div>
-      <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px">${value}</div>
-    </div>`;
+  // Scoped styles for the Insights surface. Re-injected on every render
+  // (cheap — <style> dedupes within a single host). Keeps the visuals
+  // self-contained without bleeding into other tabs.
+  const insightsStyles = `
+  <style>
+    @keyframes ins-fade-in { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+    #insights-host { animation:ins-fade-in .25s ease-out }
+    .ins-section { position:relative; padding:18px 20px; margin-bottom:16px; border-radius:16px; background:#fff; border:1px solid var(--border); box-shadow:0 1px 2px rgba(15,23,42,.04) }
+    .ins-section-head { display:flex; align-items:center; gap:12px; margin-bottom:14px }
+    .ins-section-icon { width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:18px; color:#fff; flex-shrink:0; box-shadow:0 4px 12px var(--ins-glow,rgba(16,185,129,.28)) }
+    .ins-section-title { flex:1 }
+    .ins-section-title h3 { margin:0; font-size:15px; font-weight:800; letter-spacing:-.2px; color:var(--text) }
+    .ins-section-title .sub { font-size:11.5px; color:var(--text3); margin-top:1px }
+
+    /* ── KPI tiles ───────────────────────────────────────── */
+    .ins-kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:18px }
+    .ins-kpi { position:relative; padding:16px 16px 16px 18px; border-radius:14px; display:flex; gap:12px; align-items:center; color:#fff; box-shadow:0 6px 16px var(--ins-glow,rgba(16,185,129,.28)); overflow:hidden; transition:transform .15s ease, box-shadow .15s ease }
+    .ins-kpi:hover { transform:translateY(-2px); box-shadow:0 10px 24px var(--ins-glow,rgba(16,185,129,.32)) }
+    .ins-kpi::before { content:''; position:absolute; inset:0; background:radial-gradient(circle at 110% -10%, rgba(255,255,255,.22), transparent 55%); pointer-events:none }
+    .ins-kpi::after  { content:''; position:absolute; right:-30px; bottom:-30px; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.08); pointer-events:none }
+    .ins-kpi-icon { width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.22); display:flex; align-items:center; justify-content:center; font-size:22px; flex-shrink:0; backdrop-filter:blur(6px); position:relative; z-index:1 }
+    .ins-kpi-body { position:relative; z-index:1 }
+    .ins-kpi-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; opacity:.92 }
+    .ins-kpi-value { font-size:22px; font-weight:800; letter-spacing:-.5px; margin-top:2px; line-height:1.1 }
+
+    /* ── Filter strip ────────────────────────────────────── */
+    .ins-filter { padding:14px 18px; margin-bottom:16px; border-radius:14px; background:linear-gradient(135deg, #ECFDF5 0%, #F0F9FF 100%); border:1px solid #BBF7D0 }
+    .ins-filter-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap }
+    .ins-filter-row label { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); display:block; margin-bottom:4px }
+    .ins-filter-row input[type=date] { height:36px; padding:0 10px; border:1.5px solid var(--border); border-radius:8px; font-size:13px; background:#fff; color:var(--text) }
+    .ins-pill { padding:7px 13px; font-size:11.5px; font-weight:700; border-radius:999px; border:1.5px solid var(--green-border); background:#fff; color:var(--green-dk); cursor:pointer; transition:all .15s ease; font-family:inherit }
+    .ins-pill:hover { background:var(--green-bg); transform:translateY(-1px) }
+    .ins-pill-primary { background:linear-gradient(135deg, #10B981 0%, #047857 100%); color:#fff; border-color:transparent; box-shadow:0 4px 10px rgba(16,185,129,.3); padding:8px 18px; font-size:12px }
+    .ins-pill-primary:hover { background:linear-gradient(135deg, #059669 0%, #065F46 100%); box-shadow:0 6px 14px rgba(16,185,129,.4) }
+
+    /* ── Branch cards ────────────────────────────────────── */
+    .ins-branch-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:14px }
+    .ins-branch { position:relative; padding:16px 16px 14px; border-radius:14px; background:linear-gradient(180deg, var(--ins-branch-lt,#ECFDF5) 0%, #fff 60%); border:1px solid var(--ins-branch-md,#BBF7D0); overflow:hidden; transition:transform .15s ease, box-shadow .15s ease }
+    .ins-branch:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(15,23,42,.08) }
+    .ins-branch::before { content:''; position:absolute; top:0; left:0; right:0; height:4px; background:linear-gradient(90deg, var(--ins-branch-from,#10B981), var(--ins-branch-to,#047857)) }
+    .ins-branch-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px }
+    .ins-branch-name { font-weight:800; font-size:15px; color:var(--ins-branch-to,#047857); letter-spacing:-.2px }
+    .ins-branch-badge { padding:3px 10px; font-size:10.5px; font-weight:700; border-radius:999px; background:rgba(255,255,255,.7); color:var(--ins-branch-to,#047857); border:1px solid var(--ins-branch-md,#BBF7D0) }
+    .ins-branch-stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:10px }
+    .ins-branch-stat { padding:8px 6px; border-radius:8px; background:rgba(255,255,255,.55); text-align:center; border:1px solid rgba(255,255,255,.6) }
+    .ins-branch-stat-val { font-size:16px; font-weight:800; line-height:1 }
+    .ins-branch-stat-lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--text3); font-weight:700; margin-top:3px }
+    .ins-branch-row { display:flex; justify-content:space-between; align-items:baseline; padding:5px 0; font-size:12px; color:var(--text2) }
+    .ins-branch-row b { color:var(--text); font-weight:700 }
+    .ins-branch-row + .ins-branch-row { border-top:1px dashed rgba(0,0,0,.06) }
+
+    /* ── Table ───────────────────────────────────────────── */
+    .ins-table-wrap { overflow:auto; max-height:520px; border:1px solid var(--border); border-radius:10px; background:#fff }
+    .ins-table { width:100%; border-collapse:collapse; font-size:12.5px }
+    .ins-table thead th { padding:11px 10px; text-align:left; background:linear-gradient(180deg, #F1F5F9 0%, #E2E8F0 100%); position:sticky; top:0; z-index:1; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); border-bottom:2px solid #CBD5E1; white-space:nowrap }
+    .ins-table tbody tr { transition:background .12s ease }
+    .ins-table tbody tr:nth-child(odd)  { background:#fff }
+    .ins-table tbody tr:nth-child(even) { background:#FAFCFE }
+    .ins-table tbody tr:hover           { background:#ECFDF5 }
+    .ins-table td { padding:9px 10px; border-bottom:1px solid var(--border); font-size:12.5px; color:var(--text) }
+    .ins-num { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-align:right; font-variant-numeric:tabular-nums }
+    .ins-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums }
+    .ins-badge-green  { background:#DCFCE7; color:#166534 }
+    .ins-badge-amber  { background:#FEF3C7; color:#92400E }
+    .ins-badge-rose   { background:#FFE4E6; color:#9F1239 }
+    .ins-branch-pill { display:inline-flex; align-items:center; padding:2px 9px; border-radius:999px; background:linear-gradient(135deg,#ECFDF5,#D1FAE5); color:#065F46; font-size:10.5px; margin-right:4px; margin-bottom:2px; font-weight:700; border:1px solid #A7F3D0 }
+
+    /* ── Outstanding table ───────────────────────────────── */
+    .ins-out-table { width:100%; border-collapse:collapse; font-size:12.5px }
+    .ins-out-table thead th { padding:11px 10px; text-align:left; background:linear-gradient(135deg,#FEF3C7 0%, #FDE68A 100%); position:sticky; top:0; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#92400E; border-bottom:2px solid #F59E0B }
+    .ins-out-table tbody tr:nth-child(odd)  { background:#FFFBEB }
+    .ins-out-table tbody tr:nth-child(even) { background:#FFFEF7 }
+    .ins-out-table tbody tr:hover           { background:#FEF3C7 }
+    .ins-out-table td { padding:9px 10px; border-bottom:1px solid #FDE68A }
+    .ins-out-total { background:linear-gradient(90deg, #F59E0B, #B45309) !important; color:#fff !important }
+    .ins-out-total td { color:#fff !important; font-weight:800; font-size:13px; border:none }
+
+    /* ── Buyer leaderboard ───────────────────────────────── */
+    .ins-rank { width:32px; height:32px; border-radius:50%; color:#fff; font-weight:800; display:flex; align-items:center; justify-content:center; font-size:13px; flex-shrink:0; box-shadow:0 2px 6px rgba(0,0,0,.15); position:relative }
+    .ins-rank-1 { background:linear-gradient(135deg, #FCD34D 0%, #B45309 100%); width:36px; height:36px; font-size:14px; box-shadow:0 4px 12px rgba(245,158,11,.4) }
+    .ins-rank-1::before { content:'👑'; position:absolute; top:-12px; left:50%; transform:translateX(-50%); font-size:14px }
+    .ins-rank-2 { background:linear-gradient(135deg, #E5E7EB 0%, #6B7280 100%); width:34px; height:34px }
+    .ins-rank-3 { background:linear-gradient(135deg, #FCA5A5 0%, #92400E 100%); width:34px; height:34px }
+    .ins-lb-row { display:flex; align-items:center; gap:12px; padding:10px 4px; border-bottom:1px solid var(--border); transition:background .12s ease, transform .12s ease }
+    .ins-lb-row:hover { background:#F8FAFC; transform:translateX(2px) }
+    .ins-lb-row:last-child { border-bottom:none }
+    .ins-lb-bar { height:5px; background:#E5E7EB; border-radius:3px; margin-top:5px; overflow:hidden; position:relative }
+    .ins-lb-bar > div { height:100%; border-radius:3px; transition:width .4s ease }
+
+    /* ── Empty state ─────────────────────────────────────── */
+    .ins-empty { padding:40px 20px; text-align:center; color:var(--text3); font-size:13px; background:linear-gradient(135deg, #F8FAFC 0%, #F1F5F9 100%); border-radius:12px; border:1px dashed var(--border2) }
+    .ins-empty-icon { font-size:36px; margin-bottom:8px; opacity:.5 }
+  </style>`;
+
+  // ── KPI tile builder — gradient background + icon + value.
+  const kpi = (icon, label, value, theme) => {
+    const t = _INS_THEMES[theme] || _INS_THEMES.emerald;
+    return `
+      <div class="ins-kpi" style="background:${_insGrad(theme)}; --ins-glow:${t.glow}">
+        <div class="ins-kpi-icon">${icon}</div>
+        <div class="ins-kpi-body">
+          <div class="ins-kpi-label">${esc(label)}</div>
+          <div class="ins-kpi-value">${value}</div>
+        </div>
+      </div>`;
+  };
 
   // ── Per-branch card. The KPI strip up top shows OVERALL numbers;
   // these cards drill into one branch at a time.
   const branchCard = (b, idx) => {
-    const accent = _INS_PALETTE[idx % _INS_PALETTE.length];
+    const themeName = ['emerald','orange','indigo','pink','teal','violet','amber','sky','rose'][idx % 9];
+    const tm = _INS_THEMES[themeName];
+    const lightTint = {emerald:'#ECFDF5',orange:'#FFF7ED',indigo:'#EEF2FF',pink:'#FDF2F8',teal:'#F0FDFA',violet:'#FAF5FF',amber:'#FFFBEB',sky:'#F0F9FF',rose:'#FFF1F2'}[themeName] || '#ECFDF5';
+    const midTint   = {emerald:'#A7F3D0',orange:'#FED7AA',indigo:'#C7D2FE',pink:'#FBCFE8',teal:'#99F6E4',violet:'#E9D5FF',amber:'#FDE68A',sky:'#BAE6FD',rose:'#FECDD3'}[themeName] || '#A7F3D0';
     const sellPct = b.lots > 0 ? Math.round((b.sold / b.lots) * 100) : 0;
     return `
-      <div style="padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:#fff;border-top:4px solid ${accent}">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div style="font-weight:700;font-size:14px;color:${accent}">${esc(b.branch)}</div>
-          <div style="font-size:11px;color:var(--text3)">${sellPct}% sold</div>
+      <div class="ins-branch" style="--ins-branch-from:${tm.from};--ins-branch-to:${tm.to};--ins-branch-lt:${lightTint};--ins-branch-md:${midTint}">
+        <div class="ins-branch-head">
+          <div class="ins-branch-name">${esc(b.branch)}</div>
+          <div class="ins-branch-badge">${sellPct}% sold</div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px;color:var(--text2)">
-          <div><b style="color:var(--text)">${b.lots}</b> lots</div>
-          <div><b style="color:#15803d">${b.sold}</b> sold</div>
-          <div><b style="color:#b45309">${b.withdrawn}</b> WD</div>
-          <div><b style="color:var(--text3)">${b.unsold}</b> unsold</div>
-          <div style="grid-column:1/-1;border-top:1px dashed var(--border);padding-top:6px;margin-top:2px">
-            <span style="color:var(--text3)">Qty:</span> <b style="color:var(--text)">${fmtI(b.qty, 2)} kg</b>
-          </div>
-          <div style="grid-column:1/-1">
-            <span style="color:var(--text3)">Price:</span>
-            <b>${b.min_price != null ? '₹' + fmtI(b.min_price, 0) : '—'}</b> ·
-            <b>${b.max_price != null ? '₹' + fmtI(b.max_price, 0) : '—'}</b> ·
-            avg <b>${b.avg_price > 0 ? '₹' + fmtI(b.avg_price, 0) : '—'}</b>
-          </div>
-          <div style="grid-column:1/-1;border-top:1px dashed var(--border);padding-top:6px;margin-top:2px">
-            <span style="color:var(--text3)">Value:</span> <b style="color:#15803d">₹${fmtI(b.value, 0)}</b>
-          </div>
-          <div style="grid-column:1/-1">
-            <span style="color:var(--text3)">Payable to sellers:</span>
-            <b style="color:#c2410c">₹${fmtI(b.payable_to_sellers, 0)}</b>
-          </div>
+        <div class="ins-branch-stats">
+          <div class="ins-branch-stat"><div class="ins-branch-stat-val" style="color:${tm.to}">${fmtI(b.lots, 0)}</div><div class="ins-branch-stat-lbl">Lots</div></div>
+          <div class="ins-branch-stat"><div class="ins-branch-stat-val" style="color:#15803d">${fmtI(b.sold, 0)}</div><div class="ins-branch-stat-lbl">Sold</div></div>
+          <div class="ins-branch-stat"><div class="ins-branch-stat-val" style="color:#B45309">${fmtI(b.withdrawn, 0)}</div><div class="ins-branch-stat-lbl">WD</div></div>
+          <div class="ins-branch-stat"><div class="ins-branch-stat-val" style="color:#64748B">${fmtI(b.unsold, 0)}</div><div class="ins-branch-stat-lbl">Unsold</div></div>
         </div>
+        <div class="ins-branch-row"><span>Qty</span><b>${fmtI(b.qty, 2)} kg</b></div>
+        <div class="ins-branch-row"><span>Price (min · max · avg)</span><b>${b.min_price != null ? '₹' + fmtI(b.min_price, 0) : '—'} · ${b.max_price != null ? '₹' + fmtI(b.max_price, 0) : '—'} · ${b.avg_price > 0 ? '₹' + fmtI(b.avg_price, 0) : '—'}</b></div>
+        <div class="ins-branch-row"><span>Value</span><b style="color:#15803d">₹${fmtI(b.value, 0)}</b></div>
+        <div class="ins-branch-row"><span>Payable to sellers</span><b style="color:#C2410C">₹${fmtI(b.payable_to_sellers, 0)}</b></div>
       </div>`;
   };
 
@@ -17963,23 +18105,23 @@ async function _renderInsights(){
   const tradeRow = (t) => {
     const branchPills = (t.branches || []).slice(0, 4).map(b => {
       const pct = t.value > 0 ? Math.round((b.value / t.value) * 100) : 0;
-      return `<span style="display:inline-block;padding:1px 6px;border-radius:9px;background:#ecfdf5;color:#065f46;font-size:10.5px;margin-right:3px;font-weight:600" title="${esc(b.branch)} — ${pct}% of trade value (₹${fmtI(b.value, 0)})">${esc(b.branch)} ${pct}%</span>`;
+      return `<span class="ins-branch-pill" title="${esc(b.branch)} — ${pct}% of trade value (₹${fmtI(b.value, 0)})">${esc(b.branch)} ${pct}%</span>`;
     }).join('');
     const dateStr = (t.date || '').slice(0, 10).split('-').reverse().join('/');
     return `
-      <tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:6px 8px;font-weight:700;font-family:monospace">${esc(t.ano)}</td>
-        <td style="padding:6px 8px;font-family:monospace;color:var(--text2)">${esc(dateStr)}</td>
-        <td style="padding:6px 8px;font-size:11px;color:var(--text2)">${esc(t.state || '—')}</td>
-        <td style="padding:6px 8px;text-align:right">${t.lots}</td>
-        <td style="padding:6px 8px;text-align:right;color:#15803d;font-weight:700">${t.sold}</td>
-        <td style="padding:6px 8px;text-align:right;color:#b45309">${t.withdrawn}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace">${fmtI(t.qty, 2)}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace">${t.min_price != null ? fmtI(t.min_price, 0) : '—'}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace">${t.max_price != null ? fmtI(t.max_price, 0) : '—'}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700">${t.avg_price > 0 ? fmtI(t.avg_price, 0) : '—'}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:#15803d">${fmtI(t.value, 0)}</td>
-        <td style="padding:6px 8px;font-size:11px">${branchPills || '<span style="color:var(--text3)">—</span>'}</td>
+      <tr>
+        <td style="font-weight:800;font-family:ui-monospace,Menlo,monospace;color:var(--green-dk)">#${esc(t.ano)}</td>
+        <td style="font-family:ui-monospace,Menlo,monospace;color:var(--text2)">${esc(dateStr)}</td>
+        <td style="font-size:11.5px;color:var(--text2)">${esc(t.state || '—')}</td>
+        <td class="ins-num">${fmtI(t.lots, 0)}</td>
+        <td class="ins-num"><span class="ins-badge ins-badge-green">${fmtI(t.sold, 0)}</span></td>
+        <td class="ins-num"><span class="ins-badge ins-badge-amber">${fmtI(t.withdrawn, 0)}</span></td>
+        <td class="ins-num">${fmtI(t.qty, 2)}</td>
+        <td class="ins-num">${t.min_price != null ? fmtI(t.min_price, 0) : '—'}</td>
+        <td class="ins-num">${t.max_price != null ? fmtI(t.max_price, 0) : '—'}</td>
+        <td class="ins-num" style="font-weight:800">${t.avg_price > 0 ? fmtI(t.avg_price, 0) : '—'}</td>
+        <td class="ins-num" style="font-weight:800;color:#15803d">${fmtI(t.value, 0)}</td>
+        <td>${branchPills || '<span style="color:var(--text3)">—</span>'}</td>
       </tr>`;
   };
 
@@ -17987,26 +18129,26 @@ async function _renderInsights(){
   // every invoice is treated as outstanding; the section header
   // explains the assumption.
   const outstandingTable = (rows) => {
-    if (!rows.length) return '<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No invoices in this range.</div>';
+    if (!rows.length) return '<div class="ins-empty"><div class="ins-empty-icon">📭</div>No invoices in this range.</div>';
     const total = rows.reduce((s, r) => s + r.value, 0);
     return `
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="background:#f4f4f4;position:sticky;top:0">
-          <th style="padding:6px 8px;text-align:left">Buyer</th>
-          <th style="padding:6px 8px;text-align:right">Invoices</th>
-          <th style="padding:6px 8px;text-align:right">Outstanding</th>
+      <table class="ins-out-table">
+        <thead><tr>
+          <th>Buyer</th>
+          <th style="text-align:right">Invoices</th>
+          <th style="text-align:right">Outstanding</th>
         </tr></thead>
         <tbody>
           ${rows.map(r => `
-            <tr style="border-bottom:1px solid var(--border)">
-              <td style="padding:6px 8px"><div style="font-weight:600;font-size:12px">${esc(r.buyer_name)}</div><div style="font-size:10.5px;color:var(--text3);font-family:monospace">${esc(r.buyer_code || '')}</div></td>
-              <td style="padding:6px 8px;text-align:right">${r.invoices}</td>
-              <td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:#c2410c">₹${fmtI(r.value, 0)}</td>
+            <tr>
+              <td><div style="font-weight:700;font-size:12.5px;color:var(--text)">${esc(r.buyer_name)}</div><div style="font-size:10.5px;color:var(--text3);font-family:ui-monospace,Menlo,monospace">${esc(r.buyer_code || '')}</div></td>
+              <td class="ins-num">${fmtI(r.invoices, 0)}</td>
+              <td class="ins-num" style="font-weight:800;color:#C2410C">₹${fmtI(r.value, 0)}</td>
             </tr>`).join('')}
-          <tr style="background:#fef3c7;border-top:2px solid #f59e0b">
-            <td style="padding:6px 8px;font-weight:700">Total</td>
-            <td style="padding:6px 8px;text-align:right;font-weight:700">${rows.reduce((s, r) => s + r.invoices, 0)}</td>
-            <td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700">₹${fmtI(total, 0)}</td>
+          <tr class="ins-out-total">
+            <td>Total</td>
+            <td class="ins-num">${fmtI(rows.reduce((s, r) => s + r.invoices, 0), 0)}</td>
+            <td class="ins-num">₹${fmtI(total, 0)}</td>
           </tr>
         </tbody>
       </table>`;
@@ -18014,100 +18156,115 @@ async function _renderInsights(){
 
   // ── Buyer-activity leaderboard — top buyers by value across the
   // window. Bar widths are normalised against the leader so the
-  // visual ranking is obvious at a glance.
+  // visual ranking is obvious at a glance. Top 3 wear podium colors
+  // (gold / silver / bronze) and the leader gets a crown.
   const buyerLeaderboard = (rows) => {
-    if (!rows.length) return '<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No buyer activity in this range.</div>';
+    if (!rows.length) return '<div class="ins-empty"><div class="ins-empty-icon">🏆</div>No buyer activity in this range.</div>';
     const max = rows.reduce((m, r) => Math.max(m, r.value), 0) || 1;
     return rows.map((r, i) => {
-      const pct = Math.round((r.value / max) * 100);
+      const pct = Math.max(2, Math.round((r.value / max) * 100));
+      const palette = _INS_PALETTE[i % _INS_PALETTE.length];
+      let rankClass = 'ins-rank';
+      if (i === 0) rankClass += ' ins-rank-1';
+      else if (i === 1) rankClass += ' ins-rank-2';
+      else if (i === 2) rankClass += ' ins-rank-3';
+      const rankStyle = i < 3 ? '' : `style="background:${palette}"`;
+      const barColor = i < 3
+        ? (i === 0 ? 'linear-gradient(90deg,#FCD34D,#B45309)' : i === 1 ? 'linear-gradient(90deg,#E5E7EB,#6B7280)' : 'linear-gradient(90deg,#FCA5A5,#92400E)')
+        : palette;
       return `
-        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-          <div style="width:24px;height:24px;border-radius:50%;background:${_INS_PALETTE[i % _INS_PALETTE.length]};color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0">${i + 1}</div>
+        <div class="ins-lb-row">
+          <div class="${rankClass}" ${rankStyle}>${i + 1}</div>
           <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.buyer_name)}</div>
-            <div style="height:4px;background:#e5e7eb;border-radius:2px;margin-top:4px;overflow:hidden">
-              <div style="width:${pct}%;height:100%;background:${_INS_PALETTE[i % _INS_PALETTE.length]};border-radius:2px"></div>
-            </div>
-            <div style="font-size:10.5px;color:var(--text3);margin-top:2px">${r.lots} lots · ${fmtI(r.qty, 2)} kg</div>
+            <div style="font-weight:700;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.buyer_name)}</div>
+            <div class="ins-lb-bar"><div style="width:${pct}%;background:${barColor}"></div></div>
+            <div style="font-size:10.5px;color:var(--text3);margin-top:3px">${fmtI(r.lots, 0)} lots · ${fmtI(r.qty, 2)} kg</div>
           </div>
-          <div style="font-weight:700;font-size:12.5px;font-family:monospace;color:#15803d;flex-shrink:0">₹${fmtI(r.value, 0)}</div>
+          <div style="font-weight:800;font-size:14px;font-family:ui-monospace,Menlo,monospace;color:#15803d;flex-shrink:0">₹${fmtI(r.value, 0)}</div>
         </div>`;
     }).join('');
   };
 
+  // ── Section header builder — colored icon + title + subtitle.
+  const sectionHead = (icon, title, sub, theme) => {
+    const t = _INS_THEMES[theme] || _INS_THEMES.emerald;
+    return `
+      <div class="ins-section-head">
+        <div class="ins-section-icon" style="background:${_insGrad(theme)};--ins-glow:${t.glow}">${icon}</div>
+        <div class="ins-section-title"><h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div></div>
+      </div>`;
+  };
+
   // ── Assemble.
   const t = data.totals;
-  host.innerHTML = `
+  host.innerHTML = insightsStyles + `
     <!-- Filter strip -->
-    <div class="card" style="padding:14px 18px;margin-bottom:14px">
-      <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
-        <div class="fg" style="margin:0"><label>From</label><input type="date" id="ins-from" value="${esc(data.range.from)}" style="padding:6px;border:1px solid var(--border);border-radius:6px"></div>
-        <div class="fg" style="margin:0"><label>To</label><input type="date" id="ins-to" value="${esc(data.range.to)}" style="padding:6px;border:1px solid var(--border);border-radius:6px"></div>
-        <button class="btn btn-g" onclick="_insightsApplyDateInputs()" style="height:38px">Apply</button>
-        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-left:8px">
-          <span style="font-size:11px;color:var(--text3)">Quick:</span>
-          <button onclick="_insightsQuickRange('week')"        class="btn btn-o" style="padding:6px 10px;font-size:11.5px">7 Days</button>
-          <button onclick="_insightsQuickRange('month')"       class="btn btn-o" style="padding:6px 10px;font-size:11.5px">This Month</button>
-          <button onclick="_insightsQuickRange('last_month')"  class="btn btn-o" style="padding:6px 10px;font-size:11.5px">Last Month</button>
-          <button onclick="_insightsQuickRange('quarter')"     class="btn btn-o" style="padding:6px 10px;font-size:11.5px">Quarter</button>
-          <button onclick="_insightsQuickRange('year')"        class="btn btn-o" style="padding:6px 10px;font-size:11.5px">Year</button>
+    <div class="ins-filter">
+      <div class="ins-filter-row">
+        <div><label>From</label><input type="date" id="ins-from" value="${esc(data.range.from)}"></div>
+        <div><label>To</label><input type="date" id="ins-to" value="${esc(data.range.to)}"></div>
+        <button class="ins-pill ins-pill-primary" onclick="_insightsApplyDateInputs()">Apply</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:6px">
+          <span style="font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:700">Quick:</span>
+          <button onclick="_insightsQuickRange('week')"       class="ins-pill">7 Days</button>
+          <button onclick="_insightsQuickRange('month')"      class="ins-pill">This Month</button>
+          <button onclick="_insightsQuickRange('last_month')" class="ins-pill">Last Month</button>
+          <button onclick="_insightsQuickRange('quarter')"    class="ins-pill">Quarter</button>
+          <button onclick="_insightsQuickRange('year')"       class="ins-pill">Year</button>
         </div>
       </div>
     </div>
 
-    <!-- KPI strip -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px">
-      ${kpiCard('Trades',       t.trades, '#15803d')}
-      ${kpiCard('Lots',         t.lots, '#1d4ed8')}
-      ${kpiCard('Sold',         t.sold, '#15803d')}
-      ${kpiCard('Withdrawn',    t.withdrawn, '#b45309')}
-      ${kpiCard('Qty',          fmtI(t.qty, 2) + ' kg', '#0f766e')}
-      ${kpiCard('Value',        '₹' + fmtI(t.value, 0), '#15803d')}
-      ${kpiCard('Avg Price',    t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 0) : '—', '#7c3aed')}
-      ${kpiCard('Payable',      '₹' + fmtI(t.payable_to_sellers, 0), '#c2410c')}
-      ${kpiCard('Outstanding',  '₹' + fmtI(t.outstanding_by_buyers, 0), '#be123c')}
+    <!-- KPI tiles -->
+    <div class="ins-kpi-grid">
+      ${kpi('📊', 'Trades',      fmtI(t.trades, 0),                                            'emerald')}
+      ${kpi('🌾', 'Lots',        fmtI(t.lots, 0),                                              'indigo')}
+      ${kpi('✅', 'Sold',        fmtI(t.sold, 0),                                              'teal')}
+      ${kpi('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                                         'amber')}
+      ${kpi('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                               'sky')}
+      ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 0),                                       'emerald')}
+      ${kpi('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 0) : '—',           'violet')}
+      ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 0),                          'orange')}
+      ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 0),                       'rose')}
     </div>
 
-    ${data.perTrade.length ? '' : '<div class="card" style="padding:24px;text-align:center;color:var(--text3);margin-bottom:14px">No trades fall in this date range. Pick a wider window above.</div>'}
+    ${data.perTrade.length ? '' : '<div class="ins-section"><div class="ins-empty"><div class="ins-empty-icon">📭</div>No trades fall in this date range. Pick a wider window above.</div></div>'}
 
     <!-- Stacked bar chart -->
     ${data.perTrade.length ? `
-    <div class="card" style="padding:14px 18px;margin-bottom:14px">
-      <h3 style="margin:0 0 4px;font-size:14px">Branch contribution per trade</h3>
-      <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Stacked bar — each segment is a branch's value contribution to that trade. Top 20 trades by date shown.</div>
-      <div style="height:300px;position:relative"><canvas id="ins-stacked-canvas"></canvas></div>
+    <div class="ins-section">
+      ${sectionHead('📊', 'Branch contribution per trade', 'Each segment is a branch\'s value contribution. Top 20 trades by date.', 'indigo')}
+      <div style="height:320px;position:relative"><canvas id="ins-stacked-canvas"></canvas></div>
     </div>` : ''}
 
     <!-- Per-branch cards -->
     ${data.perBranch.length ? `
-    <div class="card" style="padding:14px 18px;margin-bottom:14px">
-      <h3 style="margin:0 0 4px;font-size:14px">Per-branch summary</h3>
-      <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Rolled up across every trade in the date range.</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+    <div class="ins-section">
+      ${sectionHead('🏪', 'Per-branch summary', 'Rolled up across every trade in the date range.', 'teal')}
+      <div class="ins-branch-grid">
         ${data.perBranch.map(branchCard).join('')}
       </div>
     </div>` : ''}
 
     <!-- Per-trade table -->
     ${data.perTrade.length ? `
-    <div class="card" style="padding:14px 18px;margin-bottom:14px">
-      <h3 style="margin:0 0 4px;font-size:14px">Per-trade details</h3>
-      <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Each row is one trade with its branch composition (top 4 by value shown as pills).</div>
-      <div style="overflow:auto;max-height:480px;border:1px solid var(--border);border-radius:6px">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff">
-          <thead><tr style="background:#f4f4f4;position:sticky;top:0;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--text2)">
-            <th style="padding:6px 8px;text-align:left">Trade</th>
-            <th style="padding:6px 8px;text-align:left">Date</th>
-            <th style="padding:6px 8px;text-align:left">State</th>
-            <th style="padding:6px 8px;text-align:right">Lots</th>
-            <th style="padding:6px 8px;text-align:right">Sold</th>
-            <th style="padding:6px 8px;text-align:right">WD</th>
-            <th style="padding:6px 8px;text-align:right">Qty (kg)</th>
-            <th style="padding:6px 8px;text-align:right">Min ₹</th>
-            <th style="padding:6px 8px;text-align:right">Max ₹</th>
-            <th style="padding:6px 8px;text-align:right">Avg ₹</th>
-            <th style="padding:6px 8px;text-align:right">Value (₹)</th>
-            <th style="padding:6px 8px;text-align:left">Branches</th>
+    <div class="ins-section">
+      ${sectionHead('📋', 'Per-trade details', 'Each row is one trade with branch composition (top 4 by value).', 'violet')}
+      <div class="ins-table-wrap">
+        <table class="ins-table">
+          <thead><tr>
+            <th>Trade</th>
+            <th>Date</th>
+            <th>State</th>
+            <th style="text-align:right">Lots</th>
+            <th style="text-align:right">Sold</th>
+            <th style="text-align:right">WD</th>
+            <th style="text-align:right">Qty (kg)</th>
+            <th style="text-align:right">Min ₹</th>
+            <th style="text-align:right">Max ₹</th>
+            <th style="text-align:right">Avg ₹</th>
+            <th style="text-align:right">Value (₹)</th>
+            <th>Branches</th>
           </tr></thead>
           <tbody>${data.perTrade.map(tradeRow).join('')}</tbody>
         </table>
@@ -18115,15 +18272,13 @@ async function _renderInsights(){
     </div>` : ''}
 
     <!-- Two-column row: outstanding by buyer + buyer leaderboard -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px">
-      <div class="card" style="padding:14px 18px">
-        <h3 style="margin:0 0 4px;font-size:14px">Outstanding by buyer</h3>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Sales invoices in this range. Treated as outstanding — there's no per-invoice payment tracking yet.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px">
+      <div class="ins-section" style="margin-bottom:0">
+        ${sectionHead('💳', 'Outstanding by buyer', 'Sales invoices in this range — treated as outstanding (no per-invoice payment tracking yet).', 'amber')}
         ${outstandingTable(data.outstandingByBuyer)}
       </div>
-      <div class="card" style="padding:14px 18px">
-        <h3 style="margin:0 0 4px;font-size:14px">Top buyer activity</h3>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Ranked by value across all trades in range.</div>
+      <div class="ins-section" style="margin-bottom:0">
+        ${sectionHead('🏆', 'Top buyer activity', 'Ranked by value across all trades in range.', 'pink')}
         ${buyerLeaderboard(data.buyerActivity)}
       </div>
     </div>
@@ -18138,13 +18293,22 @@ async function _renderInsights(){
   const canvas = document.getElementById('ins-stacked-canvas');
   if (canvas && data.branchStacked && data.branchStacked.labels.length) {
     const ctx = canvas.getContext('2d');
-    const datasets = data.branchStacked.datasets.map((ds, i) => ({
-      label: ds.label,
-      data: ds.data,
-      backgroundColor: _INS_PALETTE[i % _INS_PALETTE.length],
-      borderColor: '#fff',
-      borderWidth: 1,
-    }));
+    // Gradient fills for each branch dataset — softer than flat fills
+    // and they shift with theme palette so 10 branches stay distinct.
+    const datasets = data.branchStacked.datasets.map((ds, i) => {
+      const base = _INS_PALETTE[i % _INS_PALETTE.length];
+      const grad = ctx.createLinearGradient(0, 0, 0, 320);
+      grad.addColorStop(0, base);
+      grad.addColorStop(1, base + 'AA');
+      return {
+        label: ds.label,
+        data: ds.data,
+        backgroundColor: grad,
+        borderColor: '#fff',
+        borderWidth: 1,
+        borderRadius: 4,
+      };
+    });
     _insightsBarChart = new Chart(ctx, {
       type: 'bar',
       data: { labels: data.branchStacked.labels, datasets },
@@ -18152,12 +18316,17 @@ async function _renderInsights(){
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { stacked: true, ticks: { font: { size: 10 } } },
-          y: { stacked: true, ticks: { callback: v => '₹' + (v >= 100000 ? (v/100000).toFixed(1) + 'L' : (v/1000).toFixed(0) + 'k'), font: { size: 10 } } },
+          x: { stacked: true, ticks: { font: { size: 10, weight: '600' }, color: '#64748B' }, grid: { display: false } },
+          y: { stacked: true, ticks: { callback: v => '₹' + (v >= 100000 ? (v/100000).toFixed(1) + 'L' : (v/1000).toFixed(0) + 'k'), font: { size: 10, weight: '600' }, color: '#64748B' }, grid: { color: 'rgba(148,163,184,.15)' } },
         },
         plugins: {
-          legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } },
+          legend: { position: 'bottom', labels: { font: { size: 11, weight: '600' }, boxWidth: 12, boxHeight: 12, padding: 12, color: '#475569' } },
           tooltip: {
+            backgroundColor: 'rgba(15,23,42,.95)',
+            titleFont: { size: 12, weight: '700' },
+            bodyFont: { size: 12 },
+            padding: 10,
+            cornerRadius: 8,
             callbacks: {
               label: (ctx) => `${ctx.dataset.label}: ₹${fmtI(ctx.parsed.y, 0)}`,
             }

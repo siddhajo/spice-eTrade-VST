@@ -7720,24 +7720,34 @@ app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
     const db = getDb();
     // Normalise the body. names → array of trimmed non-empty strings.
     // lots → object mapping seller-name → array of lot_no strings.
+    // excludeLots → same shape; lots that already shipped in earlier
+    //               exports and must not be included again. Lets the
+    //               client re-export a seller's remaining lots without
+    //               accidentally double-paying the ones already paid.
     const body = req.body || {};
     const names = Array.isArray(body.names)
       ? body.names.map(s => String(s || '').trim()).filter(Boolean)
       : [];
-    const lots = (body.lots && typeof body.lots === 'object' && !Array.isArray(body.lots)) ? body.lots : null;
-    const opts = (names.length || lots) ? {} : undefined;
+    const lots        = (body.lots        && typeof body.lots        === 'object' && !Array.isArray(body.lots))        ? body.lots        : null;
+    const excludeLots = (body.excludeLots && typeof body.excludeLots === 'object' && !Array.isArray(body.excludeLots)) ? body.excludeLots : null;
+    const opts = (names.length || lots || excludeLots) ? {} : undefined;
     if (opts) {
       if (names.length) opts.names = names;
-      if (lots) {
-        // Strip any non-array entries / empty arrays so the downstream
-        // export functions can rely on `opts.lots[seller]` being a
-        // non-empty array when present.
+      const cleanMap = (src) => {
         const cleaned = {};
-        for (const k of Object.keys(lots)) {
-          const arr = Array.isArray(lots[k]) ? lots[k].map(v => String(v || '').trim()).filter(Boolean) : [];
+        for (const k of Object.keys(src)) {
+          const arr = Array.isArray(src[k]) ? src[k].map(v => String(v || '').trim()).filter(Boolean) : [];
           if (arr.length) cleaned[k] = arr;
         }
-        if (Object.keys(cleaned).length) opts.lots = cleaned;
+        return Object.keys(cleaned).length ? cleaned : null;
+      };
+      if (lots) {
+        const c = cleanMap(lots);
+        if (c) opts.lots = c;
+      }
+      if (excludeLots) {
+        const c = cleanMap(excludeLots);
+        if (c) opts.excludeLots = c;
       }
     }
     let buffer;
