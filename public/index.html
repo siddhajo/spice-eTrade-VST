@@ -3070,7 +3070,7 @@ input[type="search"]:focus{
                  List (Before) sheet before re-importing it here. Behind
                  the flag_price_list_mapping feature toggle. -->
             <button class="btn btn-o feat-price-list-mapping" style="height:38px;padding:0 16px;font-weight:600" onclick="go('plmap')" title="Fill the CODE column on a Price List sheet from TRADE NAME">🗺 Price List Mapping</button>
-            <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="showModal('price-import-modal')">📥 Price Import</button>
+            <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openPriceImport()">📥 Price Import</button>
           </div>
         </div>
 
@@ -3842,6 +3842,33 @@ input[type="search"]:focus{
 
     <!-- EXPORTS -->
     <div class="tc" id="tc-exports">
+      <!-- Trade picker — shared by the Pre-trade Exports section below
+           and the main Export Center. Lifted out of the Center card so
+           both sections read from a single canonical control. -->
+      <div class="card" style="padding:14px 18px">
+        <div class="fg" style="max-width:300px;margin:0"><label>Select Trade</label><select id="exp-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select></div>
+      </div>
+
+      <!-- Pre-trade Exports — a fixed five-report snapshot the operator
+           should download BEFORE running Price Import. Once prices are
+           imported the lots table is overwritten with the auctioneer's
+           data, so these exports are the only record of the pre-trade
+           state. Kept as a separate collapsible so the day-to-day
+           Export Center isn't cluttered. -->
+      <div class="card">
+        <div class="tally-section" id="exp-sec-pretrade" style="margin:0">
+          <h3 class="tally-section-head" onclick="toggleTallySection('exp-sec-pretrade')">
+            <span class="tally-section-chev">▼</span>
+            <span>Pre-trade Exports</span>
+            <span style="font-weight:400;font-size:12px;color:var(--text3);margin-left:8px">Download BEFORE importing prices — your "before trade" snapshot</span>
+          </h3>
+          <div class="tally-section-body">
+            <div style="font-size:12px;color:var(--text2);margin:12px 0 0">Lot Slip, Lot Buyer, Lot Name, Praman CSV and Price List (Before) — your pre-import safety net. Run them now while the lots table still reflects the auction sheet.</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:12px" id="export-btns-pretrade"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="tally-section" id="exp-sec-center" style="margin:0">
           <h3 class="tally-section-head" onclick="toggleTallySection('exp-sec-center')">
@@ -3849,7 +3876,6 @@ input[type="search"]:focus{
             <span>Export Center — XLSX</span>
           </h3>
           <div class="tally-section-body">
-            <div class="fg" style="max-width:300px;margin-top:12px"><label>Select Trade</label><select id="exp-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select></div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:12px" id="export-btns"></div>
           </div>
         </div>
@@ -4942,6 +4968,32 @@ input[type="search"]:focus{
 <!-- ═══ PRICE IMPORT (post-auction) ═══════════════════════ -->
 <div class="modal-bg" id="price-import-modal"><div class="modal">
   <h2>Price Import — Post-Auction Data</h2>
+
+  <!-- "Before trade" snapshot reminder. Importing prices rewrites the
+       lots table with the auctioneer's data; the five reports listed
+       here are the only record of the pre-trade state once that
+       happens. The Import button is disabled until the operator
+       acknowledges, so the reminder can't be silently skipped.
+       openPriceImport() re-arms this every time the modal opens. -->
+  <div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+    <div style="font-weight:700;color:#7C2D12;font-size:13px;margin-bottom:4px">⚠ Download "before trade" snapshots first</div>
+    <div style="font-size:12px;color:#7C2D12;margin-bottom:8px;line-height:1.45">
+      Once you import prices the lots table is overwritten with the auctioneer's data. These five reports are your record of the pre-trade state.
+      <span style="display:block;margin-top:4px">Snapshots use the trade picked in the topbar.</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">
+      <button class="btn btn-o" type="button" onclick="piQuickExport('lot_slip')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Lot Slip</button>
+      <button class="btn btn-o" type="button" onclick="piQuickExport('lot_buyer')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Lot Buyer</button>
+      <button class="btn btn-o" type="button" onclick="piQuickExport('lot_name')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Lot Name</button>
+      <button class="btn btn-o" type="button" onclick="piQuickExport('praman_csv')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Praman CSV</button>
+      <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Price List (Before)</button>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#7C2D12;margin-top:10px;cursor:pointer;font-weight:600">
+      <input type="checkbox" id="pi-ack" onchange="piAckChanged()">
+      Snapshots saved — proceed with import
+    </label>
+  </div>
+
   <p style="font-size:13px;color:var(--spice-text-mute);margin-bottom:10px">Use this after the auction ends to update prices, buyer codes, and quantities on existing lots.</p>
   <div style="font-size:12px;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:10px 12px;margin-bottom:14px">
     <strong>Expected columns:</strong> STATE, TNO (or ANO), DATE, LOT, BAG, QTY, PRICE, CODE<br>
@@ -4956,7 +5008,7 @@ input[type="search"]:focus{
   </div>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('price-import-modal')">Cancel</button>
-    <button class="btn btn-g" id="pi-submit" onclick="doPriceImport()">Import Prices</button>
+    <button class="btn btn-g" id="pi-submit" onclick="doPriceImport()" disabled>Import Prices</button>
   </div>
 </div></div>
 
@@ -13837,6 +13889,37 @@ async function importAuction(){
     if(d.skipped===0)setTimeout(()=>status.style.display='none',5000);
   }catch(err){status.style.background='var(--red-bg)';status.style.color='var(--red)';status.textContent='Error: '+err.message}}
 
+// Open the Price Import modal with a fresh "before trade" reminder
+// state — the ack checkbox starts unchecked and the Import button
+// starts disabled every time, so the operator can't muscle-memory
+// through the warning by clicking submit before reading it.
+function openPriceImport(){
+  const ack=document.getElementById('pi-ack');
+  if(ack) ack.checked=false;
+  const submit=document.getElementById('pi-submit');
+  if(submit) submit.disabled=true;
+  showModal('price-import-modal');
+}
+function piAckChanged(){
+  const ack=document.getElementById('pi-ack');
+  const submit=document.getElementById('pi-submit');
+  if(submit) submit.disabled=!(ack && ack.checked);
+}
+// Quick-download for the five "before trade" snapshot reports surfaced
+// inside the Price Import reminder banner. Uses the topbar's shared
+// trade pick (set by any tab's trade selector via setSharedAuctionId)
+// so the operator doesn't have to open the Reports tab first to pick
+// an auction. Praman is CSV-only; everything else defaults to PDF.
+async function piQuickExport(type){
+  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+  if(!aid){
+    alert('Pick a trade in the topbar first — the snapshots need to know which auction to export.');
+    return;
+  }
+  const fmt = (type==='praman_csv') ? 'csv' : 'pdf';
+  await exportType(type, fmt, aid);
+}
+
 async function doPriceImport(){
   const fileInput=document.getElementById('pi-file');
   const file=fileInput.files[0];
@@ -17077,33 +17160,57 @@ const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',
 const EXP_CSV_ONLY = new Set(['praman_csv']);
 // Full File has too many columns to fit any printable PDF page — only XLSX.
 const EXP_XLSX_ONLY = new Set(['full_file']);
-function renderExportBtns(){document.getElementById('export-btns').innerHTML=Object.entries(EXP_LABELS).map(([k,v])=>{
-  if (EXP_CSV_ONLY.has(k)) {
-    return `<div style="display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff">
-      <div style="font-weight:600;font-size:13px;color:var(--text)">${v}</div>
-      <div style="display:flex;gap:4px">
-        <button class="btn btn-a" onclick="exportType('${k}','csv')" style="flex:1;padding:6px 8px;font-size:12px">CSV</button>
-      </div>
-    </div>`;
-  }
-  if (EXP_XLSX_ONLY.has(k)) {
+// Reports that capture the pre-trade lot state. Rendered into the
+// "Pre-trade Exports" collapsible section above the main Export Center
+// AND surfaced as quick-download buttons inside the Price Import
+// reminder banner. Order here drives display order in both spots.
+const EXP_PRETRADE = ['lot_slip', 'lot_buyer', 'lot_name', 'praman_csv', 'price_list_before'];
+const EXP_PRETRADE_SET = new Set(EXP_PRETRADE);
+function renderExportBtns(){
+  const renderOne = ([k,v]) => {
+    if (EXP_CSV_ONLY.has(k)) {
+      return `<div style="display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${v}</div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-a" onclick="exportType('${k}','csv')" style="flex:1;padding:6px 8px;font-size:12px">CSV</button>
+        </div>
+      </div>`;
+    }
+    if (EXP_XLSX_ONLY.has(k)) {
+      return `<div style="display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${v}</div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-a" onclick="exportType('${k}','xlsx')" style="flex:1;padding:6px 8px;font-size:12px">XLSX</button>
+        </div>
+      </div>`;
+    }
     return `<div style="display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff">
       <div style="font-weight:600;font-size:13px;color:var(--text)">${v}</div>
       <div style="display:flex;gap:4px">
         <button class="btn btn-a" onclick="exportType('${k}','xlsx')" style="flex:1;padding:6px 8px;font-size:12px">XLSX</button>
+        <button class="btn btn-orange" onclick="exportType('${k}','pdf')" style="flex:1;padding:6px 8px;font-size:12px">PDF</button>
       </div>
     </div>`;
+  };
+  const all = Object.entries(EXP_LABELS);
+  // Pre-trade group keeps EXP_PRETRADE's declared order, not EXP_LABELS' insertion order,
+  // so the snapshot list reads the same way in the Reports tab and the import-modal banner.
+  const ptHost = document.getElementById('export-btns-pretrade');
+  if (ptHost) {
+    ptHost.innerHTML = EXP_PRETRADE
+      .filter(k => EXP_LABELS[k])
+      .map(k => renderOne([k, EXP_LABELS[k]]))
+      .join('');
   }
-  return `<div style="display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff">
-    <div style="font-weight:600;font-size:13px;color:var(--text)">${v}</div>
-    <div style="display:flex;gap:4px">
-      <button class="btn btn-a" onclick="exportType('${k}','xlsx')" style="flex:1;padding:6px 8px;font-size:12px">XLSX</button>
-      <button class="btn btn-orange" onclick="exportType('${k}','pdf')" style="flex:1;padding:6px 8px;font-size:12px">PDF</button>
-    </div>
-  </div>`;
-}).join('')}
-async function exportType(type,format){format=format||'xlsx';
-  const aid=document.getElementById('exp-auction')?.value||document.getElementById('pay-auction')?.value;
+  document.getElementById('export-btns').innerHTML =
+    all.filter(([k]) => !EXP_PRETRADE_SET.has(k)).map(renderOne).join('');
+}
+async function exportType(type,format,aidOverride){format=format||'xlsx';
+  // aidOverride lets non-Reports-tab callers (e.g. the pre-import
+  // reminder banner inside the Price Import modal) pass an explicit
+  // auction id without first having to seed #exp-auction. Falls
+  // through to the normal Reports/Payments selectors otherwise.
+  const aid=aidOverride||document.getElementById('exp-auction')?.value||document.getElementById('pay-auction')?.value;
   if(!aid){alert('Select an auction first');return}
   const label = (EXP_LABELS[type]||type);
   await withOverlay(`Exporting ${label} (${format.toUpperCase()})…`, async () => {
