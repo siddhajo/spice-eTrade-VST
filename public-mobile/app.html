@@ -309,8 +309,18 @@ select:focus{border-color:var(--green)}
         <!-- Grade + Bags + Litre -->
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px">
           <div><div class="elb" id="elb-grade">GRADE</div><input type="text" id="le-grade" value="1" autocomplete="off" class="ein"></div>
-          <div><div class="elb" id="elb-bags">BAGS</div><input type="text" id="le-bags" placeholder="0" inputmode="numeric" onfocus="showSaveBtn()" class="ein" oninput="sanitizeInt(this)"></div>
+          <div><div class="elb" id="elb-bags">BAGS</div><input type="text" id="le-bags" placeholder="0" inputmode="numeric" onfocus="showSaveBtn()" class="ein" oninput="sanitizeInt(this);onBagsInput()"></div>
           <div><div class="elb" id="elb-litre">LITRE WT</div><input type="text" id="le-litre" placeholder="0" inputmode="numeric" onfocus="showSaveBtn()" class="ein" oninput="sanitizeInt(this)"></div>
+        </div>
+
+        <!-- Weight w/ Gunny + per-bag Gunny Wt — sits ABOVE Net Wt so the
+             operator types the gross weight first and watches Net Wt
+             populate. Visible only when showExtraLotFields is on. Gunny
+             Wt is the configured per-bag tare (read-only); Net Wt below
+             is auto-derived as: weight_w_gunny − (bags × gunny_wt). -->
+        <div id="le-gunny-wrap" style="display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+          <div><div class="elb">W/ GUNNY</div><input type="text" id="le-wwg" placeholder="0.000" inputmode="decimal" class="ein" oninput="sanitizeDec(this);calcNetFromGunny()"></div>
+          <div><div class="elb">GUNNY/BAG</div><input type="text" id="le-gunny-wt" readonly class="ein" style="background:var(--bg);color:var(--text3);font-weight:600" title="Default gunny weight per bag"></div>
         </div>
 
         <!-- Net + Sample + Gross -->
@@ -320,14 +330,13 @@ select:focus{border-color:var(--green)}
           <div><div class="elb" id="elb-gross">GROSS</div><input type="text" id="le-gross" placeholder="0" readonly class="ein" style="background:var(--bg);color:var(--green);font-weight:700"></div>
         </div>
 
-        <!-- Extra fields (conditional) — Crop Receipt # / Reserved Price /
-             Weight w/ Gunny. Visibility driven by showExtraLotFields from
-             /api/config. When ON, Net Wt above becomes read-only and is
-             derived from (Weight w/ Gunny − Gunny Weight). -->
-        <div id="le-extra-wrap" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px">
+        <!-- Remaining extra fields (conditional) — Crop Receipt # /
+             Reserved Price. Weight w/ Gunny + Gunny Wt now live ABOVE
+             Net Wt (see #le-gunny-wrap) so the gross-to-net derivation
+             flows top-down on the form. -->
+        <div id="le-extra-wrap" style="display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
           <div><div class="elb">RECEIPT #</div><input type="text" id="le-crop-receipt" placeholder="auto" readonly class="ein" style="background:var(--bg);color:var(--text3);font-weight:600"></div>
           <div><div class="elb">RESERVED ₹</div><input type="text" id="le-reserved-price" placeholder="0.00" inputmode="decimal" class="ein" oninput="sanitizeDec(this)"></div>
-          <div><div class="elb">W/ GUNNY</div><input type="text" id="le-wwg" placeholder="0.000" inputmode="decimal" class="ein" oninput="sanitizeDec(this);calcNetFromGunny()"></div>
         </div>
 
         <!-- Moisture (conditional, compact) -->
@@ -585,32 +594,56 @@ function doLogout(){fetch(B+'/api/auth/logout',{method:'POST',headers:ah()}).cat
 async function tryAutoLogin(){if(!token){loadTitle();return}try{const r=await fetch(B+'/api/auth/me',{headers:ah()});if(r.ok){const d=await r.json();user=d.user.username;userBranch=d.user.branch||'';userRole=d.user.role||'user';goSession()}else{token='';localStorage.removeItem('sa_token');loadTitle()}}catch(e){loadTitle()}}
 var cfgSampleWeight=0,cfgShowMoisture=false,cfgGunnyWeight=0,cfgShowExtraFields=false;
 var cfgLabels={lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'};
-// Show or hide the extra-fields row and flip Net Wt's read-only state
-// to match. Called from every place where the config is (re)loaded.
+// Show or hide the extra-fields rows — both the Weight w/ Gunny +
+// per-bag Gunny Wt row (above Net Wt) and the Crop Receipt + Reserved
+// Price row (below) — and flip Net Wt's read-only state to match.
+// Called from every place where the config is (re)loaded.
 function applyExtraFieldsVisibility(){
   var wrap=document.getElementById('le-extra-wrap');
+  var gunnyWrap=document.getElementById('le-gunny-wrap');
+  var gunnyWtEl=document.getElementById('le-gunny-wt');
   var qtyEl=document.getElementById('le-qty');
-  if(!wrap||!qtyEl)return;
+  if(!qtyEl)return;
   if(cfgShowExtraFields){
-    wrap.style.display='grid';
+    if(wrap)wrap.style.display='grid';
+    if(gunnyWrap)gunnyWrap.style.display='grid';
+    // Seed the read-only Gunny Wt display so the operator can see what
+    // tare is being subtracted per bag (format to 3 decimals to match
+    // the other weight inputs).
+    if(gunnyWtEl){
+      var g=Number(cfgGunnyWeight)||0;
+      gunnyWtEl.value=g>0?g.toFixed(3):'0.000';
+    }
     qtyEl.readOnly=true;
     qtyEl.style.background='var(--bg)';
     qtyEl.style.color='var(--text3)';
   }else{
-    wrap.style.display='none';
+    if(wrap)wrap.style.display='none';
+    if(gunnyWrap)gunnyWrap.style.display='none';
     qtyEl.readOnly=false;
     qtyEl.style.background='';
     qtyEl.style.color='';
   }
 }
-// Auto-calc Net = Weight w/ Gunny − Gunny Weight when the operator
-// types into Weight w/ Gunny. Writes the result back into Net Wt, then
-// re-runs the gross calc so Gross stays in sync.
+// Auto-calc Net = Weight w/ Gunny − (Bags × Gunny Wt) when the operator
+// types into Weight w/ Gunny — and also when Bags changes (see
+// onBagsInput) because bags is part of the formula. Writes the result
+// back into Net Wt, then re-runs the gross calc so Gross stays in sync.
 function calcNetFromGunny(){
   var wwg=parseFloat(document.getElementById('le-wwg').value)||0;
-  var net=Math.max(0,wwg-(Number(cfgGunnyWeight)||0));
+  var bags=parseInt(document.getElementById('le-bags').value,10)||0;
+  var gunny=Number(cfgGunnyWeight)||0;
+  var tare=bags*gunny;
+  var net=Math.max(0,wwg-tare);
   document.getElementById('le-qty').value=wwg>0?net.toFixed(3):'';
   calcGrossWeight();
+}
+// Bags input handler — when extra-fields are active, bags is part of
+// the Net Wt formula (Bags × Gunny Wt is the tare), so a change here
+// has to re-derive Net Wt. No-op when extras are off so the legacy
+// operator-typed Net Wt flow is unaffected.
+function onBagsInput(){
+  if(cfgShowExtraFields)calcNetFromGunny();
 }
 function applyLabels(){
   var L=cfgLabels;

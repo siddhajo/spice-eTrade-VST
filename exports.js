@@ -323,9 +323,72 @@ async function exportPriceListBefore(db, auctionId) {
 //   BENEFICI_B | REMARKS    | CLIENTCODE
 // Header on row 1, data from row 2. Bank software auto-ingests this
 // shape — adding a brand band would break the import.
-async function exportBankPayment(db, auctionId, cfg) {
+async function exportBankPayment(db, auctionId, cfg, _state, opts) {
   const { getBankPaymentData } = require('./calculations');
-  const payments = getBankPaymentData(db, auctionId, cfg);
+  let payments = getBankPaymentData(db, auctionId, cfg);
+  // Optional seller-name filter — when the user clicks "Export Bank
+  // Payment (Selected)" in the Payments tab, only the ticked sellers'
+  // rows should appear in the bank upload file. Match against `p.name`
+  // (the seller name) because that's the value the UI checkbox holds;
+  // beneficiaryName tracks the bank account holder which can be a
+  // different entity. When opts.names is absent or empty the full
+  // payment set is exported, preserving the original behaviour.
+  if (opts && Array.isArray(opts.names) && opts.names.length) {
+    const wanted = new Set(opts.names.map(n => String(n || '').trim().toUpperCase()));
+    payments = payments.filter(p =>
+      wanted.has(String(p.name || '').trim().toUpperCase())
+    );
+  }
+  // Optional per-seller lot-picks — when the operator picks specific
+  // lots inside a seller's detail modal, the bank transfer for THAT
+  // seller is partial: amount must sum only the picked lots' balances,
+  // not the seller's full payable. We re-query per picked seller and
+  // override the corresponding payments[] row in place. Sellers absent
+  // from opts.lots retain their full-payable row (already computed by
+  // getBankPaymentData above). For partial rows we also re-pick RTGS
+  // vs NEFT based on the new amount (the ₹2L threshold may move it),
+  // and re-roll the REMARKS string further down so it reflects the
+  // partial value.
+  const lotPicks = (opts && opts.lots && typeof opts.lots === 'object') ? opts.lots : null;
+  if (lotPicks) {
+    for (const sellerName of Object.keys(lotPicks)) {
+      const lotNos = Array.isArray(lotPicks[sellerName]) ? lotPicks[sellerName] : [];
+      if (!lotNos.length) continue;
+      const wantedUpper = String(sellerName || '').trim().toUpperCase();
+      const idx = payments.findIndex(p =>
+        String(p.name || '').trim().toUpperCase() === wantedUpper
+      );
+      if (idx < 0) continue;   // seller not in the current payments set (e.g. fully paid)
+      const placeholders = lotNos.map(() => '?').join(',');
+      const sub = db.get(
+        `SELECT COALESCE(SUM(l.balance),0) AS payable,
+                COALESCE(SUM(l.puramt), 0) AS puramt
+           FROM lots l
+          WHERE l.auction_id = ? AND l.amount > 0
+            AND (l.paid IS NULL OR l.paid = '')
+            AND UPPER(TRIM(l.name)) = ?
+            AND l.lot_no IN (${placeholders})`,
+        [auctionId, wantedUpper, ...lotNos.map(String)]
+      ) || { payable: 0, puramt: 0 };
+      const rawAmount = Number(sub.payable) || 0;
+      const roundedAmount = cfg.flag_round ? Math.round(rawAmount) : rawAmount;
+      const isRTGS = roundedAmount >= 200000;
+      payments[idx] = {
+        ...payments[idx],
+        amount: roundedAmount,
+        transactionType: isRTGS ? 'RTGS' : 'NEFT',
+        // REMARKS is rebuilt later at row.map time using `p.amount`
+        // and the (still-defined-below) `ano`/`shortTag` — overriding
+        // it here would also need access to those vars which haven't
+        // been computed yet, so just let the rebuild pick up the new
+        // amount automatically.
+      };
+    }
+    // Drop any zero-amount rows the lot-pick recompute produced (e.g.
+    // the operator picked only zero-balance lots) — banks reject
+    // zero-value RTGS rows.
+    payments = payments.filter(p => Number(p.amount) > 0);
+  }
 
   // Sender-side context (state-aware): debit account, IFSC for BT/LBT
   // detection, and the email used in BENEFIARYE.
@@ -545,7 +608,7 @@ async function exportSalesTaxes(db, auctionId) {
 }
 
 // ── Export: Payment Summary ──────────────────────────────────
-async function exportPaymentSummary(db, auctionId, cfg) {
+async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
   // Match getPaymentSummary semantics: discount includes BOTH the per-lot
   // policy discount AND any manual debit_notes for this auction's sellers.
   // We compute it per-row by adding debit_notes (joined by ano + name).
@@ -563,12 +626,50 @@ async function exportPaymentSummary(db, auctionId, cfg) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
-  const rows = db.all(
+  // Optional seller-name filter — "Export Payment XLSX (Selected)"
+  // limits the rows to the ticked sellers. We push the filter into the
+  // SQL with a `name IN (…)` clause so we don't waste the SELECT on rows
+  // we'll throw away. Names are matched case-insensitively to be
+  // resilient to slight casing drift between the UI and the DB.
+  const filterNames = (opts && Array.isArray(opts.names) && opts.names.length)
+    ? opts.names.map(n => String(n || '').trim()).filter(Boolean)
+    : null;
+  let whereExtra = '';
+  const params = [auctionId];
+  if (filterNames && filterNames.length) {
+    const placeholders = filterNames.map(() => '?').join(',');
+    whereExtra = ` AND UPPER(TRIM(name)) IN (${placeholders})`;
+    for (const n of filterNames) params.push(n.toUpperCase());
+  }
+  let rows = db.all(
     `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
       pqty, prate, puramt, ${discountCol} as lot_discount, balance as payable
-     FROM lots WHERE auction_id = ? AND amount > 0
-     ORDER BY state, name`, [auctionId]
+     FROM lots WHERE auction_id = ? AND amount > 0${whereExtra}
+     ORDER BY state, name`, params
   );
+  // Optional per-seller lot-picks — when the operator picks specific
+  // lots inside a seller's detail modal, the Payment XLSX should keep
+  // ONLY those lot rows for that seller; sellers without picks keep
+  // every lot as before. Filter in JS rather than push into the SQL —
+  // the WHERE clause for "(name=A AND lot IN (...)) OR (name=B AND lot
+  // IN (...))" gets ugly fast, and the post-filter is cheap at this
+  // volume. Match name case-insensitively to be safe.
+  const lotPicks = (opts && opts.lots && typeof opts.lots === 'object') ? opts.lots : null;
+  if (lotPicks) {
+    // Pre-compute upper-cased Sets per seller for O(1) lookup.
+    const picksUpper = {};
+    for (const k of Object.keys(lotPicks)) {
+      const arr = Array.isArray(lotPicks[k]) ? lotPicks[k] : [];
+      if (!arr.length) continue;
+      picksUpper[k.trim().toUpperCase()] = new Set(arr.map(x => String(x)));
+    }
+    rows = rows.filter(r => {
+      const key = String(r.poolername || '').trim().toUpperCase();
+      const picks = picksUpper[key];
+      if (!picks) return true;   // no pick set for this seller → all lots
+      return picks.has(String(r.lot));
+    });
+  }
   // Spread debit_notes amount across the seller's lots proportionally so
   // every row totals to the same SUM as the payments view. Simpler approach:
   // attribute the FULL manual debit on the FIRST row for each seller; later

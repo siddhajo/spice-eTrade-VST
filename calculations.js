@@ -745,6 +745,12 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     const acctnum   = (tb && tb.acctnum)     || p.t_acctnum || '';
     const holderNm  = (tb && tb.holder_name) || p.t_holder  || p.name;
     return {
+      // Seller name preserved on the row so callers can filter by the
+      // same key the Payments tab UI uses (the ticked checkbox value).
+      // beneficiaryName below can diverge from this (it tracks the bank
+      // account holder, which may be a different person/entity) so it's
+      // not safe to filter against beneficiaryName.
+      name: p.name,
       transactionType: rawAmount >= 200000 ? 'RTGS' : 'NEFT',
       ifsc,
       accountNo: acctnum,

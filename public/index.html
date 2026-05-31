@@ -3286,12 +3286,9 @@ input[type="search"]:focus{
           </div>
         </div>
 
-        <!-- Extra lot fields — Crop Receipt, Reserved Price, Weight with
-             Gunny. Visibility driven by the `show_extra_lot_fields`
-             setting in Settings → Lot Entry Defaults. When ON, Net Wt
-             above becomes read-only and is auto-calculated as
-             (Weight with Gunny − Default Gunny Weight). -->
-        <div id="le-extra-wrap" style="display:none;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        <!-- Extra lot fields — Crop Receipt + Reserved Price. Visibility
+             tracks the `show_extra_lot_fields` setting. -->
+        <div id="le-extra-wrap" style="display:none;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Crop Receipt No</div>
             <input type="number" id="le-crop-receipt" min="0" placeholder="auto" readonly style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--text3);font-family:monospace;font-weight:600">
@@ -3299,10 +3296,6 @@ input[type="search"]:focus{
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Reserved Price (₹)</div>
             <input type="number" id="le-reserved-price" step="0.01" min="0" placeholder="0.00" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
-          </div>
-          <div>
-            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Weight w/ Gunny (kg)</div>
-            <input type="number" id="le-wwg" step="0.001" min="0" placeholder="0.000" oninput="leCalcNetFromGunny()" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
           </div>
         </div>
 
@@ -3747,6 +3740,11 @@ input[type="search"]:focus{
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="pay-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print Selected</button>
             <button id="pay-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600" onclick="whatsappSelectedPayments()" title="Send merged payment statements via WhatsApp">📱 WhatsApp Selected</button>
+            <!-- Subset exports — only the ticked sellers. Hidden until the
+                 operator selects at least one row (synced with the other
+                 bulk buttons by updatePaymentBulkButtons). -->
+            <button id="pay-bulk-bank-export" class="btn btn-a" style="display:none;height:38px;padding:0 16px;font-weight:600" onclick="exportBankPaymentSelected()" title="Export the bank RTGS/NEFT file containing ONLY the ticked sellers">📤 Export Bank Payment (Selected)</button>
+            <button id="pay-bulk-xlsx-export" class="btn btn-a" style="display:none;height:38px;padding:0 16px;font-weight:600" onclick="exportPaymentXlsxSelected()" title="Export the per-lot Payment XLSX containing ONLY the ticked sellers">📊 Export Payment XLSX (Selected)</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
@@ -4429,8 +4427,18 @@ input[type="search"]:focus{
   </h2>
   <div id="pay-lots-body" style="margin-top:10px;max-height:60vh;overflow:auto"></div>
   <div id="pay-lots-totals" style="margin-top:10px;padding:10px 14px;background:var(--spice-cream);border:1px solid var(--spice-line);border-radius:8px;font-size:13px"></div>
-  <div class="actions" style="margin-top:14px">
+  <!-- Live indicator for the persisted lot-pick state. Updated by
+       updatePayLotsTotals so the operator always knows whether the
+       currently ticked lots match what's saved as the export filter. -->
+  <div id="pay-lots-pick-state" style="margin-top:8px;font-size:12px;color:var(--text2);display:none"></div>
+  <div class="actions" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn btn-o" onclick="hideModal('pay-lots-modal')">Close</button>
+    <!-- Lot selection persistence — feeds the "Export Selected" flow.
+         Save remembers the ticked subset for this seller until the
+         operator clears it or hits Undo. Clear reverts to "all lots". -->
+    <button class="btn btn-a" type="button" onclick="saveSelectedPayLots()" id="pay-lots-save-btn" title="Persist the ticked lots as the export filter for this seller. Next 'Export Selected' will use ONLY these lots.">💾 Save Lot Selection</button>
+    <button class="btn btn-o" type="button" onclick="clearSelectedPayLots()" id="pay-lots-clear-btn" title="Drop the saved filter for this seller; next 'Export Selected' will include all their lots again.">✕ Clear Lot Selection</button>
+    <span style="flex:1"></span>
     <button class="btn btn-a" onclick="printSelectedPayLots()" id="pay-lots-print-btn" title="PDF payment statement covering only the ticked lots">🖨 Print Payment for Selected</button>
   </div>
 </div></div>
@@ -4994,12 +5002,44 @@ input[type="search"]:focus{
       Once you import prices the lots table is overwritten with the auctioneer's data. These five reports are your record of the pre-trade state.
       <span style="display:block;margin-top:4px">Snapshots use the trade picked in the topbar.</span>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">
-      <button class="btn btn-o" type="button" onclick="piQuickExport('lot_slip')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Lot Slip</button>
-      <button class="btn btn-o" type="button" onclick="piQuickExport('lot_buyer')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Lot Buyer</button>
-      <button class="btn btn-o" type="button" onclick="piQuickExport('lot_name')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Lot Name</button>
-      <button class="btn btn-o" type="button" onclick="piQuickExport('praman_csv')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Praman CSV</button>
-      <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before')" style="padding:5px 8px;font-size:11.5px;font-weight:600">📄 Price List (Before)</button>
+    <!-- Per report: label on the left, XLSX + PDF buttons on the right.
+         Praman stays CSV-only since the export pipeline doesn't render
+         it in either spreadsheet form. -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
+        <span style="font-size:12px;font-weight:600;color:#7C2D12">Lot Slip</span>
+        <span style="display:flex;gap:4px">
+          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_slip','xlsx')" title="Download as Excel"  style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
+          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_slip','pdf')"  title="Download as PDF"    style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
+        <span style="font-size:12px;font-weight:600;color:#7C2D12">Lot Buyer</span>
+        <span style="display:flex;gap:4px">
+          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_buyer','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
+          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_buyer','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
+        <span style="font-size:12px;font-weight:600;color:#7C2D12">Lot Name</span>
+        <span style="display:flex;gap:4px">
+          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_name','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
+          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_name','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
+        <span style="font-size:12px;font-weight:600;color:#7C2D12">Praman</span>
+        <span style="display:flex;gap:4px">
+          <button class="btn btn-o" type="button" onclick="piQuickExport('praman_csv','csv')" title="Download as CSV" style="padding:3px 8px;font-size:11px;font-weight:600">📄 CSV</button>
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
+        <span style="font-size:12px;font-weight:600;color:#7C2D12">Price List (Before)</span>
+        <span style="display:flex;gap:4px">
+          <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
+          <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
+        </span>
+      </div>
     </div>
     <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#7C2D12;margin-top:10px;cursor:pointer;font-weight:600">
       <input type="checkbox" id="pi-ack" onchange="piAckChanged()">
@@ -8401,6 +8441,18 @@ document.addEventListener('DOMContentLoaded', () => {
   BulkActions.register({ id:'buyer',  tbodyId:'buyers-list',   resource:'buyers',   label:'buyer',
                          onChanged: () => { const s=document.querySelector('#tc-buyers input[type=search]');  searchBuyers(s?s.value:''); } });
   BulkActions.register({ id:'lot',    tbodyId:'lots-list',     resource:'lots',     label:'lot',
+                         // Resolve a lot id to its lock state from the cached
+                         // _lotsFull array (refreshed on every loadLots run).
+                         // Drives the lock-aware bulk-action suppression in
+                         // syncMaster — locked lots can't be deleted /
+                         // re-graded / re-buyered / re-locked, so we hide
+                         // those buttons rather than letting the operator
+                         // fire a request the server would 423-reject.
+                         getRowLocked: (lotId) => {
+                           const arr = (typeof _lotsFull !== 'undefined' && Array.isArray(_lotsFull)) ? _lotsFull : [];
+                           const row = arr.find(l => l && l.id === lotId);
+                           return !!(row && row.locked_at);
+                         },
                          onChanged: () => { if (typeof loadLots === 'function') loadLots(); } });
   BulkActions.register({ id:'trade',  tbodyId:'auctions-list', resource:'auctions', label:'trade',
                          onChanged: () => { if (typeof loadAuctions === 'function') loadAuctions(); } });
@@ -8601,39 +8653,14 @@ function leClearSeller(){
   setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
 }
 
-// Show or hide the extra-fields row (Crop Receipt / Reserved Price /
-// Weight w/ Gunny) and flip Net Wt's read-only state to match. When
-// the toggle is ON, Net Wt is derived from (weight_with_gunny -
-// gunny_weight) so the operator can't desync the two. When OFF, the
-// row is hidden and Net Wt goes back to operator-typed.
+// Show or hide the Crop Receipt + Reserved Price row based on the
+// `show_extra_lot_fields` toggle. Net Wt stays operator-typed in both
+// modes — the old Weight-w/-Gunny auto-derivation (Net = WwG − bags ×
+// gunny) was retired so the toggle no longer touches Net Wt's
+// read-only state.
 function leApplyExtraFieldsVisibility(){
   const wrap = document.getElementById('le-extra-wrap');
-  const qtyEl = document.getElementById('le-qty');
-  if (!wrap || !qtyEl) return;
-  if (_le.showExtraFields) {
-    wrap.style.display = 'grid';
-    qtyEl.readOnly = true;
-    qtyEl.style.background = 'var(--bg)';
-    qtyEl.style.color = 'var(--text3)';
-    qtyEl.title = 'Net = Weight w/ Gunny − Gunny Weight (auto-calculated)';
-  } else {
-    wrap.style.display = 'none';
-    qtyEl.readOnly = false;
-    qtyEl.style.background = '';
-    qtyEl.style.color = 'var(--green)';
-    qtyEl.title = '';
-  }
-}
-
-// Auto-calculate Net = Weight w/ Gunny − Gunny Weight whenever the
-// operator types into Weight w/ Gunny. Result feeds Net Wt, which in
-// turn re-runs the Gross calc via leCalcGross.
-function leCalcNetFromGunny(){
-  const wwg = parseFloat(document.getElementById('le-wwg').value) || 0;
-  const gunny = Number(_le.gunnyWeight) || 0;
-  const net = Math.max(0, wwg - gunny);
-  document.getElementById('le-qty').value = wwg > 0 ? net.toFixed(3) : '';
-  leCalcGross();
+  if (wrap) wrap.style.display = _le.showExtraFields ? 'grid' : 'none';
 }
 
 function leCalcGross(){
@@ -8678,10 +8705,8 @@ async function leSaveLot(){
   // Extra-fields payload — sent regardless of the toggle so a row that
   // had values set while the toggle was on isn't silently zeroed when
   // someone flips it off mid-session. Empty inputs map to 0/null.
-  const wwgRaw = document.getElementById('le-wwg')?.value || '';
   const reservedRaw = document.getElementById('le-reserved-price')?.value || '';
   const cropReceiptRaw = document.getElementById('le-crop-receipt')?.value || '';
-  const weightWithGunny = parseFloat(wwgRaw) || 0;
   const reservedPrice = parseFloat(reservedRaw) || 0;
   const cropReceiptNo = parseInt(cropReceiptRaw, 10);
 
@@ -8705,7 +8730,6 @@ async function leSaveLot(){
       // doesn't silently default these to 0.
       sample_wt: sample,
       gross_wt: gross,
-      weight_with_gunny: weightWithGunny,
       reserved_price: reservedPrice,
       // crop_receipt_no: omitted on create so server auto-assigns the
       // next per-trade sequence. On edit (when we have an existing
@@ -8766,10 +8790,8 @@ async function leSaveLot(){
     if (moistureEl) moistureEl.value = '';
     // Clear extra-fields inputs so the next entry starts fresh. Crop
     // Receipt is server-assigned, so the field stays placeholder='auto'.
-    const wwgEl = document.getElementById('le-wwg');
     const reservedEl = document.getElementById('le-reserved-price');
     const cropEl = document.getElementById('le-crop-receipt');
-    if (wwgEl)      wwgEl.value = '';
     if (reservedEl) reservedEl.value = '';
     if (cropEl)     cropEl.value = '';
     setTimeout(() => document.getElementById('le-lotno').focus(), 50);
@@ -8797,10 +8819,8 @@ function leResetForm(){
   document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
   const moistureEl = document.getElementById('le-moisture');
   if (moistureEl) moistureEl.value = '';
-  const wwgEl = document.getElementById('le-wwg');
   const reservedEl = document.getElementById('le-reserved-price');
   const cropEl = document.getElementById('le-crop-receipt');
-  if (wwgEl)      wwgEl.value = '';
   if (reservedEl) reservedEl.value = '';
   if (cropEl)     cropEl.value = '';
   document.getElementById('le-err').style.display = 'none';
@@ -8851,10 +8871,8 @@ async function leEditLot(lotId){
   if (moistureEl) moistureEl.value = lot.moisture || '';
   // Populate extra fields. Always loaded (even when toggle is off) so an
   // admin who later flips the toggle on doesn't lose the stored values.
-  const wwgEl = document.getElementById('le-wwg');
   const reservedEl = document.getElementById('le-reserved-price');
   const cropEl = document.getElementById('le-crop-receipt');
-  if (wwgEl)      wwgEl.value      = (lot.weight_with_gunny != null && Number(lot.weight_with_gunny) > 0) ? Number(lot.weight_with_gunny).toFixed(3) : '';
   if (reservedEl) reservedEl.value = (lot.reserved_price != null && Number(lot.reserved_price) > 0) ? Number(lot.reserved_price).toFixed(2) : '';
   if (cropEl)     cropEl.value     = lot.crop_receipt_no ?? '';
   leCalcGross();
@@ -9334,12 +9352,11 @@ function renderLeRecent(){
   }
   const showExtra = !!_le.showExtraFields;
   const COLS = showExtra
-    ? 'grid-template-columns:32px 80px 1fr 90px 60px 60px 80px 70px 90px 90px 88px'
+    ? 'grid-template-columns:32px 80px 1fr 90px 60px 60px 80px 70px 90px 88px'
     : 'grid-template-columns:32px 80px 1fr 90px 70px 70px 80px 88px';
   const extraHdr = showExtra
     ? '<div style="text-align:right" title="Crop receipt number (auto-assigned per trade)">Receipt</div>' +
-      '<div style="text-align:right" title="Reserved price set at entry">Reserved (₹)</div>' +
-      '<div style="text-align:right" title="Weight including gunny">W/ Gunny</div>'
+      '<div style="text-align:right" title="Reserved price set at entry">Reserved (₹)</div>'
     : '';
   host.innerHTML = `
     <div style="display:grid;${COLS};gap:0;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:1">
@@ -9359,8 +9376,7 @@ function renderLeRecent(){
         const checked = _le.selectedForPrint && _le.selectedForPrint.has(l.id) ? 'checked' : '';
         const extraCells = showExtra
           ? `<div style="text-align:right;font-family:monospace;font-size:12px;color:var(--text2)">${l.crop_receipt_no != null ? esc(String(l.crop_receipt_no)) : '—'}</div>` +
-            `<div style="text-align:right">${Number(l.reserved_price) > 0 ? Number(l.reserved_price).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'}</div>` +
-            `<div style="text-align:right">${Number(l.weight_with_gunny) > 0 ? Number(l.weight_with_gunny).toFixed(3) : '—'}</div>`
+            `<div style="text-align:right">${Number(l.reserved_price) > 0 ? Number(l.reserved_price).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'}</div>`
           : '';
         return `
         <div class="le-recent-row" data-lot-id="${l.id}" style="display:grid;${COLS};gap:0;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;transition:background .1s" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''" onclick="leEditLot(${l.id})" title="Click to edit">
@@ -13160,10 +13176,21 @@ const BulkActions = (function(){
     // !important` — a plain `style.display = 'none'` would be silently
     // ignored for users who hold the permission.
     const showBulk = ticked > 0;
-    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-del`),    showBulk);
-    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-grade`),  showBulk);
-    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-buyer`),  showBulk);
-    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-lock`),   showBulk);
+    // Lock-aware suppression: when any ticked row is locked, the only
+    // sensible bulk action is Unlock (admin-only). Delete / Set Buyer /
+    // Set Grade / Lock are hidden so the operator can't fire a request
+    // that the server would 423-reject anyway (filterLockedLotIds skips
+    // them silently). Resources without a `getRowLocked` hook
+    // (sellers, buyers, trades) keep the original behavior.
+    const opts = registry[id];
+    let anyLocked = false;
+    if (opts && typeof opts.getRowLocked === 'function' && ticked > 0) {
+      anyLocked = getTickedIds(id).some(rid => opts.getRowLocked(rid));
+    }
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-del`),    showBulk && !anyLocked);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-grade`),  showBulk && !anyLocked);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-buyer`),  showBulk && !anyLocked);
+    _bulkBtnSetVisible(document.getElementById(`${id}-bulk-lock`),   showBulk && !anyLocked);
     _bulkBtnSetVisible(document.getElementById(`${id}-bulk-unlock`), showBulk);
     const counts = [
       [`${id}-sel-count`,         ticked > 0 ? `(${ticked})` : ''],
@@ -13922,14 +13949,18 @@ function piAckChanged(){
 // inside the Price Import reminder banner. Uses the topbar's shared
 // trade pick (set by any tab's trade selector via setSharedAuctionId)
 // so the operator doesn't have to open the Reports tab first to pick
-// an auction. Praman is CSV-only; everything else defaults to PDF.
-async function piQuickExport(type){
+// an auction. Each report offers both XLSX + PDF buttons (Praman is
+// CSV-only because the export pipeline doesn't render it as either
+// spreadsheet form). `format` defaults to PDF for back-compat with
+// any older callsite that didn't pass it explicitly.
+async function piQuickExport(type, format){
   const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
   if(!aid){
     alert('Pick a trade in the topbar first — the snapshots need to know which auction to export.');
     return;
   }
-  const fmt = (type==='praman_csv') ? 'csv' : 'pdf';
+  let fmt = (format || '').toLowerCase();
+  if (!fmt) fmt = (type === 'praman_csv') ? 'csv' : 'pdf';
   await exportType(type, fmt, aid);
 }
 
@@ -14831,10 +14862,18 @@ function openLotEdit(l){
       // WD = withdrawn — no buyer, no money changes hands. Zero the
       // price so amount (qty × price) also collapses to 0, matching
       // every downstream report's "withdrawn lots contribute nothing"
-      // assumption ([_NOT_WD] filters in server.js).
+      // assumption ([_NOT_WD] filters in server.js). Clear the buyer
+      // fields too so a stale buyer from the prior assignment doesn't
+      // travel into invoices / Tally / exports on the withdrawn row.
       if (code === 'WD') {
         if (priceEl) priceEl.value = '0';
         if (amtEl)   amtEl.value   = '0.00';
+        const buyerEl  = document.getElementById('l-buyer');
+        const buyer1El = document.getElementById('l-buyer1');
+        const crEl     = document.getElementById('l-cr');
+        if (buyerEl)  buyerEl.value  = '';
+        if (buyer1El) buyer1El.value = '';
+        if (crEl)     crEl.value     = '';
         codeEl.value = 'WD';
         return; // skip buyer lookup — WD isn't a buyer code
       }
@@ -16725,6 +16764,58 @@ async function printSelectedPayments() {
     { auction_id: aid, names }
   );
 }
+
+// ── Selected-subset exports ──────────────────────────────────────
+// Two thin wrappers around the existing /api/exports/:type/:auctionId
+// endpoint that pass the ticked sellers via repeated `names=` query
+// params. The server filters to those rows (see exports.js +
+// calculations.js) and tags the download filename with "_selected" so
+// the partial file isn't confused with the full export later.
+//
+// Each name is its own ?names= param (not a comma-joined list) so a
+// seller name containing a comma — improbable but possible — survives
+// the round trip without being split into two phantom matches.
+async function exportBankPaymentSelected() {
+  const aid = document.getElementById('pay-auction')?.value;
+  const names = _collectSelectedPaymentNames();
+  if (!aid) { alert('Select an auction first'); return; }
+  if (!names.length) { alert('Tick one or more sellers first'); return; }
+  await _payDownloadSelected('bank_payment', 'xlsx', aid, names);
+}
+async function exportPaymentXlsxSelected() {
+  const aid = document.getElementById('pay-auction')?.value;
+  const names = _collectSelectedPaymentNames();
+  if (!aid) { alert('Select an auction first'); return; }
+  if (!names.length) { alert('Tick one or more sellers first'); return; }
+  await _payDownloadSelected('payment', 'xlsx', aid, names);
+}
+async function _payDownloadSelected(type, format, aid, names) {
+  const label = (typeof EXP_LABELS === 'object' && EXP_LABELS[type]) || type;
+  const qs = 'format=' + encodeURIComponent(format) + '&' +
+             names.map(n => 'names=' + encodeURIComponent(n)).join('&');
+  await withOverlay(`Exporting ${label} — ${names.length} seller${names.length === 1 ? '' : 's'}…`, async () => {
+    const r = await fetch(B + `/api/exports/${type}/${aid}?${qs}`, {
+      headers: { 'Authorization': 'Bearer ' + T }
+    });
+    if (!r.ok) {
+      const errBody = await r.json().catch(() => ({}));
+      alert(`Export failed: ${errBody.error || ('HTTP ' + r.status)}`);
+      return;
+    }
+    const blob = await r.blob();
+    // Honour the server's Content-Disposition filename (it already
+    // appends "_selected" so the file is obviously a subset on disk).
+    let filename = `${type}_selected_${aid}.${format}`;
+    const cd = r.headers.get('Content-Disposition') || '';
+    const fm = /filename="?([^";]+)"?/i.exec(cd);
+    if (fm) filename = fm[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  });
+}
 // Bulk Payments — queue of individual TEXT messages, one per seller.
 async function whatsappSelectedPayments() {
   const aid = Number(document.getElementById('pay-auction').value);
@@ -16752,6 +16843,108 @@ async function whatsappSelectedPayments() {
     });
   }
   await _runWaQueue(items);
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAYMENTS — per-auction state (lot-picks, exported markers, batches)
+// ══════════════════════════════════════════════════════════════
+//
+// Three pieces of state live in localStorage under `pay.state.<aid>`:
+//
+//   picks    : { sellerName: ['lot_no', 'lot_no', ...], ... }
+//              Sellers absent from this map (or with an empty array)
+//              export with ALL their lots. Sellers present override
+//              with ONLY the listed lots.
+//   exported : ['sellerName', 'sellerName', ...]
+//              Sellers whose payments have already been exported.
+//              Their rows render greyed-out + checkbox-disabled until
+//              they're undone.
+//   batches  : [{ id, names: [...], ts }, ...]
+//              History of export batches in chronological order.
+//              The toolbar "↶ Undo Last Export" button pops the most
+//              recent entry off the end.
+//
+// All three persist per-auction so a reload (or a tab reopen) shows
+// exactly what was exported / picked before. Switching to a different
+// auction in the picker loads that auction's state in turn.
+const _PAY_STATE_KEY = (aid) => `pay.state.${aid}`;
+function _payLoadState(aid) {
+  if (!aid) return { picks: {}, exported: [], batches: [] };
+  try {
+    const raw = localStorage.getItem(_PAY_STATE_KEY(aid));
+    if (!raw) return { picks: {}, exported: [], batches: [] };
+    const obj = JSON.parse(raw);
+    return {
+      picks:    obj && typeof obj.picks === 'object' && obj.picks    ? obj.picks    : {},
+      exported: Array.isArray(obj && obj.exported) ? obj.exported : [],
+      batches:  Array.isArray(obj && obj.batches)  ? obj.batches  : [],
+    };
+  } catch (_) { return { picks: {}, exported: [], batches: [] }; }
+}
+function _paySaveState(aid, state) {
+  if (!aid) return;
+  try { localStorage.setItem(_PAY_STATE_KEY(aid), JSON.stringify(state)); }
+  catch (_) { /* quota; ignore */ }
+}
+function _payGetLotPicks(aid, sellerName) {
+  const s = _payLoadState(aid);
+  const arr = s.picks[sellerName];
+  return Array.isArray(arr) && arr.length ? arr.slice() : null;
+}
+function _paySetLotPicks(aid, sellerName, lotNos) {
+  const s = _payLoadState(aid);
+  if (Array.isArray(lotNos) && lotNos.length) {
+    s.picks[sellerName] = lotNos.map(String);
+  } else {
+    delete s.picks[sellerName];
+  }
+  _paySaveState(aid, s);
+}
+function _payIsExported(aid, sellerName) {
+  const s = _payLoadState(aid);
+  return s.exported.includes(sellerName);
+}
+function _payMarkExported(aid, names) {
+  if (!Array.isArray(names) || !names.length) return null;
+  const s = _payLoadState(aid);
+  // Idempotent — same seller exported twice doesn't double-stack in
+  // the exported list (Set semantics) but DOES go into batches both
+  // times, since each export is its own undo-able unit.
+  const set = new Set(s.exported);
+  for (const n of names) set.add(n);
+  s.exported = Array.from(set);
+  const batch = { id: 'b' + Date.now() + '-' + Math.floor(Math.random() * 1000), names: names.slice(), ts: new Date().toISOString() };
+  s.batches.push(batch);
+  _paySaveState(aid, s);
+  return batch;
+}
+function _payUnmarkExported(aid, names) {
+  if (!Array.isArray(names) || !names.length) return;
+  const s = _payLoadState(aid);
+  const drop = new Set(names);
+  s.exported = s.exported.filter(n => !drop.has(n));
+  // Also strip those names from any batch in the history. An empty
+  // batch is removed entirely so the toolbar Undo button doesn't get
+  // stuck on no-op restores.
+  s.batches = s.batches
+    .map(b => ({ ...b, names: b.names.filter(n => !drop.has(n)) }))
+    .filter(b => b.names.length > 0);
+  _paySaveState(aid, s);
+}
+function _payUndoLastBatch(aid) {
+  const s = _payLoadState(aid);
+  const batch = s.batches.pop();
+  if (!batch) { _paySaveState(aid, s); return null; }
+  const dropSet = new Set(batch.names);
+  // Only un-export a name if no OTHER batch still references it. This
+  // matters when a seller was exported twice and the operator only
+  // wants to undo the most recent export — the older batch's claim
+  // remains valid so the seller stays greyed out.
+  const stillClaimed = new Set();
+  for (const b of s.batches) for (const n of b.names) if (dropSet.has(n)) stillClaimed.add(n);
+  s.exported = s.exported.filter(n => !dropSet.has(n) || stillClaimed.has(n));
+  _paySaveState(aid, s);
+  return batch;
 }
 
 // ── Per-seller lot detail / partial payment ───────────────────
@@ -16811,10 +17004,17 @@ function _renderPayLotsTable() {
     document.getElementById('pay-lots-totals').innerHTML = '';
     return;
   }
+  // Seed the row checkboxes from any persisted lot picks for this
+  // (auction, seller). When no picks are saved the legacy default
+  // applies — every lot is pre-ticked, so the existing partial-payment
+  // print flow keeps working unchanged.
+  const savedPicks = _payGetLotPicks(_payLotsState.aid, _payLotsState.seller);
+  const savedSet = savedPicks ? new Set(savedPicks.map(String)) : null;
   const rows = _payLotsState.lots.map(l => {
     const tax = (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
+    const checked = savedSet ? savedSet.has(String(l.lot_no)) : true;
     return `<tr>
-      <td style="text-align:center"><input type="checkbox" class="pay-lot-cb" data-id="${l.id}" checked onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
+      <td style="text-align:center"><input type="checkbox" class="pay-lot-cb" data-id="${l.id}" data-lot="${esc(l.lot_no || '')}"${checked ? ' checked' : ''} onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
       <td style="font-family:monospace;font-weight:600">${esc(l.lot_no || '')}</td>
       <td>${esc(l.branch || '')}</td>
       <td style="text-align:right">${fmtI(Number(l.qty)||0, 3)}</td>
@@ -16915,6 +17115,8 @@ function updatePaymentBulkButtons() {
   if (cnt) cnt.textContent = checked > 0 ? String(checked) : '';
   _bulkBtnSetVisible(document.getElementById('pay-bulk-print'),    checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-whatsapp'), checked > 0);
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-bank-export'), checked > 0);
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-xlsx-export'), checked > 0);
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');

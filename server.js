@@ -3804,12 +3804,14 @@ const LOT_UPDATE_COLUMNS = new Set([
   'isp_pqty','isp_prate','isp_puramt','asp_pqty','asp_prate','asp_puramt'
 ]);
 
-// Fields that feed calculateLot. When a PUT touches any of these, the
-// endpoint re-runs the planter-side calc so the dependent columns
-// (prate/puramt/com/cgst/sgst/igst/bilamt/advance/balance) stay
-// consistent with the new inputs. Kept in sync with the reads inside
-// calculations.js → calculateLot.
-const CALC_TRIGGER_FIELDS = ['price','qty','grade','refud','cr'];
+// Fields that feed calculateLot OR that imply the planter math should
+// be re-evaluated. When a PUT touches any of these, the endpoint
+// re-runs the calc so the dependent columns (prate/puramt/com/cgst/
+// sgst/igst/bilamt/advance/balance) stay consistent. `code` is here
+// because a code change to 'WD' (withdrawn) typically zeroes price
+// elsewhere in the flow — and we need to clear stale planter values
+// regardless of what price ends up as.
+const CALC_TRIGGER_FIELDS = ['price','qty','grade','refud','cr','code'];
 
 app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   const l = req.body; const sets = []; const vals = [];
@@ -3868,13 +3870,19 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   // stale-but-non-zero puramt would silently flow into purchase
   // invoices / bills / debit notes after a price tweak.
   //
+  // Recalc runs even when the lot ends up with zero inputs (e.g.
+  // code → WD, which zeroes price): calculateLot produces zeros for
+  // all planter fields in that case, which is the correct outcome.
+  // Without this, marking a lot as withdrawn left stale prate/puramt
+  // values that propagated into bills + debit notes.
+  //
   // Skip locked lots (same rule Calculate All uses — finalised planter
   // numbers must not be overwritten). Admins editing a locked lot must
   // unlock + Calculate All explicitly if they want the cascade.
   if (current && !current.locked_at &&
       CALC_TRIGGER_FIELDS.some(f => Object.prototype.hasOwnProperty.call(l, f))) {
     const fresh = db.get('SELECT * FROM lots WHERE id = ?', [lotId]);
-    if (fresh && ((fresh.amount > 0) || (fresh.qty > 0 && fresh.price > 0))) {
+    if (fresh) {
       const cfg = getSettingsFlat(db);
       const calc = calculateLot(fresh, cfg);
       db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
@@ -4034,7 +4042,22 @@ app.post('/api/lots/calculate/:auctionId',
   // Check (bulk-set-buyer only writes `price`) can leave `amount` stale
   // at 0 while qty and the new price are both valid; we want to recalc
   // those rows and heal `amount` rather than skip them.
-  const lots = db.all('SELECT * FROM lots WHERE auction_id = ? AND (amount > 0 OR (qty > 0 AND price > 0)) AND locked_at IS NULL', [req.params.auctionId]);
+  //
+  // Also pick up rows whose price/amount are now zero but still carry
+  // non-zero planter values (e.g. a lot marked WD after its planter
+  // math was computed). Without this branch, Calculate All would leave
+  // stale prate/puramt/cgst/sgst/igst on withdrawn lots — those values
+  // would then leak into bills, purchases, and debit notes.
+  const lots = db.all(
+    `SELECT * FROM lots
+       WHERE auction_id = ?
+         AND locked_at IS NULL
+         AND ( amount > 0
+               OR (qty > 0 AND price > 0)
+               OR puramt > 0 OR prate > 0
+               OR cgst > 0 OR sgst > 0 OR igst > 0 )`,
+    [req.params.auctionId]
+  );
   let count = 0;
   for (const lot of lots) {
     const calc = calculateLot(lot, cfg);
@@ -4052,12 +4075,22 @@ app.post('/api/lots/calculate/:auctionId',
 //
 // Picks up lots with `amount > 0` OR `qty*price > 0` so a stale `amount`
 // (e.g. after a Price Check price write) doesn't hide a row that has
-// otherwise valid qty + price. Returns total lots calculated across all
-// auctions.
+// otherwise valid qty + price. Also picks up rows whose price/amount
+// are now zero but still carry stale planter values (e.g. lots marked
+// WD after their planter math was computed) — see the per-auction
+// calculate above for the same rationale. Returns total lots
+// calculated across all auctions.
 app.post('/api/lots/calculate-all', requireLotWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   // Skip locked lots (same rationale as the per-auction calculate above).
-  const lots = db.all('SELECT * FROM lots WHERE (amount > 0 OR (qty > 0 AND price > 0)) AND locked_at IS NULL');
+  const lots = db.all(
+    `SELECT * FROM lots
+       WHERE locked_at IS NULL
+         AND ( amount > 0
+               OR (qty > 0 AND price > 0)
+               OR puramt > 0 OR prate > 0
+               OR cgst > 0 OR sgst > 0 OR igst > 0 )`
+  );
   let count = 0;
   for (const lot of lots) {
     const calc = calculateLot(lot, cfg);
@@ -7622,23 +7655,105 @@ app.get('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
   try {
     const db = getDb();
     let buffer;
+    // Optional seller-name filter — drives the "Export Selected" buttons
+    // in the Payments tab. The Bank Payment + Payment XLSX exporters
+    // read this through their 5th arg; every other exporter ignores
+    // unknown opts, so this is a no-op for them. Accept BOTH shapes:
+    //   ?names=A&names=B&names=C   → req.query.names = ['A','B','C']
+    //   ?names=A,B,C               → req.query.names = 'A,B,C'  → split
+    let rawNames = req.query.names;
+    if (typeof rawNames === 'string') rawNames = rawNames.split(',');
+    if (!Array.isArray(rawNames)) rawNames = [];
+    const names = rawNames.map(s => String(s || '').trim()).filter(Boolean);
+    const opts = names.length ? { names } : undefined;
     if (exportDef.needsCfg) {
       const cfg = getSettingsFlat(db);
       // Pass state too so exports that need both (e.g. Praman) can filter
       // by state without losing cfg context. Backward-compatible: existing
-      // needsCfg exports that ignore the 4th arg are unaffected.
-      buffer = await exportDef.fn(db, auctionId, cfg, req.query.state);
+      // needsCfg exports that ignore the 4th/5th args are unaffected.
+      buffer = await exportDef.fn(db, auctionId, cfg, req.query.state, opts);
     } else {
-      buffer = await exportDef.fn(db, auctionId, req.query.state);
+      buffer = await exportDef.fn(db, auctionId, req.query.state, opts);
     }
     // Per-export-type content-type/extension override (defaults to xlsx).
     // CSV exports like Praman use ext:'csv', mime:'text/csv'.
     const ext  = exportDef.ext  || 'xlsx';
     const mime = exportDef.mime || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    // Tag the download filename with "_selected" when a names filter is
+    // active so a partial-export file is obviously a subset on disk and
+    // doesn't get confused with the full export later.
+    const suffix = opts ? '_selected' : '';
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}_${auctionId}.${ext}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}${suffix}_${auctionId}.${ext}"`);
     res.send(Buffer.from(buffer));
   } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST sibling of the GET export route — same response shape, but the
+// "selected" filters live in the JSON body so:
+//   (a) URL length isn't a constraint when many sellers are ticked,
+//   (b) the per-seller lot-pick map ({ "Alice": ["12","15"] }) can be
+//       sent as a normal nested object instead of being marshalled
+//       through query-string bracket notation.
+//
+// Used by the Payments tab's "Export Bank Payment (Selected)" and
+// "Export Payment XLSX (Selected)" buttons. The GET route stays the
+// canonical path for the no-filter case (all sellers, all lots).
+app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
+  const { type, auctionId } = req.params;
+  const format = String((req.body && req.body.format) || 'xlsx').toLowerCase();
+
+  if (format === 'pdf') {
+    // PDF generation on this route is intentionally not implemented —
+    // the Payments-tab selected exports are XLSX-only. Adding PDF later
+    // is straightforward: thread `opts` through exportAnyPdf the same
+    // way the GET route does for ?state=...
+    return res.status(400).json({ error: 'PDF format is not supported on the selected-export route. Use the GET endpoint for a full PDF.' });
+  }
+
+  const exportDef = EXPORT_TYPES[type];
+  if (!exportDef) return res.status(400).json({ error: 'Unknown export type', available: Object.keys(EXPORT_TYPES) });
+
+  try {
+    const db = getDb();
+    // Normalise the body. names → array of trimmed non-empty strings.
+    // lots → object mapping seller-name → array of lot_no strings.
+    const body = req.body || {};
+    const names = Array.isArray(body.names)
+      ? body.names.map(s => String(s || '').trim()).filter(Boolean)
+      : [];
+    const lots = (body.lots && typeof body.lots === 'object' && !Array.isArray(body.lots)) ? body.lots : null;
+    const opts = (names.length || lots) ? {} : undefined;
+    if (opts) {
+      if (names.length) opts.names = names;
+      if (lots) {
+        // Strip any non-array entries / empty arrays so the downstream
+        // export functions can rely on `opts.lots[seller]` being a
+        // non-empty array when present.
+        const cleaned = {};
+        for (const k of Object.keys(lots)) {
+          const arr = Array.isArray(lots[k]) ? lots[k].map(v => String(v || '').trim()).filter(Boolean) : [];
+          if (arr.length) cleaned[k] = arr;
+        }
+        if (Object.keys(cleaned).length) opts.lots = cleaned;
+      }
+    }
+    let buffer;
+    if (exportDef.needsCfg) {
+      const cfg = getSettingsFlat(db);
+      buffer = await exportDef.fn(db, auctionId, cfg, body.state || null, opts);
+    } else {
+      buffer = await exportDef.fn(db, auctionId, body.state || null, opts);
+    }
+    const ext  = exportDef.ext  || 'xlsx';
+    const mime = exportDef.mime || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const suffix = opts ? '_selected' : '';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}${suffix}_${auctionId}.${ext}"`);
+    res.send(Buffer.from(buffer));
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
