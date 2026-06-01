@@ -13688,6 +13688,10 @@ async function lotBulkLock(){
   try {
     const r = await j('/api/lots/lock', { method: 'POST', body: JSON.stringify({ ids }) });
     toast(`Locked ${r.locked || 0} of ${r.requested || ids.length} lot${(r.requested || ids.length) === 1 ? '' : 's'}`);
+    // Drop the just-locked lots from the sticky selection so the bulk
+    // toolbar clears on reload. Admins keep enabled checkboxes on locked
+    // rows, so without this the rows would re-tick and the buttons stay.
+    ids.forEach(id => _lotsTickedIds.delete(id));
     if (typeof loadLots === 'function') loadLots({ keepPage: true });
   } catch (e) { showError(e); }
 }
@@ -13715,6 +13719,10 @@ async function lotLockOne(id){
   try {
     await j('/api/lots/lock', { method: 'POST', body: JSON.stringify({ ids: [Number(id)] }) });
     toast('Lot locked');
+    // Clear any sticky selection on the just-locked row so the bulk
+    // toolbar doesn't linger after the reload (admins keep its checkbox
+    // enabled, so it would otherwise re-tick).
+    _lotsTickedIds.delete(Number(id));
     if (typeof loadLots === 'function') loadLots({ keepPage: true });
   } catch (e) { showError(e); }
 }
@@ -15247,8 +15255,13 @@ async function loadLots(opts){
       if (cb.disabled) { _lotsTickedIds.delete(id); return; }
       cb.checked = true;
     });
-    if (typeof BulkActions !== 'undefined' && BulkActions._sync) BulkActions._sync('lot');
   }
+  // Always re-sync the bulk toolbar to the freshly-rendered checkbox
+  // state — even when nothing is ticked. A reload that clears the
+  // selection (e.g. after Lock Selected) must hide the bulk-action
+  // buttons immediately, not leave them stranded visible until the next
+  // checkbox click happens to re-run syncMaster.
+  if (typeof BulkActions !== 'undefined' && BulkActions._sync) BulkActions._sync('lot');
 }
 
 function openLotEdit(l){
