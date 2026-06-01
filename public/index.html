@@ -15160,7 +15160,17 @@ async function loadLots(opts){
     { key:'name', label:'Name', sort:'text' },
     { key:'buyer', label:'Buyer', sort:'text' },
     { key:'buyer_code', label:'Code', sort:'text',
-      render:(l)=> l.buyer_code ? esc(l.buyer_code) : '<span style="color:var(--text3)">—</span>' },
+      // Prefer the joined master code (from buyers.code keyed by
+      // lots.buyer), but fall back to the lot's own `code` column when
+      // the join misses — e.g. for special markers like WD / NA where
+      // the buyer field doesn't match any row in the buyers master.
+      // Without this fallback, the column would render as "—" for
+      // every withdrawn / n-a lot after edit even though the data is
+      // present on the row.
+      render:(l)=> {
+        const c = l.buyer_code || l.code || '';
+        return c ? esc(c) : '<span style="color:var(--text3)">—</span>';
+      } },
     { key:'branch', label:'Branch', sort:'text' },
     { key:'grade', label:'Grade', sort:'text' },
     { key:'bags', label:'Bags', sort:'number', numeric:true },
