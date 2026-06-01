@@ -15305,23 +15305,39 @@ function openLotEdit(l){
     codeEl.addEventListener('change', async () => {
       const code = (codeEl.value || '').trim().toUpperCase();
       if (!code) return;
-      // WD = withdrawn — no buyer, no money changes hands. Zero the
-      // price so amount (qty × price) also collapses to 0, matching
-      // every downstream report's "withdrawn lots contribute nothing"
-      // assumption ([_NOT_WD] filters in server.js). Clear the buyer
-      // fields too so a stale buyer from the prior assignment doesn't
-      // travel into invoices / Tally / exports on the withdrawn row.
-      if (code === 'WD') {
+      // Special markers — these aren't real buyer codes, they're
+      // status flags entered into the Code field. For each one we
+      // stamp the buyer block + sale type + price so the row is
+      // self-describing in lists / exports without the reader having
+      // to know that an empty buyer means "withdrawn" or "n/a".
+      //
+      //   WD = withdrawn — no real buyer, no money changes hands.
+      //   NA = not applicable — placeholder used when the operator
+      //        wants to mark a lot as out-of-scope for invoicing
+      //        without withdrawing it from the auction record.
+      //
+      // Both zero the price so amount (qty × price) collapses to 0,
+      // matching every downstream report's "no transaction" filter.
+      // GSTIN stays cleared because there's no real counterparty.
+      const SPECIAL = {
+        WD: { buyer: 'WD', buyer1: 'Withdrawn', sale: 'W', toast: 'Marked as Withdrawn — buyer set to WD / Withdrawn, sale type W, price zeroed' },
+        NA: { buyer: 'NA', buyer1: 'N/A',       sale: 'N', toast: 'Marked as N/A — buyer set to NA / N/A, sale type N, price zeroed' },
+      };
+      if (SPECIAL[code]) {
+        const s = SPECIAL[code];
         if (priceEl) priceEl.value = '0';
         if (amtEl)   amtEl.value   = '0.00';
         const buyerEl  = document.getElementById('l-buyer');
         const buyer1El = document.getElementById('l-buyer1');
         const crEl     = document.getElementById('l-cr');
-        if (buyerEl)  buyerEl.value  = '';
-        if (buyer1El) buyer1El.value = '';
+        const saleEl   = document.getElementById('l-sale');
+        if (buyerEl)  buyerEl.value  = s.buyer;
+        if (buyer1El) buyer1El.value = s.buyer1;
         if (crEl)     crEl.value     = '';
-        codeEl.value = 'WD';
-        return; // skip buyer lookup — WD isn't a buyer code
+        if (saleEl)   saleEl.value   = s.sale;
+        codeEl.value = code;
+        if (typeof toast === 'function') toast(s.toast);
+        return; // skip buyer lookup — special codes aren't real buyers
       }
       try {
         // First try the in-memory cache populated when the modal opened.
