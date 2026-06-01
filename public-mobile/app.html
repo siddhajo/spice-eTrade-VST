@@ -313,14 +313,15 @@ select:focus{border-color:var(--green)}
           <div><div class="elb" id="elb-litre">LITRE WT</div><input type="text" id="le-litre" placeholder="0" inputmode="numeric" onfocus="showSaveBtn()" class="ein" oninput="sanitizeInt(this)"></div>
         </div>
 
-        <!-- Weight w/ Gunny + per-bag Gunny Wt — sits ABOVE Net Wt so the
+        <!-- Weight w/ Gunny + total Gunny Weight — sits ABOVE Net Wt so the
              operator types the gross weight first and watches Net Wt
              populate. Visible only when showExtraLotFields is on. Gunny
-             Wt is the configured per-bag tare (read-only); Net Wt below
-             is auto-derived as: weight_w_gunny − (bags × gunny_wt). -->
+             Weight is the total tare (read-only) = default gunny weight ×
+             bags; Net Wt below is auto-derived as: weight_w_gunny −
+             gunny_weight. -->
         <div id="le-gunny-wrap" style="display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
           <div><div class="elb">W/ GUNNY</div><input type="text" id="le-wwg" placeholder="0.000" inputmode="decimal" class="ein" oninput="sanitizeDec(this);calcNetFromGunny()"></div>
-          <div><div class="elb">GUNNY/BAG</div><input type="text" id="le-gunny-wt" readonly class="ein" style="background:var(--bg);color:var(--text3);font-weight:600" title="Default gunny weight per bag"></div>
+          <div><div class="elb">GUNNY WT</div><input type="text" id="le-gunny-wt" readonly class="ein" style="background:var(--bg);color:var(--text3);font-weight:600" title="Total gunny weight = default gunny weight × bags"></div>
         </div>
 
         <!-- Net + Sample + Gross -->
@@ -467,6 +468,12 @@ select:focus{border-color:var(--green)}
     </div>
     <div class="lb">GRADE</div><input type="text" id="ed-grade">
     <div class="fr" style="margin-top:12px"><div><div class="lb">BAGS</div><input type="text" id="ed-bags" inputmode="numeric" oninput="sanitizeInt(this)"></div><div><div class="lb">LITRE</div><input type="text" id="ed-litre" inputmode="numeric" oninput="sanitizeInt(this)"></div></div>
+    <!-- Weight w/ Gunny + per-bag Gunny Wt — parity with the entry
+         screen so a partial edit can update the gross-of-gunny value
+         without leaving the modal. Net Wt below stays operator-typed
+         here (auto-derive lives only in the entry-form path); admins
+         and field staff can correct either or both as needed. -->
+    <div class="fr" style="margin-top:8px"><div><div class="lb">W/ GUNNY</div><input type="text" id="ed-wwg" inputmode="decimal" oninput="sanitizeDec(this)" placeholder="0.000"></div><div><div class="lb">GUNNY WT</div><input type="text" id="ed-gunny-wt" readonly style="background:var(--bg);color:var(--text3);font-weight:600" title="Total gunny weight = default gunny weight × bags"></div></div>
     <div class="lb">QUANTITY (KG)</div><input type="text" id="ed-qty" inputmode="decimal" class="qi" oninput="sanitizeDec(this);calcEditGross()">
     <div class="fr" style="margin-top:8px"><div><div class="lb">SAMPLE WT</div><input type="text" id="ed-sample" inputmode="decimal" oninput="sanitizeDec(this);calcEditGross()" readonly style="background:var(--bg);color:var(--text3)"></div><div><div class="lb">GROSS WT</div><input type="text" id="ed-gross" readonly style="background:var(--bg);color:var(--green);font-weight:700"></div></div>
     <div id="ed-err"></div>
@@ -595,7 +602,7 @@ async function tryAutoLogin(){if(!token){loadTitle();return}try{const r=await fe
 var cfgSampleWeight=0,cfgShowMoisture=false,cfgGunnyWeight=0,cfgShowExtraFields=false;
 var cfgLabels={lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'};
 // Show or hide the extra-fields rows — both the Weight w/ Gunny +
-// per-bag Gunny Wt row (above Net Wt) and the Crop Receipt + Reserved
+// total Gunny Weight row (above Net Wt) and the Crop Receipt + Reserved
 // Price row (below) — and flip Net Wt's read-only state to match.
 // Called from every place where the config is (re)loaded.
 function applyExtraFieldsVisibility(){
@@ -607,12 +614,15 @@ function applyExtraFieldsVisibility(){
   if(cfgShowExtraFields){
     if(wrap)wrap.style.display='grid';
     if(gunnyWrap)gunnyWrap.style.display='grid';
-    // Seed the read-only Gunny Wt display so the operator can see what
-    // tare is being subtracted per bag (format to 3 decimals to match
-    // the other weight inputs).
+    // Seed the read-only Gunny Weight display with the total tare
+    // (default gunny weight × bags) so the operator sees exactly what is
+    // being subtracted (format to 3 decimals to match the other weight
+    // inputs).
     if(gunnyWtEl){
       var g=Number(cfgGunnyWeight)||0;
-      gunnyWtEl.value=g>0?g.toFixed(3):'0.000';
+      var bags=parseInt(document.getElementById('le-bags').value,10)||0;
+      var total=g*bags;
+      gunnyWtEl.value=total>0?total.toFixed(3):'0.000';
     }
     qtyEl.readOnly=true;
     qtyEl.style.background='var(--bg)';
@@ -625,15 +635,18 @@ function applyExtraFieldsVisibility(){
     qtyEl.style.color='';
   }
 }
-// Auto-calc Net = Weight w/ Gunny − (Bags × Gunny Wt) when the operator
-// types into Weight w/ Gunny — and also when Bags changes (see
-// onBagsInput) because bags is part of the formula. Writes the result
-// back into Net Wt, then re-runs the gross calc so Gross stays in sync.
+// Auto-calc Net = Weight w/ Gunny − Gunny Weight when the operator types
+// into Weight w/ Gunny — and also when Bags changes (see onBagsInput)
+// because Gunny Weight (= default gunny weight × bags) depends on bags.
+// Keeps the read-only Gunny Weight field in sync, writes the result back
+// into Net Wt, then re-runs the gross calc so Gross stays in sync.
 function calcNetFromGunny(){
   var wwg=parseFloat(document.getElementById('le-wwg').value)||0;
   var bags=parseInt(document.getElementById('le-bags').value,10)||0;
   var gunny=Number(cfgGunnyWeight)||0;
   var tare=bags*gunny;
+  var gunnyWtEl=document.getElementById('le-gunny-wt');
+  if(gunnyWtEl)gunnyWtEl.value=tare>0?tare.toFixed(3):'0.000';
   var net=Math.max(0,wwg-tare);
   document.getElementById('le-qty').value=wwg>0?net.toFixed(3):'';
   calcGrossWeight();
@@ -1217,7 +1230,45 @@ function printLot(id){printAndClose(B+'/api/lots/'+id+'/receipt?branch='+encodeU
 
 var editBanks=[],editTraderId=null;
 var editLotBankId=null;
-function openEdit(id,lotNo,s,g,bags,litre,qty,traderId,bankId){editId=id;editTraderId=traderId||null;editLotBankId=bankId||null;document.getElementById('ed-lotno-display').textContent=lotNo;document.getElementById('ed-lotno').value=lotNo;document.getElementById('ed-seller-name').textContent=s;document.getElementById('ed-seller-card').style.display='flex';document.getElementById('ed-seller-search').style.display='none';document.getElementById('ed-seller-res').style.display='none';document.getElementById('ed-grade').value=g;document.getElementById('ed-bags').value=bags;document.getElementById('ed-litre').value=litre;document.getElementById('ed-qty').value=Number(qty).toFixed(3);document.getElementById('ed-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('ed-err').innerHTML='';document.getElementById('ed-bank-form').style.display='none';document.getElementById('edit-modal').classList.add('show');if(traderId)loadEditBanks(traderId);fetch(B+'/api/lots/'+id+'/detail',{headers:ah()}).then(r=>r.json()).then(d=>{if(d.lot){var sw=d.lot.sample_weight!=null&&d.lot.sample_weight>0?d.lot.sample_weight:cfgSampleWeight||0;document.getElementById('ed-sample').value=Number(sw).toFixed(3);document.getElementById('ed-gross').value=d.lot.gross_weight?Number(d.lot.gross_weight).toFixed(3):'0';calcEditGross()}}).catch(()=>{calcEditGross()})}
+function openEdit(id,lotNo,s,g,bags,litre,qty,traderId,bankId){
+  editId=id;editTraderId=traderId||null;editLotBankId=bankId||null;
+  document.getElementById('ed-lotno-display').textContent=lotNo;
+  document.getElementById('ed-lotno').value=lotNo;
+  document.getElementById('ed-seller-name').textContent=s;
+  document.getElementById('ed-seller-card').style.display='flex';
+  document.getElementById('ed-seller-search').style.display='none';
+  document.getElementById('ed-seller-res').style.display='none';
+  document.getElementById('ed-grade').value=g;
+  document.getElementById('ed-bags').value=bags;
+  document.getElementById('ed-litre').value=litre;
+  document.getElementById('ed-qty').value=Number(qty).toFixed(3);
+  document.getElementById('ed-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';
+  // Clear stale Weight w/ Gunny from the previous edit; seed Gunny Weight
+  // with the total tare (default gunny weight × this lot's bags) so the
+  // operator sees exactly what is being subtracted. The /detail fetch
+  // below replaces ed-wwg with the stored value once it returns (kept
+  // blank in the meantime to make it obvious that no value has loaded yet).
+  var edWwg=document.getElementById('ed-wwg');     if(edWwg)edWwg.value='';
+  var edGw =document.getElementById('ed-gunny-wt');if(edGw){var gv=Number(cfgGunnyWeight)||0;var eb=parseInt(bags,10)||0;var tv=gv*eb;edGw.value=tv>0?tv.toFixed(3):'0.000';}
+  document.getElementById('ed-err').innerHTML='';
+  document.getElementById('ed-bank-form').style.display='none';
+  document.getElementById('edit-modal').classList.add('show');
+  if(traderId)loadEditBanks(traderId);
+  fetch(B+'/api/lots/'+id+'/detail',{headers:ah()}).then(r=>r.json()).then(d=>{
+    if(d.lot){
+      var sw=d.lot.sample_weight!=null&&d.lot.sample_weight>0?d.lot.sample_weight:cfgSampleWeight||0;
+      document.getElementById('ed-sample').value=Number(sw).toFixed(3);
+      document.getElementById('ed-gross').value=d.lot.gross_weight?Number(d.lot.gross_weight).toFixed(3):'0';
+      // Surface the stored Weight w/ Gunny if present so the operator
+      // can verify / correct it. The lot row uses `weight_with_gunny`
+      // (snake_case) to match the e-Trade schema.
+      var wwg=Number(d.lot.weight_with_gunny)||0;
+      var ed=document.getElementById('ed-wwg');
+      if(ed) ed.value = wwg>0 ? wwg.toFixed(3) : '';
+      calcEditGross();
+    }
+  }).catch(()=>{calcEditGross()})
+}
 function closeEdit(){document.getElementById('edit-modal').classList.remove('show');editId=null;editTraderId=null}
 function editSellerMode(){document.getElementById('ed-seller-card').style.display='none';document.getElementById('ed-seller-search').style.display='block';document.getElementById('ed-seller-input').value='';document.getElementById('ed-seller-input').focus()}
 let edStm;
@@ -1320,7 +1371,36 @@ async function saveEditBankAccount(){
   }catch(e){toast('Failed',true)}
 }
 function calcEditGross(){var net=parseFloat(document.getElementById('ed-qty').value)||0;var sample=parseFloat(document.getElementById('ed-sample').value)||0;document.getElementById('ed-gross').value=(net+sample).toFixed(3)}
-async function saveEdit(){const lotNo=document.getElementById('ed-lotno').value.trim(),grade=document.getElementById('ed-grade').value.trim()||'1',bags=parseInt(document.getElementById('ed-bags').value),litre=parseInt(document.getElementById('ed-litre').value),qty=parseFloat(document.getElementById('ed-qty').value),sampleWt=parseFloat(document.getElementById('ed-sample').value)||0,grossWt=parseFloat(document.getElementById('ed-gross').value)||0,er=document.getElementById('ed-err');er.innerHTML='';if(!lotNo||!bags||!litre||!qty){er.innerHTML='<div class="eb">Fill all fields</div>';return}document.getElementById('ed-save').disabled=true;try{const body={lot_no:lotNo,grade,bags,litre,qty,sample_weight:sampleWt,gross_weight:grossWt};if(editTraderId)body.trader_id=editTraderId;var edBankSel=document.getElementById('ed-bank-select');if(edBankSel)body.bank_id=edBankSel.value?parseInt(edBankSel.value):null;const r=await fetch(B+'/api/lots/'+editId,{method:'PUT',headers:ah(),body:JSON.stringify(body)});const d=await r.json();if(!r.ok){er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';return}toast('Lot updated',false);closeEdit();loadMyLots();await loadStats();updUI()}catch(e){er.innerHTML='<div class="eb">Failed</div>'}finally{document.getElementById('ed-save').disabled=false}}
+async function saveEdit(){
+  const lotNo=document.getElementById('ed-lotno').value.trim(),
+        grade=document.getElementById('ed-grade').value.trim()||'1',
+        bags=parseInt(document.getElementById('ed-bags').value),
+        litre=parseInt(document.getElementById('ed-litre').value),
+        qty=parseFloat(document.getElementById('ed-qty').value),
+        sampleWt=parseFloat(document.getElementById('ed-sample').value)||0,
+        grossWt=parseFloat(document.getElementById('ed-gross').value)||0,
+        // Optional: blank Weight w/ Gunny means "don't change" rather
+        // than "set to 0" — parseFloat('') is NaN, so we coerce to 0
+        // here but only send the field when the input has a value.
+        wwgRaw=(document.getElementById('ed-wwg')||{}).value||'',
+        weightWithGunny=parseFloat(wwgRaw)||0,
+        er=document.getElementById('ed-err');
+  er.innerHTML='';
+  if(!lotNo||!bags||!litre||!qty){er.innerHTML='<div class="eb">Fill all fields</div>';return}
+  document.getElementById('ed-save').disabled=true;
+  try{
+    const body={lot_no:lotNo,grade,bags,litre,qty,sample_weight:sampleWt,gross_weight:grossWt,weight_with_gunny:weightWithGunny};
+    if(editTraderId)body.trader_id=editTraderId;
+    var edBankSel=document.getElementById('ed-bank-select');
+    if(edBankSel)body.bank_id=edBankSel.value?parseInt(edBankSel.value):null;
+    const r=await fetch(B+'/api/lots/'+editId,{method:'PUT',headers:ah(),body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok){er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';return}
+    toast('Lot updated',false);
+    closeEdit();loadMyLots();await loadStats();updUI()
+  }catch(e){er.innerHTML='<div class="eb">Failed</div>'}
+  finally{document.getElementById('ed-save').disabled=false}
+}
 async function deleteLot(id,n){if(!confirm('Delete Lot #'+n+'?'))return;try{await fetch(B+'/api/lots/'+id,{method:'DELETE',headers:ah()});toast('Deleted',false);loadMyLots();await loadStats();updUI()}catch(e){}}
 
 function clearEntryForm(){

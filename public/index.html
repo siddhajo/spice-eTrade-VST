@@ -3429,11 +3429,28 @@ input[type="search"]:focus{
           </div>
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Bags</div>
-            <input type="number" id="le-bags" min="0" placeholder="0" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px">
+            <input type="number" id="le-bags" min="0" placeholder="0" oninput="leOnBagsInput()" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px">
           </div>
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Litre Wt</div>
             <input type="number" id="le-litre" min="0" placeholder="0" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:15px">
+          </div>
+        </div>
+
+        <!-- Weight w/ Gunny + total Gunny Weight — sits ABOVE Net Wt so the
+             operator types the gross weight first and watches Net Wt
+             populate. Visible only when `show_extra_lot_fields` is on.
+             Gunny Weight is the total tare (read-only), derived as
+             default gunny weight × bags; Net Wt below is auto-derived as:
+             weight_w_gunny − gunny_weight. -->
+        <div id="le-gunny-wrap" style="display:none;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Weight w/ Gunny (kg)</div>
+            <input type="number" id="le-wwg" step="0.001" min="0" placeholder="0.000" oninput="leCalcNetFromGunny()" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Gunny Weight (kg)</div>
+            <input type="number" id="le-gunny-wt" readonly title="Total gunny weight = default gunny weight (Settings → Lot Entry Defaults) × bags" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--text3);font-weight:600">
           </div>
         </div>
 
@@ -4693,6 +4710,8 @@ input[type="search"]:focus{
         <option value="L">Local (L)</option>
         <option value="I">Inter-state (I)</option>
         <option value="E">Export (E)</option>
+        <option value="W">Withdrawn (W)</option>
+        <option value="N">N/A (N)</option>
       </select>
     </div>
   </div>
@@ -4904,6 +4923,13 @@ input[type="search"]:focus{
     <div class="fg"><label>Grade</label><input id="l-grade"></div>
     <div class="fg"><label>Bags</label><input id="l-bags" type="number"></div>
     <div class="fg"><label>Litre</label><input id="l-litre"></div>
+    <!-- Weight w/ Gunny — the gross-of-gunny weight captured at the
+         weighbridge. Always visible here so an admin correcting a
+         lot can keep the field in sync with Net Wt regardless of the
+         `show_extra_lot_fields` setting. Net Wt below is what the
+         operator pays on; we persist both so the audit trail
+         reconciles. -->
+    <div class="fg"><label>Weight w/ Gunny (kg)</label><input id="l-wwg" type="number" step="0.001"></div>
     <div class="fg"><label>Qty (kg)</label><input id="l-qty" type="number" step="0.001"></div>
     <div class="fg"><label>Price (₹)</label><input id="l-price" type="number" step="0.01"></div>
     <div class="fg"><label>Amount (₹)</label><input id="l-amount" type="number" step="0.01"></div>
@@ -8939,14 +8965,69 @@ function leClearSeller(){
   setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
 }
 
-// Show or hide the Crop Receipt + Reserved Price row based on the
-// `show_extra_lot_fields` toggle. Net Wt stays operator-typed in both
-// modes — the old Weight-w/-Gunny auto-derivation (Net = WwG − bags ×
-// gunny) was retired so the toggle no longer touches Net Wt's
-// read-only state.
+// Show or hide the extra-fields rows — both the Weight w/ Gunny +
+// per-bag Gunny Wt row (above Net Wt) and the Crop Receipt + Reserved
+// Price row (below) — and flip Net Wt's read-only state to match. When
+// the toggle is ON, Net Wt is derived from (weight_with_gunny − bags ×
+// gunny_weight) so the operator can't desync the two. When OFF, both
+// rows hide and Net Wt goes back to operator-typed.
 function leApplyExtraFieldsVisibility(){
   const wrap = document.getElementById('le-extra-wrap');
-  if (wrap) wrap.style.display = _le.showExtraFields ? 'grid' : 'none';
+  const gunnyWrap = document.getElementById('le-gunny-wrap');
+  const gunnyWtEl = document.getElementById('le-gunny-wt');
+  const qtyEl = document.getElementById('le-qty');
+  if (!qtyEl) return;
+  if (_le.showExtraFields) {
+    if (wrap) wrap.style.display = 'grid';
+    if (gunnyWrap) gunnyWrap.style.display = 'grid';
+    // Seed the read-only Gunny Weight display with the total tare
+    // (default gunny weight × bags) so the operator sees exactly what is
+    // being subtracted. Format to 3 decimals to match the other weight
+    // inputs on this row.
+    if (gunnyWtEl) {
+      const g = Number(_le.gunnyWeight) || 0;
+      const bags = parseInt(document.getElementById('le-bags').value, 10) || 0;
+      const total = g * bags;
+      gunnyWtEl.value = total > 0 ? total.toFixed(3) : '0.000';
+    }
+    qtyEl.readOnly = true;
+    qtyEl.style.background = 'var(--bg)';
+    qtyEl.style.color = 'var(--text3)';
+    qtyEl.title = 'Net = Weight w/ Gunny − Gunny Weight — auto-calculated';
+  } else {
+    if (wrap) wrap.style.display = 'none';
+    if (gunnyWrap) gunnyWrap.style.display = 'none';
+    qtyEl.readOnly = false;
+    qtyEl.style.background = '';
+    qtyEl.style.color = 'var(--green)';
+    qtyEl.title = '';
+  }
+}
+
+// Auto-calculate Net = Weight w/ Gunny − Gunny Weight whenever the
+// operator types into Weight w/ Gunny — and also when they change the
+// Bags field (see leOnBagsInput), because Gunny Weight (= default gunny
+// weight × bags) depends on bags. Keeps the read-only Gunny Weight field
+// in sync, feeds Net Wt, which in turn re-runs the Gross calc via
+// leCalcGross.
+function leCalcNetFromGunny(){
+  const wwg = parseFloat(document.getElementById('le-wwg').value) || 0;
+  const bags = parseInt(document.getElementById('le-bags').value, 10) || 0;
+  const gunny = Number(_le.gunnyWeight) || 0;
+  const tare = bags * gunny;
+  const gunnyWtEl = document.getElementById('le-gunny-wt');
+  if (gunnyWtEl) gunnyWtEl.value = tare > 0 ? tare.toFixed(3) : '0.000';
+  const net = Math.max(0, wwg - tare);
+  document.getElementById('le-qty').value = wwg > 0 ? net.toFixed(3) : '';
+  leCalcGross();
+}
+
+// Bags input handler — when extra-fields are active, bags is part of
+// the Net Wt formula (Bags × Gunny Wt is the tare), so a change here
+// has to re-derive Net Wt. No-op when extras are off so the legacy
+// operator-typed Net Wt flow is unaffected.
+function leOnBagsInput(){
+  if (_le && _le.showExtraFields) leCalcNetFromGunny();
 }
 
 function leCalcGross(){
@@ -8991,8 +9072,10 @@ async function leSaveLot(){
   // Extra-fields payload — sent regardless of the toggle so a row that
   // had values set while the toggle was on isn't silently zeroed when
   // someone flips it off mid-session. Empty inputs map to 0/null.
+  const wwgRaw = document.getElementById('le-wwg')?.value || '';
   const reservedRaw = document.getElementById('le-reserved-price')?.value || '';
   const cropReceiptRaw = document.getElementById('le-crop-receipt')?.value || '';
+  const weightWithGunny = parseFloat(wwgRaw) || 0;
   const reservedPrice = parseFloat(reservedRaw) || 0;
   const cropReceiptNo = parseInt(cropReceiptRaw, 10);
 
@@ -9016,6 +9099,7 @@ async function leSaveLot(){
       // doesn't silently default these to 0.
       sample_wt: sample,
       gross_wt: gross,
+      weight_with_gunny: weightWithGunny,
       reserved_price: reservedPrice,
       // crop_receipt_no: omitted on create so server auto-assigns the
       // next per-trade sequence. On edit (when we have an existing
@@ -9076,8 +9160,10 @@ async function leSaveLot(){
     if (moistureEl) moistureEl.value = '';
     // Clear extra-fields inputs so the next entry starts fresh. Crop
     // Receipt is server-assigned, so the field stays placeholder='auto'.
+    const wwgEl = document.getElementById('le-wwg');
     const reservedEl = document.getElementById('le-reserved-price');
     const cropEl = document.getElementById('le-crop-receipt');
+    if (wwgEl)      wwgEl.value = '';
     if (reservedEl) reservedEl.value = '';
     if (cropEl)     cropEl.value = '';
     setTimeout(() => document.getElementById('le-lotno').focus(), 50);
@@ -9105,8 +9191,10 @@ function leResetForm(){
   document.getElementById('le-sample').value = _le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000';
   const moistureEl = document.getElementById('le-moisture');
   if (moistureEl) moistureEl.value = '';
+  const wwgEl = document.getElementById('le-wwg');
   const reservedEl = document.getElementById('le-reserved-price');
   const cropEl = document.getElementById('le-crop-receipt');
+  if (wwgEl)      wwgEl.value = '';
   if (reservedEl) reservedEl.value = '';
   if (cropEl)     cropEl.value = '';
   document.getElementById('le-err').style.display = 'none';
@@ -9157,8 +9245,10 @@ async function leEditLot(lotId){
   if (moistureEl) moistureEl.value = lot.moisture || '';
   // Populate extra fields. Always loaded (even when toggle is off) so an
   // admin who later flips the toggle on doesn't lose the stored values.
+  const wwgEl = document.getElementById('le-wwg');
   const reservedEl = document.getElementById('le-reserved-price');
   const cropEl = document.getElementById('le-crop-receipt');
+  if (wwgEl)      wwgEl.value      = (lot.weight_with_gunny != null && Number(lot.weight_with_gunny) > 0) ? Number(lot.weight_with_gunny).toFixed(3) : '';
   if (reservedEl) reservedEl.value = (lot.reserved_price != null && Number(lot.reserved_price) > 0) ? Number(lot.reserved_price).toFixed(2) : '';
   if (cropEl)     cropEl.value     = lot.crop_receipt_no ?? '';
   leCalcGross();
@@ -13531,13 +13621,23 @@ const BulkActions = (function(){
         // buttons preemptively because a disabled checkbox can never be
         // ticked → the bulk Set Buyer / Set Grade / Delete / Lock
         // buttons stay hidden instead of flashing on then vanishing.
+        // Admins keep the checkbox enabled even on locked rows so they
+        // can bulk-unlock when every lot in a trade is locked —
+        // otherwise the Unlock Selected button has no surface to
+        // appear on. The lock-aware suppression in syncMaster still
+        // keeps the destructive bulk buttons hidden whenever locked
+        // rows are in the selection; only Unlock Selected surfaces.
         // Resources without the hook keep the original behavior.
         render: (row) => {
           const opts = registry[id];
           const locked = !!(opts && typeof opts.getRowLocked === 'function' && opts.getRowLocked(row.id));
-          const attrs = locked
+          const isAdmin = (window._userRole === 'admin');
+          const lockNoTick = locked && !isAdmin;
+          const attrs = lockNoTick
             ? `disabled title="Locked — unlock first to include in bulk actions" style="cursor:not-allowed;opacity:.4"`
-            : `style="cursor:pointer"`;
+            : (locked
+                ? `title="Locked — admin can include in Unlock Selected" style="cursor:pointer;opacity:.7"`
+                : `style="cursor:pointer"`);
           return `<input type="checkbox" class="${id}-select-cb" value="${row.id}" onclick="event.stopPropagation();BulkActions._sync('${id}')" ${attrs}>`;
         }
       };
@@ -14683,9 +14783,9 @@ async function downloadDbfRange(type){
 // trader_id is included so the modal's Change Seller flow can post the
 // new id; saveLot iterates L_FIELDS so adding it here makes the value
 // flow through without changing the save logic.
-const L_FIELDS=['lot_no','name','cr','branch','grade','bags','litre','qty','price','amount','buyer','buyer1','code','sale','trader_id'];
+const L_FIELDS=['lot_no','name','cr','branch','grade','bags','litre','weight_with_gunny','qty','price','amount','buyer','buyer1','code','sale','trader_id'];
 const L_IDS={lot_no:'l-lotno',name:'l-name',cr:'l-cr',branch:'l-branch',grade:'l-grade',bags:'l-bags',
-  litre:'l-litre',qty:'l-qty',price:'l-price',amount:'l-amount',buyer:'l-buyer',buyer1:'l-buyer1',
+  litre:'l-litre',weight_with_gunny:'l-wwg',qty:'l-qty',price:'l-price',amount:'l-amount',buyer:'l-buyer',buyer1:'l-buyer1',
   code:'l-code',sale:'l-sale',trader_id:'l-trader-id'};
 
 // Refresh wrapper: surfaces feedback so the user knows the click registered.
