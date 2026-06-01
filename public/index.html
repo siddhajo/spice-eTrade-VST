@@ -3741,6 +3741,8 @@ input[type="search"]:focus{
             <option value="L">Local (L)</option>
             <option value="I">Inter-state (I)</option>
             <option value="E">Export (E)</option>
+            <option value="W">Withdrawn (W)</option>
+            <option value="N">N/A (N)</option>
           </select>
 
           <!-- Create group -->
@@ -3838,6 +3840,8 @@ input[type="search"]:focus{
             <option value="L">Local (L)</option>
             <option value="I">Inter-state (I)</option>
             <option value="E">Export (E)</option>
+            <option value="W">Withdrawn (W)</option>
+            <option value="N">N/A (N)</option>
           </select>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
@@ -4069,7 +4073,7 @@ input[type="search"]:focus{
             <span style="font-weight:400;font-size:12px;color:var(--text3);margin-left:8px">Download BEFORE importing prices — your "before trade" snapshot</span>
           </h3>
           <div class="tally-section-body">
-            <div style="font-size:12px;color:var(--text2);margin:12px 0 0">Lot Slip, Lot Buyer, Lot Name, Praman CSV and Price List (Before) — your pre-import safety net. Run them now while the lots table still reflects the auction sheet.</div>
+            <div style="font-size:12px;color:var(--text2);margin:12px 0 0">Lot Slip, Lot Buyer, Lot Name, Praman CSV, Price List (Before) and Dealer List — your pre-import safety net. Run them now while the lots table still reflects the auction sheet.</div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:12px" id="export-btns-pretrade"></div>
           </div>
         </div>
@@ -4596,7 +4600,7 @@ input[type="search"]:focus{
             <select id="jr-auction" style="width:100%;padding:6px"></select>
           </div>
           <div class="fg" style="margin:0" id="jr-sale-wrap"><label>Sale Type</label>
-            <select id="jr-sale"><option value="">All</option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option></select>
+            <select id="jr-sale"><option value="">All</option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option><option value="W">Withdrawn (W)</option><option value="N">N/A (N)</option></select>
           </div>
           <button class="btn btn-g" onclick="loadJournal()">Load</button>
           <button class="btn btn-a" onclick="exportJournal()">Export XLSX</button>
@@ -4953,7 +4957,7 @@ input[type="search"]:focus{
       </div>
     </div>
     <div class="fg"><label>Sale Type</label>
-      <select id="l-sale"><option value=""></option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option></select>
+      <select id="l-sale"><option value=""></option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option><option value="W">Withdrawn (W)</option><option value="N">N/A (N)</option></select>
     </div>
   </div>
   <div class="actions"><button class="btn btn-o" onclick="hideModal('lot-modal')">Cancel</button><button class="btn btn-g" onclick="saveLot()">Save</button></div>
@@ -4973,6 +4977,8 @@ input[type="search"]:focus{
       <option value="L">Local (L)</option>
       <option value="I">Inter-state (I)</option>
       <option value="E">Export (E)</option>
+      <option value="W">Withdrawn (W)</option>
+      <option value="N">N/A (N)</option>
     </select>
   </div>
   <div class="fg">
@@ -5020,6 +5026,8 @@ input[type="search"]:focus{
       <option value="L">Local (L) only</option>
       <option value="I">Inter-state (I) only</option>
       <option value="E">Export (E) only</option>
+      <option value="W">Withdrawn (W) only</option>
+      <option value="N">N/A (N) only</option>
     </select>
     <div style="font-size:11px;color:var(--text3);margin-top:4px">When set, only buyers whose default sale type matches are included.</div>
   </div>
@@ -5195,7 +5203,7 @@ input[type="search"]:focus{
   <h2>Price Import — Post-Auction Data</h2>
 
   <!-- "Before trade" snapshot reminder. Importing prices rewrites the
-       lots table with the auctioneer's data; the five reports listed
+       lots table with the auctioneer's data; the reports listed
        here are the only record of the pre-trade state once that
        happens. The Import button is disabled until the operator
        acknowledges, so the reminder can't be silently skipped.
@@ -5203,7 +5211,7 @@ input[type="search"]:focus{
   <div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:12px 14px;margin-bottom:14px">
     <div style="font-weight:700;color:#7C2D12;font-size:13px;margin-bottom:4px">⚠ Download "before trade" snapshots first</div>
     <div style="font-size:12px;color:#7C2D12;margin-bottom:8px;line-height:1.45">
-      Once you import prices the lots table is overwritten with the auctioneer's data. These five reports are your record of the pre-trade state.
+      Once you import prices the lots table is overwritten with the auctioneer's data. These reports are your record of the pre-trade state.
       <span style="display:block;margin-top:4px">Snapshots use the trade picked in the topbar.</span>
     </div>
     <!-- Per report: label on the left, XLSX + PDF buttons on the right.
@@ -5244,6 +5252,13 @@ input[type="search"]:focus{
           <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
         </span>
       </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
+        <span style="font-size:12px;font-weight:600;color:#7C2D12">Dealer List</span>
+        <span style="display:flex;gap:4px">
+          <button class="btn btn-o" type="button" onclick="piQuickExport('dealer_list','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
+          <button class="btn btn-o" type="button" onclick="piQuickExport('dealer_list','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
+        </span>
+      </div>
     </div>
     <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#7C2D12;margin-top:10px;cursor:pointer;font-weight:600">
       <input type="checkbox" id="pi-ack" onchange="piAckChanged()">
@@ -5278,7 +5293,7 @@ input[type="search"]:focus{
     <div class="fg"><label>Trade No</label><input id="ie-ano"></div>
     <div class="fg"><label>Date</label><input type="date" id="ie-date"></div>
     <div class="fg"><label>Sale Type</label>
-      <select id="ie-sale"><option value="L">Local</option><option value="I">Inter-state</option><option value="E">Export</option></select>
+      <select id="ie-sale"><option value="L">Local</option><option value="I">Inter-state</option><option value="E">Export</option><option value="W">Withdrawn</option><option value="N">N/A</option></select>
     </div>
     <div class="fg"><label>Invoice No</label><input id="ie-invo"></div>
     <div class="fg"><label>Buyer Code</label><input id="ie-buyer"></div>
@@ -13825,9 +13840,11 @@ function lotBulkBuyerPreview(){
   );
   if (b) {
     const saleRaw = String(b.sale || '').trim().toUpperCase();
-    const saleCode = ['L','I','E'].includes(saleRaw) ? saleRaw : 'L';
+    const saleCode = ['L','I','E','W','N'].includes(saleRaw) ? saleRaw : 'L';
     const saleLabel = saleCode === 'L' ? 'Local'
                     : saleCode === 'I' ? 'Inter-state'
+                    : saleCode === 'W' ? 'Withdrawn'
+                    : saleCode === 'N' ? 'N/A'
                     : 'Export';
     prev.innerHTML = `→ <strong style="color:var(--spice-cardamom)">${esc(b.buyer1 || '(no trade name)')}</strong>`
       + (b.code ? `<span style="color:var(--text3)"> · code ${esc(b.code)}</span>` : '')
@@ -13872,6 +13889,8 @@ async function lotBulkBuyerApply(){
     hideModal('lot-bulk-buyer-modal');
     const saleLabel = r.sale === 'I' ? 'Inter-state'
                     : r.sale === 'E' ? 'Export'
+                    : r.sale === 'W' ? 'Withdrawn'
+                    : r.sale === 'N' ? 'N/A'
                     : 'Local';
     toast(`Set buyer ${r.buyer} (${saleLabel}) on ${n} lot${n === 1 ? '' : 's'} — recalculated`);
     if (typeof loadLots === 'function') loadLots();
@@ -18785,7 +18804,7 @@ const EXP_XLSX_ONLY = new Set(['full_file']);
 // "Pre-trade Exports" collapsible section above the main Export Center
 // AND surfaced as quick-download buttons inside the Price Import
 // reminder banner. Order here drives display order in both spots.
-const EXP_PRETRADE = ['lot_slip', 'lot_buyer', 'lot_name', 'praman_csv', 'price_list_before'];
+const EXP_PRETRADE = ['lot_slip', 'lot_buyer', 'lot_name', 'praman_csv', 'price_list_before', 'dealer_list'];
 const EXP_PRETRADE_SET = new Set(EXP_PRETRADE);
 function renderExportBtns(){
   const renderOne = ([k,v]) => {
