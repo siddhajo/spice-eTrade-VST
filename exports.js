@@ -916,7 +916,7 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
   // Praman CSV. The name-based fallback subquery only kicks in for
   // legacy rows that pre-date the trader_id column.
   const rows = db.all(
-    `SELECT l.lot_no, l.branch, l.grade, l.name, l.cr, l.qty, l.litre, l.bags, l.tel,
+    `SELECT l.lot_no, l.branch, l.grade, l.name, l.cr, l.qty, l.litre, l.bags, l.tel, l.reserved_price,
             COALESCE(
               t.cr,
               (SELECT cr  FROM traders WHERE UPPER(TRIM(name)) = UPPER(TRIM(l.name)) LIMIT 1)
@@ -994,7 +994,7 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
       r.bags || '',
       '', // Grade Type (not captured — blank as per sample)
       '', // Grade (Praman's own grade codes, not ours — blank)
-      '', // Reserved Price (blank)
+      Number(r.reserved_price) > 0 ? Number(r.reserved_price).toFixed(2) : '', // Reserved Price (seller's minimum, per lot)
       '', // Auction Start Price (blank)
       '', // Immature Seeds (blank)
       '', // Moisture Content (blank)
