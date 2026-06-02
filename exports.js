@@ -297,8 +297,12 @@ async function exportPriceListBefore(db, auctionId) {
   // blank pre-auction (auction not held yet) and populated post-
   // auction. The "Before" form is typically printed empty so buyers
   // can hand-fill PRICE / CODE during the auction.
+  // PRICE is blanked when 0 (lot not yet priced) so the column reads
+  // empty rather than "0.00" — matching how CODE shows blank when unset.
   const rawRows = db.all(
-    `SELECT lot_no as lot, bags as bag, qty, price, COALESCE(code,'') AS code
+    `SELECT lot_no as lot, bags as bag, qty,
+            CASE WHEN COALESCE(price,0) = 0 THEN '' ELSE price END AS price,
+            COALESCE(code,'') AS code
      FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
   );
   const rows = rawRows.map(r => ({ trade_no: tradeNo, date: tradeDate, ...r }));

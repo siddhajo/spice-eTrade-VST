@@ -771,8 +771,12 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
       const tradeNo = a.ano || '';
       const tradeDate = String(a.date || '').slice(0, 10).split('-').reverse().join('/');
+      // PRICE blanked when 0 so the column reads empty instead of "0.00",
+      // matching CODE's blank-when-unset behaviour.
       return db.all(
-        `SELECT lot_no as lot, bags as bag, qty, price, COALESCE(code,'') AS code
+        `SELECT lot_no as lot, bags as bag, qty,
+                CASE WHEN COALESCE(price,0) = 0 THEN '' ELSE price END AS price,
+                COALESCE(code,'') AS code
          FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]
       ).map(r => ({ trade_no: tradeNo, date: tradeDate, ...r }));
     }
