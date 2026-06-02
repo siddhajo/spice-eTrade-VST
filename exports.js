@@ -509,9 +509,21 @@ async function exportBankPaymentBefore(db, auctionId, cfg) {
 
 // ── Export Type 5: Pooler-wise Register ───────────────────────
 async function exportPoolerRegister(db, auctionId) {
+  // Filter on NOT-withdrawn rather than `amount > 0`. Post-auction the
+  // only 0-amount lots are withdrawn ones, so this matches the old
+  // output exactly; but PRE-auction (lots imported, not yet priced) the
+  // `amount > 0` filter excluded everything and the register came out
+  // empty. Money columns are blanked when 0 so the pre-priced register
+  // reads clean instead of showing "0.00" everywhere (matches the
+  // Price List / Code blank-when-unset convention).
   const rows = db.all(
-    `SELECT state, lot_no as lot, name as poolername, branch as br, qty, price, amount, pqty, prate, puramt
-     FROM lots WHERE auction_id = ? AND amount > 0
+    `SELECT state, lot_no as lot, name as poolername, branch as br, qty,
+            CASE WHEN COALESCE(price,0)  = 0 THEN '' ELSE price  END AS price,
+            CASE WHEN COALESCE(amount,0) = 0 THEN '' ELSE amount END AS amount,
+            CASE WHEN COALESCE(pqty,0)   = 0 THEN '' ELSE pqty   END AS pqty,
+            CASE WHEN COALESCE(prate,0)  = 0 THEN '' ELSE prate  END AS prate,
+            CASE WHEN COALESCE(puramt,0) = 0 THEN '' ELSE puramt END AS puramt
+     FROM lots WHERE auction_id = ? AND UPPER(TRIM(COALESCE(code,''))) != 'WD'
      ORDER BY name`, [auctionId]
   );
   const cols = [

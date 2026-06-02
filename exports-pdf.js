@@ -795,9 +795,18 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
     }
 
     case 'pooler_register':
+      // NOT-withdrawn filter (not `amount > 0`) so the register isn't
+      // empty pre-pricing; post-auction the only 0-amount lots are
+      // withdrawn ones, so output is unchanged. Money columns blanked
+      // when 0 to avoid "0.00" on a pre-priced register.
       return db.all(
-        `SELECT state, lot_no as lot, name as poolername, branch as br, qty, price, amount, pqty, prate, puramt
-         FROM lots WHERE auction_id = ? AND amount > 0 ORDER BY name`, [auctionId]);
+        `SELECT state, lot_no as lot, name as poolername, branch as br, qty,
+                CASE WHEN COALESCE(price,0)  = 0 THEN '' ELSE price  END AS price,
+                CASE WHEN COALESCE(amount,0) = 0 THEN '' ELSE amount END AS amount,
+                CASE WHEN COALESCE(pqty,0)   = 0 THEN '' ELSE pqty   END AS pqty,
+                CASE WHEN COALESCE(prate,0)  = 0 THEN '' ELSE prate  END AS prate,
+                CASE WHEN COALESCE(puramt,0) = 0 THEN '' ELSE puramt END AS puramt
+         FROM lots WHERE auction_id = ? AND UPPER(TRIM(COALESCE(code,''))) != 'WD' ORDER BY name`, [auctionId]);
 
     case 'full_file':
       return db.all(`SELECT * FROM lots WHERE auction_id = ? ORDER BY lot_no`, [auctionId]);
