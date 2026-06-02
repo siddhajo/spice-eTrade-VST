@@ -264,7 +264,8 @@ async function lotSlipCodePdf(db, auctionId) {
     let ry = BODY_TOP + HEAD_H;
     const tblTop = BODY_TOP;
     sliceRows.forEach((r, i) => {
-      if (i % 2 === 1) doc.rect(xOrigin, ry, halfW, ROW_H).fill('#F7F5F2');
+      // Inset 0.4pt so the stripe fill doesn't cover the row separator lines.
+      if (i % 2 === 1) doc.rect(xOrigin, ry + 0.4, halfW, ROW_H - 0.8).fill('#F7F5F2');
       doc.fillColor('#000').font('Helvetica').fontSize(8);
       const cells = [
         String(r.lot),
@@ -477,7 +478,8 @@ async function truckListPdf(db, auctionId) {
     y += HEAD_H;
   }
   function drawRow(r, idx) {
-    if (idx % 2 === 1) doc.rect(m, y, usableW, ROW_H).fill('#F7F5F2');
+    // Inset 0.4pt so the stripe fill doesn't cover the row separator lines.
+    if (idx % 2 === 1) doc.rect(m, y + 0.4, usableW, ROW_H - 0.8).fill('#F7F5F2');
     doc.fillColor('#000').font('Helvetica').fontSize(10);
     doc.text(String(idx + 1),     colX[0] + 4, y + 5, { width: colW[0] - 8, align: 'center', lineBreak: false });
     doc.text(String(r.lot_count), colX[1] + 4, y + 5, { width: colW[1] - 8, align: 'center', lineBreak: false });
@@ -891,7 +893,8 @@ async function buyerLotLorryPdf(db, auctionId) {
   }
 
   function drawLotRow(lt, idx) {
-    if (idx % 2 === 1) doc.rect(m, y, usableW, ROW_H).fill('#F7F5F2');
+    // Inset 0.4pt so the stripe fill doesn't cover the row separator lines.
+    if (idx % 2 === 1) doc.rect(m, y + 0.4, usableW, ROW_H - 0.8).fill('#F7F5F2');
     doc.fillColor('#000').font('Helvetica').fontSize(8.5);
     const cells = [
       String(idx + 1),         // SL.NO — restarts at 1 within each buyer

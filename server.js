@@ -9235,7 +9235,26 @@ app.get('/api/stats', requireView, (req, res) => {
     const invoiced   = (db.get(`SELECT COUNT(*) as c FROM lots WHERE auction_id = ? AND invo IS NOT NULL AND invo != ''`, [currentAuction.id]) || {}).c || 0;
     const totalQty   = (db.get('SELECT COALESCE(SUM(qty),0) as s FROM lots WHERE auction_id = ?', [currentAuction.id]) || {}).s || 0;
     const totalAmt   = (db.get('SELECT COALESCE(SUM(amount),0) as s FROM lots WHERE auction_id = ?', [currentAuction.id]) || {}).s || 0;
-    auctionStats = { ...currentAuction, totalLots, priced, invoiced, totalQty, totalAmt };
+    // Document-generation progress for the dashboard hero's mini bars.
+    // Each workflow targets a different population, so the denominators
+    // differ — they mirror the same registered/URD split and
+    // remaining-party predicates as _hasRemainingParties() so the bars
+    // agree with the generate-lock logic:
+    //   • payments  — every priced (non-WD) lot must be paid (lots.paid set)
+    //   • purchases — one purchase invoice per REGISTERED seller (GSTIN cr)
+    //   • bills     — one bill of supply per UNREGISTERED / agri seller
+    const REG_CR = `(UPPER(l.cr) LIKE 'GSTIN%' OR (l.cr GLOB '[0-9][0-9]*' AND LENGTH(l.cr) >= 15))`;
+    const URD_CR = `(l.cr IS NULL OR l.cr = '' OR (UPPER(l.cr) NOT LIKE 'GSTIN%' AND l.cr NOT GLOB '[0-9][0-9]*'))`;
+    const NOT_WD = `UPPER(TRIM(COALESCE(l.code,''))) != 'WD'`;
+    const cnt1 = (sql) => (db.get(sql, [currentAuction.id]) || {}).c || 0;
+    const paymentsTotal  = cnt1(`SELECT COUNT(*) AS c FROM lots l WHERE l.auction_id = ? AND l.amount > 0 AND ${NOT_WD}`);
+    const paymentsDone   = cnt1(`SELECT COUNT(*) AS c FROM lots l WHERE l.auction_id = ? AND l.amount > 0 AND ${NOT_WD} AND l.paid IS NOT NULL AND l.paid != ''`);
+    const purchasesTotal = cnt1(`SELECT COUNT(DISTINCT l.name) AS c FROM lots l WHERE l.auction_id = ? AND l.amount > 0 AND ${NOT_WD} AND l.name IS NOT NULL AND l.name != '' AND ${REG_CR}`);
+    const purchasesDone  = cnt1(`SELECT COUNT(DISTINCT l.name) AS c FROM lots l WHERE l.auction_id = ? AND l.amount > 0 AND ${NOT_WD} AND l.name IS NOT NULL AND l.name != '' AND ${REG_CR} AND EXISTS (SELECT 1 FROM purchases p WHERE p.auction_id = l.auction_id AND p.name = l.name)`);
+    const billsTotal     = cnt1(`SELECT COUNT(DISTINCT l.name) AS c FROM lots l WHERE l.auction_id = ? AND l.amount > 0 AND ${NOT_WD} AND l.name IS NOT NULL AND l.name != '' AND ${URD_CR}`);
+    const billsDone      = cnt1(`SELECT COUNT(DISTINCT l.name) AS c FROM lots l WHERE l.auction_id = ? AND l.amount > 0 AND ${NOT_WD} AND l.name IS NOT NULL AND l.name != '' AND ${URD_CR} AND EXISTS (SELECT 1 FROM bills b WHERE b.auction_id = l.auction_id AND b.name = l.name)`);
+    auctionStats = { ...currentAuction, totalLots, priced, invoiced, totalQty, totalAmt,
+      paymentsDone, paymentsTotal, purchasesDone, purchasesTotal, billsDone, billsTotal };
   }
 
   // Top sellers (this week — by total amount in auctions dated within last 7 days)

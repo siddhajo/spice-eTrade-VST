@@ -352,7 +352,9 @@ async function twoUpSlipPdf(db, auctionId, opts) {
 
     pageEntries.forEach((entry, i) => {
       const { measured: mr } = entry;
-      if (i % 2 === 1) doc.rect(xOrigin, ry, halfW, mr.rowH).fill('#F7F5F2');
+      // Inset 0.4pt so the stripe fill doesn't cover the adjacent row
+      // separator lines (see exports-pdf.js drawRow for the rationale).
+      if (i % 2 === 1) doc.rect(xOrigin, ry + 0.4, halfW, mr.rowH - 0.8).fill('#F7F5F2');
       let cx = xOrigin;
       columns.forEach((c, ci) => {
         const lines = mr.wrapped[ci];
@@ -853,7 +855,8 @@ async function collectionPdf(db, auctionId) {
       finishPage(); doc.addPage(); drawTopHeader(); drawColHeader();
     }
     startSegment();
-    if (idx % 2 === 1) doc.rect(m, y, usableW, rowH).fill('#F7F5F2');
+    // Inset 0.4pt so the stripe fill doesn't cover the row separator lines.
+    if (idx % 2 === 1) doc.rect(m, y + 0.4, usableW, rowH - 0.8).fill('#F7F5F2');
     doc.fillColor('#000').font('Helvetica').fontSize(9);
 
     cells.forEach((v, ci) => {
@@ -1385,7 +1388,8 @@ async function tradeReportPdf(db, auctionId) {
 
     ensureRoom(rowH);
     startSegment();
-    if (idx % 2 === 1) doc.rect(m, y, usableW, rowH).fill('#F7F5F2');
+    // Inset 0.4pt so the stripe fill doesn't cover the row separator lines.
+    if (idx % 2 === 1) doc.rect(m, y + 0.4, usableW, rowH - 0.8).fill('#F7F5F2');
     doc.fillColor('#000').font('Helvetica').fontSize(8.5);
 
     cells.forEach((v, ci) => {
@@ -1513,7 +1517,7 @@ async function tradeReportPdf(db, auctionId) {
   let ly = y + FOOT_HEAD_H;
 
   function leftRow(label, kgs, bags, lots, idx) {
-    if (idx % 2 === 1) doc.rect(leftX, ly, leftW, FOOT_ROW_H).fill('#F7F5F2');
+    if (idx % 2 === 1) doc.rect(leftX, ly + 0.4, leftW, FOOT_ROW_H - 0.8).fill('#F7F5F2');
     doc.fillColor('#000').font('Helvetica').fontSize(9);
     doc.text(label, lcX[0] + 6, ly + 4, { width: lcW[0] - 12, align: 'left', lineBreak: false });
     doc.text(kgs,   lcX[1] + 6, ly + 4, { width: lcW[1] - 12, align: 'right', lineBreak: false });
@@ -1547,7 +1551,7 @@ async function tradeReportPdf(db, auctionId) {
   let ry2 = y + FOOT_HEAD_H;
 
   function priceRow(label, val, idx) {
-    if (idx % 2 === 1) doc.rect(rightX, ry2, rightW, FOOT_ROW_H).fill('#F7F5F2');
+    if (idx % 2 === 1) doc.rect(rightX, ry2 + 0.4, rightW, FOOT_ROW_H - 0.8).fill('#F7F5F2');
     doc.fillColor('#000').font('Helvetica').fontSize(9);
     doc.text(label, rcX[0] + 6, ry2 + 4, { width: rcW[0] - 12, align: 'left',  lineBreak: false });
     doc.text(val,   rcX[1] + 6, ry2 + 4, { width: rcW[1] - 12, align: 'right', lineBreak: false });
@@ -1560,7 +1564,8 @@ async function tradeReportPdf(db, auctionId) {
   priceRow('AVERAGE', fmtMoney(stats.avg_price), 2);
   // Pad with empty row so right table aligns with left's 4 rows
   if (ry2 < ly) {
-    doc.rect(rightX, ry2, rightW, ly - ry2).fill('#F7F5F2');
+    // Inset top 0.4pt so the pad fill keeps the last price row's separator.
+    doc.rect(rightX, ry2 + 0.4, rightW, ly - ry2 - 0.4).fill('#F7F5F2');
     ry2 = ly;
   }
 

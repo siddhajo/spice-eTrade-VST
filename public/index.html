@@ -7084,13 +7084,36 @@ async function loadStats(auctionId){
         <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${A.invoiced||0}</strong>Invoiced</div>
         <div class="hero-stat" style="color:var(--spice-text-mute);opacity:1"><strong style="color:var(--spice-text-main)">${inrL(A.totalAmt)}</strong>Volume</div>
       </div>
-      <div style="height:10px;background:#ffffff;border:1px solid rgba(22,101,52,.18);border-radius:999px;overflow:hidden;margin-bottom:8px">
-        <div style="height:100%;background:var(--spice-cardamom);width:${A.totalLots?Math.round(A.invoiced/A.totalLots*100):0}%;border-radius:999px;transition:width .6s ease-out"></div>
-      </div>
-      <div class="progress-label" style="color:var(--spice-text-mute);opacity:1">
-        <span>Invoicing progress</span>
-        <span><strong style="color:var(--spice-cardamom-dk)">${A.totalLots?Math.round(A.invoiced/A.totalLots*100):0}%</strong> complete</span>
-      </div>
+      ${(() => {
+        // Compact 2×2 grid of mini progress bars — one per document
+        // workflow for this trade. Kept thin (6px) with the label and
+        // percentage on a single line so all four fit without crowding
+        // the hero. Denominators differ per workflow (see /api/stats):
+        // invoicing/payments are lot-level, purchases/bills are
+        // per-seller. A 0-denominator workflow (e.g. no URD sellers)
+        // shows "n/a" rather than a misleading 0%.
+        const bar = (label, done, total, color) => {
+          const has = total > 0;
+          const pct = has ? Math.round(done / total * 100) : 0;
+          return `
+            <div>
+              <div class="progress-label" style="color:var(--spice-text-mute);opacity:1;font-size:11.5px;margin-bottom:3px">
+                <span>${label}</span>
+                <span>${has ? `<strong style="color:var(--spice-cardamom-dk)">${pct}%</strong>` : '<span style="color:var(--spice-text-hint)">n/a</span>'}</span>
+              </div>
+              <div style="height:6px;background:#ffffff;border:1px solid rgba(22,101,52,.18);border-radius:999px;overflow:hidden" title="${done} of ${total}">
+                <div style="height:100%;background:${color};width:${pct}%;border-radius:999px;transition:width .6s ease-out"></div>
+              </div>
+            </div>`;
+        };
+        return `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px 16px;margin-top:2px">
+            ${bar('Invoicing', A.invoiced || 0, A.totalLots || 0, 'var(--spice-cardamom)')}
+            ${bar('Payments', A.paymentsDone || 0, A.paymentsTotal || 0, 'var(--spice-saffron)')}
+            ${bar('Purchases', A.purchasesDone || 0, A.purchasesTotal || 0, 'var(--spice-turmeric)')}
+            ${bar('Bills of Supply', A.billsDone || 0, A.billsTotal || 0, 'var(--spice-clove)')}
+          </div>`;
+      })()}
     </div>
   ` : `
     <div class="auction-hero" style="background:var(--tab-bg);color:var(--spice-text-main)">
@@ -18768,9 +18791,9 @@ async function _renderInsights(){
           <div class="ins-branch-stat"><div class="ins-branch-stat-val" style="color:#64748B">${fmtI(b.unsold, 0)}</div><div class="ins-branch-stat-lbl">Unsold</div></div>
         </div>
         <div class="ins-branch-row"><span>Qty</span><b>${fmtI(b.qty, 2)} kg</b></div>
-        <div class="ins-branch-row"><span>Price (min · max · avg)</span><b>${b.min_price != null ? '₹' + fmtI(b.min_price, 0) : '—'} · ${b.max_price != null ? '₹' + fmtI(b.max_price, 0) : '—'} · ${b.avg_price > 0 ? '₹' + fmtI(b.avg_price, 0) : '—'}</b></div>
-        <div class="ins-branch-row"><span>Value</span><b style="color:#15803d">₹${fmtI(b.value, 0)}</b></div>
-        <div class="ins-branch-row"><span>Payable to sellers</span><b style="color:#C2410C">₹${fmtI(b.payable_to_sellers, 0)}</b></div>
+        <div class="ins-branch-row"><span>Price (min · max · avg)</span><b>${b.min_price != null ? '₹' + fmtI(b.min_price, 0) : '—'} · ${b.max_price != null ? '₹' + fmtI(b.max_price, 0) : '—'} · ${b.avg_price > 0 ? '₹' + fmtI(b.avg_price, 2) : '—'}</b></div>
+        <div class="ins-branch-row"><span>Value</span><b style="color:#15803d">₹${fmtI(b.value, 2)}</b></div>
+        <div class="ins-branch-row"><span>Payable to sellers</span><b style="color:#C2410C">₹${fmtI(b.payable_to_sellers, 2)}</b></div>
       </div>`;
   };
 
@@ -18780,7 +18803,7 @@ async function _renderInsights(){
   const tradeRow = (t) => {
     const branchPills = (t.branches || []).slice(0, 4).map(b => {
       const pct = t.value > 0 ? Math.round((b.value / t.value) * 100) : 0;
-      return `<span class="ins-branch-pill" title="${esc(b.branch)} — ${pct}% of trade value (₹${fmtI(b.value, 0)})">${esc(b.branch)} ${pct}%</span>`;
+      return `<span class="ins-branch-pill" title="${esc(b.branch)} — ${pct}% of trade value (₹${fmtI(b.value, 2)})">${esc(b.branch)} ${pct}%</span>`;
     }).join('');
     const dateStr = (t.date || '').slice(0, 10).split('-').reverse().join('/');
     return `
@@ -18794,8 +18817,8 @@ async function _renderInsights(){
         <td class="ins-num">${fmtI(t.qty, 2)}</td>
         <td class="ins-num">${t.min_price != null ? fmtI(t.min_price, 0) : '—'}</td>
         <td class="ins-num">${t.max_price != null ? fmtI(t.max_price, 0) : '—'}</td>
-        <td class="ins-num" style="font-weight:800">${t.avg_price > 0 ? fmtI(t.avg_price, 0) : '—'}</td>
-        <td class="ins-num" style="font-weight:800;color:#15803d">${fmtI(t.value, 0)}</td>
+        <td class="ins-num" style="font-weight:800">${t.avg_price > 0 ? fmtI(t.avg_price, 2) : '—'}</td>
+        <td class="ins-num" style="font-weight:800;color:#15803d">${fmtI(t.value, 2)}</td>
         <td>${branchPills || '<span style="color:var(--text3)">—</span>'}</td>
       </tr>`;
   };
@@ -18818,12 +18841,12 @@ async function _renderInsights(){
             <tr>
               <td><div style="font-weight:700;font-size:12.5px;color:var(--text)">${esc(r.buyer_name)}</div><div style="font-size:10.5px;color:var(--text3);font-family:ui-monospace,Menlo,monospace">${esc(r.buyer_code || '')}</div></td>
               <td class="ins-num">${fmtI(r.invoices, 0)}</td>
-              <td class="ins-num" style="font-weight:800;color:#C2410C">₹${fmtI(r.value, 0)}</td>
+              <td class="ins-num" style="font-weight:800;color:#C2410C">₹${fmtI(r.value, 2)}</td>
             </tr>`).join('')}
           <tr class="ins-out-total">
             <td>Total</td>
             <td class="ins-num">${fmtI(rows.reduce((s, r) => s + r.invoices, 0), 0)}</td>
-            <td class="ins-num">₹${fmtI(total, 0)}</td>
+            <td class="ins-num">₹${fmtI(total, 2)}</td>
           </tr>
         </tbody>
       </table>`;
@@ -18855,7 +18878,7 @@ async function _renderInsights(){
             <div class="ins-lb-bar"><div style="width:${pct}%;background:${barColor}"></div></div>
             <div style="font-size:10.5px;color:var(--text3);margin-top:3px">${fmtI(r.lots, 0)} lots · ${fmtI(r.qty, 2)} kg</div>
           </div>
-          <div style="font-weight:800;font-size:14px;font-family:ui-monospace,Menlo,monospace;color:#15803d;flex-shrink:0">₹${fmtI(r.value, 0)}</div>
+          <div style="font-weight:800;font-size:14px;font-family:ui-monospace,Menlo,monospace;color:#15803d;flex-shrink:0">₹${fmtI(r.value, 2)}</div>
         </div>`;
     }).join('');
   };
@@ -18913,10 +18936,10 @@ async function _renderInsights(){
           ${kpi('✅', 'Sold',        fmtI(t.sold, 0),                                              'teal')}
           ${kpi('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                                         'amber')}
           ${kpi('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                               'sky')}
-          ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 0),                                       'emerald')}
-          ${kpi('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 0) : '—',           'violet')}
-          ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 0),                          'orange')}
-          ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 0),                       'rose')}
+          ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 2),                                       'emerald')}
+          ${kpi('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—',           'violet')}
+          ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                          'orange')}
+          ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),                       'rose')}
         </div>
       </div>
     </div>

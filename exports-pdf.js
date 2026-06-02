@@ -330,7 +330,11 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
       y += rowH;
       return;
     }
-    if (i % 2 === 1) doc.rect(m, y, usableW, rowH).fill('#F7F5F2');
+    // Inset the stripe fill's top/bottom by 0.4pt so it doesn't paint over
+    // the previous row's separator line (drawn at this row's top edge) or
+    // its own (drawn at the bottom). Without this, every separator beneath
+    // an unstriped row gets covered and only lines under striped rows show.
+    if (i % 2 === 1) doc.rect(m, y + 0.4, usableW, rowH - 0.8).fill('#F7F5F2');
     const BASE = 7.5;
     const LINE_H = 10;
     const PAD_TOP = 3;
