@@ -82,11 +82,19 @@ async function createExcelBuffer(sheetName, columns, rows, opts) {
   });
 
   // Brand band: company name (row 1) + meta (row 2) + spacer (row 3).
-  const header = opts.companyHeader || getCompanyHeader(opts.db);
-  const startRow = writeXlsxCompanyHeader(wb, ws, header, {
-    colCount: columns.length,
-    metaLines: opts.metaLines || [],
-  });
+  // `opts.noBrandBand` suppresses it entirely so the sheet starts straight
+  // at the column-header row — used for fillable forms (e.g. Price List
+  // Before) that buyers print blank and don't want branding/meta on.
+  let startRow;
+  if (opts.noBrandBand) {
+    startRow = 1;
+  } else {
+    const header = opts.companyHeader || getCompanyHeader(opts.db);
+    startRow = writeXlsxCompanyHeader(wb, ws, header, {
+      colCount: columns.length,
+      metaLines: opts.metaLines || [],
+    });
+  }
 
   // Column-header row — explicit per-cell alignment 'center' overrides
   // the column-level left/right cascade.
@@ -303,15 +311,11 @@ async function exportPriceListBefore(db, auctionId) {
     { header: 'PRICE', key: 'price',    width: 10 },
     { header: 'CODE',  key: 'code',     width: 10 },
   ];
+  // Printed blank as a fillable form during the auction, so it carries no
+  // brand band (company name + trade/date rows) and no TOTAL footer — just
+  // the column headers and lot rows.
   return createExcelBuffer('PriceListBefore', cols, rows, {
-    db, title: 'Price List (Before)', metaLines: auctionMeta(db, auctionId),
-    grandTotal: {
-      label: 'TOTAL',
-      values: {
-        bag: rows.reduce((s, r) => s + (Number(r.bag) || 0), 0),
-        qty: rows.reduce((s, r) => s + (Number(r.qty) || 0), 0),
-      },
-    },
+    db, title: 'Price List (Before)', noBrandBand: true,
   });
 }
 
