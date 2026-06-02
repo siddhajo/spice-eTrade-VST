@@ -19082,6 +19082,11 @@ const EXP_XLSX_ONLY = new Set(['full_file']);
 // reminder banner. Order here drives display order in both spots.
 const EXP_PRETRADE = ['lot_slip', 'lot_buyer', 'lot_name', 'praman_csv', 'price_list_before', 'dealer_list'];
 const EXP_PRETRADE_SET = new Set(EXP_PRETRADE);
+// Pre-trade exports that ALSO belong in the main Export Center (they're
+// useful both before pricing and after the trade closes). Without this
+// they'd render only in the pre-trade group and be missing from the
+// Export Center grid.
+const EXP_ALSO_IN_CENTER = new Set(['dealer_list']);
 function renderExportBtns(){
   const renderOne = ([k,v]) => {
     if (EXP_CSV_ONLY.has(k)) {
@@ -19119,7 +19124,7 @@ function renderExportBtns(){
       .join('');
   }
   document.getElementById('export-btns').innerHTML =
-    all.filter(([k]) => !EXP_PRETRADE_SET.has(k)).map(renderOne).join('');
+    all.filter(([k]) => !EXP_PRETRADE_SET.has(k) || EXP_ALSO_IN_CENTER.has(k)).map(renderOne).join('');
 }
 async function exportType(type,format,aidOverride){format=format||'xlsx';
   // aidOverride lets non-Reports-tab callers (e.g. the pre-import

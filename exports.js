@@ -569,9 +569,15 @@ async function exportCollection(db, auctionId) {
 // punctuation/whitespace, uppercase) and filter on its length being
 // exactly 15. Works for every storage form.
 async function exportDealerList(db, auctionId) {
+  // No `amount > 0` filter: a dealer list enumerates the registered
+  // dealers (sellers with a GSTIN) participating in the trade and is a
+  // PRE-trade safety-net export — at that point lots are imported but
+  // not yet priced (amount = 0), so filtering on amount returned an
+  // empty sheet. Bags/qty are entered at import time, so they're
+  // accurate regardless of pricing.
   const rows = db.all(
     `WITH cleaned AS (
-       SELECT state, name, lot_no, bags, qty, amount,
+       SELECT state, name, lot_no, bags, qty,
               UPPER(TRIM(
                 CASE
                   WHEN LOWER(SUBSTR(TRIM(cr),1,5)) = 'gstin'
@@ -580,7 +586,7 @@ async function exportDealerList(db, auctionId) {
                 END
               )) AS gstin
          FROM lots
-        WHERE auction_id = ? AND amount > 0
+        WHERE auction_id = ?
      )
      SELECT state, name, gstin,
             COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty

@@ -804,11 +804,29 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
          FROM lots WHERE auction_id = ? ORDER BY branch, name`, [auctionId]);
 
     case 'dealer_list':
+      // Mirror exportDealerList() in exports.js: clean the GSTIN inline
+      // (strip any 'gstin' prefix + punctuation, uppercase) and filter on
+      // length 15 so every storage form matches, and DON'T filter on
+      // amount — this is a pre-trade export where lots aren't priced yet.
       return db.all(
-        `SELECT state, name, SUBSTR(cr, 7, 15) as gstin,
-          COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty
-         FROM lots WHERE auction_id = ? AND cr LIKE '%GST%' AND amount > 0
-         GROUP BY state, name, cr ORDER BY name`, [auctionId]);
+        `WITH cleaned AS (
+           SELECT state, name, lot_no, bags, qty,
+                  UPPER(TRIM(
+                    CASE
+                      WHEN LOWER(SUBSTR(TRIM(cr),1,5)) = 'gstin'
+                        THEN LTRIM(SUBSTR(TRIM(cr),6), '. :-')
+                      ELSE TRIM(cr)
+                    END
+                  )) AS gstin
+             FROM lots
+            WHERE auction_id = ?
+         )
+         SELECT state, name, gstin,
+                COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty
+           FROM cleaned
+          WHERE LENGTH(gstin) = 15
+          GROUP BY state, name, gstin
+          ORDER BY state, name`, [auctionId]);
 
     case 'sales_taxes':
       return db.all(
