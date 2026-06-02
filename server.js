@@ -1504,6 +1504,144 @@ const STATE_CODES = {
 };
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 
+// Defaults for the low-credit warning thresholds. Operator can override
+// via settings keys `gst_warn_below` and `gst_critical_below` once the
+// recharge habits stabilise.
+const GST_WARN_BELOW_DEFAULT = 50;
+const GST_CRITICAL_BELOW_DEFAULT = 10;
+
+// gstincheck.co.in ships credit-related fields under several names
+// depending on plan and endpoint version. Probe each common one and
+// return the first non-empty match. Adding new aliases here is safe —
+// the probe is pure, just data lookups.
+function _gstPickField(obj, names) {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const n of names) {
+    if (obj[n] != null && obj[n] !== '') return obj[n];
+  }
+  return null;
+}
+function _gstExtractCredits(rawBody) {
+  if (!rawBody || typeof rawBody !== 'object') return {};
+  // Search at the top level AND inside any nested object that looks
+  // like a metadata envelope (userInfo / quota / meta etc.). The
+  // gstincheck response shape is flat in practice but we hedge.
+  const candidates = [rawBody];
+  for (const k of ['userInfo', 'quota', 'meta', 'pkg', 'plan']) {
+    if (rawBody[k] && typeof rawBody[k] === 'object') candidates.push(rawBody[k]);
+  }
+  let remaining = null, total = null, expires = null;
+  for (const c of candidates) {
+    remaining = remaining ?? _gstPickField(c, [
+      'gstinAvailableSearch', 'availableSearch', 'remainingHits',
+      'remainingSearches', 'creditsLeft', 'credits_remaining', 'remaining',
+    ]);
+    total = total ?? _gstPickField(c, [
+      'gstinTotalSearch', 'totalSearch', 'totalHits',
+      'totalSearches', 'creditsTotal', 'credits_total', 'total',
+    ]);
+    expires = expires ?? _gstPickField(c, [
+      'gstinValidity', 'searchValidUpto', 'validUpto', 'validity',
+      'planExpiresAt', 'plan_expires_at', 'expiryDate',
+    ]);
+  }
+  return {
+    remaining: remaining == null ? null : Number(remaining),
+    total:     total     == null ? null : Number(total),
+    expires:   expires   == null ? null : String(expires),
+  };
+}
+function _gstSaveState(db, rawBody) {
+  const credits = _gstExtractCredits(rawBody);
+  // Persist a trimmed envelope so the operator can audit what the API
+  // returned without keeping the (potentially large) `data` blob.
+  const meta = {};
+  if (rawBody && typeof rawBody === 'object') {
+    for (const k of Object.keys(rawBody)) {
+      if (k === 'data') continue;
+      meta[k] = rawBody[k];
+    }
+  }
+  const now = new Date().toISOString();
+  // Ensure the single row exists then UPDATE — simpler than UPSERT
+  // and avoids any quirks with sql.js's INSERT OR REPLACE on a
+  // CHECK-constrained id column.
+  const exists = db.get('SELECT id FROM gst_api_state WHERE id = 1');
+  if (!exists) {
+    db.run(
+      `INSERT INTO gst_api_state
+        (id, credits_remaining, credits_total, plan_expires_at, last_checked_at, last_response_raw)
+       VALUES (1, ?, ?, ?, ?, ?)`,
+      [credits.remaining, credits.total, credits.expires, now, JSON.stringify(meta)]
+    );
+  } else {
+    // Only overwrite fields we actually observed — keep prior data on
+    // misses so a partial response doesn't blank the cached value.
+    const cur = db.get('SELECT * FROM gst_api_state WHERE id = 1') || {};
+    db.run(
+      `UPDATE gst_api_state SET
+         credits_remaining = ?,
+         credits_total     = ?,
+         plan_expires_at   = ?,
+         last_checked_at   = ?,
+         last_response_raw = ?
+       WHERE id = 1`,
+      [
+        credits.remaining ?? cur.credits_remaining ?? null,
+        credits.total     ?? cur.credits_total     ?? null,
+        credits.expires   ?? cur.plan_expires_at   ?? null,
+        now,
+        JSON.stringify(meta),
+      ]
+    );
+  }
+  return credits;
+}
+function _gstStatusFor(db, cfg) {
+  const row = db.get('SELECT * FROM gst_api_state WHERE id = 1') || {};
+  const cfgg = cfg || getSettingsFlat(db);
+  const warnBelow     = Number(cfgg.gst_warn_below)     || GST_WARN_BELOW_DEFAULT;
+  const criticalBelow = Number(cfgg.gst_critical_below) || GST_CRITICAL_BELOW_DEFAULT;
+  const remaining = row.credits_remaining == null ? null : Number(row.credits_remaining);
+  let level = 'unknown';
+  if (remaining == null)              level = 'unknown';
+  else if (remaining <= 0)            level = 'exhausted';
+  else if (remaining <  criticalBelow) level = 'critical';
+  else if (remaining <  warnBelow)     level = 'warning';
+  else                                 level = 'ok';
+  return {
+    has_api_key:        !!(cfgg.gst_api_key && String(cfgg.gst_api_key).trim()),
+    credits_remaining:  remaining,
+    credits_total:      row.credits_total == null ? null : Number(row.credits_total),
+    plan_expires_at:    row.plan_expires_at || null,
+    last_checked_at:    row.last_checked_at || null,
+    warn_below:         warnBelow,
+    critical_below:     criticalBelow,
+    level,            // 'ok' | 'warning' | 'critical' | 'exhausted' | 'unknown'
+    recharge_url:       'https://gstincheck.co.in/',
+  };
+}
+
+// ── Cheap status probe (registered BEFORE the dynamic :gstin route) ──
+// Express matches routes in registration order, so the literal path
+// /api/gst-lookup/status MUST be declared first — otherwise the
+// :gstin handler below grabs the word "status", fails the GSTIN
+// regex, and returns 400 "Invalid GSTIN format" (the bug you hit).
+//
+// Used by the Settings → Integrations card and the topbar pill to
+// render the credit count without burning a real lookup. Numbers
+// reflect the most recent observation; do a real GSTIN lookup to
+// force a refresh.
+app.get('/api/gst-lookup/status', requireView, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const status = _gstStatusFor(getDb(), null);
+    res.json(status);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
   const gstin = String(req.params.gstin || '').toUpperCase().trim();
   if (!GSTIN_RE.test(gstin)) {
@@ -1525,12 +1663,20 @@ app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
     });
   }
 
-  // With API key → attempt live lookup
+  // With API key → attempt live lookup. Every successful response
+  // opportunistically refreshes gst_api_state so the Settings card +
+  // topbar pill stay current without a separate "ping" cost.
   try {
     const url = `https://sheet.gstincheck.co.in/check/${apiKey}/${gstin}`;
     const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const body = await r.json();
+    // Persist credit info regardless of whether `data` came back —
+    // even a "no records found" response usually still carries the
+    // quota envelope, and we want that visible to the operator.
+    const db = getDb();
+    try { _gstSaveState(db, body); } catch (_) { /* persistence is best-effort */ }
+    const apiStatus = _gstStatusFor(db, cfg);
     if (body && body.flag && body.data) {
       const d = body.data;
       const addr = (d.pradr && d.pradr.addr) || {};
@@ -1544,13 +1690,19 @@ app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
         state:    addr.stcd || state,
         status:   d.sts || '',
         regDate:  d.rgdt || '',
-        source:   'live'
+        source:   'live',
+        // Surface the freshly-refreshed credit state so the UI can
+        // show the "X searches left" hint on each lookup. Carried in
+        // a nested `api` object to avoid colliding with the existing
+        // `status` (GST registration status) field.
+        api:      apiStatus,
       });
     }
     return res.json({
       valid: true, gstin, pan, st_code: stCode, state,
       source: 'structural',
-      note: body && body.message ? body.message : 'GST portal returned no data'
+      note: body && body.message ? body.message : 'GST portal returned no data',
+      api:  apiStatus,
     });
   } catch (e) {
     return res.json({

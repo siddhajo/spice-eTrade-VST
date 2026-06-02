@@ -150,6 +150,27 @@ async function initDb() {
     active_token TEXT
   )`);
 
+  // ── GST API STATE ─────────────────────────────────────────
+  // Single-row table mirroring license_state — tracks the most recent
+  // observation of the gstincheck.co.in API quota. Every successful
+  // /api/gst-lookup call opportunistically updates this row from
+  // credit-related fields the API ships in the response (gstinTotalSearch,
+  // gstinAvailableSearch, validUpto, etc.). The Settings → Integrations
+  // status card and the topbar warning pill both read from here.
+  //
+  // last_response_raw stores the trimmed JSON envelope (minus the
+  // `data` field, which can be large) so the dev can audit what the
+  // API returned the last time it was queried — useful when the API
+  // changes its field names and we need to teach the parser.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS gst_api_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    credits_remaining INTEGER,
+    credits_total INTEGER,
+    plan_expires_at TEXT,
+    last_checked_at TEXT,
+    last_response_raw TEXT
+  )`);
+
   // ── SESSIONS ───────────────────────────────────────────────
   wrapped.exec(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,

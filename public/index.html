@@ -2490,6 +2490,10 @@ input[type="search"]:focus{
            _refreshLicenseBadge when ≤ 7 days remain (or already expired).
            Clicking opens /renew.html. -->
       <a id="license-badge" href="/renew.html" title="License renewal" style="display:none;font-size:11.5px;font-weight:700;letter-spacing:.2px;padding:4px 10px;border-radius:14px;text-decoration:none;border:1.5px solid transparent"></a>
+      <!-- GST API credit pill — hidden by default; shown by
+           _refreshGstBadge when the recharge threshold is hit. Clicking
+           opens the recharge dashboard in a new tab. -->
+      <a id="gst-badge" href="https://gstincheck.co.in/" target="_blank" rel="noopener" title="GST lookup credits" style="display:none;font-size:11.5px;font-weight:700;letter-spacing:.2px;padding:4px 10px;border-radius:14px;text-decoration:none;border:1.5px solid transparent"></a>
       <span id="logo-badge" style="font-size:18px;font-weight:800;color:var(--green);background:var(--green-bg);padding:9px 20px;border-radius:18px;border:2px solid var(--green-border);display:none;letter-spacing:1px;box-shadow:0 1px 3px rgba(22,101,52,.12)" title="Active company for invoices & calculations"></span>
       <span id="user-lbl" class="topbar-user"></span>
       <span id="user-role-badge" style="display:none;font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:3px 8px;border-radius:8px;text-transform:uppercase" title="Your role"></span>
@@ -6468,6 +6472,133 @@ async function _refreshLicenseBadge(){
 // "7 days left" today without a manual refresh.
 setInterval(_refreshLicenseBadge, 30 * 60 * 1000);
 
+// GST API credit badge — mirrors the licence pill but driven by the
+// gst_api_state row. Hidden when level=='ok' (lots of credits left)
+// or 'unknown' (no API key set, or no lookup has happened yet so
+// there's nothing useful to show). The pill is a hard nudge to top
+// up the gstincheck.co.in account before the next lookup fails.
+async function _refreshGstBadge(){
+  const badge = document.getElementById('gst-badge');
+  if (!badge) return;
+  try {
+    const r = await fetch('/api/gst-lookup/status', {
+      headers: T ? { 'Authorization': 'Bearer ' + T } : {},
+      cache: 'no-store',
+    });
+    if (!r.ok) return;
+    const s = await r.json();
+    const left = s.credits_remaining == null ? null : Number(s.credits_remaining);
+    // No API key configured OR we've never observed a credit count →
+    // there's nothing actionable to show. Keep the pill hidden.
+    if (!s.has_api_key || s.level === 'unknown' || left == null) {
+      badge.style.display = 'none';
+      return;
+    }
+    if (s.level === 'exhausted') {
+      badge.style.display = 'inline-block';
+      badge.style.background = '#fef2f2';
+      badge.style.color = '#991b1b';
+      badge.style.borderColor = '#fecaca';
+      badge.textContent = `🚫 GST: 0 left — recharge`;
+    } else if (s.level === 'critical') {
+      badge.style.display = 'inline-block';
+      badge.style.background = '#fef2f2';
+      badge.style.color = '#991b1b';
+      badge.style.borderColor = '#fecaca';
+      badge.textContent = `⚠ GST: ${left} left — recharge`;
+    } else if (s.level === 'warning') {
+      badge.style.display = 'inline-block';
+      badge.style.background = '#fffbeb';
+      badge.style.color = '#92400e';
+      badge.style.borderColor = '#fde68a';
+      badge.textContent = `⏳ GST: ${left} left`;
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (_) {
+    // Probe failed — leave the badge as-is, don't make noise.
+  }
+}
+// Same 30-minute polling as the licence pill, plus an opportunistic
+// refresh after each /api/gst-lookup call (see gstLookup()).
+setInterval(_refreshGstBadge, 30 * 60 * 1000);
+
+// Render the Settings → Integrations status card. Self-contained so
+// it can be called from selectCat() and from gstLookup() (which fires
+// it when the operator is currently looking at the integrations panel
+// — keeps the card live without a manual refresh).
+async function _renderGstApiStatus(){
+  const host = document.getElementById('gst-api-status-host');
+  if (!host) return;
+  host.innerHTML =
+    '<div style="padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:#f9fafb;font-size:12.5px;color:var(--text2)">Loading GST lookup status…</div>';
+  let s;
+  try {
+    const r = await fetch('/api/gst-lookup/status', {
+      headers: T ? { 'Authorization': 'Bearer ' + T } : {},
+      cache: 'no-store',
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    s = await r.json();
+  } catch (e) {
+    host.innerHTML =
+      `<div style="padding:14px 16px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#991b1b;font-size:12.5px">Could not load GST lookup status: ${esc(e.message || String(e))}</div>`;
+    return;
+  }
+  // Pick a tone (background + border + headline colour) per level.
+  const tones = {
+    exhausted: { bg:'#fef2f2', bd:'#fecaca', fg:'#991b1b', icon:'🚫', head:'GST credits exhausted — recharge before the next lookup' },
+    critical:  { bg:'#fef2f2', bd:'#fecaca', fg:'#991b1b', icon:'⚠',  head:'Very low — recharge soon' },
+    warning:   { bg:'#fffbeb', bd:'#fde68a', fg:'#92400e', icon:'⏳', head:'Running low — consider recharging' },
+    ok:        { bg:'#ecfdf5', bd:'#a7f3d0', fg:'#065f46', icon:'✓',  head:'GST lookup API is healthy' },
+    unknown:   { bg:'#f9fafb', bd:'#e5e7eb', fg:'#374151', icon:'ℹ',  head:'GST lookup status unknown' },
+  };
+  const tone = tones[s.level] || tones.unknown;
+  const rows = [];
+  if (s.has_api_key) {
+    rows.push(['API key', '<span style="color:#065f46;font-weight:600">✓ configured</span>']);
+  } else {
+    rows.push(['API key', '<span style="color:#991b1b;font-weight:600">not set</span> — paste your key into the field below to enable live lookups']);
+  }
+  if (s.credits_remaining != null) {
+    const total = s.credits_total != null ? ` of ${fmtI(s.credits_total, 0)}` : '';
+    rows.push(['Credits remaining',
+      `<strong style="font-size:14px;color:${tone.fg}">${fmtI(s.credits_remaining, 0)}</strong>${total}`]);
+  } else if (s.has_api_key) {
+    rows.push(['Credits remaining', '<span style="color:var(--text3)">unknown — run one GST lookup to refresh</span>']);
+  }
+  if (s.plan_expires_at) {
+    rows.push(['Plan expires', `<code style="font-family:ui-monospace,Menlo,Consolas,monospace">${esc(s.plan_expires_at)}</code>`]);
+  }
+  if (s.last_checked_at) {
+    const t = new Date(s.last_checked_at);
+    const when = isNaN(t.getTime()) ? esc(s.last_checked_at) : t.toLocaleString();
+    rows.push(['Last refreshed', `<span style="color:var(--text3)">${esc(when)}</span>`]);
+  }
+  // Warning thresholds — surfaced so the operator knows when the badge
+  // will start nudging them.
+  rows.push(['Warn at', `<code>≤ ${s.warn_below}</code> credits · critical at <code>≤ ${s.critical_below}</code>`]);
+
+  const rechargeHref = s.recharge_url || 'https://gstincheck.co.in/';
+  host.innerHTML = `
+    <div style="padding:14px 16px;border:1px solid ${tone.bd};border-radius:10px;background:${tone.bg};color:${tone.fg}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:18px;line-height:1">${tone.icon}</span>
+        <strong style="font-size:13.5px">${esc(tone.head)}</strong>
+        <span style="flex:1"></span>
+        <a href="${rechargeHref}" target="_blank" rel="noopener"
+           style="font-size:11.5px;font-weight:700;background:${tone.fg};color:#fff;padding:5px 12px;border-radius:6px;text-decoration:none">↗ Recharge at gstincheck.co.in</a>
+      </div>
+      <div style="display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:12.5px">
+        ${rows.map(([k, v]) => `<div style="color:var(--text2);font-weight:600">${esc(k)}</div><div>${v}</div>`).join('')}
+      </div>
+      <div style="margin-top:10px;font-size:11.5px;color:var(--text3);line-height:1.5">
+        Credits refresh automatically every time someone runs a real GST lookup (from the Sellers or Buyers form).
+        ${s.has_api_key ? '' : 'Paste your key from the gstincheck.co.in dashboard into the field below to start tracking.'}
+      </div>
+    </div>`;
+}
+
 async function login(){
   const e=document.getElementById('login-err');e.textContent='';e.style.display='none';
   const btn=document.getElementById('login-btn');
@@ -6506,6 +6637,9 @@ async function login(){
   // Refresh the topbar licence countdown badge once we're past the
   // login screen (the badge is hidden until the user authenticates).
   try { _refreshLicenseBadge(); } catch(_) {}
+  // GST credit pill — same trigger as the licence pill so the user
+  // sees the recharge warning right after login if it applies.
+  try { _refreshGstBadge(); } catch(_) {}
   go(window._userRole === 'lot_entry' ? 'lotentry' : 'dash');}
   catch(x){
     // The server returns 451 (RFC 7725 — Unavailable For Legal Reasons,
@@ -12093,11 +12227,24 @@ function renderSettingsPanel(){
     if (ck === 'company') {
       html += logoUploadWidget('ispl', 'Company Logo');
     }
+    // Integrations tab gets a live status card for the GST lookup API:
+    // credits left, plan expiry, last-checked timestamp, recharge link.
+    // The placeholder is populated by _renderGstApiStatus once the
+    // panel mounts; rendering it here keeps it above the API-key input
+    // so the operator sees the recharge nudge before scrolling.
+    if (ck === 'integrations') {
+      html += '<div id="gst-api-status-host" style="margin-bottom:14px"></div>';
+    }
     html+='<div class="sgrid">';
     for(const f of fields)html+=fld(f);
     html+='</div>';
   }
   document.getElementById('settings-root').innerHTML=html;
+  // Hydrate the integrations status card from /api/gst-lookup/status
+  // after the panel HTML has landed in the DOM.
+  if (ck === 'integrations' && typeof _renderGstApiStatus === 'function') {
+    try { _renderGstApiStatus(); } catch(_){}
+  }
   // Rates panel — apply flag-driven visibility (hide local_transport
   // input when flag_local_transport is off, etc.) and bind live
   // listeners so toggling a flag updates the row immediately.
@@ -13949,7 +14096,34 @@ async function gstLookup(prefix){
     }
 
     if(d.source==='live'){
-      alert(`✓ GST details fetched from GSTN\n\nTrade Name: ${d.tradeName||d.name||'(not provided)'}\n${d.status?'Status: '+d.status:''}\n\nAll fields have been filled automatically.`);
+      // Surface remaining GST API credits so the operator knows when
+      // to recharge — pulled from the response's `api` envelope which
+      // the server refreshes from gstincheck.co.in on every call.
+      const apiInfo = d.api || {};
+      let creditLine = '';
+      if (apiInfo.credits_remaining != null) {
+        const left = Number(apiInfo.credits_remaining) || 0;
+        const total = apiInfo.credits_total != null ? Number(apiInfo.credits_total) : null;
+        const ofTotal = total ? ` of ${total}` : '';
+        const expiry = apiInfo.plan_expires_at ? ` · plan expires ${apiInfo.plan_expires_at}` : '';
+        // Decorate based on level so the urgency is obvious without reading.
+        let prefix = '';
+        if (apiInfo.level === 'exhausted')      prefix = '\n\n🚫 0 GST searches left — recharge at gstincheck.co.in before the next lookup.';
+        else if (apiInfo.level === 'critical')  prefix = `\n\n⚠ Only ${left} GST search${left === 1 ? '' : 'es'} left${ofTotal}${expiry}.\nRecharge soon at gstincheck.co.in`;
+        else if (apiInfo.level === 'warning')   prefix = `\n\n⏳ ${left} GST searches left${ofTotal}${expiry}.\nConsider recharging soon at gstincheck.co.in`;
+        else                                    prefix = `\n\n${left} GST searches left${ofTotal}${expiry}.`;
+        creditLine = prefix;
+      }
+      alert(`✓ GST details fetched from GSTN\n\nTrade Name: ${d.tradeName||d.name||'(not provided)'}\n${d.status?'Status: '+d.status:''}\n\nAll fields have been filled automatically.${creditLine}`);
+      // Refresh the topbar pill immediately so an at-the-limit warning
+      // appears without waiting for the polling interval.
+      if (typeof _refreshGstBadge === 'function') { try { _refreshGstBadge(); } catch(_){} }
+      // If the operator is currently looking at Settings → Integrations,
+      // re-hydrate that card so the credit count + last-refreshed
+      // timestamp update in place (no manual reload).
+      if (document.getElementById('gst-api-status-host') && typeof _renderGstApiStatus === 'function') {
+        try { _renderGstApiStatus(); } catch(_){}
+      }
     } else {
       // No API key configured — we still extracted PAN + state from the GSTIN digits
       const filled = prefix==='t'
