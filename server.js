@@ -1521,29 +1521,90 @@ function _gstPickField(obj, names) {
   }
   return null;
 }
-function _gstExtractCredits(rawBody) {
-  if (!rawBody || typeof rawBody !== 'object') return {};
-  // Search at the top level AND inside any nested object that looks
-  // like a metadata envelope (userInfo / quota / meta etc.). The
-  // gstincheck response shape is flat in practice but we hedge.
-  const candidates = [rawBody];
-  for (const k of ['userInfo', 'quota', 'meta', 'pkg', 'plan']) {
-    if (rawBody[k] && typeof rawBody[k] === 'object') candidates.push(rawBody[k]);
+// Some gstincheck.co.in plans report quota via response headers, not
+// the JSON body. Pull headers into a plain {lowercase-name → value}
+// object so the probe can search them alongside the body.
+function _headersToObj(h) {
+  const out = {};
+  if (!h) return out;
+  try {
+    // Node fetch returns a Headers object (iterable). Older shims
+    // surface a plain object — handle both.
+    if (typeof h.forEach === 'function') {
+      h.forEach((v, k) => { out[String(k).toLowerCase()] = v; });
+    } else if (typeof h === 'object') {
+      for (const k of Object.keys(h)) out[String(k).toLowerCase()] = h[k];
+    }
+  } catch (_) {}
+  return out;
+}
+// Scan a "message" string for inline credit counts. gstincheck.co.in
+// returns sentences like "847 Searches Left" or "Total 1000 Credits"
+// depending on the package; capture whichever pattern matches first.
+function _parseCreditsFromMessage(msg) {
+  const s = String(msg || '');
+  if (!s) return {};
+  const out = {};
+  // "847 searches left", "847 credits remaining", "847 hits remaining"
+  let m = s.match(/(\d[\d,]*)\s*(?:searches?|credits?|hits?|requests?)\s*(?:left|remaining|available|balance)\b/i);
+  if (m) out.remaining = Number(m[1].replace(/,/g, ''));
+  // "balance: 847" / "left: 847"
+  if (out.remaining == null) {
+    m = s.match(/(?:balance|left|remaining|available)\s*[:=]\s*(\d[\d,]*)/i);
+    if (m) out.remaining = Number(m[1].replace(/,/g, ''));
   }
+  // "of 1000" / "total 1000"
+  m = s.match(/(?:of|total|out\s+of)\s*(\d[\d,]*)/i);
+  if (m) out.total = Number(m[1].replace(/,/g, ''));
+  // "valid till 2026-12-31" / "expires on 2026-12-31"
+  m = s.match(/(?:valid|expir(?:es|y))[^0-9]*?(\d{4}-\d{2}-\d{2})/i);
+  if (m) out.expires = m[1];
+  return out;
+}
+function _gstExtractCredits(rawBody, rawHeaders) {
+  // Search the body at the top level AND inside common metadata
+  // wrappers, the response headers, AND the human-readable message
+  // field. Adding new aliases here is safe — every probe is pure
+  // data lookup or regex, no side effects.
+  const candidates = [];
+  if (rawBody && typeof rawBody === 'object') {
+    candidates.push(rawBody);
+    for (const k of ['userInfo', 'quota', 'meta', 'pkg', 'plan', 'subscription', 'account']) {
+      if (rawBody[k] && typeof rawBody[k] === 'object') candidates.push(rawBody[k]);
+    }
+  }
+  if (rawHeaders && typeof rawHeaders === 'object') candidates.push(rawHeaders);
   let remaining = null, total = null, expires = null;
   for (const c of candidates) {
     remaining = remaining ?? _gstPickField(c, [
+      // body field names
       'gstinAvailableSearch', 'availableSearch', 'remainingHits',
       'remainingSearches', 'creditsLeft', 'credits_remaining', 'remaining',
+      'balance', 'searchLeft', 'searches_left', 'available_credits',
+      'creditBalance', 'credit_balance', 'apiCallsRemaining',
+      // header names (lowercased by _headersToObj)
+      'x-credits-remaining', 'x-credit-remaining', 'x-credits-left',
+      'x-searches-remaining', 'x-quota-remaining', 'x-ratelimit-remaining',
     ]);
     total = total ?? _gstPickField(c, [
       'gstinTotalSearch', 'totalSearch', 'totalHits',
       'totalSearches', 'creditsTotal', 'credits_total', 'total',
+      'totalCredits', 'total_credits', 'plan_size', 'planSize',
+      'x-credits-total', 'x-quota-limit', 'x-ratelimit-limit',
     ]);
     expires = expires ?? _gstPickField(c, [
       'gstinValidity', 'searchValidUpto', 'validUpto', 'validity',
-      'planExpiresAt', 'plan_expires_at', 'expiryDate',
+      'planExpiresAt', 'plan_expires_at', 'expiryDate', 'expiry_date',
+      'subscriptionEnd', 'subscription_end', 'expiresOn', 'expires_on',
+      'x-plan-expires', 'x-subscription-expires',
     ]);
+  }
+  // Last-resort: parse the human-readable `message` field.
+  if (remaining == null || total == null || expires == null) {
+    const msgScan = _parseCreditsFromMessage(rawBody && (rawBody.message || rawBody.msg || rawBody.note));
+    if (remaining == null) remaining = msgScan.remaining != null ? msgScan.remaining : null;
+    if (total     == null) total     = msgScan.total     != null ? msgScan.total     : null;
+    if (expires   == null) expires   = msgScan.expires   != null ? msgScan.expires   : null;
   }
   return {
     remaining: remaining == null ? null : Number(remaining),
@@ -1551,15 +1612,27 @@ function _gstExtractCredits(rawBody) {
     expires:   expires   == null ? null : String(expires),
   };
 }
-function _gstSaveState(db, rawBody) {
-  const credits = _gstExtractCredits(rawBody);
+function _gstSaveState(db, rawBody, rawHeaders) {
+  const headerObj = _headersToObj(rawHeaders);
+  const credits = _gstExtractCredits(rawBody, headerObj);
   // Persist a trimmed envelope so the operator can audit what the API
   // returned without keeping the (potentially large) `data` blob.
-  const meta = {};
+  // Includes both the body (minus `data`) and any headers that LOOK
+  // credit-related, plus the `_extracted` snapshot so the UI can show
+  // exactly what the probe matched (or didn't).
+  const meta = { _body: {}, _headers: {}, _extracted: credits };
   if (rawBody && typeof rawBody === 'object') {
     for (const k of Object.keys(rawBody)) {
       if (k === 'data') continue;
-      meta[k] = rawBody[k];
+      meta._body[k] = rawBody[k];
+    }
+  }
+  // Save only header names that look credit/quota-related so we don't
+  // bloat the row with cookies / CDN noise. Anything matching common
+  // prefixes (x-credit, x-search, x-quota, x-ratelimit, x-plan) stays.
+  for (const k of Object.keys(headerObj)) {
+    if (/^(x-credit|x-search|x-quota|x-ratelimit|x-plan|x-subscription|x-balance)/.test(k)) {
+      meta._headers[k] = headerObj[k];
     }
   }
   const now = new Date().toISOString();
@@ -1609,6 +1682,14 @@ function _gstStatusFor(db, cfg) {
   else if (remaining <  criticalBelow) level = 'critical';
   else if (remaining <  warnBelow)     level = 'warning';
   else                                 level = 'ok';
+  // Parse the persisted envelope back so callers can see WHAT the
+  // API returned (body keys + saved headers + what the probe matched).
+  // Useful when level === 'unknown' and we need to teach the probe
+  // about a new field name without re-running the lookup.
+  let lastEnvelope = null;
+  if (row.last_response_raw) {
+    try { lastEnvelope = JSON.parse(row.last_response_raw); } catch (_) { lastEnvelope = null; }
+  }
   return {
     has_api_key:        !!(cfgg.gst_api_key && String(cfgg.gst_api_key).trim()),
     credits_remaining:  remaining,
@@ -1619,6 +1700,7 @@ function _gstStatusFor(db, cfg) {
     critical_below:     criticalBelow,
     level,            // 'ok' | 'warning' | 'critical' | 'exhausted' | 'unknown'
     recharge_url:       'https://gstincheck.co.in/',
+    last_envelope:      lastEnvelope,
   };
 }
 
@@ -1673,9 +1755,11 @@ app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
     const body = await r.json();
     // Persist credit info regardless of whether `data` came back —
     // even a "no records found" response usually still carries the
-    // quota envelope, and we want that visible to the operator.
+    // quota envelope, and we want that visible to the operator. Pass
+    // both body AND response headers so the probe can pick up plans
+    // that report credits via X-Credits-Remaining etc.
     const db = getDb();
-    try { _gstSaveState(db, body); } catch (_) { /* persistence is best-effort */ }
+    try { _gstSaveState(db, body, r.headers); } catch (_) { /* persistence is best-effort */ }
     const apiStatus = _gstStatusFor(db, cfg);
     if (body && body.flag && body.data) {
       const d = body.data;
