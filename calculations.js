@@ -667,6 +667,23 @@ function getPaymentSummary(db, auctionId, state, cfg) {
 }
 
 /**
+ * Format a raw GROUP_CONCAT(lot_no) string into a clean, de-duped,
+ * numerically-sorted comma list for the bank payment REMARKS column
+ * (e.g. "12,13,14"). Lots that look numeric sort ascending; mixed/text
+ * lot numbers fall back to lexical order. Returns '' when there are no
+ * lots so callers can omit the suffix entirely.
+ */
+function formatLotList(raw) {
+  if (!raw) return '';
+  const uniq = [...new Set(
+    String(raw).split(',').map(s => s.trim()).filter(Boolean)
+  )];
+  const allNumeric = uniq.every(x => /^\d+$/.test(x));
+  uniq.sort(allNumeric ? (a, b) => Number(a) - Number(b) : undefined);
+  return uniq.join(',');
+}
+
+/**
  * Generate bank payment data (BANKPAY.PRG — RTGS/NEFT format).
  * Used by both the "after discount" Bank Payment export (default) and
  * the "Bank Payment (Before)" export when `opts.before === true`.
@@ -700,6 +717,7 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     // alone wasn't enough; the fan-out happened BEFORE the aggregate.
     `SELECT MAX(l.state) AS state, l.name, MAX(l.cr) AS cr,
       SUM(l.puramt) as puramt, SUM(l.refund) as advance, SUM(l.balance) as payable,
+      GROUP_CONCAT(l.lot_no) as lot_nos,
       MAX(t.id) AS trader_id,
       MAX(t.ifsc) AS t_ifsc, MAX(t.acctnum) AS t_acctnum, MAX(t.holder_name) AS t_holder,
       MAX(t.padd) AS padd, MAX(t.ppla) AS ppla, MAX(t.pin) AS pin
@@ -744,6 +762,9 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     const ifsc      = (tb && tb.ifsc)        || p.t_ifsc    || '';
     const acctnum   = (tb && tb.acctnum)     || p.t_acctnum || '';
     const holderNm  = (tb && tb.holder_name) || p.t_holder  || p.name;
+    // Lots this seller's payment covers — surfaced in REMARKS so the
+    // beneficiary can reconcile the credit against the specific lots.
+    const lots = formatLotList(p.lot_nos);
     return {
       // Seller name preserved on the row so callers can filter by the
       // same key the Payments tab UI uses (the ticked checkbox value).
@@ -759,7 +780,8 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
       address2: p.ppla || '',
       pin: p.pin || '',
       amount,
-      remarks: `${auction ? auction.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited`,
+      lots,
+      remarks: `${auction ? auction.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited${lots ? ` for lot${lots.includes(',') ? 's' : ''} ${lots}` : ''}`,
       holderName: holderNm,
     };
   });
@@ -955,6 +977,7 @@ module.exports = {
   listAgriSellers,
   getPaymentSummary,
   getBankPaymentData,
+  formatLotList,
   getTDSReturnData,
   getSalesJournal,
   getPurchaseJournal,

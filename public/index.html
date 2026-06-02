@@ -14011,6 +14011,13 @@ function lotBulkBuyerPreview(){
   if (!input || !prev) return;
   const code = String(input.value || '').trim().toUpperCase();
   if (!code) { prev.innerHTML = ''; return; }
+  // WD = withdrawn sentinel (not a real buyer). Confirm the special
+  // action so the operator knows the price will be zeroed on apply.
+  if (code === 'WD') {
+    prev.innerHTML = `→ <strong style="color:var(--spice-cardamom)">Withdrawn</strong>`
+      + `<span style="color:var(--text3)"> · code WD · sale Withdrawn · price will be zeroed</span>`;
+    return;
+  }
   const b = (_lotBulkBuyer.buyers || []).find(
     x => String(x.buyer || '').trim().toUpperCase() === code
   );
@@ -14665,6 +14672,23 @@ function setSharedAuctionId(id, source){
   // used to skip echoing the change back to the originator (avoids change-event loops).
   const v = String(id || '');
   try { sessionStorage.setItem('spice.sharedAucId', v); } catch(_){}
+  // Broadcast to the mobile bridge so field staff on phones see the
+  // same trade the desktop operator just picked. Fire-and-forget —
+  // a 403 (user lacks lot_write) is fine, we just won't sync; a
+  // network failure is fine too, the local state still updated.
+  // Skip when v is empty (a logout clear handled elsewhere).
+  if (v && typeof T !== 'undefined' && T) {
+    try {
+      fetch('/api/mobile/active-trade', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + T,
+        },
+        body: JSON.stringify({ trade_id: Number(v) || null }),
+      }).catch(() => {});
+    } catch (_) {}
+  }
   // Update topbar select unless that's where the change came from
   const topbar = document.getElementById('topbar-trade');
   if (topbar && source !== 'topbar' && topbar.value !== v) topbar.value = v;

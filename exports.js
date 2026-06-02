@@ -324,7 +324,7 @@ async function exportPriceListBefore(db, auctionId) {
 // Header on row 1, data from row 2. Bank software auto-ingests this
 // shape — adding a brand band would break the import.
 async function exportBankPayment(db, auctionId, cfg, _state, opts) {
-  const { getBankPaymentData } = require('./calculations');
+  const { getBankPaymentData, formatLotList } = require('./calculations');
   let payments = getBankPaymentData(db, auctionId, cfg);
   // Optional seller-name filter — when the user clicks "Export Bank
   // Payment (Selected)" in the Payments tab, only the ticked sellers'
@@ -380,13 +380,14 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       }
       const sub = db.get(
         `SELECT COALESCE(SUM(l.balance),0) AS payable,
-                COALESCE(SUM(l.puramt), 0) AS puramt
+                COALESCE(SUM(l.puramt), 0) AS puramt,
+                GROUP_CONCAT(l.lot_no) AS lot_nos
            FROM lots l
           WHERE l.auction_id = ? AND l.amount > 0
             AND (l.paid IS NULL OR l.paid = '')
             AND UPPER(TRIM(l.name)) = ?${extraWhere}`,
         params
-      ) || { payable: 0, puramt: 0 };
+      ) || { payable: 0, puramt: 0, lot_nos: '' };
       const rawAmount = Number(sub.payable) || 0;
       const roundedAmount = cfg.flag_round ? Math.round(rawAmount) : rawAmount;
       const isRTGS = roundedAmount >= 200000;
@@ -394,6 +395,9 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
         ...payments[idx],
         amount: roundedAmount,
         transactionType: isRTGS ? 'RTGS' : 'NEFT',
+        // Re-derive the covered-lots list from the same picked/excluded
+        // subset so REMARKS lists exactly the lots this row pays for.
+        lots: formatLotList(sub.lot_nos),
       };
     }
     // Drop any zero-amount rows produced by the recompute — banks reject
@@ -438,7 +442,7 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       BENEFIARYB:  beneIfsc,
       BENEFIARYE:  senderEmail,
       BENEFICI_B:  '',
-      REMARKS:     `${ano} ${String(p.beneficiaryName || '').toUpperCase()}${shortTag ? ' ' + shortTag : ''} PAYMENT ${amount.toFixed(2)} Credited`,
+      REMARKS:     `${ano} ${String(p.beneficiaryName || '').toUpperCase()}${shortTag ? ' ' + shortTag : ''} PAYMENT ${amount.toFixed(2)} Credited${p.lots ? ` for lot${p.lots.includes(',') ? 's' : ''} ${p.lots}` : ''}`,
       CLIENTCODE:  '',
     };
   });

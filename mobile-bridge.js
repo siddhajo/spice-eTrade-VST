@@ -626,6 +626,105 @@ function mountMobile(app, deps) {
     }
   });
 
+  // ── 4b. ACTIVE-TRADE BROADCAST ──────────────────────────────────
+  // Server-side "currently selected trade" — used to push the desktop
+  // operator's topbar trade pick down to mobile devices so field staff
+  // always enter lots into the right auction (and can't accidentally
+  // switch to a stale one).
+  //
+  // Storage: app_state single-row table, key `mobile_active_trade_id`.
+  // Created on demand the first time the PUT is called.
+  function _ensureAppStateTable(db) {
+    db.exec(`CREATE TABLE IF NOT EXISTS app_state (
+      key   TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT,
+      updated_by TEXT
+    )`);
+  }
+  function _getActiveTradeId(db) {
+    _ensureAppStateTable(db);
+    const row = db.get(`SELECT value FROM app_state WHERE key = 'mobile_active_trade_id'`);
+    if (!row || !row.value) return null;
+    const n = parseInt(row.value, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  function _setActiveTradeId(db, id, byUsername) {
+    _ensureAppStateTable(db);
+    const v = (id == null || id === '') ? null : String(parseInt(id, 10) || 0);
+    const now = new Date().toISOString();
+    // Manual UPSERT for sql.js compat — ON CONFLICT support varies.
+    const exists = db.get(`SELECT key FROM app_state WHERE key = 'mobile_active_trade_id'`);
+    if (exists) {
+      db.run(
+        `UPDATE app_state SET value = ?, updated_at = ?, updated_by = ? WHERE key = 'mobile_active_trade_id'`,
+        [v, now, byUsername || '']
+      );
+    } else {
+      db.run(
+        `INSERT INTO app_state (key, value, updated_at, updated_by) VALUES ('mobile_active_trade_id', ?, ?, ?)`,
+        [v, now, byUsername || '']
+      );
+    }
+  }
+  // GET — any authenticated user. Returns:
+  //   { trade: { id, ano, date, ... } | null, updated_at, updated_by }
+  // `trade` is null when no global pick has been made yet (so mobile
+  // falls back to its dropdown). When the stored trade id no longer
+  // exists in the auctions table (deleted), we also return null
+  // rather than a phantom reference.
+  app.get('/api/mobile/active-trade', requireAuth, (_req, res) => {
+    try {
+      const db = getDb();
+      const id = _getActiveTradeId(db);
+      if (!id) return res.json({ trade: null, updated_at: null, updated_by: null });
+      const trade = db.get(
+        `SELECT *, (SELECT COUNT(*) FROM lots WHERE auction_id=auctions.id) AS lot_count
+           FROM auctions WHERE id = ?`,
+        [id]
+      );
+      const meta = db.get(`SELECT updated_at, updated_by FROM app_state WHERE key = 'mobile_active_trade_id'`) || {};
+      if (!trade) return res.json({ trade: null, updated_at: meta.updated_at || null, updated_by: meta.updated_by || null });
+      res.json({ trade, updated_at: meta.updated_at || null, updated_by: meta.updated_by || null });
+    } catch (e) {
+      console.error('[/api/mobile/active-trade GET] failed:', e && (e.stack || e.message || e));
+      res.status(500).json({ error: e.message || 'Failed' });
+    }
+  });
+  // PUT — anyone with `lot_write` can set or clear the active trade.
+  // Body: { trade_id: number } to set, { trade_id: null } to clear.
+  // ROLE_PERMISSIONS gives us the capability set for the caller's role
+  // (admin / manager / etc.) without importing additional middleware.
+  app.put('/api/mobile/active-trade', requireAuth, (req, res) => {
+    try {
+      const role = (req.user && req.user.role) || '';
+      const caps = ROLE_PERMISSIONS && ROLE_PERMISSIONS[role];
+      const allowed = caps && (caps.has ? caps.has('lot_write') : (Array.isArray(caps) && caps.indexOf('lot_write') >= 0));
+      if (!allowed) return res.status(403).json({ error: 'Forbidden: lot_write permission required' });
+      const body = req.body || {};
+      let id = body.trade_id;
+      if (id === '' || id === undefined) id = null;
+      const db = getDb();
+      if (id != null) {
+        const n = parseInt(id, 10);
+        if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'trade_id must be a positive integer or null' });
+        const exists = db.get('SELECT id FROM auctions WHERE id = ?', [n]);
+        if (!exists) return res.status(404).json({ error: 'Trade not found' });
+        _setActiveTradeId(db, n, req.user && req.user.username);
+      } else {
+        _setActiveTradeId(db, null, req.user && req.user.username);
+      }
+      // Echo the new state back so the caller doesn't need a second
+      // GET round-trip to confirm.
+      const newId = _getActiveTradeId(db);
+      const trade = newId ? db.get('SELECT * FROM auctions WHERE id = ?', [newId]) : null;
+      res.json({ ok: true, trade });
+    } catch (e) {
+      console.error('[/api/mobile/active-trade PUT] failed:', e && (e.stack || e.message || e));
+      res.status(500).json({ error: e.message || 'Failed' });
+    }
+  });
+
   // ── 4. STATUS ALIAS ─────────────────────────────────────────────
   // PWA's app.html pings /api/status on boot to detect "logged out vs
   // server unreachable". spice-config has /api/health; alias it.

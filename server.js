@@ -4582,6 +4582,38 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
       return res.status(400).json({ error: 'ids[] contains no valid numeric ids' });
     }
     const db = getDb();
+    // Special sentinel: WD = withdrawn. Not a real buyer in the master,
+    // so skip the lookup and stamp the withdrawn marker + zero the price
+    // (amount is healed to 0 by the follow-up Calculate the client runs).
+    // Mirrors the single-lot edit modal's WD handling.
+    if (buyerCode.toUpperCase() === 'WD') {
+      const { allowed: mutableIds, skipped: lockedIds } = filterLockedLotIds(db, numericIds);
+      if (!mutableIds.length) {
+        return res.json({
+          success: true, updated: 0,
+          buyer: 'WD', buyer1: 'Withdrawn', code: 'WD', sale: 'W',
+          skipped_locked: lockedIds.length,
+        });
+      }
+      const placeholders = mutableIds.map(() => '?').join(',');
+      const touchedAuctions = new Set();
+      const affectedRows = db.all(
+        `SELECT DISTINCT auction_id FROM lots WHERE id IN (${placeholders})`,
+        mutableIds
+      );
+      affectedRows.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
+      db.run(
+        `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ?, price = 0, amount = 0 WHERE id IN (${placeholders})`,
+        ['WD', 'Withdrawn', 'WD', 'W', ...mutableIds]
+      );
+      for (const aid of touchedAuctions) pcClearGate(db, aid);
+      return res.json({
+        success: true,
+        updated: mutableIds.length,
+        buyer: 'WD', buyer1: 'Withdrawn', code: 'WD', sale: 'W',
+        skipped_locked: lockedIds.length,
+      });
+    }
     const b = db.get(
       `SELECT buyer, buyer1, code, sale FROM buyers
         WHERE UPPER(TRIM(buyer)) = UPPER(TRIM(?))

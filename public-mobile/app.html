@@ -216,7 +216,18 @@ select:focus{border-color:var(--green)}
   <div class="appbar"><h1 id="ss-title"><img class="appbar-logo" src="" style="display:none">Spice Auction</h1><span class="badge" id="ss-user"></span><button class="btn-icon" onclick="doLogout()" title="Logout">&#x2715;</button></div>
   <div class="scroll">
     <div style="text-align:center;font-size:13px;color:var(--text2);margin-bottom:20px">Select a trade to start entering lots</div>
-    <div class="lb">SELECT TRADE</div>
+    <div class="lb">TRADE</div>
+    <!-- Active trade pushed from the desktop topbar — when set, this
+         locked card replaces the dropdown so field staff always enter
+         lots into the right auction. When no global pick exists, the
+         dropdown below shows and field staff pick manually. -->
+    <div id="ss-trade-locked" style="display:none;padding:12px 14px;border:1.5px solid var(--green,#0E8A5F);background:var(--green-light,#e1f5ee);border-radius:8px;color:#0F6E56;font-weight:600;font-size:13px;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="font-size:14px">🔒</span>
+        <span id="ss-trade-locked-title" style="flex:1">—</span>
+      </div>
+      <div id="ss-trade-locked-meta" style="font-size:11px;color:#0F6E56;opacity:.8;font-weight:500"></div>
+    </div>
     <select id="ss-trade"></select>
     <div id="ss-trade-info" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
     <div class="lb">BRANCH</div><select id="ss-branch"></select>
@@ -669,6 +680,66 @@ async function goSession(){document.getElementById('ss-user').textContent=user;c
 await loadAvailableTrades();
 show('s-session')}
 
+// Apply the server-side "active trade" pick if one exists. When set,
+// the dropdown hides and a locked card shows the chosen trade — field
+// staff can't accidentally pick a different (stale) auction. When the
+// admin clears it on desktop, the dropdown re-appears automatically.
+//
+// Polled on every loadAvailableTrades() call so the UI stays in sync
+// without a websocket — admin changes the trade on desktop, field
+// staff pulls down to refresh and sees the new pick.
+async function applyActiveTradeFromServer(){
+  var locked=document.getElementById('ss-trade-locked');
+  var sel=document.getElementById('ss-trade');
+  var info=document.getElementById('ss-trade-info');
+  if(!locked||!sel) return null;
+  try{
+    var r=await fetch(B+'/api/mobile/active-trade',{headers:{'Authorization':'Bearer '+token}});
+    if(!r.ok) return null;
+    var d=await r.json();
+    var t=d&&d.trade;
+    if(t&&t.id){
+      // Render the locked card and hide the dropdown.
+      var title='Trade #'+(t.ano||'?')+' · '+fmtDate(t.date)+' · '+(t.crop_type||'ASP');
+      document.getElementById('ss-trade-locked-title').textContent=title;
+      var metaBits=[];
+      if(t.lot_count!=null) metaBits.push(t.lot_count+' lot'+(t.lot_count===1?'':'s'));
+      if(d.updated_by) metaBits.push('set by '+d.updated_by);
+      metaBits.push('Set globally from desktop — read-only here');
+      document.getElementById('ss-trade-locked-meta').textContent=metaBits.join(' · ');
+      locked.style.display='block';
+      sel.style.display='none';
+      if(info) info.style.display='none';
+      // Keep the hidden select in sync so the existing startSession
+      // flow (which reads sel.value) doesn't have to branch.
+      var opt=Array.from(sel.options).find(function(o){return String(o.value)===String(t.id)});
+      if(!opt){
+        opt=document.createElement('option');
+        opt.value=t.id;
+        opt.setAttribute('data-ano',t.ano);
+        opt.setAttribute('data-date',t.date);
+        opt.setAttribute('data-crop',t.crop_type||'ASP');
+        opt.setAttribute('data-end',t.end_time||'');
+        opt.textContent=title;
+        sel.appendChild(opt);
+      }
+      sel.value=t.id;
+      return t;
+    }
+    // No global pick → restore the dropdown to its normal state.
+    locked.style.display='none';
+    sel.style.display='';
+    if(info) info.style.display='';
+    return null;
+  }catch(_){
+    // Network blip — fall through to the dropdown so field staff isn't
+    // blocked from picking manually.
+    locked.style.display='none';
+    sel.style.display='';
+    if(info) info.style.display='';
+    return null;
+  }
+}
 async function loadAvailableTrades(){
   var sel=document.getElementById('ss-trade');
   var info=document.getElementById('ss-trade-info');
@@ -721,6 +792,11 @@ async function loadAvailableTrades(){
     }
     if(!trades.length) info.textContent='No trades available - ask admin to create one';
     sel.onchange=function(){var o=sel.options[sel.selectedIndex];info.textContent=o&&o.value&&o.getAttribute('data-end')?'Ends at '+o.getAttribute('data-end'):''};
+    // After populating the dropdown, check the server-side active
+    // trade and switch to the locked card if one is set. The dropdown
+    // remains in the DOM (hidden) so startSession's existing
+    // sel.value read still works without branching.
+    try { await applyActiveTradeFromServer(); } catch(_) {}
   }catch(e){sel.innerHTML='<option value="">Error: '+e.message+'</option>';console.error('Load trades:',e)}
 }
 
