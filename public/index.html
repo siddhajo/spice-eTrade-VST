@@ -583,10 +583,25 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 .login-hero-foot .pill::before{content:'';width:6px;height:6px;border-radius:50%;background:#86EFAC;box-shadow:0 0 10px #86EFAC;animation:login-pulse 2.4s ease-in-out infinite}
 @keyframes login-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
 
-/* ── Form (right panel) — glass card floating over the canvas ─── */
+/* ── Form (right panel) — bright, welcoming surface the card rests on ─── */
+/* Previously transparent, which let the near-black base gradient show
+   through and made the form half feel dark/gloomy. A soft mint-cream
+   wash keeps it on-brand (green family) while reading as light + pleasant,
+   giving a clean dark-hero / light-form split. */
 .login-form-panel{
   display:flex;align-items:center;justify-content:center;padding:40px 32px;
-  background:transparent;position:relative;
+  position:relative;
+  background:linear-gradient(155deg,#FCFEFD 0%,#F1F8F3 45%,#E8F4ED 100%);
+}
+/* Soft seam so the split between the dark hero and light form doesn't read
+   as a hard line on wide screens. */
+.login-form-panel::before{
+  content:'';position:absolute;inset:0 auto 0 0;width:48px;pointer-events:none;
+  background:linear-gradient(90deg,rgba(10,31,24,.12),transparent);
+}
+@media(max-width:960px){
+  /* Stacked layout — the seam shadow would sit awkwardly across the top. */
+  .login-form-panel::before{display:none}
 }
 .login-box{
   background:rgba(255,255,255,.96);backdrop-filter:blur(24px) saturate(140%);
@@ -7393,24 +7408,17 @@ async function loadStats(auctionId){
       </div>
     </div>
 
-    <div class="card" id="dash-revenue-trend-card" style="padding:0;margin-bottom:20px">
+    <div class="card" id="dash-headline-card" style="padding:0;margin-bottom:20px">
       <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <div>
-          <h2 style="font-size:17px;font-weight:700;margin:0 0 2px;color:var(--spice-text-main)">Revenue · last 7 days</h2>
-          <p style="margin:0;font-size:12.5px;color:var(--spice-text-mute)">Total invoiced per day (incl. GST &amp; round-off)</p>
+          <h2 style="font-size:17px;font-weight:700;margin:0 0 2px;color:var(--spice-text-main)">🎯 Headline metrics</h2>
+          <p style="margin:0;font-size:12.5px;color:var(--spice-text-mute)" id="dash-headline-sub">${isAllMode ? 'At-a-glance totals across every trade.' : 'At-a-glance totals for the selected trade.'}</p>
         </div>
-        <div style="display:flex;gap:6px" id="dash-rev-range">
-          <button type="button" class="btn btn-o" data-days="7"  onclick="setRevenueTrendRange(7)"  style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">7 days</button>
-          <button type="button" class="btn btn-o" data-days="14" onclick="setRevenueTrendRange(14)" style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">14 days</button>
-          <button type="button" class="btn btn-o" data-days="30" onclick="setRevenueTrendRange(30)" style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">30 days</button>
-        </div>
+        <div style="font-size:12px;color:var(--spice-text-hint)" id="dash-headline-range">${isAllMode ? 'All trades' : (A ? `Trade #${esc(A.ano)} · ${fmtD(A.date)}` : '')}</div>
       </div>
-      <div style="padding:14px 22px 18px">
-        <div id="dash-rev-empty" style="display:none;padding:30px 10px;text-align:center;color:var(--spice-text-mute);font-size:13px">
-          No invoices yet in this range.
-        </div>
-        <div style="position:relative;height:200px" id="dash-rev-canvas-wrap">
-          <canvas id="dash-rev-chart" role="img" aria-label="Line chart of daily invoiced revenue over the selected period"></canvas>
+      <div style="padding:14px 22px 18px" id="dash-headline-body">
+        <div class="ins-kpi-grid" id="dash-headline-grid" style="margin-bottom:0">
+          <div style="grid-column:1/-1;padding:18px 8px;text-align:center;color:var(--spice-text-hint);font-size:13px">Loading…</div>
         </div>
       </div>
     </div>
@@ -7549,11 +7557,60 @@ async function loadStats(auctionId){
     });
   }
 
-  // Render the 7-day (or 14/30) revenue trend line chart. Fetched from
-  // /api/stats/revenue-trend which returns a complete zero-filled series
-  // — so the X axis is continuous even on quiet days. Range buttons in
-  // the card header call setRevenueTrendRange() which re-invokes us.
-  renderRevenueTrendChart();
+  // Headline metric tiles. Mirrors the Insights "Headline metrics"
+  // strip but always for the dashboard-selected trade (or current
+  // calendar month when "All Trades" is picked). The tile grid renders
+  // synchronously above with a "Loading…" placeholder; this call fills
+  // it in asynchronously so the dashboard paint is never blocked.
+  renderDashHeadlineTiles(_dashSelectedAuctionId);
+}
+
+// Fills #dash-headline-grid by querying /api/insights. When auctionId
+// is set we ask for that single trade; otherwise the endpoint defaults
+// to the current calendar month — the same default Insights uses.
+async function renderDashHeadlineTiles(auctionId){
+  const grid = document.getElementById('dash-headline-grid');
+  if (!grid) return;
+  const fmtI = (n, dp) => {
+    const v = Number(n) || 0;
+    return v.toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  };
+  // Themes pulled from Insights — keep the visual language consistent.
+  const T = {
+    emerald: 'linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%)',
+    indigo:  'linear-gradient(135deg,#eef2ff 0%,#e0e7ff 100%)',
+    teal:    'linear-gradient(135deg,#f0fdfa 0%,#ccfbf1 100%)',
+    amber:   'linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%)',
+    sky:     'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)',
+    violet:  'linear-gradient(135deg,#f5f3ff 0%,#ede9fe 100%)',
+    orange:  'linear-gradient(135deg,#fff7ed 0%,#ffedd5 100%)',
+    rose:    'linear-gradient(135deg,#fff1f2 0%,#ffe4e6 100%)',
+  };
+  const tile = (icon, label, value, theme) => `<div class="ins-kpi" style="background:${T[theme]||T.emerald}">
+    <div class="ins-kpi-icon">${icon}</div>
+    <div class="ins-kpi-body">
+      <div class="ins-kpi-label">${esc(label)}</div>
+      <div class="ins-kpi-value">${value}</div>
+    </div></div>`;
+  try {
+    const url = auctionId
+      ? `/api/insights?auction_id=${auctionId}&_=${Date.now()}`
+      : `/api/insights?_=${Date.now()}`;
+    const d = await j(url);
+    const t = (d && d.totals) || {};
+    grid.innerHTML =
+      tile('📊', 'Trades',      fmtI(t.trades, 0),                                  'emerald') +
+      tile('🌾', 'Lots',        fmtI(t.lots, 0),                                    'indigo')  +
+      tile('✅', 'Sold',        fmtI(t.sold, 0),                                    'teal')    +
+      tile('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                               'amber')   +
+      tile('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                     'sky')     +
+      tile('💰', 'Value',       '₹' + fmtI(t.value, 2),                             'emerald') +
+      tile('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—', 'violet')  +
+      tile('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                'orange')  +
+      tile('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),             'rose');
+  } catch (e) {
+    grid.innerHTML = `<div style="grid-column:1/-1;padding:14px 8px;text-align:center;color:var(--spice-text-hint);font-size:13px">Could not load headline metrics.</div>`;
+  }
 }
 
 // Range tracker for the revenue-trend chart. Default 7 days; changed by
@@ -18944,6 +19001,25 @@ async function _renderInsights(){
       </div>
     </div>
 
+    <!-- Revenue trend (moved from dashboard). IDs match what
+         renderRevenueTrendChart() / setRevenueTrendRange() target. -->
+    <div class="ins-section" ${sectionAttrs('revtrend')}>
+      ${sectionHead('💹', 'Revenue · last 7 days', 'Total invoiced per day (incl. GST &amp; round-off).', 'pink', 'revtrend')}
+      <div class="ins-section-body">
+        <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px" id="dash-rev-range">
+          <button type="button" class="btn btn-o" data-days="7"  onclick="setRevenueTrendRange(7)"  style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">7 days</button>
+          <button type="button" class="btn btn-o" data-days="14" onclick="setRevenueTrendRange(14)" style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">14 days</button>
+          <button type="button" class="btn btn-o" data-days="30" onclick="setRevenueTrendRange(30)" style="height:28px;padding:0 12px;font-size:11.5px;font-weight:600">30 days</button>
+        </div>
+        <div id="dash-rev-empty" style="display:none;padding:30px 10px;text-align:center;color:var(--text3);font-size:13px">
+          No invoices yet in this range.
+        </div>
+        <div style="position:relative;height:240px" id="dash-rev-canvas-wrap">
+          <canvas id="dash-rev-chart" role="img" aria-label="Line chart of daily invoiced revenue over the selected period"></canvas>
+        </div>
+      </div>
+    </div>
+
     ${data.perTrade.length ? '' : '<div class="ins-section"><div class="ins-empty"><div class="ins-empty-icon">📭</div>No trades fall in this date range. Pick a wider window above.</div></div>'}
 
     <!-- Stacked bar chart -->
@@ -19062,6 +19138,13 @@ async function _renderInsights(){
         }
       }
     });
+  }
+
+  // Trigger the Revenue trend chart now that its canvas exists. Reuses
+  // the dashboard renderer so range buttons & empty-state behaviour
+  // remain a single code path.
+  if (typeof renderRevenueTrendChart === 'function') {
+    requestAnimationFrame(() => { try { renderRevenueTrendChart(); } catch(_) {} });
   }
 }
 

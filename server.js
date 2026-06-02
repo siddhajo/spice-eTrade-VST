@@ -9486,22 +9486,49 @@ app.get('/api/insights', requireView, (req, res) => {
   res.set('Cache-Control', 'no-store');
   const db = getDb();
 
-  // Date window — default to the current calendar month. Server-side
-  // clamping is the source of truth; the UI date pickers can pass
-  // anything but a malformed string falls back to defaults silently.
+  // Two modes:
+  //   1. ?auction_id=N   → filter to a single trade. Date range is
+  //                        inferred from that auction's `date` so every
+  //                        downstream query continues to use the same
+  //                        date predicate without special-casing.
+  //   2. ?from=... &to=. → calendar window (default: current month).
+  // Used by the Insights tab (date range) AND the Dashboard's headline
+  // metrics tiles (auction_id, when the operator picks a specific trade).
   const today = new Date();
   const pad = n => String(n).padStart(2, '0');
   const isoMonthStart = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
   const isoToday      = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-  const from = dateRe.test(String(req.query.from || '')) ? String(req.query.from) : isoMonthStart;
-  const to   = dateRe.test(String(req.query.to   || '')) ? String(req.query.to)   : isoToday;
+  let from, to;
+  let singleAuctionId = null;
+  const rawAid = String(req.query.auction_id || '').trim();
+  if (rawAid && rawAid !== 'all') {
+    const n = parseInt(rawAid, 10);
+    if (Number.isFinite(n) && n > 0) {
+      const a = db.get('SELECT id, date FROM auctions WHERE id = ?', [n]);
+      if (a && a.date) {
+        singleAuctionId = a.id;
+        from = String(a.date).slice(0, 10);
+        to   = from;
+      }
+    }
+  }
+  if (from == null) {
+    from = dateRe.test(String(req.query.from || '')) ? String(req.query.from) : isoMonthStart;
+    to   = dateRe.test(String(req.query.to   || '')) ? String(req.query.to)   : isoToday;
+  }
 
   // Helper SQL fragment — "is this lot actually sold?" Code blank
   // means no buyer was assigned; "WD" means withdrawn. Anything else
   // is a real hammer transaction and counts towards min/max/avg price.
   const SOLD = `(UPPER(COALESCE(l.code,'')) <> '' AND UPPER(COALESCE(l.code,'')) <> 'WD')`;
   const WD   = `(UPPER(COALESCE(l.code,'')) = 'WD')`;
+
+  // Auction filter — appended to every WHERE that references `a` or `l`.
+  // Two trades can fall on the same calendar date, so the date predicate
+  // alone is not enough when the caller asks for a specific auction.
+  const aidA = singleAuctionId ? ` AND a.id = ${Number(singleAuctionId)}` : '';
+  const aidL = singleAuctionId ? ` AND l.auction_id = ${Number(singleAuctionId)}` : '';
 
   // ── Per-trade rollup ──────────────────────────────────────
   const tradeRows = db.all(
@@ -9519,7 +9546,7 @@ app.get('/api/insights', requireView, (req, res) => {
        COALESCE(SUM(l.amount), 0) AS value
      FROM auctions a
      LEFT JOIN lots l ON l.auction_id = a.id
-     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
      GROUP BY a.id, a.ano, a.date, a.state
      ORDER BY a.date DESC, CAST(a.ano AS INTEGER) DESC, a.ano DESC`,
     [from, to]
@@ -9537,7 +9564,7 @@ app.get('/api/insights', requireView, (req, res) => {
        COALESCE(SUM(l.amount), 0) AS value
      FROM lots l
      JOIN auctions a ON a.id = l.auction_id
-     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
      GROUP BY l.auction_id, COALESCE(NULLIF(TRIM(l.branch),''), '—')`,
     [from, to]
   );
@@ -9585,7 +9612,7 @@ app.get('/api/insights', requireView, (req, res) => {
        COALESCE(SUM(l.balance), 0) AS payable_to_sellers
      FROM lots l
      JOIN auctions a ON a.id = l.auction_id
-     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
      GROUP BY COALESCE(NULLIF(TRIM(l.branch),''), '—')
      ORDER BY value DESC`,
     [from, to]
@@ -9634,7 +9661,7 @@ app.get('/api/insights', requireView, (req, res) => {
        COUNT(*) AS invoices,
        COALESCE(SUM(i.tot), 0) AS value
      FROM invoices i
-     WHERE date(i.date) BETWEEN date(?) AND date(?)
+     WHERE date(i.date) BETWEEN date(?) AND date(?)${singleAuctionId ? ` AND i.auction_id = ${Number(singleAuctionId)}` : ''}
      GROUP BY COALESCE(NULLIF(TRIM(i.buyer1), ''), TRIM(i.buyer))
      HAVING buyer_code IS NOT NULL AND buyer_code <> ''
      ORDER BY value DESC
@@ -9659,7 +9686,7 @@ app.get('/api/insights', requireView, (req, res) => {
        COALESCE(SUM(l.amount), 0) AS value
      FROM lots l
      JOIN auctions a ON a.id = l.auction_id
-     WHERE date(a.date) BETWEEN date(?) AND date(?)
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
        AND ${SOLD}
      GROUP BY COALESCE(NULLIF(TRIM(l.buyer1), ''), TRIM(l.buyer))
      HAVING buyer_name IS NOT NULL AND buyer_name <> ''
@@ -9692,6 +9719,7 @@ app.get('/api/insights', requireView, (req, res) => {
 
   res.json({
     range: { from, to },
+    auction_id: singleAuctionId,
     totals,
     perTrade,
     perBranch,
