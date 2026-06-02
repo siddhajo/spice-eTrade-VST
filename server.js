@@ -899,6 +899,83 @@ app.post('/api/license/apply', (req, res) => {
   res.json(result);
 });
 
+// ─────────────────────────────────────────────────────────────
+// Admin endpoint — back-channel for ops without shell access.
+//
+// Authenticated by the same LICENSE_SECRET used to sign tokens
+// (only the developer knows it). When LICENSE_SECRET is unset on
+// the server, this endpoint refuses ALL requests so the fallback
+// development secret in license.js can never double as a remote
+// admin backdoor on a misconfigured production deploy.
+//
+// Usage from anywhere (no shell required):
+//
+//   curl -X POST https://<app>/api/license/admin/set-expiry \
+//     -H "content-type: application/json" \
+//     -H "X-License-Secret: $LICENSE_SECRET" \
+//     -d '{"expires_at":"2020-01-01"}'      # force expired (test)
+//
+//   curl -X POST https://<app>/api/license/admin/set-expiry \
+//     -H "content-type: application/json" \
+//     -H "X-License-Secret: $LICENSE_SECRET" \
+//     -d '{"expires_at":"2026-07-02"}'      # restore
+//
+// Sets the row's active_token to NULL so the audit trail doesn't
+// falsely attribute the new expiry to a previously-applied token.
+// For token-driven history use POST /api/license/apply.
+// ─────────────────────────────────────────────────────────────
+function _requireLicenseAdmin(req) {
+  const envSecret = String(process.env.LICENSE_SECRET || '').trim();
+  if (!envSecret) {
+    return { status: 403, error: 'admin disabled: LICENSE_SECRET env var is not set on this server' };
+  }
+  const provided = String(req.headers['x-license-secret'] || '').trim();
+  if (!provided) {
+    return { status: 403, error: 'X-License-Secret header required' };
+  }
+  // Constant-time compare on equal-length buffers. Bail before the
+  // compare when lengths differ so we don't leak the secret length
+  // (and so timingSafeEqual doesn't throw on a length mismatch).
+  const a = Buffer.from(envSecret, 'utf8');
+  const b = Buffer.from(provided, 'utf8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return { status: 403, error: 'invalid X-License-Secret' };
+  }
+  return null;
+}
+
+app.post('/api/license/admin/set-expiry', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const denied = _requireLicenseAdmin(req);
+  if (denied) return res.status(denied.status).json({ error: denied.error });
+
+  const body = req.body || {};
+  const expires_at = String(body.expires_at || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expires_at)) {
+    return res.status(400).json({ error: 'expires_at must be YYYY-MM-DD (e.g. 2026-07-31)' });
+  }
+  // Sanity bound — anything outside 2020-2099 is almost certainly a typo.
+  // Tokens already issued past 2099 would also be unusable.
+  const yr = Number(expires_at.slice(0, 4));
+  if (yr < 2020 || yr > 2099) {
+    return res.status(400).json({ error: 'expires_at year out of range (2020-2099)' });
+  }
+
+  try {
+    const db = getDb();
+    // Make sure the row exists — on a fresh install this endpoint may
+    // be hit before any normal traffic has triggered the bootstrap.
+    license.ensureState(db);
+    db.run(
+      'UPDATE license_state SET expires_at = ?, active_token = NULL WHERE id = 1',
+      [expires_at]
+    );
+    res.json({ ok: true, status: license.getStatus(db) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/login', loginLimiter, async (req, res) => {
   // Hard licence gate before the credential check — when the install
   // is expired we don't even pretend to authenticate. The frontend
