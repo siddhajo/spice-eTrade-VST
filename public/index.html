@@ -18832,7 +18832,10 @@ async function _renderInsights(){
        (small laptops, dashboards) without going below readable size.
        overflow-wrap:anywhere is a safety net for very long currency
        strings that have no natural break points. */
-    .ins-kpi-value { font-size:clamp(16px, 1.6vw, 22px); font-weight:800; letter-spacing:-.5px; margin-top:2px; line-height:1.15; overflow-wrap:anywhere; word-break:break-word }
+    /* Single line — large ₹ totals (e.g. "₹12,27,43,819.00") must not wrap.
+       fitInsKpiValues() shrinks the whole strip's font uniformly until the
+       widest value fits its tile; overflow:hidden guards extreme cases. */
+    .ins-kpi-value { font-size:22px; font-weight:800; letter-spacing:-.5px; margin-top:2px; line-height:1.15; white-space:nowrap; overflow:hidden }
     /* Tiles with a breakdown are taller — top-align the icon so it doesn't
        float in the vertical centre next to a multi-row body. */
     .ins-kpi-tall { align-items:flex-start }
@@ -19267,7 +19270,37 @@ async function _renderInsights(){
   if (typeof renderRevenueTrendChart === 'function') {
     requestAnimationFrame(() => { try { renderRevenueTrendChart(); } catch(_) {} });
   }
+  // Shrink the headline values to fit one line once layout is committed.
+  requestAnimationFrame(fitInsKpiValues);
 }
+
+// Keep every Insights headline value on ONE line. Large ₹ totals overflow
+// the tile at the base 22px font; rather than wrap, shrink the WHOLE strip's
+// font uniformly (one size for all tiles, so they stay consistent) until the
+// widest value fits. Mirrors the dashboard's fitDashHeadlineValues().
+function fitInsKpiValues(){
+  // Only size visible tiles — when the KPI section is collapsed clientWidth
+  // is 0, which would otherwise shrink every value to MIN for no reason.
+  const vals = Array.from(document.querySelectorAll('#insights-host .ins-kpi-value'))
+    .filter(v => v.clientWidth > 0);
+  if (!vals.length) return;
+  const BASE = 22, MIN = 12;
+  let fs = BASE;
+  vals.forEach(v => { v.style.fontSize = fs + 'px'; });
+  while (fs > MIN && vals.some(v => v.scrollWidth > v.clientWidth + 1)) {
+    fs -= 1;
+    vals.forEach(v => { v.style.fontSize = fs + 'px'; });
+  }
+}
+// Re-fit on resize (tile widths change with the grid).
+let _insFitRaf;
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(_insFitRaf);
+  _insFitRaf = requestAnimationFrame(() => {
+    const host = document.getElementById('insights-host');
+    if (host && host.offsetParent) fitInsKpiValues();
+  });
+});
 
 // ── Exports ───────────────────────────────────────────────
 const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',
