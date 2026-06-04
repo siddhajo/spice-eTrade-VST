@@ -45,6 +45,14 @@ const {
 const license = require('./license');
 
 const app = express();
+// Behind Railway's edge proxy, the real client IP arrives in the
+// X-Forwarded-For header. Trust exactly ONE proxy hop so:
+//   • req.ip resolves to the actual client (not the proxy), which the
+//     login rate-limiter keys on; and
+//   • express-rate-limit stops throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+// We use 1 (not `true`): trusting all hops would let a client spoof
+// X-Forwarded-For and dodge the per-IP login throttle.
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '50mb' }));
 
 // Disable caching of HTML files so users always get the latest UI without
