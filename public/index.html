@@ -1189,6 +1189,17 @@ tr:hover td{background:var(--spice-cream)}
 #lot-kpis .kpi-value{font-size:22px}
 #lot-kpis .kpi-icon{width:28px;height:28px;right:10px;top:10px;border-radius:8px}
 #lot-kpis .kpi-icon svg{width:14px;height:14px}
+
+/* Dashboard "Headline metrics" tiles — same .kpi shell as the top KPI
+   row so colors, borders, and hover affordances match. Compact so all
+   nine (Trades / Lots / Sold / Withdrawn / Qty / Value / Avg Price /
+   Payable / Outstanding) fit in two clean rows without dwarfing the
+   Quick actions card beside them. The emoji icon sits in the .kpi-icon
+   corner; we override font-size since emojis read tiny at SVG size. */
+#dash-headline-grid .kpi{padding:14px 16px;border-radius:12px}
+#dash-headline-grid .kpi-label{font-size:10.5px;letter-spacing:.6px;margin-bottom:6px;padding-right:36px}
+#dash-headline-grid .kpi-value{font-size:22px;overflow-wrap:anywhere;word-break:break-word}
+#dash-headline-grid .kpi-icon{width:32px;height:32px;right:12px;top:12px;border-radius:9px;font-size:17px;line-height:1}
 #lot-kpis .kpi-meta{
   /* Mini-table layout — label on the left (muted, small), value on
      the right (tabular numerals, slightly weightier). Adds a thin
@@ -7417,7 +7428,7 @@ async function loadStats(auctionId){
         <div style="font-size:12px;color:var(--spice-text-hint)" id="dash-headline-range">${isAllMode ? 'All trades' : (A ? `Trade #${esc(A.ano)} · ${fmtD(A.date)}` : '')}</div>
       </div>
       <div style="padding:14px 22px 18px" id="dash-headline-body">
-        <div class="ins-kpi-grid" id="dash-headline-grid" style="margin-bottom:0">
+        <div class="kpi-grid" id="dash-headline-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:0">
           <div style="grid-column:1/-1;padding:18px 8px;text-align:center;color:var(--spice-text-hint);font-size:13px">Loading…</div>
         </div>
       </div>
@@ -7575,23 +7586,16 @@ async function renderDashHeadlineTiles(auctionId){
     const v = Number(n) || 0;
     return v.toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp });
   };
-  // Themes pulled from Insights — keep the visual language consistent.
-  const T = {
-    emerald: 'linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%)',
-    indigo:  'linear-gradient(135deg,#eef2ff 0%,#e0e7ff 100%)',
-    teal:    'linear-gradient(135deg,#f0fdfa 0%,#ccfbf1 100%)',
-    amber:   'linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%)',
-    sky:     'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)',
-    violet:  'linear-gradient(135deg,#f5f3ff 0%,#ede9fe 100%)',
-    orange:  'linear-gradient(135deg,#fff7ed 0%,#ffedd5 100%)',
-    rose:    'linear-gradient(135deg,#fff1f2 0%,#ffe4e6 100%)',
-  };
-  const tile = (icon, label, value, theme) => `<div class="ins-kpi" style="background:${T[theme]||T.emerald}">
-    <div class="ins-kpi-icon">${icon}</div>
-    <div class="ins-kpi-body">
-      <div class="ins-kpi-label">${esc(label)}</div>
-      <div class="ins-kpi-value">${value}</div>
-    </div></div>`;
+  // Use the dashboard's existing .kpi shell so these tiles match the
+  // top KPI row (Total volume / Pending invoices / etc.) exactly.
+  // Colors cycle the four .kpi accent variants — saffron (default),
+  // cardamom, turmeric, chili — so the strip stays visually consistent
+  // with the rest of the dashboard while still reading at a glance.
+  const tile = (icon, label, value, accent) => `<div class="kpi${accent ? ' ' + accent : ''}">
+    <div class="kpi-icon">${icon}</div>
+    <div class="kpi-label">${esc(label)}</div>
+    <div class="kpi-value">${value}</div>
+  </div>`;
   try {
     const url = auctionId
       ? `/api/insights?auction_id=${auctionId}&_=${Date.now()}`
@@ -7599,15 +7603,15 @@ async function renderDashHeadlineTiles(auctionId){
     const d = await j(url);
     const t = (d && d.totals) || {};
     grid.innerHTML =
-      tile('📊', 'Trades',      fmtI(t.trades, 0),                                  'emerald') +
-      tile('🌾', 'Lots',        fmtI(t.lots, 0),                                    'indigo')  +
-      tile('✅', 'Sold',        fmtI(t.sold, 0),                                    'teal')    +
-      tile('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                               'amber')   +
-      tile('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                     'sky')     +
-      tile('💰', 'Value',       '₹' + fmtI(t.value, 2),                             'emerald') +
-      tile('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—', 'violet')  +
-      tile('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                'orange')  +
-      tile('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),             'rose');
+      tile('📊', 'Trades',      fmtI(t.trades, 0),                                  'cardamom') +
+      tile('🌾', 'Lots',        fmtI(t.lots, 0),                                    '')         +
+      tile('✅', 'Sold',        fmtI(t.sold, 0),                                    'cardamom') +
+      tile('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                               'turmeric') +
+      tile('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                     '')         +
+      tile('💰', 'Value',       '₹' + fmtI(t.value, 2),                             'cardamom') +
+      tile('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—', 'turmeric') +
+      tile('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                'chili')    +
+      tile('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),             'chili');
   } catch (e) {
     grid.innerHTML = `<div style="grid-column:1/-1;padding:14px 8px;text-align:center;color:var(--spice-text-hint);font-size:13px">Could not load headline metrics.</div>`;
   }
