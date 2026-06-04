@@ -1890,7 +1890,22 @@ ${rates.cess}
     // can see exactly how much was held back. tdsamt is already
     // integer-rounded when tlyrnd is on, so this stays integer-clean.
     const gstSum     = cgst + sgst + igst;
-    const gstAllocAmt = tlyrnd ? r0(gstSum) : r2(gstSum);
+    // Goods portion of the party payable (sum of the per-lot New Refs, or
+    // a single ref in aggregate mode). Computed up-front so the GST ref
+    // can absorb the invoice-level rounding below.
+    const goodsAllocSum = (purchaseBillDetailed && Array.isArray(row.lots) && row.lots.length)
+      ? billAllocSum
+      : (tlyrnd ? r0(bilamttot) : r2(bilamttot));
+    // GST bill-allocation ref. The printed purchase invoice (PDF) rounds
+    // the GRAND TOTAL once — round0(goods + GST) — and stores that single
+    // round-off in purchases.rund. Rounding goods and GST SEPARATELY here
+    // (the old `r0(gstSum)`) diverged from that by ±1 rupee whenever both
+    // fractional parts fell the same side of .5, so the Tally voucher
+    // total disagreed with the PDF. Make the goods refs + GST ref sum to
+    // the PDF grand total (totalRound) by letting the GST ref carry the
+    // combined rounding; the Round Off line (balancingRnd, below) then
+    // works out to exactly the PDF's round-off. Rounding off → exact GST.
+    const gstAllocAmt = tlyrnd ? (totalRound - goodsAllocSum) : r2(gstSum);
     const tdsAllocAmt = tlyrnd ? -r0(tdsamt) : -r2(tdsamt);
     const gstAlloc   = `
 <BILLALLOCATIONS.LIST>
@@ -1916,16 +1931,11 @@ ${rates.cess}
     // open & re-save each voucher so it could rewrite Party to match
     // the bill-allocation sum.
     //
-    // partyAmt is derived from the actual bill allocations so any
-    // residual rounding (from the largest-remainder lot loop above)
-    // is preserved end-to-end. In aggregate mode we use bilamttot
-    // directly; in detailed mode we sum what we just emitted.
-    const goodsAllocSum = (purchaseBillDetailed && Array.isArray(row.lots) && row.lots.length)
-      ? billAllocSum
-      : (tlyrnd ? r0(bilamttot) : r2(bilamttot));
-    // partyAmt = goods + gst + (−tds). The TDS leg is the new
-    // tdsAllocAmt — same net as the legacy "gst − tds" lump, but split
-    // across two bill refs so the audit trail shows the deduction.
+    // partyAmt = goods + gst + (−tds). With tlyrnd on, goodsAllocSum +
+    // gstAllocAmt == totalRound (the PDF grand total) by construction
+    // above, so partyAmt == totalRound − tds and the Round Off line below
+    // resolves to the PDF's stored round-off. The TDS leg is split into
+    // its own New Ref so the audit trail shows the deduction.
     const partyAmt = tlyrnd
       ? (goodsAllocSum + gstAllocAmt + tdsAllocAmt)
       : r2(goodsAllocSum + gstAllocAmt + tdsAllocAmt);
@@ -2823,11 +2833,23 @@ function buildSalesAspRows(db, auctionId, cfg) {
 function buildSalesRows(db, auctionId, cfg) {
   // Ship-to first, bill-to fallback for distance/route lookup. See
   // buildSalesIspRows for full rationale.
+  // One buyers row per invoice — see buildSalesIspRows for why a plain
+  // `ON b.buyer = i.buyer` join fans out on duplicate buyer codes and
+  // duplicates the voucher. Prefer the master row matching the invoice's
+  // trade name, else fall back to the lowest id.
   const stmt = db.prepare(`
     SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla,
            COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin
     FROM invoices i
-    LEFT JOIN buyers b ON b.buyer = i.buyer
+    LEFT JOIN buyers b ON b.id = COALESCE(
+      (SELECT x.id FROM buyers x
+         WHERE x.buyer = i.buyer
+           AND UPPER(TRIM(x.buyer1)) = UPPER(TRIM(i.buyer1))
+         ORDER BY x.id LIMIT 1),
+      (SELECT x.id FROM buyers x
+         WHERE x.buyer = i.buyer
+         ORDER BY x.id LIMIT 1)
+    )
     WHERE i.auction_id = ?
     ORDER BY i.buyer, i.sale, i.invo, i.id
   `);
