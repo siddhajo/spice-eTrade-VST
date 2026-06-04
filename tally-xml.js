@@ -2557,13 +2557,20 @@ function buildSalesIspRows(db, auctionId, cfg) {
   // `lots.invo` column gets overwritten by whichever side (home or sister)
   // ran most recently, so it can hold either invoice number — meaning
   // a strict equality filter silently drops all lots when the sister step
-  // was last to write. Since each buyer has at most ONE invoice per
-  // auction per state, scoping by (auction_id, buyer) and `amount > 0`
-  // is enough to pick the right lots.
+  // was last to write.
+  //
+  // We DO scope by `sale` as well as `buyer`, though. A buyer can hold more
+  // than one invoice in a single auction (one per sale type — L/I/E), and
+  // ISP_STATE_SQL pulls every invoice. Without the sale filter each of that
+  // buyer's vouchers would pull ALL of their lots, double-counting them in
+  // the preview lot total AND emitting duplicate inventory lines per
+  // voucher. Invoice generation stamps `lots.sale` to match the owning
+  // invoice (only the home/ISP path writes `sale`, so it's stable here), so
+  // (auction_id, buyer, sale) attributes each lot to exactly one voucher.
   const lotsStmt = db.prepare(`
     SELECT lot_no AS lot, bags AS bag, qty, price AS rate, amount, asp_invo
     FROM lots
-    WHERE auction_id = ? AND buyer = ? AND amount > 0
+    WHERE auction_id = ? AND buyer = ? AND sale = ? AND amount > 0
     ORDER BY CAST(lot_no AS INTEGER), lot_no
   `);
 
@@ -2603,7 +2610,7 @@ function buildSalesIspRows(db, auctionId, cfg) {
 
   const out = [];
   for (const r of raw) {
-    const lotRows = lotsStmt.all(auctionId, r.buyer);
+    const lotRows = lotsStmt.all(auctionId, r.buyer, r.sale);
     // Single-company e-Trade build: there is no intra-company cross-reference.
     // Legacy lots may still carry `asp_invo` values from the old dual-
     // company app, but emitting them as <BASICORDERREF> would just put

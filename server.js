@@ -8701,7 +8701,24 @@ app.get('/api/tally/preview/:type/:auctionId', requireExport, (req, res) => {
         sample: rows.slice(0, 6).map(r => ({ kind: r.kind, name: r.name, parent: r.parent, gstin: r.gstin || '' })),
       });
     }
-    const totalLots = rows.reduce((s, r) => s + (Array.isArray(r.lots) ? r.lots.length : 0), 0);
+    // Count DISTINCT lots, not the sum of per-voucher lot lists. A lot has
+    // exactly one buyer and one seller, so it can never legitimately appear
+    // in two vouchers — but a builder that scopes lots loosely (e.g. by
+    // seller name when a seller has duplicate imported vouchers) could list
+    // the same lot under multiple vouchers, which used to inflate this count
+    // above the real lot total. Deduping by lot_no reports the true coverage.
+    // Entries without a lot_no (shouldn't happen for lot-bearing types) are
+    // counted individually as a safety net.
+    const _lotSeen = new Set();
+    let totalLots = 0;
+    for (const r of rows) {
+      if (!Array.isArray(r.lots)) continue;
+      for (const l of r.lots) {
+        const key = (l && l.lot != null && String(l.lot).trim() !== '') ? String(l.lot).trim() : null;
+        if (key === null) { totalLots++; continue; }
+        if (!_lotSeen.has(key)) { _lotSeen.add(key); totalLots++; }
+      }
+    }
     // For voucher types that have NO per-row lot list (debit notes,
     // journal entries, agri bills with single-line items), lotCount is
     // always 0 — that's a real-world correct value but it confused
