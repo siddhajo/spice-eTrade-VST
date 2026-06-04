@@ -1840,7 +1840,7 @@ ${TAGS.DEEMYES}
 ${TAGS.DEEMYES}
 <AMOUNT>${-r2(lot.amount)}</AMOUNT>
 </ACCOUNTINGALLOCATIONS.LIST>
-${isIntra ? rates.igst : `${rates.cgst}\n${rates.sgst}`}
+${isIntra ? `${rates.cgst}\n${rates.sgst}` : rates.igst}
 ${rates.cess}
 </ALLINVENTORYENTRIES.LIST>`;
       }
@@ -1870,7 +1870,7 @@ ${TAGS.DEEMYES}
 ${TAGS.DEEMYES}
 <AMOUNT>${-amounttot}</AMOUNT>
 </ACCOUNTINGALLOCATIONS.LIST>
-${isIntra ? rates.igst : `${rates.cgst}\n${rates.sgst}`}
+${isIntra ? `${rates.cgst}\n${rates.sgst}` : rates.igst}
 ${rates.cess}
 </ALLINVENTORYENTRIES.LIST>`;
     }
@@ -2540,11 +2540,28 @@ function buildSalesIspRows(db, auctionId, cfg) {
   // 'L' (Local), 'I' (Inter-state), and 'E' (Export) vouchers together;
   // within each sale-type group, sort by numeric invoice number ascending.
   // `i.id` is a final tiebreaker for safety against duplicate invo values.
+  // Join exactly ONE buyers row per invoice. The buyers master can hold
+  // duplicate `buyer` codes (the same short code reused for two trade
+  // names — a real data condition), and a plain `ON b.buyer = i.buyer`
+  // join fans out: every duplicate multiplies the invoice into N voucher
+  // rows, each carrying the full lot list. That inflated the preview's
+  // voucher/lot counts AND emitted duplicate sales vouchers into the Tally
+  // XML. Pick the single best-matching master row — prefer the one whose
+  // trade name (buyer1) matches the invoice, else the lowest id — so the
+  // address/PIN come from the right record and each invoice maps 1:1.
   const stmt = db.prepare(`
     SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla,
            COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin
     FROM invoices i
-    LEFT JOIN buyers b ON b.buyer = i.buyer
+    LEFT JOIN buyers b ON b.id = COALESCE(
+      (SELECT x.id FROM buyers x
+         WHERE x.buyer = i.buyer
+           AND UPPER(TRIM(x.buyer1)) = UPPER(TRIM(i.buyer1))
+         ORDER BY x.id LIMIT 1),
+      (SELECT x.id FROM buyers x
+         WHERE x.buyer = i.buyer
+         ORDER BY x.id LIMIT 1)
+    )
     WHERE i.auction_id = ? AND ${ISP_STATE_SQL}
     ORDER BY i.sale, CAST(i.invo AS INTEGER), i.id
   `);
@@ -2557,20 +2574,15 @@ function buildSalesIspRows(db, auctionId, cfg) {
   // `lots.invo` column gets overwritten by whichever side (home or sister)
   // ran most recently, so it can hold either invoice number — meaning
   // a strict equality filter silently drops all lots when the sister step
-  // was last to write.
-  //
-  // We DO scope by `sale` as well as `buyer`, though. A buyer can hold more
-  // than one invoice in a single auction (one per sale type — L/I/E), and
-  // ISP_STATE_SQL pulls every invoice. Without the sale filter each of that
-  // buyer's vouchers would pull ALL of their lots, double-counting them in
-  // the preview lot total AND emitting duplicate inventory lines per
-  // voucher. Invoice generation stamps `lots.sale` to match the owning
-  // invoice (only the home/ISP path writes `sale`, so it's stable here), so
-  // (auction_id, buyer, sale) attributes each lot to exactly one voucher.
+  // was last to write. We also can't scope by `lots.sale`: it is frequently
+  // blank on imported/legacy rows, so an equality filter would silently
+  // drop every lot. Since each buyer has at most ONE invoice per auction,
+  // scoping by (auction_id, buyer) and `amount > 0` is enough to pick the
+  // right lots.
   const lotsStmt = db.prepare(`
     SELECT lot_no AS lot, bags AS bag, qty, price AS rate, amount, asp_invo
     FROM lots
-    WHERE auction_id = ? AND buyer = ? AND sale = ? AND amount > 0
+    WHERE auction_id = ? AND buyer = ? AND amount > 0
     ORDER BY CAST(lot_no AS INTEGER), lot_no
   `);
 
@@ -2610,7 +2622,7 @@ function buildSalesIspRows(db, auctionId, cfg) {
 
   const out = [];
   for (const r of raw) {
-    const lotRows = lotsStmt.all(auctionId, r.buyer, r.sale);
+    const lotRows = lotsStmt.all(auctionId, r.buyer);
     // Single-company e-Trade build: there is no intra-company cross-reference.
     // Legacy lots may still carry `asp_invo` values from the old dual-
     // company app, but emitting them as <BASICORDERREF> would just put
