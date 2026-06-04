@@ -1197,11 +1197,15 @@ tr:hover td{background:var(--spice-cream)}
    Quick actions card beside them. The emoji icon sits in the .kpi-icon
    corner; we override font-size since emojis read tiny at SVG size. */
 #dash-headline-grid .kpi{padding:14px 16px;border-radius:12px}
-#dash-headline-grid .kpi-label{font-size:10.5px;letter-spacing:.6px;margin-bottom:6px;padding-right:36px}
-/* padding-right reserves the icon's corner (icon: right:12px + 32px wide
-   = 44px from the edge) so long money values like "₹11,65,74,670.30"
-   wrap to the next line instead of running underneath the icon. */
-#dash-headline-grid .kpi-value{font-size:20px;overflow-wrap:anywhere;word-break:break-word;padding-right:38px}
+/* margin-bottom pushes the value's line down past the icon (icon bottom
+   sits ~30px into the content box) so the value can use the FULL tile
+   width on its own line without running underneath the corner icon. */
+#dash-headline-grid .kpi-label{font-size:10.5px;letter-spacing:.6px;margin-bottom:18px;padding-right:36px}
+/* Values stay on ONE line with decimals intact; fitDashHeadlineValues()
+   shrinks the whole strip's font uniformly just enough that the longest
+   value (e.g. "₹11,65,74,670.30") fits its tile. overflow:hidden is a
+   last-resort guard for extremely narrow windows. */
+#dash-headline-grid .kpi-value{font-size:20px;white-space:nowrap;overflow:hidden}
 #dash-headline-grid .kpi-icon{width:32px;height:32px;right:12px;top:12px;border-radius:9px;font-size:17px;line-height:1}
 #lot-kpis .kpi-meta{
   /* Mini-table layout — label on the left (muted, small), value on
@@ -7596,6 +7600,36 @@ async function loadStats(auctionId){
   renderDashHeadlineTiles(_dashSelectedAuctionId);
 }
 
+// Keep every headline value on ONE line with decimals visible. Money
+// totals like "₹11,65,74,670.30" can exceed the tile width at the base
+// 20px font; rather than wrap (which slid under the corner icon), we
+// shrink the WHOLE strip's font uniformly — one size for all nine tiles
+// so they stay visually consistent — until the widest value fits. Pure
+// CSS can't size-to-fit a variable-width grid track, so we measure here.
+function fitDashHeadlineValues(grid){
+  if (!grid) return;
+  const vals = Array.from(grid.querySelectorAll('.kpi-value'));
+  if (!vals.length) return;
+  const BASE = 20, MIN = 11;
+  let fs = BASE;
+  vals.forEach(v => { v.style.fontSize = fs + 'px'; });
+  // scrollWidth > clientWidth means the (nowrap) text overflows its tile.
+  // +1 tolerates sub-pixel rounding so we don't shrink a value that fits.
+  while (fs > MIN && vals.some(v => v.scrollWidth > v.clientWidth + 1)) {
+    fs -= 1;
+    vals.forEach(v => { v.style.fontSize = fs + 'px'; });
+  }
+}
+// Re-fit when the window resizes (tile widths change with the grid).
+let _dashFitRaf;
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(_dashFitRaf);
+  _dashFitRaf = requestAnimationFrame(() => {
+    const g = document.getElementById('dash-headline-grid');
+    if (g && g.offsetParent) fitDashHeadlineValues(g);
+  });
+});
+
 // Fills #dash-headline-grid by querying /api/insights. When auctionId
 // is set we ask for that single trade; otherwise the endpoint defaults
 // to the current calendar month — the same default Insights uses.
@@ -7632,6 +7666,9 @@ async function renderDashHeadlineTiles(auctionId){
       tile('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—', 'turmeric') +
       tile('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                'chili')    +
       tile('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),             'chili');
+    // Shrink-to-fit once layout is committed so scrollWidth/clientWidth
+    // reflect the real tile widths.
+    requestAnimationFrame(() => fitDashHeadlineValues(grid));
   } catch (e) {
     grid.innerHTML = `<div style="grid-column:1/-1;padding:14px 8px;text-align:center;color:var(--spice-text-hint);font-size:13px">Could not load headline metrics.</div>`;
   }

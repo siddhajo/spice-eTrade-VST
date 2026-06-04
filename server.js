@@ -9853,7 +9853,10 @@ const IMPORT_MODULES = {
   sales_invoice: {
     label: 'Sales Invoices',
     table: 'invoices',
-    keyCols: ['invo', 'sale'],
+    // Dedup on trade-no + invoice-no. Invoice numbers restart per trade,
+    // so keying on `invo` alone wrongly skips a legit invoice whose number
+    // already exists under a different trade. `ano` scopes it to the trade.
+    keyCols: ['ano', 'invo'],
     // auction_id is auto-derived from `ano` at import time so the
     // imported rows show up under the matching trade in the Sales tab
     // (the list filters by auction_id, not ano).
@@ -9878,7 +9881,9 @@ const IMPORT_MODULES = {
   purchase: {
     label: 'Purchase Invoices',
     table: 'purchases',
-    keyCols: ['invo'],
+    // Trade-no + invoice-no — see sales_invoice note. Invoice numbers
+    // repeat across trades, so `ano` is needed to avoid false-dup skips.
+    keyCols: ['ano', 'invo'],
     autoFillAuctionId: true,
     // Match the actual `purchases` schema. The legacy export's "cr"
     // column maps to `gstin` here; "bag"/"refund" don't exist on the
@@ -9886,6 +9891,7 @@ const IMPORT_MODULES = {
     fields: ['auction_id','ano','date','state','br','name','add_line','place','gstin','invo',
              'qty','amount','cgst','sgst','igst','rund','total','tds'],
     aliases: {
+      ano:     ['ano','auction_no','trade'],
       invo:    ['invo','invoice','invoice_no'],
       name:    ['name','seller','dealer'],
       gstin:   ['gstin','gst','gst_no','cr','registration'],
@@ -9902,13 +9908,16 @@ const IMPORT_MODULES = {
   bills: {
     label: 'Bills of Supply',
     table: 'bills',
-    keyCols: ['bil'],
+    // Trade-no + bill-no — see sales_invoice note. Bill numbers repeat
+    // across trades, so `ano` is needed to avoid false-dup skips.
+    keyCols: ['ano', 'bil'],
     // bills.auction_id is the field the Bills tab filters by — without
     // it the imported rows are orphaned and don't show up under any trade.
     autoFillAuctionId: true,
     fields: ['auction_id','ano','date','state','br','crpt','bil','name','add_line','pla',
              'pstate','st_code','crr','pan','qty','cost','igst','net'],
     aliases: {
+      ano: ['ano','auction_no','trade'],
       bil: ['bil','bill','bill_no'],
       name: ['name','seller','planter'],
       qty: ['qty','kilos','weight','kgs'],
@@ -9919,10 +9928,13 @@ const IMPORT_MODULES = {
   debit_notes: {
     label: 'Debit Notes',
     table: 'debit_notes',
-    keyCols: ['note_no','ano'],
+    // Already trade-scoped — trade-no + note-no (order normalized to match
+    // the other transactional modules; WHERE-clause order is irrelevant).
+    keyCols: ['ano', 'note_no'],
     autoFillAuctionId: true,
     fields: ['auction_id','ano','date','state','name','note_no','amount','cgst','sgst','igst','total'],
     aliases: {
+      ano: ['ano','auction_no','trade'],
       note_no: ['note_no','note','dn_no'],
       name: ['name','dealer','buyer'],
     },
