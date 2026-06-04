@@ -2994,39 +2994,56 @@ input[type="search"]:focus{
 
     <!-- USERS -->
     <div class="tc" id="tc-users">
-      <div class="card">
-        <h2 style="margin-bottom:4px">Users &amp; Access</h2>
-        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">Create separate logins for each person. Each user can stay signed in on their own phone/computer without logging the others out.</p>
-        <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-          <button class="btn btn-g" onclick="openAddUserModal()">+ Add User</button>
+      <div class="card le-collapsible" data-section="users-access" style="padding:0;margin-bottom:16px">
+        <div class="le-collapse-head" onclick="leToggleSection('users-access')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 24px;cursor:pointer;border-bottom:1px solid var(--border)">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
+          <span style="font-weight:700;font-size:15px">Users &amp; Access</span>
         </div>
-        <div style="overflow-x:auto">
-          <table>
-            <thead><tr><th>Username</th><th>Role</th><th>Active Sessions</th><th>Last Active</th><th>Created</th><th>Actions</th></tr></thead>
-            <tbody id="users-list"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2 style="margin-bottom:4px">My Active Sessions</h2>
-        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">Every place you're signed in as <strong id="my-uname-label"></strong>. Revoke any old/unused session to secure your account.</p>
-        <div style="overflow-x:auto">
-          <table>
-            <thead><tr><th>Device</th><th>Signed In</th><th>Last Used</th><th>Token Tail</th><th>Actions</th></tr></thead>
-            <tbody id="sessions-list"></tbody>
-          </table>
+        <div class="le-collapse-body" style="padding:18px 24px">
+          <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">Create separate logins for each person. Each user can stay signed in on their own phone/computer without logging the others out.</p>
+          <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+            <button class="btn btn-g" onclick="openAddUserModal()">+ Add User</button>
+          </div>
+          <div style="overflow-x:auto">
+            <table>
+              <thead><tr><th>Username</th><th>Role</th><th>Active Sessions</th><th>Last Active</th><th>Created</th><th>Actions</th></tr></thead>
+              <tbody id="users-list"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <h2 style="margin-bottom:4px">Change My Password</h2>
-        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">Changing your password signs you out from all other devices (this one stays signed in).</p>
-        <div style="max-width:420px">
-          <div class="fg"><label>Current password</label><input type="password" id="pw-cur"></div>
-          <div class="fg"><label>New password</label><input type="password" id="pw-new" placeholder="At least 4 characters"></div>
-          <div class="fg"><label>Confirm new password</label><input type="password" id="pw-conf"></div>
-          <button class="btn btn-g" onclick="changeMyPassword()">Update Password</button>
+      <div class="card le-collapsible" data-section="users-sessions" style="padding:0;margin-bottom:16px">
+        <div class="le-collapse-head" onclick="leToggleSection('users-sessions')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 24px;cursor:pointer;border-bottom:1px solid var(--border)">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
+          <span style="font-weight:700;font-size:15px">My Active Sessions</span>
+        </div>
+        <div class="le-collapse-body" style="padding:18px 24px">
+          <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">Every place you're signed in as <strong id="my-uname-label"></strong>. Revoke any old/unused session to secure your account.</p>
+          <!-- max-height keeps long session lists from pushing the page down;
+               the table scrolls vertically with a sticky header. -->
+          <div style="overflow:auto;max-height:340px;border:1px solid var(--border);border-radius:8px">
+            <table style="margin:0">
+              <thead style="position:sticky;top:0;background:var(--spice-cream,#FAF7F2);z-index:1"><tr><th>Device</th><th>Signed In</th><th>Last Used</th><th>Token Tail</th><th>Actions</th></tr></thead>
+              <tbody id="sessions-list"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card le-collapsible" data-section="users-password" style="padding:0">
+        <div class="le-collapse-head" onclick="leToggleSection('users-password')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 24px;cursor:pointer;border-bottom:1px solid var(--border)">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--green)">▾</span>
+          <span style="font-weight:700;font-size:15px">Change My Password</span>
+        </div>
+        <div class="le-collapse-body" style="padding:18px 24px">
+          <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">Changing your password signs you out from all other devices (this one stays signed in).</p>
+          <div style="max-width:420px">
+            <div class="fg"><label>Current password</label><input type="password" id="pw-cur"></div>
+            <div class="fg"><label>New password</label><input type="password" id="pw-new" placeholder="At least 4 characters"></div>
+            <div class="fg"><label>Confirm new password</label><input type="password" id="pw-conf"></div>
+            <button class="btn btn-g" onclick="changeMyPassword()">Update Password</button>
+          </div>
         </div>
       </div>
     </div>
@@ -7758,6 +7775,10 @@ async function renderRevenueTrendChart(){
 async function loadUsers(){
   const uname = document.getElementById('user-lbl')?.textContent || '';
   const lbl = document.getElementById('my-uname-label'); if(lbl) lbl.textContent = uname;
+  // Reuse the Lot-Entry collapsible machinery — same data-section
+  // attribute, same localStorage key prefix, so the persisted choice
+  // survives tab switches.
+  try { leRestoreCollapseState(); } catch(_) {}
   // Load users list
   try{
     const users = await j('/api/users');
