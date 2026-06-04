@@ -1191,11 +1191,12 @@ tr:hover td{background:var(--spice-cream)}
 #lot-kpis .kpi-icon svg{width:14px;height:14px}
 
 /* Dashboard "Headline metrics" tiles — same .kpi shell as the top KPI
-   row so colors, borders, and hover affordances match. Compact so all
-   nine (Trades / Lots / Sold / Withdrawn / Qty / Value / Avg Price /
-   Payable / Outstanding) fit in two clean rows without dwarfing the
-   Quick actions card beside them. The emoji icon sits in the .kpi-icon
-   corner; we override font-size since emojis read tiny at SVG size. */
+   row so colors, borders, and hover affordances match. Seven tiles
+   (Trades / Lots / Sold / Withdrawn / Value / Payable / Outstanding);
+   Lots/Sold/Withdrawn carry a bags/qty/amount breakdown and Value carries
+   min/max/avg price (see .kpi-meta below). The emoji icon sits in the
+   .kpi-icon corner; we override font-size since emojis read tiny at SVG
+   size. */
 #dash-headline-grid .kpi{padding:14px 16px;border-radius:12px}
 /* margin-bottom pushes the value's line down past the icon (icon bottom
    sits ~30px into the content box) so the value can use the FULL tile
@@ -1207,6 +1208,15 @@ tr:hover td{background:var(--spice-cream)}
    last-resort guard for extremely narrow windows. */
 #dash-headline-grid .kpi-value{font-size:20px;white-space:nowrap;overflow:hidden}
 #dash-headline-grid .kpi-icon{width:32px;height:32px;right:12px;top:12px;border-radius:9px;font-size:17px;line-height:1}
+/* Breakdown table under the headline number (bags / qty / amount, or
+   min / max / avg in the Value tile). Mirrors #lot-kpis .kpi-meta. */
+#dash-headline-grid .kpi-meta{
+  margin-top:10px;padding-top:8px;border-top:1px solid var(--spice-line);
+  display:grid;grid-template-columns:auto 1fr;gap:3px 10px;
+  font-size:11px;line-height:1.4
+}
+#dash-headline-grid .kpi-meta .lbl{color:var(--spice-text-mute);font-weight:500;letter-spacing:.1px}
+#dash-headline-grid .kpi-meta .val{text-align:right;font-weight:600;color:var(--spice-text-main);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 #lot-kpis .kpi-meta{
   /* Mini-table layout — label on the left (muted, small), value on
      the right (tabular numerals, slightly weightier). Adds a thin
@@ -7452,7 +7462,7 @@ async function loadStats(auctionId){
         <div style="font-size:12px;color:var(--spice-text-hint)" id="dash-headline-range">${isAllMode ? 'All trades' : (A ? `Trade #${esc(A.ano)} · ${fmtD(A.date)}` : '')}</div>
       </div>
       <div style="padding:14px 22px 18px" id="dash-headline-body">
-        <div class="kpi-grid" id="dash-headline-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:0">
+        <div class="kpi-grid" id="dash-headline-grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:0">
           <div style="grid-column:1/-1;padding:18px 8px;text-align:center;color:var(--spice-text-hint);font-size:13px">Loading…</div>
         </div>
       </div>
@@ -7645,11 +7655,15 @@ async function renderDashHeadlineTiles(auctionId){
   // Colors cycle the four .kpi accent variants — saffron (default),
   // cardamom, turmeric, chili — so the strip stays visually consistent
   // with the rest of the dashboard while still reading at a glance.
-  const tile = (icon, label, value, accent) => `<div class="kpi${accent ? ' ' + accent : ''}">
+  // `meta` (optional) is an array of [label, value] pairs rendered as a
+  // small breakdown table under the headline number (e.g. bags/qty/amount).
+  const tile = (icon, label, value, accent, meta) => `<div class="kpi${accent ? ' ' + accent : ''}">
     <div class="kpi-icon">${icon}</div>
     <div class="kpi-label">${esc(label)}</div>
     <div class="kpi-value">${value}</div>
+    ${meta && meta.length ? `<div class="kpi-meta">${meta.map(([l, v]) => `<span class="lbl">${esc(l)}</span><span class="val">${v}</span>`).join('')}</div>` : ''}
   </div>`;
+  const price = n => (n != null && Number(n) > 0) ? fmtI(n, 0) : '—';
   try {
     const url = auctionId
       ? `/api/insights?auction_id=${auctionId}&_=${Date.now()}`
@@ -7657,15 +7671,29 @@ async function renderDashHeadlineTiles(auctionId){
     const d = await j(url);
     const t = (d && d.totals) || {};
     grid.innerHTML =
-      tile('📊', 'Trades',      fmtI(t.trades, 0),                                  'cardamom') +
-      tile('🌾', 'Lots',        fmtI(t.lots, 0),                                    '')         +
-      tile('✅', 'Sold',        fmtI(t.sold, 0),                                    'cardamom') +
-      tile('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                               'turmeric') +
-      tile('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                     '')         +
-      tile('💰', 'Value',       '₹' + fmtI(t.value, 2),                             'cardamom') +
-      tile('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—', 'turmeric') +
-      tile('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                'chili')    +
-      tile('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),             'chili');
+      tile('📊', 'Trades',      fmtI(t.trades, 0),    'cardamom') +
+      tile('🌾', 'Lots',        fmtI(t.lots, 0),      '', [
+        ['Bags',     fmtI(t.bags, 0)],
+        ['Qty (kg)', fmtI(t.qty, 2)],
+        ['Amount',   '₹' + fmtI(t.value, 2)],
+      ]) +
+      tile('✅', 'Sold',        fmtI(t.sold, 0),      'cardamom', [
+        ['Bags',     fmtI(t.sold_bags, 0)],
+        ['Qty (kg)', fmtI(t.sold_qty, 2)],
+        ['Amount',   '₹' + fmtI(t.sold_value, 2)],
+      ]) +
+      tile('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0), 'turmeric', [
+        ['Bags',     fmtI(t.wd_bags, 0)],
+        ['Qty (kg)', fmtI(t.wd_qty, 2)],
+        ['Amount',   '₹' + fmtI(t.wd_value, 2)],
+      ]) +
+      tile('💰', 'Value',       '₹' + fmtI(t.value, 2), 'cardamom', [
+        ['Min ₹', price(t.min_price)],
+        ['Max ₹', price(t.max_price)],
+        ['Avg ₹', t.avg_price > 0 ? fmtI(t.avg_price, 2) : '—'],
+      ]) +
+      tile('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),    'chili') +
+      tile('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2), 'chili');
     // Shrink-to-fit once layout is committed so scrollWidth/clientWidth
     // reflect the real tile widths.
     requestAnimationFrame(() => fitDashHeadlineValues(grid));
@@ -18805,6 +18833,14 @@ async function _renderInsights(){
        overflow-wrap:anywhere is a safety net for very long currency
        strings that have no natural break points. */
     .ins-kpi-value { font-size:clamp(16px, 1.6vw, 22px); font-weight:800; letter-spacing:-.5px; margin-top:2px; line-height:1.15; overflow-wrap:anywhere; word-break:break-word }
+    /* Tiles with a breakdown are taller — top-align the icon so it doesn't
+       float in the vertical centre next to a multi-row body. */
+    .ins-kpi-tall { align-items:flex-start }
+    /* Breakdown table under the value (bags / qty / amount, or min/max/avg
+       in the Value tile). Translucent divider + white-on-gradient text. */
+    .ins-kpi-meta { margin-top:9px; padding-top:8px; border-top:1px solid rgba(255,255,255,.28); display:grid; grid-template-columns:auto 1fr; gap:3px 10px; font-size:11px; line-height:1.35 }
+    .ins-kpi-meta .lbl { opacity:.85; font-weight:600 }
+    .ins-kpi-meta .val { text-align:right; font-weight:700; font-variant-numeric:tabular-nums; overflow-wrap:anywhere }
 
     /* ── Filter strip ────────────────────────────────────── */
     .ins-filter { padding:14px 18px; margin-bottom:16px; border-radius:14px; background:linear-gradient(135deg, #ECFDF5 0%, #F0F9FF 100%); border:1px solid #BBF7D0 }
@@ -18879,15 +18915,21 @@ async function _renderInsights(){
   // Strip HTML entities for the title attribute so the hover tooltip
   // shows the human-readable value even on tiles where the rendered
   // text was wrapped or shrunk by clamp().
-  const kpi = (icon, label, value, theme) => {
+  // `meta` (optional) is an array of [label, value] pairs rendered as a
+  // small breakdown table under the value (e.g. bags/qty/amount).
+  const kpi = (icon, label, value, theme, meta) => {
     const t = _INS_THEMES[theme] || _INS_THEMES.emerald;
     const plain = String(value).replace(/<[^>]+>/g, '');
+    const metaHtml = meta && meta.length
+      ? `<div class="ins-kpi-meta">${meta.map(([l, v]) => `<span class="lbl">${esc(l)}</span><span class="val">${v}</span>`).join('')}</div>`
+      : '';
     return `
-      <div class="ins-kpi" style="background:${_insGrad(theme)}; --ins-glow:${t.glow}" title="${esc(label)}: ${esc(plain)}">
+      <div class="ins-kpi${meta && meta.length ? ' ins-kpi-tall' : ''}" style="background:${_insGrad(theme)}; --ins-glow:${t.glow}" title="${esc(label)}: ${esc(plain)}">
         <div class="ins-kpi-icon">${icon}</div>
         <div class="ins-kpi-body">
           <div class="ins-kpi-label">${esc(label)}</div>
           <div class="ins-kpi-value">${value}</div>
+          ${metaHtml}
         </div>
       </div>`;
   };
@@ -19053,15 +19095,29 @@ async function _renderInsights(){
       ${sectionHead('🎯', 'Headline metrics', 'At-a-glance totals for the selected range.', 'emerald', 'kpis')}
       <div class="ins-section-body">
         <div class="ins-kpi-grid" style="margin-bottom:0">
-          ${kpi('📊', 'Trades',      fmtI(t.trades, 0),                                            'emerald')}
-          ${kpi('🌾', 'Lots',        fmtI(t.lots, 0),                                              'indigo')}
-          ${kpi('✅', 'Sold',        fmtI(t.sold, 0),                                              'teal')}
-          ${kpi('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0),                                         'amber')}
-          ${kpi('⚖️', 'Qty (kg)',    fmtI(t.qty, 2),                                               'sky')}
-          ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 2),                                       'emerald')}
-          ${kpi('📈', 'Avg Price',   t.avg_price > 0 ? '₹' + fmtI(t.avg_price, 2) : '—',           'violet')}
-          ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),                          'orange')}
-          ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2),                       'rose')}
+          ${kpi('📊', 'Trades',      fmtI(t.trades, 0),    'emerald')}
+          ${kpi('🌾', 'Lots',        fmtI(t.lots, 0),      'indigo', [
+            ['Bags',     fmtI(t.bags, 0)],
+            ['Qty (kg)', fmtI(t.qty, 2)],
+            ['Amount',   '₹' + fmtI(t.value, 2)],
+          ])}
+          ${kpi('✅', 'Sold',        fmtI(t.sold, 0),      'teal', [
+            ['Bags',     fmtI(t.sold_bags, 0)],
+            ['Qty (kg)', fmtI(t.sold_qty, 2)],
+            ['Amount',   '₹' + fmtI(t.sold_value, 2)],
+          ])}
+          ${kpi('↩️', 'Withdrawn',   fmtI(t.withdrawn, 0), 'amber', [
+            ['Bags',     fmtI(t.wd_bags, 0)],
+            ['Qty (kg)', fmtI(t.wd_qty, 2)],
+            ['Amount',   '₹' + fmtI(t.wd_value, 2)],
+          ])}
+          ${kpi('💰', 'Value',       '₹' + fmtI(t.value, 2), 'emerald', [
+            ['Min ₹', t.min_price != null && t.min_price > 0 ? fmtI(t.min_price, 0) : '—'],
+            ['Max ₹', t.max_price != null && t.max_price > 0 ? fmtI(t.max_price, 0) : '—'],
+            ['Avg ₹', t.avg_price > 0 ? fmtI(t.avg_price, 2) : '—'],
+          ])}
+          ${kpi('💸', 'Payable',     '₹' + fmtI(t.payable_to_sellers, 2),    'orange')}
+          ${kpi('⏳', 'Outstanding', '₹' + fmtI(t.outstanding_by_buyers, 2), 'rose')}
         </div>
       </div>
     </div>

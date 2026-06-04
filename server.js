@@ -9539,10 +9539,15 @@ app.get('/api/insights', requireView, (req, res) => {
        SUM(CASE WHEN ${WD}   THEN 1 ELSE 0 END) AS withdrawn,
        SUM(CASE WHEN COALESCE(l.code,'') = '' THEN 1 ELSE 0 END) AS unsold,
        COALESCE(SUM(l.qty), 0) AS qty,
+       COALESCE(SUM(l.bags), 0) AS bags,
        MIN(CASE WHEN l.price > 0 AND ${SOLD} THEN l.price END) AS min_price,
        MAX(CASE WHEN l.price > 0 AND ${SOLD} THEN l.price END) AS max_price,
        COALESCE(SUM(CASE WHEN ${SOLD} THEN l.amount ELSE 0 END), 0) AS sold_value,
        COALESCE(SUM(CASE WHEN ${SOLD} THEN l.qty    ELSE 0 END), 0) AS sold_qty,
+       COALESCE(SUM(CASE WHEN ${SOLD} THEN l.bags   ELSE 0 END), 0) AS sold_bags,
+       COALESCE(SUM(CASE WHEN ${WD}   THEN l.amount ELSE 0 END), 0) AS wd_value,
+       COALESCE(SUM(CASE WHEN ${WD}   THEN l.qty    ELSE 0 END), 0) AS wd_qty,
+       COALESCE(SUM(CASE WHEN ${WD}   THEN l.bags   ELSE 0 END), 0) AS wd_bags,
        COALESCE(SUM(l.amount), 0) AS value
      FROM auctions a
      LEFT JOIN lots l ON l.auction_id = a.id
@@ -9588,8 +9593,18 @@ app.get('/api/insights', requireView, (req, res) => {
     withdrawn: Number(t.withdrawn) || 0,
     unsold:    Number(t.unsold)    || 0,
     qty:       Number(t.qty)       || 0,
+    bags:      Number(t.bags)      || 0,
     min_price: t.min_price == null ? null : Number(t.min_price),
     max_price: t.max_price == null ? null : Number(t.max_price),
+    // sold_* / wd_* cover SOLD vs WITHDRAWN lots only; kept on the row so
+    // the window-wide headline can aggregate them (avg, bags/qty/amount
+    // breakdowns per category). sold_value/sold_qty also drive avg_price.
+    sold_value: Number(t.sold_value) || 0,
+    sold_qty:   Number(t.sold_qty)   || 0,
+    sold_bags:  Number(t.sold_bags)  || 0,
+    wd_value:   Number(t.wd_value)   || 0,
+    wd_qty:     Number(t.wd_qty)     || 0,
+    wd_bags:    Number(t.wd_bags)    || 0,
     avg_price: Number(t.sold_qty) > 0 ? Number(t.sold_value) / Number(t.sold_qty) : 0,
     value:     Number(t.value)     || 0,
     branches: (branchesByTrade.get(t.auction_id) || []).sort((a, b) => b.value - a.value),
@@ -9704,18 +9719,33 @@ app.get('/api/insights', requireView, (req, res) => {
   // ── Overall KPIs — derived from perTrade so totals always agree
   // with the per-trade table the user is looking at.
   const totals = perTrade.reduce((a, t) => ({
-    trades:    a.trades + 1,
-    lots:      a.lots      + t.lots,
-    sold:      a.sold      + t.sold,
-    withdrawn: a.withdrawn + t.withdrawn,
-    qty:       a.qty       + t.qty,
-    value:     a.value     + t.value,
-  }), { trades: 0, lots: 0, sold: 0, withdrawn: 0, qty: 0, value: 0 });
+    trades:     a.trades + 1,
+    lots:       a.lots       + t.lots,
+    sold:       a.sold       + t.sold,
+    withdrawn:  a.withdrawn  + t.withdrawn,
+    qty:        a.qty        + t.qty,
+    bags:       a.bags       + t.bags,
+    value:      a.value      + t.value,
+    sold_value: a.sold_value + t.sold_value,
+    sold_qty:   a.sold_qty   + t.sold_qty,
+    sold_bags:  a.sold_bags  + t.sold_bags,
+    wd_value:   a.wd_value   + t.wd_value,
+    wd_qty:     a.wd_qty     + t.wd_qty,
+    wd_bags:    a.wd_bags    + t.wd_bags,
+  }), { trades: 0, lots: 0, sold: 0, withdrawn: 0, qty: 0, bags: 0, value: 0,
+        sold_value: 0, sold_qty: 0, sold_bags: 0, wd_value: 0, wd_qty: 0, wd_bags: 0 });
   totals.payable_to_sellers = perBranch.reduce((s, b) => s + b.payable_to_sellers, 0);
   totals.outstanding_by_buyers = outstandingByBuyer.reduce((s, b) => s + b.value, 0);
-  // Weighted avg price across sold lots in the window.
-  const totalSoldValue = perTrade.reduce((s, t) => s + (t.avg_price > 0 ? (t.avg_price * (t.qty * (t.sold / Math.max(1, t.lots)))) : 0), 0);
-  totals.avg_price = totals.qty > 0 ? (totals.value / totals.qty) : 0;
+  // Quantity-weighted avg price across SOLD lots only (sold_value / sold_qty),
+  // matching the per-trade and per-branch Avg columns. Using all-lots qty here
+  // would dilute the average with withdrawn/unsold kilos that carry no value.
+  totals.avg_price = totals.sold_qty > 0 ? (totals.sold_value / totals.sold_qty) : 0;
+  // Window-wide min/max sold price = MIN/MAX of each trade's min/max (ignoring
+  // trades with no sold lots, where min_price/max_price are null).
+  const _mins = perTrade.map(t => t.min_price).filter(v => v != null && v > 0);
+  const _maxs = perTrade.map(t => t.max_price).filter(v => v != null && v > 0);
+  totals.min_price = _mins.length ? Math.min(..._mins) : null;
+  totals.max_price = _maxs.length ? Math.max(..._maxs) : null;
 
   res.json({
     range: { from, to },
