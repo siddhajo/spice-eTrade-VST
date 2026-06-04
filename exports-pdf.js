@@ -341,12 +341,14 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
     columns.forEach((c, ci) => {
       const lines = wrapped[ci];
       const cellW = colWidths[ci] - 6;
-      if (isNumericCol(c) && lines.length === 1) {
-        // Numeric: auto-shrink to fit on one line — never wrap a number.
+      const numeric = isNumericCol(c);
+      if ((numeric || c.singleLine) && lines.length === 1) {
+        // Single-line: auto-shrink to fit so the value never wraps. Numbers
+        // right-align; flagged text columns (e.g. BRANCH) keep left align.
         const size = fitNumericFontSize(lines[0], cellW, BASE, false);
         doc.fillColor('#000').font('Helvetica').fontSize(size);
         doc.text(lines[0], colX[ci] + 3, y + PAD_TOP, {
-          width: cellW, align: 'right', lineBreak: false,
+          width: cellW, align: numeric ? 'right' : 'left', lineBreak: false,
         });
       } else {
         doc.fillColor('#000').font('Helvetica').fontSize(BASE);
@@ -373,8 +375,10 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
     const wrapped = columns.map((c, ci) => {
       const cellW = colWidths[ci] - 6;
       const text = fmtCell(row[c.key], c);
-      if (isNumericCol(c)) {
-        // Single-line; auto-shrink handled at draw time.
+      if (isNumericCol(c) || c.singleLine) {
+        // Single-line; auto-shrink handled at draw time. Covers numeric
+        // columns and any column flagged `singleLine` (e.g. BRANCH on the
+        // pooler register, which must never wrap onto a second line).
         return [String(text)];
       }
       return wrapText(doc, text, cellW);
@@ -546,7 +550,7 @@ const COLS = {
     // (resets within each name group), with a subtotal row for each name.
     { header: 'SL.NO',  key: '_sn',         width: 6  },
     { header: 'NAME',   key: 'poolername',  width: 28 },
-    { header: 'BRANCH', key: 'br',          width: 12 },
+    { header: 'BRANCH', key: 'br',          width: 12, singleLine: true },
     { header: 'LOT',    key: 'lot',         width: 7  },
     { header: 'QTY',    key: 'qty',         width: 12 },
     { header: 'PRICE',  key: 'price',       width: 9  },
