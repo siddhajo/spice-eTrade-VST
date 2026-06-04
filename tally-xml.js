@@ -1740,11 +1740,6 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
 
     const startVoucher = `<VOUCHER VCHTYPE="Purchase" ACTION="Create" OBJVIEW="Invoice Voucher View">`;
     const total       = r2(row.total);
-    // Prefer the builder-supplied rounded total (matches purchases.total
-    // exactly so Tally's audit trail reconciles). Falls back to a fresh
-    // round when the row doesn't carry it.
-    const totalRound  = tlyrnd ? r0(row.totalRounded != null ? row.totalRounded : total) : total;
-    const rnd         = tlyrnd ? r2(totalRound - total) : 0;
     const cgst        = r2(row.cgst || 0);
     const sgst        = r2(row.sgst || 0);
     const igst        = r2(row.igst || 0);
@@ -1758,6 +1753,16 @@ function generRDPurchaseXML(rows, cfg, opts = {}) {
     const amounttot   = r2(row.amounttot || 0);
     const qtytot      = r2(row.qtytot || 0);
     const rt          = r2(row.rate || (qtytot > 0 ? amounttot / qtytot : 0));
+    // Grand total = goods + GST, rounded once (same basis as the purchase
+    // invoice PDF). Derived from the voucher's OWN components — NOT the
+    // stored purchases.total. Imported legacy invoices can carry a NET
+    // total (goods + GST − TDS) in that column; trusting it pushed the
+    // TDS amount into the Round Off line. amounttot + cgst/sgst/igst are
+    // exactly what this voucher debits, so the round-off stays correct
+    // for both freshly-generated AND imported purchases.
+    const totalRound  = tlyrnd
+      ? r0(amounttot + cgst + sgst + igst)
+      : r2(amounttot + cgst + sgst + igst);
 
     // Bill allocations per lot — only built when the purchase-side
     // bill-detailed flag is ON. When OFF we emit a single consolidated
