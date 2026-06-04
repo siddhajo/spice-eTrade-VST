@@ -2277,6 +2277,30 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
   .dt-scroll tbody td:last-child{white-space:nowrap}
 }
 
+/* ── Row actions collapsed behind an ellipsis (⋯) menu ──────────
+   DataTable wraps every `_actions` cell in a .dt-actions container: an
+   ellipsis toggle button + a popover holding the original icon buttons.
+   The popover is position:fixed (positioned in JS) so it isn't clipped by
+   the .dt-scroll overflow container. */
+.dt-actions{position:relative;display:inline-flex}
+.dt-act-toggle{
+  width:30px;height:30px;border-radius:8px;border:1px solid var(--spice-line);
+  background:#fff;color:var(--spice-text-mute);cursor:pointer;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s,border-color .12s,color .12s
+}
+.dt-act-toggle:hover,.dt-actions.open .dt-act-toggle{
+  background:var(--spice-cardamom-lt);border-color:var(--spice-cardamom);
+  color:var(--spice-cardamom-dk)
+}
+.dt-act-toggle svg{fill:currentColor;pointer-events:none}
+.dt-act-menu{
+  display:none;position:fixed;z-index:60;
+  flex-direction:row;align-items:center;gap:4px;padding:6px;
+  background:#fff;border:1px solid var(--spice-line);border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,.16)
+}
+
 
 .toast{
   display:none;position:fixed;top:80px;right:24px;
@@ -6228,6 +6252,39 @@ const DataTable = (function(){
     return rows;
   }
 
+  // Wrap an action cell's icon HTML in an ellipsis (⋯) toggle + popover.
+  // Cells with no real action buttons (empty or a "—" placeholder) are
+  // left untouched so we don't show a menu that opens to nothing.
+  function wrapActionsCell(html){
+    const inner = String(html == null ? '' : html);
+    if (!/<button/i.test(inner)) return html;
+    return '<div class="dt-actions">'
+      + '<button type="button" class="dt-act-toggle" aria-label="Actions" title="Actions" '
+      +   'onclick="DataTable._toggleActions(this,event)">'
+      +   '<svg viewBox="0 0 24 24" width="18" height="18">'
+      +     '<circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>'
+      +   '</svg>'
+      + '</button>'
+      + '<div class="dt-act-menu" role="menu">' + inner + '</div>'
+      + '</div>';
+  }
+
+  // Close every open action popover and reset its inline positioning.
+  function _closeAllActionMenus(){
+    document.querySelectorAll('.dt-actions.open').forEach(w => {
+      w.classList.remove('open');
+      const m = w.querySelector('.dt-act-menu');
+      if (m) { m.style.display = ''; m.style.top = ''; m.style.left = ''; m.style.visibility = ''; }
+    });
+  }
+  // One-time global closers: any click (outside the toggle, which stops
+  // propagation), Escape, resize, or scroll dismisses open menus. Scroll
+  // uses capture so it catches the inner .dt-scroll container too.
+  document.addEventListener('click', _closeAllActionMenus);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') _closeAllActionMenus(); });
+  window.addEventListener('resize', _closeAllActionMenus);
+  window.addEventListener('scroll', _closeAllActionMenus, true);
+
   function render(tbodyId){
     const s = state[tbodyId]; if (!s) return;
     const table = document.getElementById(tbodyId).closest('table');
@@ -6251,7 +6308,11 @@ const DataTable = (function(){
     // Body rows
     const bodyRows = visible.map(r => {
       const cells = s.cols.map(c => {
-        const v = displayValue(r, c);
+        let v = displayValue(r, c);
+        // Collapse the row's action icons behind an ellipsis (⋯) menu so
+        // the table stays uncluttered — applies to every screen's
+        // `_actions` column via this single code path.
+        if (c.key === '_actions') v = wrapActionsCell(v);
         const cls = c.numeric ? ' class="num"' : (c.tdClass ? ` class="${c.tdClass}"` : '');
         return `<td${cls}>${v}</td>`;
       }).join('');
@@ -6383,6 +6444,31 @@ const DataTable = (function(){
       const s = state[tbodyId]; if (!s) return;
       s.visible += PAGE_SIZE;
       render(tbodyId);
+    },
+    // Toggle a row's ⋯ action popover. Positioned with position:fixed at
+    // the toggle's rect so it escapes the .dt-scroll overflow clip, and
+    // flips up / clamps when it would overflow the viewport.
+    _toggleActions(btn, ev){
+      if (ev) ev.stopPropagation();
+      const wrap = btn.closest('.dt-actions');
+      if (!wrap) return;
+      const menu = wrap.querySelector('.dt-act-menu');
+      const wasOpen = wrap.classList.contains('open');
+      _closeAllActionMenus();
+      if (wasOpen || !menu) return;
+      wrap.classList.add('open');
+      const r = btn.getBoundingClientRect();
+      menu.style.visibility = 'hidden';
+      menu.style.display = 'flex';
+      const mw = menu.offsetWidth, mh = menu.offsetHeight;
+      let top = r.bottom + 4;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+      let left = r.right - mw;                 // right-align to the toggle
+      if (left < 8) left = 8;
+      if (left + mw > window.innerWidth - 8) left = window.innerWidth - 8 - mw;
+      menu.style.top = top + 'px';
+      menu.style.left = left + 'px';
+      menu.style.visibility = '';
     },
     // Force-clear the cached state for a tbody. Used by Reload-style
     // actions where the caller wants the next mount() call to render
@@ -17190,6 +17276,19 @@ async function loadPurchases(opts){
   const d=await j(url);
   const arr = Array.isArray(d) ? d : [];
 
+  // Net payable (after TDS) for the Total column. Two row shapes coexist:
+  //   • generated invoices store Total = GROSS (goods+GST) → net = total − tds
+  //   • imported invoices already store Total = NET          → show as-is
+  // There's no source flag, so we detect by value: when the stored Total
+  // equals the gross grand total (amount+CGST+SGST+IGST, rounded) it's a
+  // generated row and we subtract TDS; otherwise Total is already net.
+  const _purNet = (p) => {
+    const total = Number(p.total) || 0;
+    const tds   = Number(p.tds)   || 0;
+    const gross = Math.round((Number(p.amount)||0)+(Number(p.cgst)||0)+(Number(p.sgst)||0)+(Number(p.igst)||0));
+    return (Math.abs(total - gross) < 1) ? (total - tds) : total;
+  };
+
   // Update KPI strip (same pattern as loadInvoices)
   const kpiStrip = document.getElementById('pur-kpis');
   if (kpiStrip) {
@@ -17200,7 +17299,7 @@ async function loadPurchases(opts){
       kpiStrip.style.display = 'grid';
       const totalQty    = arr.reduce((a,i) => a + (Number(i.qty)    || 0), 0);
       const totalAmount = arr.reduce((a,i) => a + (Number(i.amount) || 0), 0);
-      const grandTotal  = arr.reduce((a,i) => a + (Number(i.total)  || 0), 0);
+      const grandTotal  = arr.reduce((a,i) => a + _purNet(i), 0);
       const $ = (id) => document.getElementById(id);
       if ($('pur-kpi-count'))  $('pur-kpi-count').textContent  = arr.length;
       if ($('pur-kpi-qty'))    $('pur-kpi-qty').innerHTML      = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
@@ -17232,8 +17331,9 @@ async function loadPurchases(opts){
       { key:'igst', label:'IGST', sort:'number', numeric:true, fmt:(n)=>fmtI(n,2) },
       { key:'tds', label:'TDS', sort:'number', numeric:true, fmt:(n)=>fmtI(n,2) },
       { key:'total', label:'Total', sort:'number', numeric:true,
+        value:(p)=>_purNet(p),
         fmt:(n)=>fmtI(n,2),
-        render:(p)=>`<strong>${fmtI(p.total||0,2)}</strong>` },
+        render:(p)=>`<strong>${fmtI(_purNet(p),2)}</strong>` },
       { key:'_actions', label:'Actions', sortable:false, searchable:false, render:(p)=>
           iconBtn('pdf','View PDF',`viewPurchasePDF(${p.auction_id},'${encodeURIComponent(p.name)}','${encodeURIComponent(p.invo)}')`)
           + iconBtn('whatsapp','Send via WhatsApp',`whatsappPurchase(${p.auction_id},'${encodeURIComponent(p.name)}','${encodeURIComponent(p.invo)}',${Number(p.total)||0},'${esc(p.ano||'')}')`)
