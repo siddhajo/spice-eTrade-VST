@@ -507,9 +507,9 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 #login{
   display:flex;min-height:100vh;font-family:inherit;position:relative;overflow:hidden;
   background:
-    radial-gradient(1200px 700px at 100% -15%, rgba(16,185,129,.18), transparent 60%),
-    radial-gradient(900px 600px at -10% 110%, rgba(250,204,21,.12), transparent 60%),
-    linear-gradient(135deg,#0A1F18 0%,#0F2A1F 50%,#14532D 100%);
+    radial-gradient(1200px 700px at 100% -15%, rgba(16,185,129,.22), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(250,204,21,.14), transparent 60%),
+    linear-gradient(135deg,#064E3B 0%,#047857 52%,#059669 100%);
 }
 #login::before, #login::after{
   content:'';position:absolute;border-radius:50%;filter:blur(90px);pointer-events:none;opacity:.55;
@@ -1198,7 +1198,10 @@ tr:hover td{background:var(--spice-cream)}
    corner; we override font-size since emojis read tiny at SVG size. */
 #dash-headline-grid .kpi{padding:14px 16px;border-radius:12px}
 #dash-headline-grid .kpi-label{font-size:10.5px;letter-spacing:.6px;margin-bottom:6px;padding-right:36px}
-#dash-headline-grid .kpi-value{font-size:22px;overflow-wrap:anywhere;word-break:break-word}
+/* padding-right reserves the icon's corner (icon: right:12px + 32px wide
+   = 44px from the edge) so long money values like "₹11,65,74,670.30"
+   wrap to the next line instead of running underneath the icon. */
+#dash-headline-grid .kpi-value{font-size:20px;overflow-wrap:anywhere;word-break:break-word;padding-right:38px}
 #dash-headline-grid .kpi-icon{width:32px;height:32px;right:12px;top:12px;border-radius:9px;font-size:17px;line-height:1}
 #lot-kpis .kpi-meta{
   /* Mini-table layout — label on the left (muted, small), value on
