@@ -6774,6 +6774,115 @@ async function _renderGstApiStatus(){
     </div>`;
 }
 
+// ── WhatsApp Business config card (Settings → Integrations) ────────
+// Secrets live server-side in the whatsapp_config table and are NEVER
+// returned to the browser; /api/whatsapp/status hands back only booleans
+// (hasToken etc.) + non-secret identifiers + live health from Meta. The
+// inputs carry explicit borders/backgrounds so the focused-but-invisible
+// caret bug on Windows Electron can't bite these fields.
+async function _renderWhatsappCard(){
+  const host = document.getElementById('whatsapp-config-host');
+  if (!host) return;
+  host.innerHTML = '<div style="padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:#f9fafb;font-size:12.5px;color:var(--text2)">Loading WhatsApp status…</div>';
+  let s;
+  try {
+    const r = await fetch(B + '/api/whatsapp/status', { headers: T ? { 'Authorization':'Bearer '+T } : {}, cache:'no-store' });
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    s = await r.json();
+  } catch (e) {
+    host.innerHTML = `<div style="padding:14px 16px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#991b1b;font-size:12.5px">Could not load WhatsApp status: ${esc(e.message||String(e))}</div>`;
+    return;
+  }
+  const webhookUrl = `${location.origin}/api/whatsapp/webhook`;
+  const tone = s.configured
+    ? (s.live
+        ? {bd:'#a7f3d0',fg:'#065f46',icon:'✓',head:`Connected${s.displayPhone?(' · '+esc(s.displayPhone)):''}${s.qualityRating?(' · quality '+esc(s.qualityRating)):''}`}
+        : {bd:'#fde68a',fg:'#92400e',icon:'⚠',head:`Saved, but Meta check failed: ${esc(s.liveError||'unknown')}`})
+    : {bd:'#e5e7eb',fg:'#374151',icon:'ℹ',head:'Not configured — paste your Meta credentials below'};
+  const inStyle = 'width:100%;padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;font-size:12.5px;box-sizing:border-box';
+  const lblStyle = 'display:block;font-size:11px;font-weight:600;color:var(--text2);margin-bottom:3px;text-transform:uppercase;letter-spacing:.3px';
+  const field = (id,label,val,ph,type) => `<div><label style="${lblStyle}">${esc(label)}</label><input id="${id}" type="${type||'text'}" value="${esc(val||'')}" placeholder="${esc(ph||'')}" autocomplete="off" spellcheck="false" style="${inStyle}"></div>`;
+  const secretPh = (has) => has ? '•••••••• configured — leave blank to keep' : 'not set';
+  host.innerHTML = `
+    <div style="border:1px solid ${tone.bd};border-radius:10px;background:#fff;overflow:hidden">
+      <div style="padding:13px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid ${tone.bd};background:#f9fafb">
+        <span style="font-size:18px;line-height:1">📱</span>
+        <strong style="font-size:13.5px;color:${tone.fg}">WhatsApp Business (Cloud API)</strong>
+        <span style="flex:1"></span>
+        <span style="font-size:11.5px;font-weight:700;color:${tone.fg}">${tone.icon} ${tone.head}</span>
+      </div>
+      <div style="padding:14px 16px">
+        <div style="font-size:11.5px;color:var(--text3);line-height:1.55;margin-bottom:13px">
+          Every send goes through an approved <strong>template</strong>, so invoices reach anyone — even contacts who never messaged you. Create two templates in Meta (a <strong>Document</strong> template + a <strong>Text</strong> template, both with body <code>Dear {{1}}, {{2}} Regards, {{3}}.</code>), get them approved, then paste their names below.${s.source==='env'?'<br><strong>Heads up:</strong> some values come from environment variables and override what you save here.':''}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
+          ${field('wa-token','Access token','',secretPh(s.hasToken),'password')}
+          ${field('wa-phone-id','Phone number ID',s.phoneId,'e.g. 123456789012345')}
+          ${field('wa-waba-id','WhatsApp Business Account ID',s.wabaId,'optional')}
+          ${field('wa-app-secret','App secret','',secretPh(s.hasAppSecret),'password')}
+          ${field('wa-verify-token','Webhook verify token','',secretPh(s.hasVerifyToken),'password')}
+          ${field('wa-display-number','Display number (label)',s.displayNumber,'optional')}
+          ${field('wa-tpl-document','Document template name',s.tplDocument,'e.g. invoice_document')}
+          ${field('wa-tpl-document-lang','Document template language',s.tplDocumentLang||'en','en')}
+          ${field('wa-tpl-text','Text template name',s.tplText,'e.g. payment_notice')}
+          ${field('wa-tpl-text-lang','Text template language',s.tplTextLang||'en','en')}
+        </div>
+        <div style="margin-top:13px">
+          <label style="${lblStyle}">Webhook callback URL — paste into Meta → WhatsApp → Configuration</label>
+          <div style="display:flex;gap:6px">
+            <input id="wa-webhook-url" type="text" readonly value="${esc(webhookUrl)}" style="${inStyle};background:#f1f5f9;color:#475569">
+            <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(webhookUrl)}').then(()=>toast('Webhook URL copied'))" style="white-space:nowrap;padding:7px 12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;font-size:12px;cursor:pointer">Copy</button>
+          </div>
+          <div style="font-size:11px;color:${s.webhookReady?'#065f46':'var(--text3)'};margin-top:4px">${s.webhookReady?'✓ Webhook ready (verify token + app secret set) — subscribe to the “messages” field in Meta to receive delivery receipts.':'Set the app secret + verify token to enable delivery tracking.'}</div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button type="button" id="wa-save-btn" onclick="_saveWhatsappConfig()" style="padding:8px 16px;border:none;border-radius:6px;background:#25D366;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Save</button>
+          <button type="button" id="wa-test-btn" onclick="_testWhatsapp()" ${s.configured?'':'disabled'} style="padding:8px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;font-weight:600;font-size:12.5px;cursor:${s.configured?'pointer':'not-allowed'};opacity:${s.configured?'1':'.5'}">Send test message</button>
+          <span id="wa-card-msg" style="font-size:12px;color:var(--text3)"></span>
+        </div>
+      </div>
+    </div>`;
+}
+async function _saveWhatsappConfig(){
+  const v = (id) => { const el=document.getElementById(id); return el?el.value:undefined; };
+  const body = {
+    token: v('wa-token'), phoneId: v('wa-phone-id'), wabaId: v('wa-waba-id'),
+    appSecret: v('wa-app-secret'), verifyToken: v('wa-verify-token'), displayNumber: v('wa-display-number'),
+    tplDocument: v('wa-tpl-document'), tplDocumentLang: v('wa-tpl-document-lang'),
+    tplText: v('wa-tpl-text'), tplTextLang: v('wa-tpl-text-lang'),
+  };
+  const msgEl = document.getElementById('wa-card-msg');
+  const btn = document.getElementById('wa-save-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(B + '/api/whatsapp/config', { method:'PUT', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Save failed');
+    _waApiCheck = null; // invalidate cached capability probe so sends re-check
+    if (msgEl){ msgEl.textContent='Saved ✓'; msgEl.style.color='#065f46'; }
+    _renderWhatsappCard(); // re-hydrate: refresh masks + live status
+  } catch (e) {
+    if (msgEl){ msgEl.textContent = e.message; msgEl.style.color='#991b1b'; }
+    if (btn) btn.disabled = false;
+  }
+}
+async function _testWhatsapp(){
+  const phone = prompt('Send a test WhatsApp message to which number?\n(10-digit Indian number, or full international e.g. 919876543210)');
+  if (!phone) return;
+  const msgEl = document.getElementById('wa-card-msg');
+  const btn = document.getElementById('wa-test-btn');
+  if (btn) btn.disabled = true;
+  if (msgEl){ msgEl.textContent='Sending test…'; msgEl.style.color='var(--text3)'; }
+  try {
+    const r = await fetch(B + '/api/whatsapp/test', { method:'POST', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'}, body: JSON.stringify({ phone }) });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Test failed');
+    if (msgEl){ msgEl.textContent='Test sent ✓ — check the recipient phone'; msgEl.style.color='#065f46'; }
+  } catch (e) {
+    if (msgEl){ msgEl.textContent = 'Test failed: '+e.message; msgEl.style.color='#991b1b'; }
+  } finally { if (btn) btn.disabled = false; }
+}
+
 async function login(){
   const e=document.getElementById('login-err');e.textContent='';e.style.display='none';
   const btn=document.getElementById('login-btn');
@@ -11793,12 +11902,15 @@ async function leWhatsappReceipt() {
   if (!items.length) { showErr('Nothing to send.'); return; }
 
   const useApi = await _waCloudApiAvailable();
+  const company = (cfg.trade_name || cfg.short_name || cfg.tally_company_name || cfg.legal_name || 'Company').toUpperCase();
   let sent = 0, opened = 0;
   for (const grp of items) {
     const phone = await _lookupSellerPhone(grp.traderName);
     const msg = leBuildReceiptText(grp.traderName, grp.lots, { cfg, auction });
     if (useApi && phone) {
-      const ok = await _waCloudSendText(phone, msg);
+      // The multi-line receipt is flattened to a single line server-side
+      // (template body params can't contain newlines).
+      const ok = await _waCloudSendText(phone, [grp.traderName, msg, company]);
       if (ok) { sent++; continue; }
     }
     _waOpenText(phone, msg);
@@ -12526,12 +12638,21 @@ function renderSettingsPanel(){
     html+='<div class="sgrid">';
     for(const f of fields)html+=fld(f);
     html+='</div>';
+    // WhatsApp Business config lives in a dedicated server-side table
+    // (secrets never reach the browser), so it renders as its own card
+    // below the standard integration fields rather than via fld().
+    if (ck === 'integrations') {
+      html += '<div id="whatsapp-config-host" style="margin-top:18px"></div>';
+    }
   }
   document.getElementById('settings-root').innerHTML=html;
   // Hydrate the integrations status card from /api/gst-lookup/status
   // after the panel HTML has landed in the DOM.
   if (ck === 'integrations' && typeof _renderGstApiStatus === 'function') {
     try { _renderGstApiStatus(); } catch(_){}
+  }
+  if (ck === 'integrations' && typeof _renderWhatsappCard === 'function') {
+    try { _renderWhatsappCard(); } catch(_){}
   }
   // Rates panel — apply flag-driven visibility (hide local_transport
   // input when flag_local_transport is off, etc.) and bind live
@@ -17443,50 +17564,58 @@ function _invalidateWaCaches() { _CCFG = null; _AUCTIONS = null; }
 
 // Cloud API — try server-side automated send. Returns true on success,
 // false when not configured (501) so caller falls back to manual flow.
-async function _waCloudSendText(phone, message) {
+async function _waCloudSendText(phone, params) {
   try {
-    const r = await fetch(B + '/api/whatsapp/send-text', {
+    const r = await fetch(B + '/api/whatsapp/send-template-text', {
       method: 'POST', headers: { 'Authorization': 'Bearer ' + T, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, message }),
+      body: JSON.stringify({ phone, params: params || [] }),
     });
     if (r.status === 501) return false; // not configured → fallback
-    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || 'Send failed'); }
+    const d = await r.json().catch(()=>({}));
+    if (r.status === 400 && d.fallback) return false; // no template configured → fallback
+    if (!r.ok) { throw new Error(d.error || 'Send failed'); }
     return true;
   } catch (e) { showError(e); return false; }
 }
 
-// Cloud API — send a locally-generated PDF blob via Meta's media upload
-// pipeline. The server handles the two-step Meta flow (upload-to-media
-// → send-document); we just POST the blob as multipart. Returns true on
-// success; false on 501 (not configured) so the caller falls back to
+// Cloud API — send a locally-generated PDF blob inside an approved
+// DOCUMENT-header template via Meta's media-upload pipeline. The server
+// uploads to /media then sends the template with the PDF as the header +
+// `params` as the positional body params. Works for ANY recipient (no
+// 24h-window restriction). Returns true on success; false on 501 (not
+// configured) / 400-fallback (no template) so the caller falls back to
 // the manual wa.me / Web Share flow.
-async function _waCloudSendDocument(phone, message, blob, filename) {
+async function _waCloudSendDocument(phone, params, blob, filename) {
   try {
     const fd = new FormData();
     fd.append('file', blob, filename);
     fd.append('phone', phone || '');
-    fd.append('caption', message || '');
+    fd.append('params', JSON.stringify(params || []));
     fd.append('filename', filename || 'document.pdf');
     // Don't set Content-Type — the browser adds the multipart boundary.
-    const r = await fetch(B + '/api/whatsapp/send-pdf', {
+    const r = await fetch(B + '/api/whatsapp/send-template-document', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + T },
       body: fd,
     });
     if (r.status === 501) return false; // not configured → manual fallback
-    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || 'Send failed'); }
+    const d = await r.json().catch(()=>({}));
+    if (r.status === 400 && d.fallback) return false; // no document template → fallback
+    if (!r.ok) { throw new Error(d.error || 'Send failed'); }
     return true;
   } catch (e) { showError(e); return false; }
 }
 
-// Best-effort document dispatcher: try Cloud API first (PDF auto-sends,
-// no browser tab opens), fall back to _waOpenDocument (wa.me + manual
-// drag) on 501 / 502. Phone is required for the Cloud path — without a
-// phone Meta can't route, so we go straight to the fallback which can
-// at least let the user pick the recipient.
-async function _waSendDocument({ blob, filename, phone, message }) {
+// Best-effort document dispatcher: try Cloud API first (PDF auto-sends via
+// the document template, no browser tab opens), fall back to
+// _waOpenDocument (wa.me + manual drag) on 501 / 400-fallback / 502. Phone
+// is required for the Cloud path — without a phone Meta can't route, so we
+// go straight to the fallback which can at least let the user pick the
+// recipient. `params` are the [name, summary, company] template params;
+// `message` is the flat one-liner used by the manual fallback.
+async function _waSendDocument({ blob, filename, phone, params, message }) {
   if (phone && await _waCloudApiAvailable()) {
-    const ok = await _waCloudSendDocument(_normalizePhoneForWa(phone), message, blob, filename);
+    const ok = await _waCloudSendDocument(_normalizePhoneForWa(phone), params, blob, filename);
     if (ok) {
       if (typeof toast === 'function') toast(`WhatsApp sent (+${_normalizePhoneForWa(phone)})`);
       return true;
@@ -17589,10 +17718,11 @@ async function _runWaQueue(items, opts) {
       // Either branch falls back to the manual flow on Cloud API
       // failure (501 / 502) so the user can still finish the send.
       let ok;
+      const params = it.params || [it.name || '', it.message || '', ''];
       if (it.blob) {
-        ok = await _waCloudSendDocument(_normalizePhoneForWa(it.phone), it.message, it.blob, it.filename);
+        ok = await _waCloudSendDocument(_normalizePhoneForWa(it.phone), params, it.blob, it.filename);
       } else {
-        ok = await _waCloudSendText(it.phone, it.message);
+        ok = await _waCloudSendText(it.phone, params);
       }
       if (!ok) { it.blob ? await _waOpenDocument(it) : _waOpenText(it.phone, it.message); }
       sent++;
@@ -17609,11 +17739,10 @@ let _waApiCheck = null;
 async function _waCloudApiAvailable() {
   if (_waApiCheck !== null) return _waApiCheck;
   try {
-    const r = await fetch(B + '/api/whatsapp/send-text', {
-      method: 'POST', headers: { 'Authorization': 'Bearer ' + T, 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    _waApiCheck = (r.status !== 501); // 400 (bad params) means configured; 501 means not
+    const r = await fetch(B + '/api/whatsapp/status', { headers: { 'Authorization': 'Bearer ' + T } });
+    if (!r.ok) { _waApiCheck = false; return false; }
+    const d = await r.json().catch(() => ({}));
+    _waApiCheck = !!d.configured;
   } catch (_) { _waApiCheck = false; }
   return _waApiCheck;
 }
@@ -17637,11 +17766,14 @@ async function whatsappDebitNote(id, dealerName, noteNo, totalAmt, ano) {
       _lookupSellerPhone(decoded),
       _getCompanyName(),
     ]);
-    const msg = `${ano || ''} ${decoded} ${company} DEBIT NOTE ${decNote} \u20B9${Number(totalAmt||0).toLocaleString('en-IN')}`.trim();
+    const amt = `\u20B9${Number(totalAmt||0).toLocaleString('en-IN')}`;
+    const msg = `${ano || ''} ${decoded} ${company} DEBIT NOTE ${decNote} ${amt}`.trim();
+    const summary = `your DEBIT NOTE ${decNote} for ${amt} is attached.`;
     await _waSendDocument({
       blob,
       filename: `DebitNote_${decoded}_${decNote || id}.pdf`,
       phone,
+      params: [decoded, summary, company],
       message: msg,
     });
   } catch (e) { showError(e); }
@@ -17666,8 +17798,10 @@ async function whatsappInvoice(id, buyerName, invNo, saleType, totalAmt, ano) {
     const [phone, company] = await Promise.all([
       _lookupBuyerPhone(decoded), _getCompanyName(),
     ]);
-    const msg = `${ano || ''} ${decoded} ${company} SALES INVOICE ${invLabel} ₹${Number(totalAmt||0).toLocaleString('en-IN')}`.trim();
-    await _waSendDocument({ blob, filename: `SalesInvoice_${decoded}_${invLabel}.pdf`, phone, message: msg });
+    const amt = `₹${Number(totalAmt||0).toLocaleString('en-IN')}`;
+    const msg = `${ano || ''} ${decoded} ${company} SALES INVOICE ${invLabel} ${amt}`.trim();
+    const summary = `your SALES INVOICE ${invLabel} for ${amt} is attached.`;
+    await _waSendDocument({ blob, filename: `SalesInvoice_${decoded}_${invLabel}.pdf`, phone, params: [decoded, summary, company], message: msg });
   } catch (e) { showError(e); }
 }
 async function whatsappPurchase(auctionId, sellerName, invNo, totalAmt, ano) {
@@ -17681,8 +17815,10 @@ async function whatsappPurchase(auctionId, sellerName, invNo, totalAmt, ano) {
       _lookupSellerPhone(decoded), _getCompanyName(),
       ano ? Promise.resolve(ano) : _getAuctionAno(auctionId),
     ]);
-    const msg = `${anoVal} ${decoded} ${company} PURCHASE INVOICE ${decInv} ₹${Number(totalAmt||0).toLocaleString('en-IN')}`;
-    await _waSendDocument({ blob, filename: `PurchaseInvoice_${decoded}_${decInv}.pdf`, phone, message: msg });
+    const amt = `₹${Number(totalAmt||0).toLocaleString('en-IN')}`;
+    const msg = `${anoVal} ${decoded} ${company} PURCHASE INVOICE ${decInv} ${amt}`;
+    const summary = `your PURCHASE INVOICE ${decInv} for ${amt} (Auction ${anoVal}) is attached.`;
+    await _waSendDocument({ blob, filename: `PurchaseInvoice_${decoded}_${decInv}.pdf`, phone, params: [decoded, summary, company], message: msg });
   } catch (e) { showError(e); }
 }
 // Bulk Purchases — queue, one PDF per seller
@@ -17706,10 +17842,12 @@ async function whatsappSelectedPurchases() {
     try {
       const blob = await _fetchPdfBlob(`/api/purchases/pdf/${r.auction_id}/${encodeURIComponent(r.name)}?invoiceNo=${encodeURIComponent(r.invo)}`);
       const phone = await _lookupSellerPhone(r.name);
+      const amt = `₹${Number(r.total||0).toLocaleString('en-IN')}`;
       items.push({
         name: r.name, phone, blob,
         filename: `PurchaseInvoice_${r.name}_${r.invo}.pdf`,
-        message: `${r.ano} ${r.name} ${company} PURCHASE INVOICE ${r.invo} ₹${Number(r.total||0).toLocaleString('en-IN')}`,
+        message: `${r.ano} ${r.name} ${company} PURCHASE INVOICE ${r.invo} ${amt}`,
+        params: [r.name, `your PURCHASE INVOICE ${r.invo} for ${amt} (Auction ${r.ano}) is attached.`, company],
       });
     } catch (e) { console.warn('Skipping', r.name, e); }
   }
@@ -17731,9 +17869,11 @@ async function whatsappPayment(auctionId, sellerName, payable) {
     const [phone, company, ano] = await Promise.all([
       _lookupSellerPhone(sellerName), _getCompanyName(), _getAuctionAno(auctionId),
     ]);
-    const msg = `${ano} ${sellerName} ${company} PAYMENT ${Number(payable||0).toLocaleString('en-IN')} CREDITED`;
-    if (await _waCloudApiAvailable()) {
-      const ok = await _waCloudSendText(phone, msg);
+    const amt = Number(payable||0).toLocaleString('en-IN');
+    const msg = `${ano} ${sellerName} ${company} PAYMENT ${amt} CREDITED`;
+    const summary = `your PAYMENT of ₹${amt} has been CREDITED (Auction ${ano}).`;
+    if (phone && await _waCloudApiAvailable()) {
+      const ok = await _waCloudSendText(phone, [sellerName, summary, company]);
       if (ok) { toast(`WhatsApp sent to ${sellerName}`); return; }
     }
     _waOpenText(phone, msg);
@@ -17960,9 +18100,11 @@ async function whatsappSelectedPayments() {
   const items = [];
   for (const nm of names) {
     const phone = await _lookupSellerPhone(nm);
+    const amt = Number(rowMap[nm]||0).toLocaleString('en-IN');
     items.push({
       name: nm, phone,
-      message: `${ano} ${nm} ${company} PAYMENT ${Number(rowMap[nm]||0).toLocaleString('en-IN')} CREDITED`,
+      message: `${ano} ${nm} ${company} PAYMENT ${amt} CREDITED`,
+      params: [nm, `your PAYMENT of ₹${amt} has been CREDITED (Auction ${ano}).`, company],
     });
   }
   await _runWaQueue(items);

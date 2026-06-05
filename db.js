@@ -550,6 +550,59 @@ async function initDb() {
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
+  // ── WHATSAPP CLOUD API ─────────────────────────────────────
+  // Single-row credential + template store (id is pinned to 1). This is
+  // the DB-side fallback for the WhatsApp config; process.env values take
+  // priority over these at read time (see _waConfig in server.js). Kept
+  // OUT of company_settings on purpose — company_settings is exposed to
+  // the browser via /api/company-settings/flat, and the access token /
+  // app secret must never reach the client. Only the server reads this.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS whatsapp_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    access_token TEXT DEFAULT '',
+    phone_id TEXT DEFAULT '',
+    waba_id TEXT DEFAULT '',
+    app_secret TEXT DEFAULT '',
+    verify_token TEXT DEFAULT '',
+    display_number TEXT DEFAULT '',
+    tpl_document TEXT DEFAULT '',
+    tpl_document_lang TEXT DEFAULT 'en',
+    tpl_text TEXT DEFAULT '',
+    tpl_text_lang TEXT DEFAULT 'en',
+    enabled INTEGER DEFAULT 1,
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  wrapped.exec("INSERT OR IGNORE INTO whatsapp_config (id) VALUES (1)");
+
+  // Outbound/inbound message log. Every Cloud send inserts a row; the Meta
+  // webhook later updates `status`/`error` by `wamid` as delivery receipts
+  // arrive (sent → delivered → read, or failed). `ref_type`/`ref_id` tie a
+  // message back to the purchase/invoice/debit-note it was sent for.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS whatsapp_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wamid TEXT DEFAULT '',
+    direction TEXT NOT NULL DEFAULT 'out',
+    phone TEXT DEFAULT '',
+    msg_type TEXT DEFAULT '',
+    caption TEXT DEFAULT '',
+    status TEXT DEFAULT 'queued',
+    error TEXT DEFAULT '',
+    ref_type TEXT DEFAULT '',
+    ref_id TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // Inbound messages (replies) recorded from the webhook. Primarily a log;
+  // also signals that a contact's 24h customer-service window is open.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS whatsapp_inbound (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wamid TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    body TEXT DEFAULT '',
+    received_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
   // ── INDEXES ────────────────────────────────────────────────
   const indexes = [
     'CREATE INDEX IF NOT EXISTS idx_traders_name ON traders(name)',
@@ -578,6 +631,10 @@ async function initDb() {
     // traders triggers a full scan of trader_banks to check for orphans.
     // Without this, bulk seller deletion is O(N·M) — quadratic.
     'CREATE INDEX IF NOT EXISTS idx_trader_banks_trader ON trader_banks(trader_id)',
+    // Webhook delivery-receipt updates look up the originating send by its
+    // Meta message id; the send-log panel filters by recipient.
+    'CREATE INDEX IF NOT EXISTS idx_wa_messages_wamid ON whatsapp_messages(wamid)',
+    'CREATE INDEX IF NOT EXISTS idx_wa_messages_phone ON whatsapp_messages(phone)',
   ];
   for (const idx of indexes) { try { wrapped.exec(idx); } catch (e) {} }
 

@@ -53,7 +53,11 @@ const app = express();
 // We use 1 (not `true`): trusting all hops would let a client spoof
 // X-Forwarded-For and dodge the per-IP login throttle.
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '50mb' }));
+// `verify` stashes the raw request bytes so the WhatsApp webhook can
+// validate Meta's X-Hub-Signature-256 (HMAC-SHA256 of the raw body with
+// the app secret) — JSON.stringify(req.body) is NOT byte-identical to
+// what Meta signed, so the parsed body can't be used for verification.
+app.use(express.json({ limit: '50mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // Disable caching of HTML files so users always get the latest UI without
 // needing a hard-reload. This is critical for ngrok-tunnelled deployments
@@ -1914,130 +1918,358 @@ app.get('/api/traders/by-name/:name', requireViewOrLotEntry, (req, res) => {
 });
 
 // ── WhatsApp Cloud API (Meta) ─────────────────────────────────
-// Optional automation: when WHATSAPP_TOKEN + WHATSAPP_PHONE_ID env vars
-// are set, these endpoints push messages directly via Meta's Graph API.
-// When env is unset, return 501 so the client falls back to its manual
+// Production send path: every Cloud message goes through a Meta-APPROVED
+// TEMPLATE, so we can message anyone — including contacts who have never
+// messaged us (no 24h customer-service-window restriction). PDFs ride
+// inside a document-header template. When credentials are unset the send
+// endpoints return 501 so the client falls back to its manual
 // (web.whatsapp.com link / Web Share API) flow without erroring.
 //
+// Credentials resolve ENV-FIRST, then the DB (whatsapp_config table, set
+// via the in-app Settings card). This lets Railway use dashboard vars and
+// the desktop/in-app user paste creds without touching the environment.
+//
 // Setup: https://developers.facebook.com/docs/whatsapp/cloud-api
-//   1. Create a Meta Business account → add a WhatsApp Business phone.
-//   2. Generate a permanent access token, capture the phone-number-id.
-//   3. Set env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID
-//   4. (Outbound to non-customers needs an approved message template;
-//      conversation-initiated messages within 24h work without templates.)
-function _waConfigured() {
-  return Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
+//   1. Meta Business → WhatsApp → API Setup: capture Phone number ID + WABA ID.
+//   2. Generate a PERMANENT system-user token (scopes whatsapp_business_messaging
+//      + whatsapp_business_management). App secret from App → Settings → Basic.
+//   3. Create + get approval for two templates (see /api/whatsapp/config card):
+//      a DOCUMENT template (header=Document) for PDF sends, and a TEXT template.
+//      Both use body "Dear {{1}}, {{2}} Regards, {{3}}." → name, summary, company.
+//   4. Webhook: set Callback URL to <host>/api/whatsapp/webhook + a verify token,
+//      subscribe to the "messages" field. Delivery receipts then flow back in.
+//   5. Set the values via env (below) or the in-app Settings → Integrations card.
+//      Env keys: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, WHATSAPP_WABA_ID,
+//      WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_TPL_DOCUMENT,
+//      WHATSAPP_TPL_TEXT.
+
+// Resolve effective config: process.env wins over the DB row. Returns a
+// flat object plus `configured` (token + phoneId both present) and
+// `source` ('env' | 'db' | 'none') indicating where the live creds came from.
+function _waConfig(db) {
+  let row = {};
+  try { row = db.get('SELECT * FROM whatsapp_config WHERE id = 1') || {}; } catch (_) { row = {}; }
+  const envv = (k) => (process.env[k] && String(process.env[k]).trim()) || '';
+  const dbv = (c) => (row[c] != null && String(row[c]).trim()) || '';
+  const pick = (k, c) => envv(k) || dbv(c);
+  const token = pick('WHATSAPP_TOKEN', 'access_token');
+  const phoneId = pick('WHATSAPP_PHONE_ID', 'phone_id');
+  let source = 'none';
+  if (token && phoneId) source = (envv('WHATSAPP_TOKEN') && envv('WHATSAPP_PHONE_ID')) ? 'env' : 'db';
+  return {
+    token, phoneId,
+    wabaId:          pick('WHATSAPP_WABA_ID', 'waba_id'),
+    appSecret:       pick('WHATSAPP_APP_SECRET', 'app_secret'),
+    verifyToken:     pick('WHATSAPP_VERIFY_TOKEN', 'verify_token'),
+    displayNumber:   dbv('display_number'),
+    tplDocument:     pick('WHATSAPP_TPL_DOCUMENT', 'tpl_document'),
+    tplDocumentLang: dbv('tpl_document_lang') || 'en',
+    tplText:         pick('WHATSAPP_TPL_TEXT', 'tpl_text'),
+    tplTextLang:     dbv('tpl_text_lang') || 'en',
+    configured: Boolean(token && phoneId),
+    source,
+  };
 }
-async function _waPost(path, body) {
-  const url = `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_ID}${path}`;
+function _waNormalizePhone(tel) {
+  const d = String(tel || '').replace(/\D/g, '');
+  if (!d) return '';
+  return d.length === 10 ? '91' + d : d; // default IN country code
+}
+// Parse positional template body params from a request. JSON bodies send an
+// array directly; multipart sends a JSON-encoded string (or a bare string).
+function _waParseParams(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw == null || raw === '') return [];
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (s.startsWith('[')) { try { const a = JSON.parse(s); return Array.isArray(a) ? a : [s]; } catch (_) { return [s]; } }
+    return [s];
+  }
+  return [];
+}
+// POST to the Graph API messages-or-other endpoint with the resolved creds.
+async function _waGraphPost(cfg, path, body) {
+  const url = `https://graph.facebook.com/v18.0/${cfg.phoneId}${path}`;
   const r = await fetch(url, {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + process.env.WHATSAPP_TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': 'Bearer ' + cfg.token, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error && j.error.message ? j.error.message : `Cloud API error ${r.status}`);
   return j;
 }
-function _waNormalizePhone(tel) {
-  const d = String(tel || '').replace(/\D/g, '');
-  if (!d) return '';
-  return d.length === 10 ? '91' + d : d;
+// Upload a PDF buffer to Meta /media → returns a media_id usable for ~30 days.
+async function _waUploadMedia(cfg, buffer, filename) {
+  const fd = new FormData();
+  fd.append('messaging_product', 'whatsapp');
+  fd.append('type', 'application/pdf');
+  fd.append('file', new Blob([buffer], { type: 'application/pdf' }), filename || 'document.pdf');
+  const r = await fetch(`https://graph.facebook.com/v18.0/${cfg.phoneId}/media`, {
+    method: 'POST', headers: { 'Authorization': 'Bearer ' + cfg.token }, body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.id) throw new Error((j.error && j.error.message) || `Media upload failed ${r.status}`);
+  return j.id;
+}
+// Send an approved template. Includes the document header component only
+// when a media id is supplied; the body component carries positional params.
+async function _waSendTemplate(cfg, { phone, template, lang, bodyParams = [], documentMediaId = null, filename = 'document.pdf' }) {
+  const components = [];
+  if (documentMediaId) {
+    components.push({ type: 'header', parameters: [{ type: 'document', document: { id: documentMediaId, filename } }] });
+  }
+  if (bodyParams.length) {
+    // Meta rejects template body params containing newlines, tabs, or 5+
+    // consecutive spaces. Flatten multi-line summaries (e.g. lot receipts)
+    // into a single line so any caller's text is accepted.
+    const clean = (t) => String(t == null ? '' : t)
+      .replace(/\r?\n+/g, ' · ')
+      .replace(/\t+/g, ' ')
+      .replace(/ {2,}/g, ' ')
+      .trim();
+    components.push({ type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: clean(t) })) });
+  }
+  const tpl = { name: template, language: { code: lang || 'en' } };
+  if (components.length) tpl.components = components;
+  const out = await _waGraphPost(cfg, '/messages', {
+    messaging_product: 'whatsapp', to: phone, type: 'template', template: tpl,
+  });
+  return out.messages && out.messages[0] && out.messages[0].id;
+}
+// Append a row to the send log. Best-effort — never throws into a handler.
+function _waLog(db, f) {
+  try {
+    db.run(
+      `INSERT INTO whatsapp_messages (wamid, direction, phone, msg_type, caption, status, error, ref_type, ref_id)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [f.wamid || '', f.direction || 'out', f.phone || '', f.msg_type || '',
+       f.caption || '', f.status || 'queued', f.error || '', f.ref_type || '', f.ref_id || '']
+    );
+  } catch (_) { /* logging must not break sends */ }
 }
 
-// Send a plain text message. Body: { phone, message }
-app.post('/api/whatsapp/send-text', requireView, async (req, res) => {
-  if (!_waConfigured()) return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
-  try {
-    const phone = _waNormalizePhone(req.body.phone);
-    const message = String(req.body.message || '');
-    if (!phone || !message) return res.status(400).json({ error: 'phone and message required' });
-    const out = await _waPost('/messages', {
-      messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: message },
-    });
-    res.json({ ok: true, id: out.messages && out.messages[0] && out.messages[0].id });
-  } catch (e) { res.status(502).json({ error: e.message }); }
+// ── Status / config / diagnostics ─────────────────────────────
+// Connection status for the client capability probe + Settings card. NEVER
+// returns the token/app-secret/verify-token — only booleans + non-secret
+// identifiers. When configured, best-effort pings Graph for live health.
+app.get('/api/whatsapp/status', requireView, async (req, res) => {
+  const cfg = _waConfig(getDb());
+  const result = {
+    configured: cfg.configured,
+    source: cfg.source,
+    phoneId: cfg.phoneId,
+    wabaId: cfg.wabaId,
+    displayNumber: cfg.displayNumber,
+    hasToken: !!cfg.token,
+    hasAppSecret: !!cfg.appSecret,
+    hasVerifyToken: !!cfg.verifyToken,
+    tplDocument: cfg.tplDocument,
+    tplDocumentLang: cfg.tplDocumentLang,
+    tplText: cfg.tplText,
+    tplTextLang: cfg.tplTextLang,
+    webhookReady: !!(cfg.verifyToken && cfg.appSecret),
+    qualityRating: null,
+    displayPhone: null,
+    verifiedName: null,
+    live: false,
+    liveError: null,
+  };
+  if (cfg.configured) {
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 4000);
+      const r = await fetch(
+        `https://graph.facebook.com/v18.0/${cfg.phoneId}?fields=display_phone_number,quality_rating,verified_name`,
+        { headers: { 'Authorization': 'Bearer ' + cfg.token }, signal: ctrl.signal }
+      );
+      clearTimeout(to);
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        result.qualityRating = j.quality_rating || null;
+        result.displayPhone = j.display_phone_number || null;
+        result.verifiedName = j.verified_name || null;
+        result.live = true;
+      } else {
+        result.liveError = (j.error && j.error.message) || `HTTP ${r.status}`;
+      }
+    } catch (e) {
+      result.liveError = e.name === 'AbortError' ? 'Timed out contacting Meta' : e.message;
+    }
+  }
+  res.json(result);
 });
 
-// Send a document by URL. Body: { phone, caption, doc_url } where
-// doc_url is a publicly reachable URL Meta will fetch the PDF from.
-// Kept for callers that already have a hosted URL; for locally-generated
-// PDFs use /api/whatsapp/send-pdf below (multipart upload → Meta /media).
-app.post('/api/whatsapp/send-document', requireView, async (req, res) => {
-  if (!_waConfigured()) return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
+// Upsert WhatsApp credentials + template config. Secrets (token, app
+// secret, verify token) are write-only: a blank/absent value leaves the
+// stored secret UNCHANGED, so saving other fields never wipes them. The
+// client can resend non-secret fields (it gets them back from /status).
+app.put('/api/whatsapp/config', requireSettingsWrite, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const sets = [];
+  const vals = [];
+  const put = (col, val) => { sets.push(`${col} = ?`); vals.push(val); };
+  const putSecret = (col, val) => { if (typeof val === 'string' && val.trim()) put(col, val.trim()); };
+  const putField = (col, val, dflt) => { if (val !== undefined) put(col, String(val).trim() || (dflt || '')); };
+  putSecret('access_token', b.token);
+  putSecret('app_secret', b.appSecret);
+  putSecret('verify_token', b.verifyToken);
+  putField('phone_id', b.phoneId);
+  putField('waba_id', b.wabaId);
+  putField('display_number', b.displayNumber);
+  putField('tpl_document', b.tplDocument);
+  putField('tpl_document_lang', b.tplDocumentLang, 'en');
+  putField('tpl_text', b.tplText);
+  putField('tpl_text_lang', b.tplTextLang, 'en');
+  if (b.enabled !== undefined) put('enabled', b.enabled ? 1 : 0);
+  if (!sets.length) return res.json({ ok: true, updated: 0 });
   try {
-    const phone = _waNormalizePhone(req.body.phone);
-    const caption = String(req.body.caption || '');
-    const docUrl = String(req.body.doc_url || '');
-    if (!phone || !docUrl) return res.status(400).json({ error: 'phone and doc_url required' });
-    const out = await _waPost('/messages', {
-      messaging_product: 'whatsapp', to: phone, type: 'document',
-      document: { link: docUrl, caption, filename: req.body.filename || 'document.pdf' },
-    });
-    res.json({ ok: true, id: out.messages && out.messages[0] && out.messages[0].id });
-  } catch (e) { res.status(502).json({ error: e.message }); }
+    db.run(`UPDATE whatsapp_config SET ${sets.join(', ')}, updated_at = datetime('now','localtime') WHERE id = 1`, vals);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true, updated: sets.length });
 });
 
-// Send a locally-generated PDF via WhatsApp Cloud API. Two-step Meta
-// flow: (1) POST the file to /{phone-id}/media to get a media_id,
-// (2) POST a document message referencing that media_id.
-//
-// Body (multipart/form-data):
+// Fire a test send (text template) to verify the whole pipeline. Surfaces
+// the exact Meta error so the user can self-diagnose from the Settings card.
+app.post('/api/whatsapp/test', requireSettingsWrite, async (req, res) => {
+  const db = getDb();
+  const cfg = _waConfig(db);
+  if (!cfg.configured) return res.status(400).json({ error: 'Token and Phone number ID are required first.' });
+  if (!cfg.tplText) return res.status(400).json({ error: 'Set an approved Text template name first.' });
+  const phone = _waNormalizePhone(req.body.phone);
+  if (!phone) return res.status(400).json({ error: 'Recipient phone required.' });
+  const params = _waParseParams(req.body.params);
+  const bodyParams = params.length ? params
+    : ['Test', 'this is a test message confirming your WhatsApp Cloud API setup works.', cfg.verifiedName || 'Spice e-Trade'];
+  try {
+    const wamid = await _waSendTemplate(cfg, { phone, template: cfg.tplText, lang: cfg.tplTextLang, bodyParams });
+    _waLog(db, { wamid, phone, msg_type: 'template-text', caption: '[test]', status: 'sent', ref_type: 'test' });
+    res.json({ ok: true, id: wamid });
+  } catch (e) {
+    _waLog(db, { phone, msg_type: 'template-text', caption: '[test]', status: 'failed', error: e.message, ref_type: 'test' });
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// ── Primary send paths (always template) ──────────────────────
+// Text-only template send. Body: { phone, params:[…], ref_type?, ref_id? }.
+app.post('/api/whatsapp/send-template-text', requireView, async (req, res) => {
+  const db = getDb();
+  const cfg = _waConfig(db);
+  if (!cfg.configured) return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
+  if (!cfg.tplText) return res.status(400).json({ error: 'No text template configured', fallback: true });
+  const phone = _waNormalizePhone(req.body.phone);
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  const bodyParams = _waParseParams(req.body.params);
+  try {
+    const wamid = await _waSendTemplate(cfg, { phone, template: cfg.tplText, lang: cfg.tplTextLang, bodyParams });
+    _waLog(db, { wamid, phone, msg_type: 'template-text', caption: bodyParams[1] || '', status: 'sent',
+      ref_type: req.body.ref_type || '', ref_id: req.body.ref_id || '' });
+    res.json({ ok: true, id: wamid });
+  } catch (e) {
+    _waLog(db, { phone, msg_type: 'template-text', caption: bodyParams[1] || '', status: 'failed', error: e.message,
+      ref_type: req.body.ref_type || '', ref_id: req.body.ref_id || '' });
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// Document template send — delivers a locally-generated PDF to ANYONE
+// (cold) via an approved document-header template. Multipart body:
 //   file     — the PDF blob (required)
 //   phone    — recipient (required; 10-digit IN auto-prefixed with 91)
-//   caption  — text shown below the document in WhatsApp (optional)
+//   params   — JSON array of positional body params (name, summary, company)
 //   filename — display name for the attachment (optional)
-//
-// Same 501/502 contract as the other endpoints so the client can fall
-// back to the wa.me manual flow when API is unset / Meta rejects.
-app.post('/api/whatsapp/send-pdf', requireView, upload.single('file'), async (req, res) => {
-  if (!_waConfigured()) {
-    if (req.file) fs.unlink(req.file.path, () => {});
-    return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true });
-  }
+//   ref_type / ref_id — optional traceability back to the source record
+// Same 501/502 contract so the client falls back to the manual flow.
+app.post('/api/whatsapp/send-template-document', requireView, upload.single('file'), async (req, res) => {
+  const db = getDb();
+  const cfg = _waConfig(db);
+  const cleanup = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  if (!cfg.configured) { cleanup(); return res.status(501).json({ error: 'WhatsApp Cloud API not configured', fallback: true }); }
+  if (!cfg.tplDocument) { cleanup(); return res.status(400).json({ error: 'No document template configured', fallback: true }); }
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const phone = _waNormalizePhone(req.body.phone);
+  const filename = String(req.body.filename || req.file.originalname || 'document.pdf');
+  const bodyParams = _waParseParams(req.body.params);
+  if (!phone) { cleanup(); return res.status(400).json({ error: 'phone required' }); }
   try {
-    const phone = _waNormalizePhone(req.body.phone);
-    const caption = String(req.body.caption || '');
-    const filename = String(req.body.filename || req.file.originalname || 'document.pdf');
-    if (!phone) return res.status(400).json({ error: 'phone required' });
-
-    // Step 1: upload to Meta /media. Meta expects multipart with
-    // messaging_product/type/file fields. Node 18+ has native FormData
-    // and Blob — no extra deps required.
-    const fileBuffer = fs.readFileSync(req.file.path);
-    const fd = new FormData();
-    fd.append('messaging_product', 'whatsapp');
-    fd.append('type', 'application/pdf');
-    fd.append('file', new Blob([fileBuffer], { type: 'application/pdf' }), filename);
-
-    const mediaUrl = `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_ID}/media`;
-    const mediaRes = await fetch(mediaUrl, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + process.env.WHATSAPP_TOKEN },
-      body: fd,
+    const buffer = fs.readFileSync(req.file.path);
+    const mediaId = await _waUploadMedia(cfg, buffer, filename);
+    const wamid = await _waSendTemplate(cfg, {
+      phone, template: cfg.tplDocument, lang: cfg.tplDocumentLang,
+      bodyParams, documentMediaId: mediaId, filename,
     });
-    const mediaJson = await mediaRes.json().catch(() => ({}));
-    if (!mediaRes.ok || !mediaJson.id) {
-      const msg = (mediaJson.error && mediaJson.error.message) || `Media upload failed ${mediaRes.status}`;
-      throw new Error(msg);
-    }
-
-    // Step 2: send the document message referencing the media id.
-    const out = await _waPost('/messages', {
-      messaging_product: 'whatsapp', to: phone, type: 'document',
-      document: { id: mediaJson.id, caption, filename },
-    });
-    res.json({
-      ok: true,
-      id: out.messages && out.messages[0] && out.messages[0].id,
-      mediaId: mediaJson.id,
-    });
+    _waLog(db, { wamid, phone, msg_type: 'template-document', caption: bodyParams[1] || filename, status: 'sent',
+      ref_type: req.body.ref_type || '', ref_id: req.body.ref_id || '' });
+    res.json({ ok: true, id: wamid, mediaId });
   } catch (e) {
+    _waLog(db, { phone, msg_type: 'template-document', caption: bodyParams[1] || filename, status: 'failed', error: e.message,
+      ref_type: req.body.ref_type || '', ref_id: req.body.ref_id || '' });
     res.status(502).json({ error: e.message });
   } finally {
-    if (req.file) fs.unlink(req.file.path, () => {});
+    cleanup();
   }
+});
+
+// ── Send log ───────────────────────────────────────────────────
+app.get('/api/whatsapp/messages', requireView, (req, res) => {
+  const db = getDb();
+  const rows = db.all(
+    `SELECT id, wamid, direction, phone, msg_type, caption, status, error, ref_type, ref_id, created_at, updated_at
+     FROM whatsapp_messages ORDER BY id DESC LIMIT 100`
+  );
+  res.json(rows);
+});
+
+// ── Webhook (PUBLIC — Meta calls these unauthenticated) ────────
+// GET: verification handshake. Echo hub.challenge when the verify token matches.
+app.get('/api/whatsapp/webhook', (req, res) => {
+  const cfg = _waConfig(getDb());
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && cfg.verifyToken && token === cfg.verifyToken) {
+    return res.status(200).send(String(challenge == null ? '' : challenge));
+  }
+  return res.sendStatus(403);
+});
+// POST: delivery-status + inbound-message events. Verify Meta's HMAC
+// signature over the RAW body (captured by the express.json verify hook),
+// then update the send log / record inbound replies. Always 200 fast —
+// Meta retries aggressively on any non-2xx.
+app.post('/api/whatsapp/webhook', (req, res) => {
+  const db = getDb();
+  const cfg = _waConfig(db);
+  if (cfg.appSecret) {
+    const sig = req.get('X-Hub-Signature-256') || '';
+    const expected = 'sha256=' + crypto.createHmac('sha256', cfg.appSecret).update(req.rawBody || Buffer.from('')).digest('hex');
+    const a = Buffer.from(sig), b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.sendStatus(401);
+  }
+  try {
+    for (const entry of (req.body && req.body.entry) || []) {
+      for (const change of (entry.changes || [])) {
+        const v = change.value || {};
+        for (const st of (v.statuses || [])) {
+          const wamid = st.id || '';
+          const status = st.status || '';
+          const err = (st.errors && st.errors[0] && (st.errors[0].title || st.errors[0].message)) || '';
+          if (wamid && status) {
+            try {
+              db.run("UPDATE whatsapp_messages SET status = ?, error = ?, updated_at = datetime('now','localtime') WHERE wamid = ?",
+                [status, err, wamid]);
+            } catch (_) {}
+          }
+        }
+        for (const m of (v.messages || [])) {
+          const body = (m.text && m.text.body) || m.type || '';
+          try { db.run('INSERT INTO whatsapp_inbound (wamid, phone, body) VALUES (?,?,?)', [m.id || '', m.from || '', String(body)]); } catch (_) {}
+        }
+      }
+    }
+  } catch (_) { /* never let a malformed payload 500 — Meta would retry forever */ }
+  res.sendStatus(200);
 });
 
 app.get('/api/traders/:id', requireViewOrLotEntry, (req, res) => {
