@@ -326,11 +326,12 @@ select:focus{border-color:var(--green)}
 
         <!-- Weight w/ Gunny + total Gunny Weight — sits ABOVE Net Wt so the
              operator types the gross weight first and watches Net Wt
-             populate. Visible only when showExtraLotFields is on. Gunny
+             populate. ALWAYS visible (independent of showExtraLotFields,
+             which gates only Crop Receipt + Reserved Price). Gunny
              Weight is the total tare (read-only) = default gunny weight ×
              bags; Net Wt below is auto-derived as: weight_w_gunny −
              gunny_weight. -->
-        <div id="le-gunny-wrap" style="display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+        <div id="le-gunny-wrap" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
           <div><div class="elb">W/ GUNNY</div><input type="text" id="le-wwg" placeholder="0.000" inputmode="decimal" class="ein" oninput="sanitizeDec(this);calcNetFromGunny()"></div>
           <div><div class="elb">GUNNY WT</div><input type="text" id="le-gunny-wt" readonly class="ein" style="background:var(--bg);color:var(--text3);font-weight:600" title="Total gunny weight = default gunny weight × bags"></div>
         </div>
@@ -622,29 +623,25 @@ function applyExtraFieldsVisibility(){
   var gunnyWtEl=document.getElementById('le-gunny-wt');
   var qtyEl=document.getElementById('le-qty');
   if(!qtyEl)return;
-  if(cfgShowExtraFields){
-    if(wrap)wrap.style.display='grid';
-    if(gunnyWrap)gunnyWrap.style.display='grid';
-    // Seed the read-only Gunny Weight display with the total tare
-    // (default gunny weight × bags) so the operator sees exactly what is
-    // being subtracted (format to 3 decimals to match the other weight
-    // inputs).
-    if(gunnyWtEl){
-      var g=Number(cfgGunnyWeight)||0;
-      var bags=parseInt(document.getElementById('le-bags').value,10)||0;
-      var total=g*bags;
-      gunnyWtEl.value=total>0?total.toFixed(3):'0.000';
-    }
-    qtyEl.readOnly=true;
-    qtyEl.style.background='var(--bg)';
-    qtyEl.style.color='var(--text3)';
-  }else{
-    if(wrap)wrap.style.display='none';
-    if(gunnyWrap)gunnyWrap.style.display='none';
-    qtyEl.readOnly=false;
-    qtyEl.style.background='';
-    qtyEl.style.color='';
+  // Crop Receipt + Reserved Price are gated by the "Show Extra Lot Fields"
+  // setting — that flag covers ONLY these two fields.
+  if(wrap)wrap.style.display=cfgShowExtraFields?'grid':'none';
+  // Weight w/ Gunny + Gunny Weight are ALWAYS shown, independent of the
+  // flag, so Net Wt is always auto-derived as gross − gunny tare.
+  if(gunnyWrap)gunnyWrap.style.display='grid';
+  // Seed the read-only Gunny Weight display with the total tare
+  // (default gunny weight × bags) so the operator sees exactly what is
+  // being subtracted (format to 3 decimals to match the other weight
+  // inputs).
+  if(gunnyWtEl){
+    var g=Number(cfgGunnyWeight)||0;
+    var bags=parseInt(document.getElementById('le-bags').value,10)||0;
+    var total=g*bags;
+    gunnyWtEl.value=total>0?total.toFixed(3):'0.000';
   }
+  qtyEl.readOnly=true;
+  qtyEl.style.background='var(--bg)';
+  qtyEl.style.color='var(--text3)';
 }
 // Auto-calc Net = Weight w/ Gunny − Gunny Weight when the operator types
 // into Weight w/ Gunny — and also when Bags changes (see onBagsInput)
@@ -667,7 +664,9 @@ function calcNetFromGunny(){
 // has to re-derive Net Wt. No-op when extras are off so the legacy
 // operator-typed Net Wt flow is unaffected.
 function onBagsInput(){
-  if(cfgShowExtraFields)calcNetFromGunny();
+  // Bags feeds the Net Wt formula (Bags × default gunny = tare). The
+  // gunny-weight fields are always shown now, so always re-derive Net.
+  calcNetFromGunny();
 }
 function applyLabels(){
   var L=cfgLabels;
@@ -822,18 +821,24 @@ function renderLotGrid(){
   var myBranch=allocStats?allocStats.find(function(s){return s.branch===br}):null;
   if(!myBranch||!myBranch.ranges){grid.innerHTML='<span style="font-size:10px;color:var(--text3)">No lots allocated</span>';return}
   availableLots=[];
-  var html='';
+  var html='';var total=0;
   myBranch.ranges.forEach(function(rng){
     if(rng.lots){
       rng.lots.forEach(function(l){
+        total++;
+        // Show ONLY available (not-yet-entered) lots — skip lots already
+        // entered for this branch so the grid stays focused on what's left.
+        if(l.used)return;
         var cls='lot-chip';
-        if(l.used)cls+=' used';
-        else{availableLots.push(l.lot);if(selectedLots.indexOf(l.lot)>=0)cls+=' selected'}
-        html+='<span class="'+cls+'" data-lot="'+l.lot+'" '+(l.used?'':'onclick="toggleLotChip(this)"')+'>'+l.lot+'</span>';
+        if(selectedLots.indexOf(l.lot)>=0)cls+=' selected';
+        availableLots.push(l.lot);
+        html+='<span class="'+cls+'" data-lot="'+l.lot+'" onclick="toggleLotChip(this)">'+l.lot+'</span>';
       });
     }
   });
-  grid.innerHTML=html||'<span style="font-size:10px;color:var(--text3)">No lots</span>';
+  grid.innerHTML=html||(total>0
+    ? '<span style="font-size:10px;color:var(--green);font-weight:600">✓ All allotted lots entered</span>'
+    : '<span style="font-size:10px;color:var(--text3)">No lots</span>');
   updateLotSelection();
 }
 
@@ -1284,13 +1289,15 @@ list.innerHTML=lots.map(l=>{const g=String(l.grade||''),q=Number(l.qty).toFixed(
 // individually if blank so a lot that has only one of the three doesn't
 // render dangling separators.
 var extraLine='';
+var bits=[];
+// Crop Receipt + Reserved Price: only when the "Show Extra Lot Fields" flag is on.
 if(cfgShowExtraFields){
-  var bits=[];
   if(l.crop_receipt_no!=null) bits.push('Rcpt '+l.crop_receipt_no);
   if(Number(l.reserved_price)>0) bits.push('₹'+Number(l.reserved_price).toFixed(2));
-  if(Number(l.weight_with_gunny)>0) bits.push('w/g '+Number(l.weight_with_gunny).toFixed(3)+' kg');
-  if(bits.length) extraLine='<div class="lot-meta" style="opacity:.85">'+bits.join(' · ')+'</div>';
 }
+// Weight w/ Gunny: always shown when present (independent of the flag).
+if(Number(l.weight_with_gunny)>0) bits.push('w/g '+Number(l.weight_with_gunny).toFixed(3)+' kg');
+if(bits.length) extraLine='<div class="lot-meta" style="opacity:.85">'+bits.join(' · ')+'</div>';
 return`<div class="lot-card"><div class="lot-hdr"><label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="ml-cb" value="${l.id}" onchange="updateMySelCount()" style="width:16px;height:16px"><span class="lot-num">#${l.lot_no}</span></label><span style="font-size:10px;color:var(--text3)">${l.user_id} · ${l.created_at?l.created_at.split(' ')[1]||'':''}</span></div><div class="lot-row"><div class="lot-name"><span style="color:var(--green);text-decoration:underline;cursor:pointer" onclick="showBankPop(event,'${tn}','${(l.acctnum||'').replace(/'/g,"\\'")}','${(l.ifsc||'').replace(/'/g,"\\'")}','${(l.tel||'').replace(/'/g,"\\'")}','${(l.cr||'').replace(/'/g,"\\'")}')">${l.trader_name}</span></div><div class="lot-actions"><button class="ico-btn pr" onclick="printLot(${l.id})" title="Print receipt">${ICO_PRINT}</button>${editBtns}</div></div><div class="lot-meta">${g} | ${l.bags} bags | ${l.litre} L | <strong>${q} kg</strong> · ${l.ppla||''}</div>${extraLine}</div>`}).join('');updateMySelCount()}
 
 function updateMySelCount(){const checked=document.querySelectorAll('.ml-cb:checked').length;const bar=document.getElementById('ml-actions');const cnt=document.getElementById('ml-sel-count');const hasLots=allMyLots&&allMyLots.length>0;bar.style.display=hasLots?'flex':'none';cnt.textContent=checked>0?checked+' selected':''}

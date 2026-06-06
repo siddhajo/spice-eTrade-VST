@@ -3542,11 +3542,12 @@ input[type="search"]:focus{
 
         <!-- Weight w/ Gunny + total Gunny Weight — sits ABOVE Net Wt so the
              operator types the gross weight first and watches Net Wt
-             populate. Visible only when `show_extra_lot_fields` is on.
+             populate. ALWAYS visible (independent of show_extra_lot_fields,
+             which gates only Crop Receipt + Reserved Price).
              Gunny Weight is the total tare (read-only), derived as
              default gunny weight × bags; Net Wt below is auto-derived as:
              weight_w_gunny − gunny_weight. -->
-        <div id="le-gunny-wrap" style="display:none;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
+        <div id="le-gunny-wrap" style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
           <div>
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Weight w/ Gunny (kg)</div>
             <input type="number" id="le-wwg" step="0.001" min="0" placeholder="0.000" oninput="leCalcNetFromGunny()" style="width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
@@ -9537,31 +9538,26 @@ function leApplyExtraFieldsVisibility(){
   const gunnyWtEl = document.getElementById('le-gunny-wt');
   const qtyEl = document.getElementById('le-qty');
   if (!qtyEl) return;
-  if (_le.showExtraFields) {
-    if (wrap) wrap.style.display = 'grid';
-    if (gunnyWrap) gunnyWrap.style.display = 'grid';
-    // Seed the read-only Gunny Weight display with the total tare
-    // (default gunny weight × bags) so the operator sees exactly what is
-    // being subtracted. Format to 3 decimals to match the other weight
-    // inputs on this row.
-    if (gunnyWtEl) {
-      const g = Number(_le.gunnyWeight) || 0;
-      const bags = parseInt(document.getElementById('le-bags').value, 10) || 0;
-      const total = g * bags;
-      gunnyWtEl.value = total > 0 ? total.toFixed(3) : '0.000';
-    }
-    qtyEl.readOnly = true;
-    qtyEl.style.background = 'var(--bg)';
-    qtyEl.style.color = 'var(--text3)';
-    qtyEl.title = 'Net = Weight w/ Gunny − Gunny Weight — auto-calculated';
-  } else {
-    if (wrap) wrap.style.display = 'none';
-    if (gunnyWrap) gunnyWrap.style.display = 'none';
-    qtyEl.readOnly = false;
-    qtyEl.style.background = '';
-    qtyEl.style.color = 'var(--green)';
-    qtyEl.title = '';
+  // Crop Receipt + Reserved Price are gated by the "Show Extra Lot Fields"
+  // setting — that flag covers ONLY these two fields.
+  if (wrap) wrap.style.display = _le.showExtraFields ? 'grid' : 'none';
+  // Weight w/ Gunny + Gunny Weight are ALWAYS shown, independent of the
+  // flag, so Net Weight is always auto-derived as gross − gunny tare.
+  if (gunnyWrap) gunnyWrap.style.display = 'grid';
+  // Seed the read-only Gunny Weight display with the total tare
+  // (default gunny weight × bags) so the operator sees exactly what is
+  // being subtracted. Format to 3 decimals to match the other weight
+  // inputs on this row.
+  if (gunnyWtEl) {
+    const g = Number(_le.gunnyWeight) || 0;
+    const bags = parseInt(document.getElementById('le-bags').value, 10) || 0;
+    const total = g * bags;
+    gunnyWtEl.value = total > 0 ? total.toFixed(3) : '0.000';
   }
+  qtyEl.readOnly = true;
+  qtyEl.style.background = 'var(--bg)';
+  qtyEl.style.color = 'var(--text3)';
+  qtyEl.title = 'Net = Weight w/ Gunny − Gunny Weight — auto-calculated';
 }
 
 // Auto-calculate Net = Weight w/ Gunny − Gunny Weight whenever the
@@ -9587,7 +9583,9 @@ function leCalcNetFromGunny(){
 // has to re-derive Net Wt. No-op when extras are off so the legacy
 // operator-typed Net Wt flow is unaffected.
 function leOnBagsInput(){
-  if (_le && _le.showExtraFields) leCalcNetFromGunny();
+  // Bags feeds the Net Wt formula (Bags × default gunny = tare). The
+  // gunny-weight fields are always shown now, so always re-derive Net.
+  if (_le) leCalcNetFromGunny();
 }
 
 function leCalcGross(){
@@ -13765,8 +13763,18 @@ async function lookupBankByIfsc(input){
     _ifscLookupCache.set(ifsc, data);
   }
   if (!data) { hintEl.textContent = ''; return; }
-  // Only overwrite Bank Name when blank — preserves any manual edit.
-  if (nameEl && !nameEl.value.trim() && data.BANK) nameEl.value = data.BANK;
+  // Overwrite Bank Name when it's blank OR still holds the value a previous
+  // IFSC lookup auto-filled (tracked in dataset.ifscAuto). This lets a
+  // changed IFSC update the bank name too — the old code only filled when
+  // blank, so switching IFSC left the first bank's name stale. A genuine
+  // manual edit (value differs from the last auto-fill) is preserved.
+  if (nameEl && data.BANK) {
+    const cur = nameEl.value.trim();
+    if (!cur || cur === (nameEl.dataset.ifscAuto || '')) {
+      nameEl.value = data.BANK;
+      nameEl.dataset.ifscAuto = data.BANK;
+    }
+  }
   if (branchEl) branchEl.value = data.BRANCH || '';
   if (hintEl)   hintEl.textContent = data.BRANCH ? 'Branch: ' + data.BRANCH : '';
 }
