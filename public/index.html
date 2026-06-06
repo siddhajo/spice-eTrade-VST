@@ -1077,9 +1077,9 @@ body:not([data-feat-debit-notes="1"]) .feat-debit-notes{display:none !important}
    Lots toolbar are tagged .feat-price-list-mapping so this single
    rule hides both when the flag is OFF. */
 body:not([data-feat-price-list-mapping="1"]) .feat-price-list-mapping{display:none !important}
-/* feat-discount-in-prate gates the Lots → "👤 Set Buyer" bulk button
-   (wired to the "Roll Discount into P_Rate (Grade 1 only)" toggle per
-   operator request). Hidden unless flag_discount_in_prate is ON. */
+/* feat-discount-in-prate gates the Lots → "🏷 Set Grade 1" bulk button
+   (wired to the "Roll Discount into P_Rate (Grade 1 only)" toggle).
+   Hidden unless flag_discount_in_prate is ON. */
 body:not([data-feat-discount-in-prate="1"]) .feat-discount-in-prate{display:none !important}
 /* "Print Selected Purchase" button on the Sales tab — niche
    "purchase-side mirror" PDF used by ASP/Kerala installs only.
@@ -1088,10 +1088,9 @@ body:not([data-feat-discount-in-prate="1"]) .feat-discount-in-prate{display:none
    layer still hides it outside Kerala business state, so the
    button needs BOTH the flag ON and Kerala active to appear. */
 body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{display:none !important}
-/* feat-lot-set-buyer gates the Lots → "🏷 Set Grade 1" bulk button
-   (wired to the "Lots → Set Buyer (bulk action)" toggle per operator
-   request). Two gates stack: flag_lot_set_buyer must be ON AND at least
-   one lot must be ticked. */
+/* feat-lot-set-buyer gates the Lots → "👤 Set Buyer" bulk button (wired
+   to the "Lots → Set Buyer (bulk action)" toggle). Two gates stack:
+   flag_lot_set_buyer must be ON AND at least one lot must be ticked. */
 body:not([data-feat-lot-set-buyer="1"]) .feat-lot-set-buyer{display:none !important}
 /* Price Check tab + its transaction gate. When OFF: the sidebar entry,
    tab content, gate banners, and Apply UI are hidden, AND pcRefreshGate
@@ -2000,7 +1999,7 @@ body[data-perm-lot-entry-view="1"] .side-item.needs-lot-entry-view{display:flex 
 /* ── Feature-flag hides MUST beat the .needs-* permission force-show ──
    The .btn.needs-* show rules above use !important at specificity (0,3,1).
    A button that is BOTH permission-gated AND feature-flag-gated (e.g.
-   Set Grade 1 = .needs-lot-write.feat-lot-set-buyer, Set Buyer =
+   Set Buyer = .needs-lot-write.feat-lot-set-buyer, Set Grade 1 =
    .needs-lot-write.feat-discount-in-prate) would otherwise stay VISIBLE
    for a permitted user even when the flag is OFF — the perm rule outranks
    the (0,2,1) flag-hide rule near the top of this stylesheet. These rules
@@ -3326,7 +3325,7 @@ input[type="search"]:focus{
                      on the flag (CSS rule above).
                    - BulkActions._sync flips display:none/inline based
                      on whether any lots are ticked. -->
-            <button id="lot-bulk-buyer" class="needs-lot-write feat-discount-in-prate btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-cardamom);color:#fff;font-weight:600" onclick="lotBulkSetBuyer()" title="Set the buyer code on every ticked lot — auto-fills the trade name + short code from the Buyers master">👤 Set Buyer <span id="lot-bulk-buyer-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-buyer" class="needs-lot-write feat-lot-set-buyer btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-cardamom);color:#fff;font-weight:600" onclick="lotBulkSetBuyer()" title="Set the buyer code on every ticked lot — auto-fills the trade name + short code from the Buyers master">👤 Set Buyer <span id="lot-bulk-buyer-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Bulk-grade button — only visible when at least one lot
                  is ticked AND flag_price_list_mapping is ON. The
                  button is part of the price-list-mapping workflow
@@ -3338,7 +3337,7 @@ input[type="search"]:focus{
                      based on the flag (CSS rule above).
                    - BulkActions._sync flips display:none/inline based
                      on whether any lots are ticked. -->
-            <button id="lot-bulk-grade" class="needs-lot-write feat-lot-set-buyer btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+            <button id="lot-bulk-grade" class="needs-lot-write feat-discount-in-prate btn" style="display:none !important;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="lotBulkSetGrade1()" title="Set the grade column on every ticked lot to '1' and recalculate">🏷 Set Grade 1 <span id="lot-bulk-grade-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- Lock Selected: any user with lot_write can confirm + lock
                  ticked lots. Hidden by default; BulkActions._sync (see
                  lock-action wiring below) shows it once a row is ticked. -->
@@ -6990,8 +6989,8 @@ async function applyFeatureFlags() {
   document.body.setAttribute('data-feat-debit-notes', featOn('flag_debit_notes') ? '1' : '0');
   document.body.setAttribute('data-feat-price-list-mapping', featOn('flag_price_list_mapping') ? '1' : '0');
   // flag_discount_in_prate defaults to OFF (not ON). Gates the Lots →
-  // "👤 Set Buyer" bulk button (.feat-discount-in-prate) per operator
-  // request — the button stays hidden until this toggle is enabled.
+  // "🏷 Set Grade 1" bulk button (.feat-discount-in-prate) — the button
+  // stays hidden until this toggle is enabled.
   const dipOn = cfg && (cfg.flag_discount_in_prate === true
     || String(cfg.flag_discount_in_prate || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-discount-in-prate', dipOn ? '1' : '0');
@@ -7001,9 +7000,9 @@ async function applyFeatureFlags() {
   const pspOn = cfg && (cfg.flag_print_selected_purchase === true
     || String(cfg.flag_print_selected_purchase || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-print-selected-purchase', pspOn ? '1' : '0');
-  // flag_lot_set_buyer defaults to OFF — gates the Lots → "🏷 Set Grade 1"
-  // bulk button (.feat-lot-set-buyer) per operator request; stays hidden
-  // until admin enables this toggle.
+  // flag_lot_set_buyer defaults to OFF — gates the Lots → "👤 Set Buyer"
+  // bulk button (.feat-lot-set-buyer); stays hidden until admin enables
+  // this toggle.
   const lsbOn = cfg && (cfg.flag_lot_set_buyer === true
     || String(cfg.flag_lot_set_buyer || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-lot-set-buyer', lsbOn ? '1' : '0');
