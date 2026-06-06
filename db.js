@@ -755,6 +755,11 @@ async function initDb() {
     'ALTER TABLE lots ADD COLUMN weight_with_gunny REAL DEFAULT 0',
     'ALTER TABLE lots ADD COLUMN crop_receipt_no INTEGER DEFAULT NULL',
     'ALTER TABLE lots ADD COLUMN reserved_price REAL DEFAULT 0',
+    // Per-lot bank account (FK trader_banks.id). Lets a seller's lots route
+    // payment to different accounts: the bank export derives each row's
+    // beneficiary account from the lots it covers, falling back to the
+    // seller's default account when a lot has no specific account.
+    'ALTER TABLE lots ADD COLUMN bank_id INTEGER DEFAULT NULL',
   ];
   for (const m of migrations) {
     try { wrapped.exec(m); console.log('Migration applied:', m); }

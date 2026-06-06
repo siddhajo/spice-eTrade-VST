@@ -567,6 +567,8 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     SUM(COALESCE(l.igst,0)) as total_igst,
     SUM(l.balance) as total_payable,
     COUNT(*) as lot_count,
+    GROUP_CONCAT(DISTINCT l.bank_id) AS bank_ids,
+    COUNT(l.bank_id) AS bank_lot_count,
     MAX(l.state) AS state
     FROM lots l WHERE l.auction_id = ? AND l.amount > 0`;
   const params = [auctionId];
@@ -662,6 +664,17 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       total_payable: manualDisc > 0
         ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
         : (Number(s.total_payable) || 0),
+      // True when this seller's lots point at more than one bank account
+      // (or a mix of tagged + untagged). Drives the "multiple banks" badge
+      // on the Payments table so the user knows to export each account's
+      // lots separately via the lot picker.
+      multipleBanks: (() => {
+        const ids = String(s.bank_ids || '').split(',')
+          .map(x => x.trim()).filter(x => x !== '' && x !== 'null');
+        const untagged = Number(s.lot_count || 0) > Number(s.bank_lot_count || 0);
+        const distinct = new Set(ids).size;
+        return distinct > 1 || (distinct >= 1 && untagged);
+      })(),
     };
   });
 }
@@ -720,7 +733,14 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
       GROUP_CONCAT(l.lot_no) as lot_nos,
       MAX(t.id) AS trader_id,
       MAX(t.ifsc) AS t_ifsc, MAX(t.acctnum) AS t_acctnum, MAX(t.holder_name) AS t_holder,
-      MAX(t.padd) AS padd, MAX(t.ppla) AS ppla, MAX(t.pin) AS pin
+      MAX(t.padd) AS padd, MAX(t.ppla) AS ppla, MAX(t.pin) AS pin,
+      -- Per-lot bank routing: distinct non-null bank_ids across this
+      -- seller's payable lots, plus counts so we can tell whether they
+      -- ALL share one account (single → use it) or differ (mixed → keep
+      -- the default account and flag multipleBanks for the UI).
+      GROUP_CONCAT(DISTINCT l.bank_id) AS bank_ids,
+      COUNT(*) AS lot_count,
+      COUNT(l.bank_id) AS bank_lot_count
     FROM lots l
     LEFT JOIN traders t ON t.id = l.trader_id
     WHERE l.auction_id = ? AND l.amount > 0
@@ -737,15 +757,19 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
   //   3. traders.ifsc/acctnum — legacy single-bank
   // Pre-fetch all default banks once (cheaper than per-seller query).
   const bankByTraderId = {};
+  // Also index every bank row by its own id so per-lot bank_id routing can
+  // resolve the exact account a seller's lots were tagged with.
+  const bankById = {};
   try {
     const banks = db.all(`
-      SELECT trader_id, ifsc, acctnum, holder_name, is_default, id
+      SELECT trader_id, ifsc, acctnum, holder_name, bank_name, is_default, id
         FROM trader_banks
        ORDER BY trader_id, is_default DESC, id ASC
     `);
     for (const b of banks) {
       // First row per trader_id wins (already sorted by is_default DESC).
       if (bankByTraderId[b.trader_id] == null) bankByTraderId[b.trader_id] = b;
+      bankById[b.id] = b;
     }
   } catch (_) { /* trader_banks may not exist on partial migrations */ }
 
@@ -759,9 +783,23 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     const rawAmount = useBefore ? (p.puramt || 0) : (p.payable || 0);
     const amount = roundAmounts ? round0(rawAmount) : rawAmount;
     const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;
-    const ifsc      = (tb && tb.ifsc)        || p.t_ifsc    || '';
-    const acctnum   = (tb && tb.acctnum)     || p.t_acctnum || '';
-    const holderNm  = (tb && tb.holder_name) || p.t_holder  || p.name;
+    // Per-lot bank routing. Distinct non-null bank_ids tagged on this
+    // seller's payable lots:
+    const distinctBankIds = String(p.bank_ids || '')
+      .split(',').map(s => s.trim()).filter(s => s !== '' && s !== 'null')
+      .map(Number).filter(Number.isFinite);
+    const hasUntagged = Number(p.lot_count || 0) > Number(p.bank_lot_count || 0);
+    // Use the lot-tagged account ONLY when every payable lot points at the
+    // same single account (no untagged lots). Otherwise keep the seller's
+    // default account and flag `multipleBanks` so the UI can warn the user
+    // to export each account's lots separately via the lot picker.
+    const lotBank = (distinctBankIds.length === 1 && !hasUntagged)
+      ? bankById[distinctBankIds[0]] : null;
+    const multipleBanks = distinctBankIds.length > 1
+      || (distinctBankIds.length >= 1 && hasUntagged);
+    const ifsc      = (lotBank && lotBank.ifsc)        || (tb && tb.ifsc)        || p.t_ifsc    || '';
+    const acctnum   = (lotBank && lotBank.acctnum)     || (tb && tb.acctnum)     || p.t_acctnum || '';
+    const holderNm  = (lotBank && lotBank.holder_name) || (tb && tb.holder_name) || p.t_holder  || p.name;
     // Lots this seller's payment covers — surfaced in REMARKS so the
     // beneficiary can reconcile the credit against the specific lots.
     const lots = formatLotList(p.lot_nos);
@@ -783,6 +821,11 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
       lots,
       remarks: `${auction ? auction.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited${lots ? ` for lot${lots.includes(',') ? 's' : ''} ${lots}` : ''}`,
       holderName: holderNm,
+      // True when this seller's lots point at more than one bank account
+      // (or a mix of tagged + untagged). The row still pays a single
+      // account (the default); the Payments UI shows a badge prompting the
+      // user to export each account's lots separately via the lot picker.
+      multipleBanks,
     };
   });
 }

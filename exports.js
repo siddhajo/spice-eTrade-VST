@@ -364,6 +364,14 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
   const lotPicks = (opts && opts.lots && typeof opts.lots === 'object') ? opts.lots : null;
   const excludeLots = (opts && opts.excludeLots && typeof opts.excludeLots === 'object') ? opts.excludeLots : null;
   if (lotPicks || excludeLots) {
+    // Index every trader bank by id so a picked-lot subset that all points
+    // at one account can route this export row to THAT account (this is how
+    // "select Account-1's lots → Export Selected" credits Account 1, then a
+    // second export of Account-2's lots credits Account 2).
+    const bankById = {};
+    try {
+      for (const b of db.all('SELECT id, ifsc, acctnum, holder_name FROM trader_banks')) bankById[b.id] = b;
+    } catch (_) { /* table may not exist on partial migrations */ }
     const sellersToRecompute = new Set();
     if (lotPicks)     for (const k of Object.keys(lotPicks))     sellersToRecompute.add(k);
     if (excludeLots)  for (const k of Object.keys(excludeLots))  sellersToRecompute.add(k);
@@ -389,7 +397,10 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       const sub = db.get(
         `SELECT COALESCE(SUM(l.balance),0) AS payable,
                 COALESCE(SUM(l.puramt), 0) AS puramt,
-                GROUP_CONCAT(l.lot_no) AS lot_nos
+                GROUP_CONCAT(l.lot_no) AS lot_nos,
+                GROUP_CONCAT(DISTINCT l.bank_id) AS bank_ids,
+                COUNT(*) AS lot_count,
+                COUNT(l.bank_id) AS bank_lot_count
            FROM lots l
           WHERE l.auction_id = ? AND l.amount > 0
             AND (l.paid IS NULL OR l.paid = '')
@@ -399,6 +410,15 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       const rawAmount = Number(sub.payable) || 0;
       const roundedAmount = cfg.flag_round ? Math.round(rawAmount) : rawAmount;
       const isRTGS = roundedAmount >= 200000;
+      // If every picked lot points at the same single bank account, route
+      // this row to that account (overrides the seller-default account that
+      // getBankPaymentData put on the base row). Mixed/untagged → leave the
+      // default account as-is.
+      const subBankIds = String(sub.bank_ids || '')
+        .split(',').map(s => s.trim()).filter(s => s !== '' && s !== 'null')
+        .map(Number).filter(Number.isFinite);
+      const subUntagged = Number(sub.lot_count || 0) > Number(sub.bank_lot_count || 0);
+      const subBank = (subBankIds.length === 1 && !subUntagged) ? bankById[subBankIds[0]] : null;
       payments[idx] = {
         ...payments[idx],
         amount: roundedAmount,
@@ -406,6 +426,11 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
         // Re-derive the covered-lots list from the same picked/excluded
         // subset so REMARKS lists exactly the lots this row pays for.
         lots: formatLotList(sub.lot_nos),
+        ...(subBank ? {
+          ifsc: subBank.ifsc || payments[idx].ifsc,
+          accountNo: subBank.acctnum || payments[idx].accountNo,
+          beneficiaryName: subBank.holder_name || payments[idx].beneficiaryName,
+        } : {}),
       };
     }
     // Drop any zero-amount rows produced by the recompute — banks reject

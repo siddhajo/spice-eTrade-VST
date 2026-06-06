@@ -1984,6 +1984,10 @@ input.pay-lot-cb-exported{accent-color:#b91c1c}
    include those lots, not all of them). Spice-yellow so it doesn't
    compete with the cardamom-green payable highlight. */
 .pay-lot-pick-badge{display:inline-flex;align-items:center;gap:3px;background:#fef3c7;color:#7c2d12;border:1px solid #fde68a;border-radius:9px;padding:1px 6px;font-size:10.5px;font-weight:700;margin-left:6px;cursor:help}
+/* "Multiple banks" warning — a seller whose lots route to >1 account.
+   Sky-blue so it reads as informational, distinct from the rose/amber
+   export-status badges. */
+.pay-multibank-badge{display:inline-flex;align-items:center;gap:3px;background:#e0f2fe;color:#075985;border:1px solid #7dd3fc;border-radius:9px;padding:1px 6px;font-size:10.5px;font-weight:700;margin-left:6px;cursor:help}
 /* Block-level containers gated by perms — `display:initial` above resolves
    to `inline` on a div, which collapses borders/padding/margin and breaks
    the boundary visualization. Restore block layout here. */
@@ -9678,28 +9682,19 @@ async function leSaveLot(){
       pan: _le.selectedSeller.pan || '',
       tel: _le.selectedSeller.tel || '',
       aadhar: _le.selectedSeller.aadhar || '',
+      // Per-lot bank account: routes THIS lot's payment to the chosen
+      // account in the bank export. null when the seller has no banks or
+      // none was picked (export then falls back to the default account).
+      bank_id: _le.selectedBankId || null,
     };
     await j(_le.editingLotId
       ? `/api/lots/${_le.editingLotId}`
       : '/api/lots',
       { method: _le.editingLotId ? 'PUT' : 'POST', body: JSON.stringify(payload) });
-    // Sync the chosen bank as the seller's default ONLY if the user
-    // picked a different bank than the seller's current default. Avoids
-    // unnecessary writes for the common case where the picker just
-    // showed the existing default and the user didn't touch it.
-    if (_le.selectedBankId && _le.selectedSeller && Array.isArray(_le.selectedSeller.banks)) {
-      const currentDefault = _le.selectedSeller.banks.find(b => b.is_default);
-      if (!currentDefault || currentDefault.id !== _le.selectedBankId) {
-        try {
-          await j(`/api/traders/${_le.selectedSeller.id}/bank-default/${_le.selectedBankId}`, { method: 'PUT' });
-          // Reflect locally so we don't re-PUT on next save with the
-          // same selection.
-          for (const b of _le.selectedSeller.banks) b.is_default = (b.id === _le.selectedBankId) ? 1 : 0;
-        } catch (e) {
-          console.warn('Bank-default sync failed (non-fatal):', e);
-        }
-      }
-    }
+    // The chosen bank is now stored per-lot (payload.bank_id) so different
+    // lots of the same seller can route to different accounts. We no longer
+    // flip the seller's default account here — that would have forced every
+    // lot onto the last-picked account, defeating per-lot routing.
     toast(_le.editingLotId ? `Lot ${lotNo} updated ✓` : `Lot ${lotNo} saved ✓`);
     const wasEditing = !!_le.editingLotId;
     _le.editingLotId = null;
@@ -9827,6 +9822,16 @@ async function leEditLot(lotId){
         tel: lot.tel || '', ppla: lot.ppla || '', pin: lot.ppin || '',
         pstate: lot.pstate || '', banks: []
       });
+    }
+  }
+  // Preselect THIS lot's saved bank account in the picker (lePickSeller
+  // above defaults to the seller's default account). Falls through silently
+  // when the lot has no bank_id or the account is no longer in the list.
+  if (lot.bank_id != null) {
+    const sel = document.getElementById('le-bank-select');
+    if (sel && sel.querySelector(`option[value="${lot.bank_id}"]`)) {
+      sel.value = String(lot.bank_id);
+      _le.selectedBankId = Number(lot.bank_id);
     }
   }
   // Scroll the form into view so the user sees what they're editing
@@ -18361,6 +18366,22 @@ async function openPayLotsModal(auctionId, sellerName) {
       return String(a.lot_no || '').localeCompare(String(b.lot_no || ''));
     });
     _payLotsState.lots = filtered;
+    // Build a bank_id → account label map so each lot row can show which
+    // account its payment routes to (so the operator can tick one account's
+    // lots and Export Selected separately). Banks come from the seller's
+    // trader record (trader_id is denormalised onto every lot).
+    _payLotsState.bankLabels = {};
+    const tid = (filtered.find(l => l.trader_id) || {}).trader_id;
+    if (tid) {
+      try {
+        const seller = await j(`/api/traders/${tid}`);
+        for (const b of (seller && seller.banks) || []) {
+          const parts = [b.acctnum];
+          if (b.bank_name) parts.push(b.bank_name);
+          _payLotsState.bankLabels[b.id] = parts.filter(Boolean).join(' · ') + (b.is_default ? ' ★' : '');
+        }
+      } catch (_) { /* non-fatal — lots fall back to "default" label */ }
+    }
     _renderPayLotsTable();
   } catch (e) {
     body.innerHTML = `<div style="padding:24px;text-align:center;color:var(--spice-chili)">Failed to load lots: ${esc(e.message || String(e))}</div>`;
@@ -18403,10 +18424,14 @@ function _renderPayLotsTable() {
     const expCell = isExported
       ? `<span class="pay-lot-exported-tag" title="This lot has already been included in a previous export.">🚫</span>`
       : '';
+    const bankLabel = (l.bank_id != null && _payLotsState.bankLabels && _payLotsState.bankLabels[l.bank_id])
+      ? `<span title="${esc(_payLotsState.bankLabels[l.bank_id])}" style="font-family:monospace;font-size:11.5px">${esc(_payLotsState.bankLabels[l.bank_id])}</span>`
+      : '<span style="color:var(--text3)">default</span>';
     return `<tr${rowStyle}>
       <td style="text-align:center"><input type="checkbox" class="${cls}" data-id="${l.id}" data-lot="${esc(lotKey)}"${checked ? ' checked' : ''}${dis} onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
       <td style="font-family:monospace;font-weight:600">${esc(lotKey)} ${expCell}</td>
       <td>${esc(l.branch || '')}</td>
+      <td>${bankLabel}</td>
       <td style="text-align:right">${fmtI(Number(l.qty)||0, 3)}</td>
       <td style="text-align:right">${fmtI(Number(l.prate)||0, 2)}</td>
       <td style="text-align:right">${fmtI(Number(l.amount)||0, 2)}</td>
@@ -18422,6 +18447,7 @@ function _renderPayLotsTable() {
           <th style="width:36px;text-align:center"><input type="checkbox" id="pay-lot-select-all" checked onchange="togglePayLotSelectAll(this.checked)" title="Select / clear all" style="cursor:pointer"></th>
           <th>Lot</th>
           <th>Branch</th>
+          <th>Bank</th>
           <th style="text-align:right">Qty</th>
           <th style="text-align:right">Rate</th>
           <th style="text-align:right">Amount</th>
@@ -18773,7 +18799,14 @@ async function loadPayments(opts){
               const denom = totalLots || (n + ((Array.isArray(picks) && picks.length) ? picks.length : 1));
               expBadge = `<span class="pay-exported-badge pay-exported-partial" title="${n} of ${denom} lots exported. Open 📋 to pick the remaining lots for the next export.">🚫 ${n}/${denom} EXPORTED</span>`;
             }
-            return `<span style="font-weight:600;color:var(--spice-text-main)">${esc(sellerName)}</span>${pickBadge}${expBadge}`;
+            // Warn when this seller's lots route to more than one bank
+            // account. The export still pays a single (default) account, so
+            // prompt the user to open the Lots picker, select one account's
+            // lots, Export Selected, then repeat for the other account.
+            const bankBadge = p.multipleBanks
+              ? `<span class="pay-multibank-badge" title="This seller's lots use more than one bank account. Open 📋 Lots, pick one account's lots and Export Selected — then repeat for the other account.">🏦 multiple banks</span>`
+              : '';
+            return `<span style="font-weight:600;color:var(--spice-text-main)">${esc(sellerName)}</span>${pickBadge}${expBadge}${bankBadge}`;
           } },
         { key:'lot_count', label:'Lots', sort:'number', numeric:true },
         { key:'total_qty', label:'Qty', sort:'number', numeric:true, fmt:(n)=>fmtI(n,3) },
