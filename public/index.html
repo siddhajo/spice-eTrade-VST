@@ -18470,8 +18470,14 @@ function togglePayLotSelectAll(checked) {
   updatePayLotsTotals();
 }
 function updatePayLotsTotals() {
+  // Count only TICKABLE (not-yet-exported) checked lots. Already-exported
+  // rows are pre-ticked + disabled purely as a visual record — they won't
+  // be paid again, so they must NOT inflate "Payable now" or the selected
+  // count (this matches Save Lot Selection / Export Selected, which both
+  // skip disabled rows). Including them was double-counting already-paid
+  // lots in the totals strip.
   const selectedIds = new Set(
-    Array.from(document.querySelectorAll('.pay-lot-cb:checked')).map(cb => Number(cb.dataset.id))
+    Array.from(document.querySelectorAll('.pay-lot-cb:not([disabled]):checked')).map(cb => Number(cb.dataset.id))
   );
   let qty = 0, amt = 0, disc = 0, tax = 0, payable = 0;
   for (const l of _payLotsState.lots) {
@@ -18483,10 +18489,12 @@ function updatePayLotsTotals() {
     payable += Number(l.balance) || 0;
   }
   const n = selectedIds.size;
-  const totalN = _payLotsState.lots.length;
+  // Denominator = lots that CAN be picked now (excludes already-exported).
+  const totalN = document.querySelectorAll('.pay-lot-cb:not([disabled])').length;
+  const exportedN = document.querySelectorAll('.pay-lot-cb[disabled]').length;
   document.getElementById('pay-lots-totals').innerHTML =
     `<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center">
-      <div><strong>${n}</strong> of ${totalN} lots selected</div>
+      <div><strong>${n}</strong> of ${totalN} lots selected${exportedN ? ` <span style="color:#b91c1c;font-weight:600">· ${exportedN} already exported (excluded)</span>` : ''}</div>
       <div>Qty: <strong>${fmtI(qty, 3)} kg</strong></div>
       <div>Amount: <strong>₹${fmtI(amt, 2)}</strong></div>
       <div>Discount: <strong style="color:#B45309">₹${fmtI(disc, 2)}</strong></div>
@@ -18581,10 +18589,13 @@ async function clearSelectedPayLots() {
   updatePayLotsTotals();
 }
 async function printSelectedPayLots() {
-  const lot_ids = Array.from(document.querySelectorAll('.pay-lot-cb:checked'))
+  // Exclude already-exported (disabled) rows — same rule as the totals
+  // strip and Export Selected, so the printed statement covers only the
+  // lots being paid now, not ones that already went out.
+  const lot_ids = Array.from(document.querySelectorAll('.pay-lot-cb:not([disabled]):checked'))
     .map(cb => Number(cb.dataset.id))
     .filter(Number.isFinite);
-  if (!lot_ids.length) { alert('Tick at least one lot first'); return; }
+  if (!lot_ids.length) { alert('Tick at least one not-yet-exported lot first'); return; }
   if (!_payLotsState.aid || !_payLotsState.seller) { alert('Open this from the Payments tab'); return; }
   const safe = _payLotsState.seller.replace(/[^\w]/g, '_').slice(0, 40);
   await fetchAndPrint(
