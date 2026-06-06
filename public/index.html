@@ -13718,7 +13718,7 @@ function appendBankRow(b){
   row.innerHTML = `
     <div class="fg" style="margin:0">
       <label style="font-size:11px">Bank Name</label>
-      <input class="bank-name" value="${esc(b.bank_name||'')}" placeholder="e.g. HDFC">
+      <input class="bank-name" value="${esc(b.bank_name||'')}" data-ifsc-auto="${esc(b.bank_name||'')}" placeholder="e.g. HDFC">
       <div class="bank-branch-hint" style="font-size:11px;color:var(--text3);margin-top:2px;min-height:14px">${b.branch ? 'Branch: '+esc(b.branch) : ''}</div>
       <input type="hidden" class="bank-branch" value="${esc(b.branch||'')}">
     </div>
@@ -18333,7 +18333,7 @@ function _payUndoLastBatch(aid) {
 // "Print Payment for Selected" calls the lot-filtered PDF endpoint
 // so the printed statement only covers the chosen lots — remaining
 // lots stay in the Payments summary and can be settled later.
-const _payLotsState = { aid: 0, seller: '', lots: [] };
+const _payLotsState = { aid: 0, seller: '', lots: [], bankLabels: {}, defaultBankId: null };
 async function openPayLotsModal(auctionId, sellerName) {
   _payLotsState.aid = Number(auctionId) || 0;
   _payLotsState.seller = String(sellerName || '');
@@ -18376,16 +18376,25 @@ async function openPayLotsModal(auctionId, sellerName) {
     // lots and Export Selected separately). Banks come from the seller's
     // trader record (trader_id is denormalised onto every lot).
     _payLotsState.bankLabels = {};
+    _payLotsState.defaultBankId = null;
     const tid = (filtered.find(l => l.trader_id) || {}).trader_id;
     if (tid) {
       try {
         const seller = await j(`/api/traders/${tid}`);
-        for (const b of (seller && seller.banks) || []) {
-          const parts = [b.acctnum];
-          if (b.bank_name) parts.push(b.bank_name);
-          _payLotsState.bankLabels[b.id] = parts.filter(Boolean).join(' · ') + (b.is_default ? ' ★' : '');
+        const banks = (seller && seller.banks) || [];
+        // The account a lot routes to when it carries no explicit bank_id:
+        // the one flagged is_default, else the first bank on file. We resolve
+        // it so the table can show its real details instead of the bare
+        // word "default".
+        const def = banks.find(b => b.is_default) || banks[0] || null;
+        _payLotsState.defaultBankId = def ? def.id : null;
+        for (const b of banks) {
+          // Account No · Bank Name · IFSC — the three details the operator
+          // needs to confirm where the payment lands.
+          const parts = [b.acctnum, b.bank_name, b.ifsc].filter(Boolean);
+          _payLotsState.bankLabels[b.id] = parts.join(' · ') + (b.is_default ? ' ★' : '');
         }
-      } catch (_) { /* non-fatal — lots fall back to "default" label */ }
+      } catch (_) { /* non-fatal — lots fall back to "—" label */ }
     }
     _renderPayLotsTable();
   } catch (e) {
@@ -18429,9 +18438,14 @@ function _renderPayLotsTable() {
     const expCell = isExported
       ? `<span class="pay-lot-exported-tag" title="This lot has already been included in a previous export.">🚫</span>`
       : '';
-    const bankLabel = (l.bank_id != null && _payLotsState.bankLabels && _payLotsState.bankLabels[l.bank_id])
-      ? `<span title="${esc(_payLotsState.bankLabels[l.bank_id])}" style="font-family:monospace;font-size:11.5px">${esc(_payLotsState.bankLabels[l.bank_id])}</span>`
-      : '<span style="color:var(--text3)">default</span>';
+    // A lot with no explicit bank_id routes to the seller's default
+    // account, so resolve to THAT account and show its real details
+    // (Account No · Bank · IFSC) rather than the bare word "default".
+    const effBankId = l.bank_id != null ? l.bank_id : _payLotsState.defaultBankId;
+    const bankText = (effBankId != null && _payLotsState.bankLabels) ? _payLotsState.bankLabels[effBankId] : '';
+    const bankLabel = bankText
+      ? `<span title="${esc(bankText)}" style="font-family:monospace;font-size:11.5px">${esc(bankText)}</span>`
+      : '<span style="color:var(--text3)">—</span>';
     return `<tr${rowStyle}>
       <td style="text-align:center"><input type="checkbox" class="${cls}" data-id="${l.id}" data-lot="${esc(lotKey)}"${checked ? ' checked' : ''}${dis} onchange="updatePayLotsTotals()" style="cursor:pointer"></td>
       <td style="font-family:monospace;font-weight:600">${esc(lotKey)} ${expCell}</td>
