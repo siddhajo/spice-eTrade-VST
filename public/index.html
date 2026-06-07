@@ -3222,7 +3222,7 @@ input[type="search"]:focus{
     <!-- LOTS -->
     <div class="tc" id="tc-lots">
       <div class="card">
-        <h2>
+        <h2 style="display:flex;align-items:center;gap:10px">
           <span style="display:flex;align-items:center;gap:10px">
             <span style="width:32px;height:32px;border-radius:10px;background:var(--spice-cardamom-lt);display:inline-flex;align-items:center;justify-content:center">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--spice-cardamom)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
@@ -3230,6 +3230,7 @@ input[type="search"]:focus{
             Lot Data
             <span style="font-weight:400;font-size:12px;color:var(--text3)">Select an auction from Auctions tab first</span>
           </span>
+          <a href="https://tradefair.intelloinsights.com/trading/dashboard/sign_in#/login/false" target="_blank" rel="noopener noreferrer" class="btn btn-g" style="margin-left:auto;height:32px;padding:0 14px;font-size:12px;text-decoration:none">TradeFair ↗</a>
         </h2>
 
         <!-- KPI strip -->
@@ -4433,8 +4434,9 @@ input[type="search"]:focus{
     <!-- JOURNALS -->
     <div class="tc" id="tc-tally">
       <div class="card">
-        <h2>To Tally
+        <h2 style="display:flex;align-items:center;gap:8px">To Tally
           <span style="font-weight:400;font-size:12px;color:var(--text3)">Generate Tally-importable XML files from your auction data</span>
+          <a href="https://app.cocloud.in/login" target="_blank" rel="noopener noreferrer" class="btn btn-g" style="margin-left:auto;height:32px;padding:0 14px;font-size:12px;text-decoration:none">CoCloud ↗</a>
         </h2>
 
         <div class="fg" style="max-width:360px"><label>Select Trade</label>
@@ -21692,9 +21694,6 @@ async function impVerify(){
       // generation). Lets the operator see how many round-offs were
       // synthesized before they hit the DB.
       (c.rundDerived ? ' · <span style="color:#0369a1">rund-derived='+c.rundDerived+'</span>' : '') +
-      // ASP/ISP company split from the place (Sales) / BR (Purchase)
-      // "ASP" prefix. Only shown for the company-tagged modules.
-      ((c.aspTagged || c.ispTagged) ? ' · <span style="color:#7c2d12">ASP='+(c.aspTagged||0)+' / ISP='+(c.ispTagged||0)+'</span>' : '') +
       ' &nbsp;<span style="color:'+(totalInvalid?'#c00':'#15803d')+'">'+
         (totalInvalid ? '⚠ Fix invalid rows or adjust mapping before importing.' : '✓ Ready to import.')+
       '</span>';
@@ -21961,43 +21960,11 @@ async function impRun(){
     if (data.rundDerived && data.rundDerived > 0) {
       h += ' · <span style="color:#0369a1">rund-derived='+data.rundDerived+'</span>';
     }
-    // ASP/ISP company split from the place/BR "ASP" prefix — shown only
-    // for the company-tagged modules (Sales Invoices, Purchases).
-    if ((data.aspTagged || 0) > 0 || (data.ispTagged || 0) > 0) {
-      h += ' · <span style="color:#7c2d12">ASP='+(data.aspTagged||0)+' / ISP='+(data.ispTagged||0)+'</span>';
-    }
     h += '</div>';
     if (data.errors && data.errors.length) {
       h += '<div style="margin-top:8px"><b>Errors (first '+data.errors.length+'):</b><ul style="margin:4px 0 0 18px;font-size:12px">';
       data.errors.forEach(e => { h += '<li>Row '+e.row+': '+escAttr(e.error)+'</li>'; });
       h += '</ul></div>';
-    }
-    // Skipped (duplicate) rows — collapsed by default so a big dup list
-    // doesn't dominate the result, but one click shows every skipped row
-    // with its key values + the existing DB id it collided with.
-    if (data.skippedDetails && data.skippedDetails.length) {
-      const sd = data.skippedDetails;
-      const more = (data.skipped || sd.length) - sd.length;
-      h += '<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:700;color:#a16207">'+
-        'Skipped as duplicate ('+(data.skipped||sd.length)+') — click to see which rows</summary>'+
-        '<div style="margin-top:6px;max-height:260px;overflow:auto;border:1px solid #fde68a;border-radius:6px">'+
-        '<table style="width:100%;border-collapse:collapse;font-size:11.5px">'+
-        '<thead><tr style="background:#fffbeb;position:sticky;top:0">'+
-          '<th style="text-align:left;padding:4px 8px;border:1px solid #fde68a">File row</th>'+
-          '<th style="text-align:left;padding:4px 8px;border:1px solid #fde68a">Existing DB id</th>'+
-          '<th style="text-align:left;padding:4px 8px;border:1px solid #fde68a">Matched on</th>'+
-        '</tr></thead><tbody>';
-      sd.forEach(s => {
-        const keyStr = s.keys ? Object.keys(s.keys).map(k => k+'='+(s.keys[k]==null?'':s.keys[k])).join(' · ') : '';
-        h += '<tr>'+
-          '<td style="padding:3px 8px;border:1px solid #fef3c7;font-family:monospace">'+escAttr(String(s.row))+'</td>'+
-          '<td style="padding:3px 8px;border:1px solid #fef3c7;font-family:monospace">'+escAttr(String(s.existingId==null?'—':s.existingId))+'</td>'+
-          '<td style="padding:3px 8px;border:1px solid #fef3c7">'+escAttr(keyStr)+'</td>'+
-        '</tr>';
-      });
-      h += '</tbody></table></div>';
-      if (more > 0) h += '<div style="font-size:11px;color:#888;padding:4px 2px">…and '+more+' more (list capped at '+sd.length+').</div>';
-      h += '</details>';
     }
     result.innerHTML = h;
     // Always refresh history — dry-runs are logged too, and the
