@@ -5028,17 +5028,13 @@ app.get('/api/invoices', requireView, (req, res) => {
     q += ' AND UPPER(sale) = ?';
     p.push(String(sale).toUpperCase());
   }
-  // Two-company split: invoices carry the issuing company in `state`
-  // (KERALA = ASP, TAMIL NADU/blank = ISP — stamped at generation and
-  // by Import Old Data's ASP-prefix tagging). Filter by the active
-  // business context so ASP rows surface only in ASP and ISP rows only
-  // in ISP. ISP is the default bucket: any row whose state isn't KERALA
-  // (including blank/legacy rows) shows in ISP, so nothing gets lost.
-  if (businessState === 'KERALA') {
-    q += " AND UPPER(COALESCE(state,'')) LIKE '%KERALA%'";
-  } else {
-    q += " AND UPPER(COALESCE(state,'')) NOT LIKE '%KERALA%'";
-  }
+  // e-Trade-only build: every invoice belongs to the single company
+  // (ISP), regardless of what's stamped in the `state` column. The
+  // original Spice Config app used `state` to split rows between ISP
+  // (TN) and ASP (KL) views — that split no longer exists. So no
+  // state filter here; anything for the requested auction_id ships
+  // back. (`businessState` is left unused but kept above so future
+  // callers can reintroduce a filter without restructuring.)
   q += ' ORDER BY date DESC, invo DESC LIMIT 500';
   const rows = db.all(q, p);
   // Hydrate asp_invo: for each invoice, find the ASP invoice number
@@ -6043,18 +6039,6 @@ app.get('/api/purchases', requireView, (req, res) => {
                AND UPPER(TRIM(COALESCE(l.name,''))) = UPPER(TRIM(COALESCE(purchases.name,'')))
                AND UPPER(TRIM(COALESCE(l.sale,''))) = 'E'
           )`;
-  }
-  // Two-company split — same convention as the Sales list: `state`
-  // carries the issuing company (KERALA = ASP, else ISP). Import Old
-  // Data tags purchases from the BR "ASP" prefix; generation stamps it
-  // from the auction state. Filter by the active business context so
-  // ASP purchases show only in ASP and ISP only in ISP. Blank/legacy
-  // state falls into the ISP bucket so nothing disappears.
-  const _purBizState = String(getSettingsFlat(getDb()).business_state || 'TAMIL NADU').toUpperCase();
-  if (_purBizState === 'KERALA') {
-    q += " AND UPPER(COALESCE(state,'')) LIKE '%KERALA%'";
-  } else {
-    q += " AND UPPER(COALESCE(state,'')) NOT LIKE '%KERALA%'";
   }
   q += ' ORDER BY date DESC LIMIT 500';
   res.json(getDb().all(q, p));
@@ -8131,7 +8115,7 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   y += 10;
 
   doc.font('Helvetica').fontSize(10);
-  doc.text(`Seller: ${sellerName}`, PAGE_L, y); doc.text(`Auction: ${auction.ano}`, PAGE_L + 280, y);
+  doc.text(`Seller: ${sellerName}`, PAGE_L, y); doc.text(`Trade: ${auction.ano}`, PAGE_L + 280, y);
   y += 14;
   doc.text(`Phone: ${trader && trader.tel ? trader.tel : '-'}`, PAGE_L, y);
   doc.text(`Date: ${fmtDate(auction.date)}`, PAGE_L + 280, y);
@@ -10386,34 +10370,6 @@ function _deriveRund(values, cfg) {
   const rund = subtotalRounded - totalBeforeRound;
   return Math.round(rund * 100) / 100;
 }
-
-// ── Two-company tagging on import (ASP vs ISP) ───────────────────
-// Legacy Sales/Purchase files mark ASP-company rows by prefixing a
-// column with "ASP": the place column for Sales, the BR column for
-// Purchase. On import we read that prefix, stamp the row's `state`
-// column with the company tag the rest of the app already uses
-// (KERALA = ASP, TAMIL NADU = ISP — same convention invoice
-// generation writes at /api/invoices/generate), strip the prefix
-// from the stored value, and tag every non-prefixed row as ISP.
-// The Sales / Purchase list GETs then filter by the active
-// business_state, so ASP rows surface only in ASP context and ISP
-// rows only in ISP context.
-const IMPORT_COMPANY_TAG = {
-  sales_invoice: { sourceField: 'place', stateField: 'state' },
-  purchase:      { sourceField: 'br',    stateField: 'state' },
-};
-// Detect a leading "ASP" token — accepts "ASP", "ASP ", "ASP-",
-// "ASP_", "ASP:" etc. The \b boundary means a real name like
-// "ASPINWALL" is NOT treated as an ASP prefix (no separator after
-// the P). Returns { stripped } with the prefix removed (trimmed),
-// or null when the value isn't ASP-prefixed.
-function _detectAspPrefix(raw) {
-  const s = String(raw == null ? '' : raw);
-  const m = s.match(/^\s*ASP\b[\s\-_:.]*/i);
-  if (!m) return null;
-  return { stripped: s.slice(m[0].length).trim() };
-}
-
 app.post('/api/import-old-data/preview', requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const moduleKey = req.body.module;
@@ -10540,11 +10496,6 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
     const deriveRundCfg = IMPORT_DERIVE_RUND[moduleKey] || null;
     let cntRundDerived = 0;
 
-    // Two-company tag config (ASP vs ISP from a column prefix). Null
-    // when the module isn't company-tagged. See IMPORT_COMPANY_TAG.
-    const companyTagCfg = IMPORT_COMPANY_TAG[moduleKey] || null;
-    let cntAspTagged = 0, cntIspTagged = 0;
-
     let cntNew = 0, cntDup = 0, cntDupChanged = 0, cntInvAno = 0, cntInvReq = 0;
     // Four independent sample buckets so the client always has concrete
     // rows from each non-empty status, regardless of where they sit in
@@ -10602,26 +10553,6 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
             values._rundDerived = { value: derived };
             cntRundDerived++;
           }
-        }
-      }
-
-      // Two-company tagging: an "ASP" prefix on the source column
-      // (place for Sales, BR for Purchase) stamps state=KERALA (ASP)
-      // and strips the prefix; everything else becomes state=TAMIL
-      // NADU (ISP). Derived from the prefix, so it overrides any STATE
-      // column the file happened to carry. Mirrors /run exactly so the
-      // projected row matches what will be inserted.
-      if (companyTagCfg) {
-        const det = _detectAspPrefix(values[companyTagCfg.sourceField]);
-        if (det) {
-          values[companyTagCfg.stateField]  = 'KERALA';
-          values[companyTagCfg.sourceField] = det.stripped;
-          values._companyTag = { company: 'ASP', state: 'KERALA' };
-          cntAspTagged++;
-        } else {
-          values[companyTagCfg.stateField] = 'TAMIL NADU';
-          values._companyTag = { company: 'ISP', state: 'TAMIL NADU' };
-          cntIspTagged++;
         }
       }
 
@@ -10757,10 +10688,6 @@ app.post('/api/import-old-data/verify', requireAdmin, upload.single('file'), (re
         // because the source file had no rund column. 0 when the
         // module isn't in IMPORT_DERIVE_RUND.
         rundDerived: cntRundDerived,
-        // Rows tagged to each company from the place/BR "ASP" prefix.
-        // Both 0 when the module isn't in IMPORT_COMPANY_TAG.
-        aspTagged: cntAspTagged,
-        ispTagged: cntIspTagged,
       },
       samples: {
         new: sampleNew,
@@ -10800,14 +10727,7 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
   // nameCorrected. Stays 0 when the module isn't in IMPORT_DERIVE_RUND
   // or when every row already had a non-zero rund.
   let rundDerived = 0;
-  // ASP/ISP company-tag counters — hoisted like the two above so the
-  // response builder can read them. Stay 0 unless the module is in
-  // IMPORT_COMPANY_TAG and rows actually got tagged.
-  let aspTagged = 0, ispTagged = 0;
   const errors = [];
-  // Detail of every duplicate-skipped row so the operator can see WHAT
-  // was skipped (not just a count). Capped to keep the payload bounded.
-  const skippedDetails = [];
   let total = 0;
   // Capture the primary-key id of every row this import inserts so the
   // Undo button on the History panel can roll back this specific file.
@@ -10869,13 +10789,6 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
       ? deriveRundCfg.taxFields.map(f => def.fields.indexOf(f)).filter(i => i >= 0)
       : [];
 
-    // Two-company tag (ASP/ISP) positional slots. sourceField carries
-    // the optional "ASP" prefix (place / br); stateField is where the
-    // resolved company tag (KERALA / TAMIL NADU) is written.
-    const companyTagCfg = IMPORT_COMPANY_TAG[moduleKey] || null;
-    const tagSrcIdx   = companyTagCfg ? def.fields.indexOf(companyTagCfg.sourceField) : -1;
-    const tagStateIdx = companyTagCfg ? def.fields.indexOf(companyTagCfg.stateField)  : -1;
-
     // Cache `ano → auction_id` lookups for autoFillAuctionId modules.
     // Without this every row of a large import would hit the DB once
     // for the same trade number.
@@ -10898,25 +10811,8 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
         const keyChecks = def.keyCols.map(k => mapping[k] ? r[mapping[k]] : null).filter(v => v != null && v !== '');
         if (keyChecks.length === def.keyCols.length) {
           const whereSql = def.keyCols.map(k => `${k} = ?`).join(' AND ');
-          const dup = db.get(`SELECT id FROM ${def.table} WHERE ${whereSql} LIMIT 1`, keyChecks);
-          if (dup) {
-            skipped++;
-            // Capture which file row was skipped + the matching key values
-            // + the existing DB row id, so the UI can list them. Capped at
-            // 500 to keep the response bounded on huge re-imports.
-            if (skippedDetails.length < 500) {
-              const keyObj = {};
-              def.keyCols.forEach((k, idx) => { keyObj[k] = keyChecks[idx]; });
-              skippedDetails.push({
-                row: i + 2,
-                keys: keyObj,
-                existingId: (dup && dup.id != null) ? dup.id : null,
-                reason: 'Duplicate — already in ' + def.table + ' ('
-                      + def.keyCols.map((k, idx) => k + '=' + keyChecks[idx]).join(', ') + ')',
-              });
-            }
-            continue;
-          }
+          const dup = db.get(`SELECT 1 FROM ${def.table} WHERE ${whereSql} LIMIT 1`, keyChecks);
+          if (dup) { skipped++; continue; }
         }
         // Build positional values from the source mapping. For
         // autoFillAuctionId modules we derive auction_id from `ano` after
@@ -10963,21 +10859,6 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
               values[rundSlotIdx] = derived;
               rundDerived++;
             }
-          }
-        }
-        // Two-company tagging (ASP/ISP) from the place/BR "ASP" prefix.
-        // Mirrors /verify so the inserted row matches what was projected.
-        // Overrides any mapped STATE value — the tag is derived from the
-        // prefix, not a STATE column.
-        if (companyTagCfg && tagStateIdx >= 0) {
-          const det = _detectAspPrefix(tagSrcIdx >= 0 ? values[tagSrcIdx] : '');
-          if (det) {
-            values[tagStateIdx] = 'KERALA';
-            if (tagSrcIdx >= 0) values[tagSrcIdx] = det.stripped;
-            aspTagged++;
-          } else {
-            values[tagStateIdx] = 'TAMIL NADU';
-            ispTagged++;
           }
         }
         if (def.autoFillAuctionId && auctionIdSlot >= 0) {
@@ -11070,12 +10951,6 @@ app.post('/api/import-old-data/run', requireAdmin, upload.single('file'), (req, 
     // columns because the source file had no rund value. 0 when the
     // module isn't in IMPORT_DERIVE_RUND.
     rundDerived,
-    // Rows tagged to each company from the place/BR "ASP" prefix.
-    // Both 0 when the module isn't in IMPORT_COMPANY_TAG.
-    aspTagged, ispTagged,
-    // Per-row detail of duplicate-skipped rows (capped at 500) so the
-    // UI can show exactly which rows were skipped and why.
-    skippedDetails,
     errors, importLogId,
   });
 });
