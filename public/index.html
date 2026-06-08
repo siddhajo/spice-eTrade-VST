@@ -1092,6 +1092,10 @@ body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{
    to the "Lots → Set Buyer (bulk action)" toggle). Two gates stack:
    flag_lot_set_buyer must be ON AND at least one lot must be ticked. */
 body:not([data-feat-lot-set-buyer="1"]) .feat-lot-set-buyer{display:none !important}
+/* ASP-only surfaces (e.g. the Payments menu + dashboard quick action).
+   Hidden in ISP context (Tamil Nadu / non-Kerala) — applyAspContextVisibility()
+   sets body[data-biz-asp] to "1" (ASP = Kerala + e-Trade) or "0" (ISP). */
+body[data-biz-asp="0"] .asp-only{display:none !important}
 /* Price Check tab + its transaction gate. When OFF: the sidebar entry,
    tab content, gate banners, and Apply UI are hidden, AND pcRefreshGate
    skips every button-disable (so .needs-price-check stays enabled). */
@@ -2489,7 +2493,7 @@ input[type="search"]:focus{
 })();
 </script>
 </head>
-<body>
+<body data-biz-asp="0">
 <div id="login">
   <div class="login-stage">
     <!-- Left brand panel — vibrant gradient, value-prop bullets -->
@@ -2701,7 +2705,7 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h2M12 15h2"/></svg>
           Debit Notes
         </button>
-        <button class="side-item" data-tab="payments" onclick="go('payments')">
+        <button class="side-item asp-only" data-tab="payments" onclick="go('payments')">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>
           Payments
         </button>
@@ -7703,7 +7707,7 @@ async function loadStats(auctionId){
               <div class="qa-label">New trade</div>
               <div class="qa-sub">Start today's trade</div>
             </button>
-            <button class="qa" onclick="go('payments')">
+            <button class="qa asp-only" onclick="go('payments')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
               <div class="qa-label">View Payments</div>
               <div class="qa-sub">Check pending dues</div>
@@ -12324,11 +12328,20 @@ function isCategoryHiddenByMode(catKey){
 // produces purchase-side mirror PDFs which only make sense when the
 // active selling company is ASP.
 function applyAspContextVisibility(){
-  const btn = document.getElementById('btn-print-asp-purchase');
-  if (!btn) return;
   const mode  = getCurrentBusinessMode();
   const state = String(getCurrentBusinessState() || '').toUpperCase();
   const isASP = (mode === 'e-Trade' && state === 'KERALA');
+  // Flag the body so CSS can hide ASP-only surfaces (.asp-only) in ISP
+  // context — currently the Payments sidebar menu + dashboard quick action.
+  document.body.setAttribute('data-biz-asp', isASP ? '1' : '0');
+  // If the operator is sitting on the (now-hidden) Payments tab when the
+  // context flips to ISP, bounce them to the dashboard so they aren't
+  // stranded on a screen the menu no longer exposes.
+  if (!isASP && window._currentTab === 'payments' && typeof go === 'function') {
+    go('dash');
+  }
+  const btn = document.getElementById('btn-print-asp-purchase');
+  if (!btn) return;
   // Two-gate visibility: ASP-context AND at least one ticked invoice.
   // Without the second gate the button would sit always-visible in the
   // toolbar even when there's nothing to print, breaking the unified
@@ -18453,9 +18466,9 @@ function _renderPayLotsTable() {
       <td style="font-family:monospace;font-weight:600">${esc(lotKey)} ${expCell}</td>
       <td>${esc(l.branch || '')}</td>
       <td>${bankLabel}</td>
-      <td style="text-align:right">${fmtI(Number(l.qty)||0, 3)}</td>
+      <td style="text-align:right">${fmtI(Number(l.pqty)||0, 3)}</td>
       <td style="text-align:right">${fmtI(Number(l.prate)||0, 2)}</td>
-      <td style="text-align:right">${fmtI(Number(l.amount)||0, 2)}</td>
+      <td style="text-align:right">${fmtI(Number(l.puramt)||0, 2)}</td>
       <td style="text-align:right;color:#B45309">${fmtI(Number(l.refund)||0, 2)}</td>
       <td style="text-align:right;color:#0891B2">${fmtI(tax, 2)}</td>
       <td style="text-align:right;font-weight:700;color:var(--spice-cardamom-dk)">${fmtI(Number(l.balance)||0, 2)}</td>
@@ -18503,8 +18516,10 @@ function updatePayLotsTotals() {
   let qty = 0, amt = 0, disc = 0, tax = 0, payable = 0;
   for (const l of _payLotsState.lots) {
     if (!selectedIds.has(l.id)) continue;
-    qty     += Number(l.qty)     || 0;
-    amt     += Number(l.amount)  || 0;
+    // Qty/Amount mirror the table columns: planter quantity (pqty) and
+    // purchase amount (puramt), not the auction qty/amount.
+    qty     += Number(l.pqty)    || 0;
+    amt     += Number(l.puramt)  || 0;
     disc    += Number(l.refund)  || 0;
     tax     += (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
     payable += Number(l.balance) || 0;
