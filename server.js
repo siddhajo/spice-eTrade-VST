@@ -8085,7 +8085,7 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   const lotIdFilter = Array.isArray(lotIds)
     ? lotIds.map(n => parseInt(n, 10)).filter(Number.isFinite)
     : [];
-  let lotSql = `SELECT id, lot_no, qty, prate AS rate, amount, puramt, refund, balance, cgst, sgst, igst
+  let lotSql = `SELECT id, lot_no, pqty, prate AS rate, puramt, refund, balance, cgst, sgst, igst
        FROM lots
       WHERE auction_id = ?
         AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?))
@@ -8121,11 +8121,14 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   doc.text(`Date: ${fmtDate(auction.date)}`, PAGE_L + 280, y);
   y += 18;
 
+  // Payment is the planter/purchase side: Qty/Rate/Amount source from
+  // pqty / prate / puramt (NOT auction qty/price/amount) so this matches
+  // the Payments screen + the per-seller Lots modal.
   const cols = [
     { k: 'lot_no', label: 'Lot#',     x: PAGE_L,        w: 60,  align: 'left' },
-    { k: 'qty',    label: 'Qty',      x: PAGE_L + 60,   w: 70,  align: 'right', fmt: fmtQty },
+    { k: 'pqty',   label: 'Qty',      x: PAGE_L + 60,   w: 70,  align: 'right', fmt: fmtQty },
     { k: 'rate',   label: 'Rate',     x: PAGE_L + 130,  w: 60,  align: 'right', fmt: fmtAmt },
-    { k: 'amount', label: 'Amount',   x: PAGE_L + 190,  w: 80,  align: 'right', fmt: fmtAmt },
+    { k: 'puramt', label: 'Amount',   x: PAGE_L + 190,  w: 80,  align: 'right', fmt: fmtAmt },
     { k: 'refund', label: 'Discount', x: PAGE_L + 270,  w: 75,  align: 'right', fmt: fmtAmt },
     { k: 'tax',    label: 'GST',      x: PAGE_L + 345,  w: 70,  align: 'right', fmt: fmtAmt },
     { k: 'balance',label: 'Payable',  x: PAGE_L + 415,  w: 120, align: 'right', fmt: fmtAmt },
@@ -8139,7 +8142,7 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   for (const l of lots) {
     const tax = (Number(l.cgst)||0)+(Number(l.sgst)||0)+(Number(l.igst)||0);
     const row = { ...l, tax };
-    tQty+=Number(l.qty)||0; tAmt+=Number(l.amount)||0; tDisc+=Number(l.refund)||0; tTax+=tax; tPay+=Number(l.balance)||0;
+    tQty+=Number(l.pqty)||0; tAmt+=Number(l.puramt)||0; tDisc+=Number(l.refund)||0; tTax+=tax; tPay+=Number(l.balance)||0;
     if (y > 770) { doc.addPage(); y = 40; }
     for (const c of cols) {
       const v = c.fmt ? c.fmt(row[c.k]) : String(row[c.k] ?? '');
