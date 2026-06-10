@@ -8010,6 +8010,72 @@ app.get('/api/exports/purchase-journal', requireExport, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// REGISTERS — lot-wise Purchase / invoice-wise Sales
+// Sibling of Journals. Scope: a specific trade (auctionId) OR a date
+// range across trades (from/to). Sales also takes an optional saleType.
+// ══════════════════════════════════════════════════════════════
+function registerOpts(req, cfg) {
+  return {
+    auctionId: req.query.auctionId || null,
+    from: req.query.from || null,
+    to: req.query.to || null,
+    saleType: req.query.saleType || null,
+    mode: (cfg && cfg.business_mode) || 'e-Trade',
+  };
+}
+
+app.get('/api/registers/purchase', requireView, (req, res) => {
+  const { getPurchaseRegister } = require('./calculations');
+  const db = getDb();
+  res.json(getPurchaseRegister(db, registerOpts(req, getSettingsFlat(db))));
+});
+
+app.get('/api/registers/sales', requireView, (req, res) => {
+  const { getSalesRegister } = require('./calculations');
+  res.json(getSalesRegister(getDb(), registerOpts(req, {})));
+});
+
+app.get('/api/exports/purchase-register', requireExport, async (req, res) => {
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const opts = registerOpts(req, cfg);
+    const format = String(req.query.format || 'xlsx').toLowerCase();
+    if (format === 'pdf') {
+      const buffer = await exportAnyPdf(db, 'purchase_register', opts.auctionId, cfg, { from: opts.from, to: opts.to });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="PurchaseRegister.pdf"');
+      return res.send(buffer);
+    }
+    const { exportPurchaseRegister } = require('./exports');
+    const buffer = await exportPurchaseRegister(db, opts);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="PurchaseRegister.xlsx"');
+    res.send(Buffer.from(buffer));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/exports/sales-register', requireExport, async (req, res) => {
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const opts = registerOpts(req, cfg);
+    const format = String(req.query.format || 'xlsx').toLowerCase();
+    if (format === 'pdf') {
+      const buffer = await exportAnyPdf(db, 'sales_register', opts.auctionId, cfg, { from: opts.from, to: opts.to, saleType: opts.saleType });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="SalesRegister.pdf"');
+      return res.send(buffer);
+    }
+    const { exportSalesRegister } = require('./exports');
+    const buffer = await exportSalesRegister(db, opts);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="SalesRegister.xlsx"');
+    res.send(Buffer.from(buffer));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
 // INVOICE PREVIEW (PREINVO.PRG) — dry-run, no save
 // ══════════════════════════════════════════════════════════════
 app.post('/api/invoices/preview/:auctionId', requireView, (req, res) => {

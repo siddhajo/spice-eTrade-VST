@@ -652,6 +652,47 @@ const COLS = {
     { header: 'ASSESS_VALUE', key: 'assess_value', width: 14 },
     { header: 'TDS', key: 'tds', width: 12 },
   ],
+  // Purchase Register — lot-wise seller-side ledger (landscape).
+  purchase_register: [
+    { header: 'STATE',  key: 'state',  width: 12 },
+    { header: 'TNO',    key: 'tno',    width: 5  },
+    { header: 'DATE',   key: 'date',   width: 11 },
+    { header: 'LOT',    key: 'lot',    width: 6  },
+    { header: 'BRANCH', key: 'branch', width: 9  },
+    { header: 'NAME',   key: 'name',   width: 22 },
+    { header: 'PLACE',  key: 'place',  width: 12 },
+    { header: 'GSTIN',  key: 'gstin',  width: 16 },
+    { header: 'BAG',    key: 'bag',    width: 5  },
+    { header: 'QTY',    key: 'qty',    width: 10 },
+    { header: 'PRICE',  key: 'price',  width: 9  },
+    { header: 'AMOUNT', key: 'amount', width: 13 },
+    { header: 'PQTY',   key: 'pqty',   width: 10 },
+    { header: 'PRATE',  key: 'prate',  width: 9  },
+    { header: 'PURAMT', key: 'puramt', width: 13 },
+    { header: 'DISCOUNT', key: 'discount', width: 11 },
+    { header: 'GST5',   key: 'gst5',   width: 10 },
+    { header: 'PAYABLE', key: 'payable', width: 13 },
+  ],
+  // Sales Register — invoice-wise (landscape).
+  sales_register: [
+    { header: 'STATE',  key: 'state',  width: 12 },
+    { header: 'TNO',    key: 'tno',    width: 5  },
+    { header: 'DATE',   key: 'date',   width: 11 },
+    { header: 'SALE',   key: 'sale',   width: 5  },
+    { header: 'INVO',   key: 'invo',   width: 7  },
+    { header: 'TRADERNAME', key: 'tradername', width: 24 },
+    { header: 'BIDDER', key: 'bidder', width: 9  },
+    { header: 'BAG',    key: 'bag',    width: 5  },
+    { header: 'QTY',    key: 'qty',    width: 10 },
+    { header: 'AMOUNT', key: 'amount', width: 13 },
+    { header: 'LORRY',  key: 'lorry',  width: 10 },
+    { header: 'GUNNY',  key: 'gunny',  width: 10 },
+    { header: 'IGST',   key: 'igst',   width: 10 },
+    { header: 'CGST',   key: 'cgst',   width: 10 },
+    { header: 'SGST',   key: 'sgst',   width: 10 },
+    { header: 'INS',    key: 'ins',    width: 10 },
+    { header: 'INVAMT', key: 'invamt', width: 13 },
+  ],
 };
 
 const TOTAL_KEYS = {
@@ -672,6 +713,8 @@ const TOTAL_KEYS = {
   payment_partywise: ['pqty', 'puramt', 'discount', 'gst5', 'payable'],
   tally_purchase:  ['bag', 'qty', 'amount', 'cgst', 'sgst', 'igst', 'discount', 'bilamt'],
   tds_return:      ['assess_value', 'tds'],
+  purchase_register: ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'],
+  sales_register:    ['bag', 'qty', 'amount', 'lorry', 'gunny', 'igst', 'cgst', 'sgst', 'ins', 'invamt'],
 };
 
 const TITLES = {
@@ -692,6 +735,8 @@ const TITLES = {
   payment_partywise: 'Payment Summary - Party wise',
   tally_purchase:  'Tally Purchase',
   tds_return:      'TDS Return',
+  purchase_register: 'Purchase Register',
+  sales_register:  'Sales Register',
 };
 
 // Per-type page orientation override. Portrait is the default (set in
@@ -703,6 +748,9 @@ const PDF_LAYOUT = {
   // BUYER1, SALE, INVO, PQTY, PRATE, PURAMT, COM, CGST, SGST, IGST,
   // ADVANCE, BALANCE). Portrait is impossible — stays landscape.
   full_file: 'landscape',
+  // 18 / 17 wide registers — portrait can't fit them.
+  purchase_register: 'landscape',
+  sales_register: 'landscape',
 };
 
 // Per-type row preprocessing: add a serial-number column, optionally group
@@ -962,6 +1010,24 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       return getTDSReturnData(db, extra.from, extra.to, 'invoice');
     }
 
+    case 'purchase_register': {
+      const { getPurchaseRegister } = require('./calculations');
+      const mode = (cfg && cfg.business_mode) || 'e-Trade';
+      return getPurchaseRegister(db, {
+        auctionId: auctionId || (extra && extra.auctionId) || null,
+        from: extra && extra.from, to: extra && extra.to, mode,
+      });
+    }
+
+    case 'sales_register': {
+      const { getSalesRegister } = require('./calculations');
+      return getSalesRegister(db, {
+        auctionId: auctionId || (extra && extra.auctionId) || null,
+        from: extra && extra.from, to: extra && extra.to,
+        saleType: extra && extra.saleType,
+      });
+    }
+
     default:
       throw new Error(`Unknown export type: ${type}`);
   }
@@ -1018,6 +1084,8 @@ async function exportPdf(db, type, auctionId, cfg, extra = {}) {
   let subtitle = '';
   if (type === 'tds_return') {
     subtitle = `Period: ${extra.from || ''} to ${extra.to || ''}`;
+  } else if ((type === 'purchase_register' || type === 'sales_register') && !auctionId) {
+    subtitle = (extra.from && extra.to) ? `Period: ${extra.from} to ${extra.to}` : 'All trades';
   } else if (auctionId) {
     const auction = db.get('SELECT ano, date, crop_type FROM auctions WHERE id = ?', [auctionId]);
     if (auction) {

@@ -1010,6 +1010,71 @@ function getPurchaseJournal(db, auctionId, type) {
   return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
 }
 
+/**
+ * Purchase Register (lot-wise)
+ * One row PER LOT — the seller-side purchase detail. Unlike the Purchase
+ * Journal (one row per dealer invoice / agri bill), this is the raw lot
+ * ledger: STATE, TNO, DATE, LOT, BRANCH, NAME, PLACE, GSTIN, BAG, QTY,
+ * PRICE, AMOUNT, PQTY, PRATE, PURAMT, DISCOUNT, GST5, PAYABLE.
+ *
+ * DISCOUNT = refund, GST5 = stored GST-on-discount (`advance`), PAYABLE =
+ * balance (GST already netted) — see [[payment-field-semantics]]. In
+ * auction mode `advance` is the discount, so GST5 → 0.
+ *
+ * Scope: a specific trade (opts.auctionId) OR a date range across trades
+ * (opts.from/opts.to over the auction date). Trade wins when both given.
+ */
+function getPurchaseRegister(db, opts = {}) {
+  const mode = String(opts.mode || 'e-Trade').toLowerCase();
+  const discountCol = (mode === 'auction') ? 'advance' : 'refund';
+  const gstCol = (mode === 'auction') ? '0' : 'advance';
+  let q = `SELECT l.state AS state, a.ano AS tno, a.date AS date, l.lot_no AS lot,
+      l.branch AS branch, l.name AS name, l.ppla AS place, l.cr AS gstin,
+      l.bags AS bag, l.qty AS qty, l.price AS price, l.amount AS amount,
+      l.pqty AS pqty, l.prate AS prate, l.puramt AS puramt,
+      l.${discountCol} AS discount, l.${gstCol} AS gst5, l.balance AS payable
+    FROM lots l JOIN auctions a ON a.id = l.auction_id
+    WHERE l.amount > 0`;
+  const params = [];
+  if (opts.auctionId) { q += ' AND l.auction_id = ?'; params.push(opts.auctionId); }
+  else if (opts.from && opts.to) { q += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+  q += ' ORDER BY l.state, a.ano, CAST(l.lot_no AS INTEGER), l.lot_no';
+  const rows = db.all(q, params);
+  return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
+}
+
+/**
+ * Sales Register (invoice-wise)
+ * One row PER INVOICE: STATE, TNO, DATE, SALE, INVO, TRADERNAME, BIDDER,
+ * BAG, QTY, AMOUNT, LORRY, GUNNY, IGST, CGST, SGST, INS, INVAMT.
+ * LORRY = freight charge (pava_hc); INVAMT = invoice grand total (tot).
+ *
+ * Scope: a specific trade (matched by auction_id OR ano for legacy rows)
+ * OR a date range across trades. Optional saleType filter.
+ */
+function getSalesRegister(db, opts = {}) {
+  let q = `SELECT i.state AS state, i.ano AS tno, i.date AS date, i.sale AS sale,
+      i.invo AS invo, i.buyer1 AS tradername, i.buyer AS bidder,
+      i.bag AS bag, i.qty AS qty, i.amount AS amount,
+      i.pava_hc AS lorry, i.gunny AS gunny, i.igst AS igst, i.cgst AS cgst,
+      i.sgst AS sgst, i.ins AS ins, i.tot AS invamt
+    FROM invoices i`;
+  const params = [];
+  const where = [];
+  if (opts.auctionId) {
+    const a = db.get('SELECT id, ano FROM auctions WHERE id = ?', [opts.auctionId]);
+    if (a) { where.push('(i.auction_id = ? OR i.ano = ?)'); params.push(a.id, a.ano); }
+    else { where.push('i.auction_id = ?'); params.push(opts.auctionId); }
+  } else if (opts.from && opts.to) {
+    where.push('i.date BETWEEN ? AND ?'); params.push(opts.from, opts.to);
+  }
+  if (opts.saleType) { where.push('i.sale = ?'); params.push(opts.saleType); }
+  if (where.length) q += ' WHERE ' + where.join(' AND ');
+  q += ' ORDER BY i.state, i.ano, i.date, i.sale, i.invo';
+  const rows = db.all(q, params);
+  return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
+}
+
 module.exports = {
   calculateLot,
   calculateTDS,
@@ -1024,6 +1089,8 @@ module.exports = {
   getTDSReturnData,
   getSalesJournal,
   getPurchaseJournal,
+  getPurchaseRegister,
+  getSalesRegister,
   gstinStateCode,
   round2,
   round0,
