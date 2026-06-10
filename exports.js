@@ -447,9 +447,6 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
   const senderIfsc  = (isKL ? cfg.bank_kl_ifsc  : cfg.bank_tn_ifsc)  || cfg.bank_tn_ifsc  || cfg.bank_kl_ifsc  || '';
   const senderEmail = (isKL ? cfg.kl_email      : cfg.tn_email)      || cfg.tn_email      || cfg.kl_email      || '';
   const senderBankPrefix = String(senderIfsc).slice(0, 4).toUpperCase();
-  // Short tag inserted into REMARKS (e.g. "VSTL" → "5 ANN MARIA SPICES VSTL PAYMENT 5945275.00 Credited").
-  // Falls back to the leading word of trade_name when short_name isn't set.
-  const shortTag = String(cfg.short_name || (cfg.trade_name || '').split(/\s+/)[0] || '').toUpperCase();
 
   // Auction context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
@@ -475,7 +472,18 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       BENEFIARYB:  beneIfsc,
       BENEFIARYE:  senderEmail,
       BENEFICI_B:  '',
-      REMARKS:     `${ano} ${String(p.beneficiaryName || '').toUpperCase()}${shortTag ? ' ' + shortTag : ''} PAYMENT ${amount.toFixed(2)} Credited${p.lots ? ` for lot${p.lots.includes(',') ? 's' : ''} ${p.lots}` : ''}`,
+      // Pipe-delimited REMARKS: ano | seller | beneficiary | payment | lots
+      //   10 | ALUMKAL SPICES | VANDANMEDU SPICES TRADING LLP | PAYMENT 1388677.00 Credited | For lots 004,012,082,152
+      // Seller name (p.name) and beneficiary/account-holder (p.beneficiaryName)
+      // are BOTH shown even when identical, so the column layout is fixed.
+      // The lots segment is dropped when the row covers no lots.
+      REMARKS:     [
+        ano,
+        String(p.name || '').toUpperCase(),
+        String(p.beneficiaryName || '').toUpperCase(),
+        `PAYMENT ${amount.toFixed(2)} Credited`,
+        p.lots ? `For lot${p.lots.includes(',') ? 's' : ''} ${p.lots}` : '',
+      ].filter(Boolean).join(' | '),
       CLIENTCODE:  '',
     };
   });

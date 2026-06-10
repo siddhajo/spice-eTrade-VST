@@ -672,7 +672,237 @@ function generateCropReceiptPDF(lot, cfg) {
   });
 }
 
-module.exports = { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF };
+// ── Lot-entry receipt PDF (WhatsApp attachment) ──────────────────
+// Server-side render of the SAME slip the Lot Entry print modal shows
+// (public/index.html → leBuildCompactHtml / leBuildDetailedHtml). The
+// browser print flow can't hand a PDF blob to the WhatsApp document
+// sender (no client-side PDF lib), so this reproduces the slip from a
+// pre-computed payload the client already builds for the HTML path:
+//   { format, co, groups, dateStr, ano, printedAt, traderInfo }
+// One section (page) per trader group — same grouping/order as print.
+// Pure renderer: every value comes from the payload; the only thing
+// resolved here is the logo file (same source the crop receipt uses).
+function _maskAcct(acct) {
+  const s = String(acct || '');
+  if (s.length <= 4) return s;
+  return '*'.repeat(s.length - 4) + s.slice(-4);
+}
+function generateLotReceiptPDF(payload) {
+  const format = (payload && payload.format === 'compact') ? 'compact' : 'detailed';
+  const co = (payload && payload.co) || {};
+  const groups = (payload && Array.isArray(payload.groups)) ? payload.groups : [];
+  const traderInfo = (payload && payload.traderInfo) || {};
+  const dateStr = String((payload && payload.dateStr) || '');
+  const ano = String((payload && payload.ano) != null ? payload.ano : '');
+  const printedAt = String((payload && payload.printedAt) || '');
+
+  const num = (v, dp = 3) => Number(v || 0).toFixed(dp);
+  const { getLogoSource } = require('./logo-paths');
+
+  // ── Compact 80mm thermal slip ──
+  function compactHeight(g) {
+    const rows = g.lots.length;
+    const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
+    const totalGross  = g.lots.reduce((s, l) => s + (Number(l.gross_wt)  || 0), 0);
+    let h = 12 + 18;                         // pad + nickname
+    if (g.branch) h += 12;
+    if (co.gstin) h += 12;
+    h += 8 + 14;                             // planter
+    h += 12;                                 // meta
+    h += 10 + 14;                            // table header
+    h += rows * 13;
+    if (totalSample > 0) h += 13;
+    if (totalGross > 0) h += 8 + 14;
+    h += 12 + 16;                            // thanks
+    h += 12;                                 // printed
+    h += 12;                                 // bottom pad
+    return Math.ceil(h);
+  }
+  function drawCompact(doc, g, w, x0) {
+    let y = 12;
+    const cx = x0, cw = w;
+    doc.fontSize(13).font('Helvetica-Bold').text(String(co.nickname || ''), cx, y, { width: cw, align: 'center', lineBreak: false });
+    y += 18;
+    doc.font('Helvetica');
+    if (g.branch) { doc.fontSize(9).text(String(g.branch).toUpperCase(), cx, y, { width: cw, align: 'center' }); y += 12; }
+    if (co.gstin) { doc.fontSize(9).text('GSTIN: ' + co.gstin, cx, y, { width: cw, align: 'center' }); y += 12; }
+    y += 8;
+    doc.fontSize(10).text('Planter: ', cx + 2, y, { continued: true }).font('Helvetica-Bold').text(g.name || '—');
+    doc.font('Helvetica');
+    y += 14;
+    doc.fontSize(9).text(`Auction: ${ano}    Date: ${dateStr}`, cx + 2, y, { width: cw - 2 });
+    y += 12 + 10;
+    // Table header
+    const c1 = cx + 2, c2 = cx + 30, c3r = cx + cw - 90, c4r = cx + cw - 2;
+    doc.fontSize(9).font('Helvetica-Bold');
+    doc.text('S.No', c1, y, { width: 26 });
+    doc.text('Lots', c2, y, { width: 70 });
+    doc.text('Bags', c3r - 30, y, { width: 60, align: 'right' });
+    doc.text('Weight(kg)', c4r - 70, y, { width: 70, align: 'right' });
+    y += 12;
+    doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).lineWidth(0.7).stroke();
+    y += 2;
+    doc.font('Helvetica').fontSize(9);
+    g.lots.forEach((l, i) => {
+      doc.text(String(i + 1), c1, y, { width: 26 });
+      doc.text(String(l.lot_no || ''), c2, y, { width: 70 });
+      doc.text(String(l.bags || 0), c3r - 30, y, { width: 60, align: 'right' });
+      doc.text(num(l.qty, 3), c4r - 70, y, { width: 70, align: 'right' });
+      y += 13;
+    });
+    const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
+    const totalGross  = g.lots.reduce((s, l) => s + (Number(l.gross_wt)  || 0), 0);
+    if (totalSample > 0) {
+      doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).dash(2, { space: 2 }).stroke().undash();
+      doc.text('Sample', c1, y + 1, { width: 96 });
+      doc.text(String(g.lots.length), c3r - 30, y + 1, { width: 60, align: 'right' });
+      doc.text(num(totalSample, 3) + ' kg', c4r - 70, y + 1, { width: 70, align: 'right' });
+      y += 13;
+    }
+    if (totalGross > 0) {
+      y += 4;
+      doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).lineWidth(0.7).stroke();
+      y += 4;
+      doc.font('Helvetica-Bold').fontSize(10).text('Gross Wt.  ' + num(totalGross, 3) + ' kg', cx, y, { width: cw - 2, align: 'right', lineBreak: false });
+      doc.font('Helvetica');
+      y += 14;
+    }
+    y += 12;
+    doc.font('Helvetica-Bold').fontSize(11).text('Thank you!', cx, y, { width: cw, align: 'center' });
+    y += 16;
+    doc.font('Helvetica').fontSize(8).fillColor('#444').text(printedAt, cx, y, { width: cw, align: 'center' }).fillColor('#000');
+  }
+
+  // ── Detailed ~60mm slip ──
+  function detailedMetaRows(g, ti) {
+    const bank = (ti && ti.defaultBank) || {};
+    let n = 3; // Name, Place, CR always present as rows
+    if (bank.acctnum) n += 1;
+    if (bank.ifsc) n += 1;
+    return n;
+  }
+  function detailedHeight(g) {
+    const ti = (g.trader_id != null ? traderInfo[g.trader_id] : null) || {};
+    let h = 12 + 30;                         // pad + brand (title+branch)
+    if (co.gstin) h += 12;
+    h += 8 + 14;                             // dateline
+    h += 8;                                  // hr
+    h += detailedMetaRows(g, ti) * 13;
+    h += 8 + 14;                             // lot header
+    h += g.lots.length * 14;
+    h += 16;                                 // summary
+    h += 12 + 14;                            // thanks
+    h += 12;                                 // bottom pad
+    return Math.ceil(h);
+  }
+  function drawDetailed(doc, g, w, x0) {
+    const ti = (g.trader_id != null ? traderInfo[g.trader_id] : null) || {};
+    const bank = (ti && ti.defaultBank) || {};
+    const acctMasked = bank.acctnum ? _maskAcct(bank.acctnum) : '';
+    const ifsc = bank.ifsc || '';
+    const place = [g.ppla, g.ppin].filter(Boolean).join(', ');
+    const cr = g.cr || '';
+    let y = 12;
+    const cx = x0, cw = w;
+    // Brand row: logo + title/branch, centered
+    const logoSrc = getLogoSource('ispl', ['logo-ispl.png', 'logo_kj.png', 'logo-asp.png']);
+    const title = String(co.tradeName || co.nickname || '');
+    const branchLine = String((g.branch || '—')).toUpperCase() + ' BRANCH';
+    let logoDrawn = false;
+    if (logoSrc) {
+      try { doc.image(logoSrc, cx + cw / 2 - 60, y, { fit: [18, 18] }); logoDrawn = true; } catch (_) {}
+    }
+    const tX = logoDrawn ? cx + cw / 2 - 38 : cx;
+    const tW = logoDrawn ? 120 : cw;
+    const tAlign = logoDrawn ? 'left' : 'center';
+    // Shrink the title to fit on ONE line — a wrapped title would collide
+    // with the branch line below AND risk overflowing the fixed page
+    // height (which would spill onto an auto-added blank page and break
+    // the one-slip-per-trader pagination).
+    let ts = 12;
+    doc.font('Helvetica-Bold');
+    while (ts > 7 && doc.fontSize(ts).widthOfString(title) > tW) ts--;
+    doc.fontSize(ts).text(title, tX, y, { width: tW, align: tAlign, lineBreak: false });
+    doc.fontSize(8).font('Helvetica-Bold').fillColor('#444').text(branchLine, tX, y + 14, { width: tW, align: tAlign, lineBreak: false }).fillColor('#000');
+    y += 30;
+    if (co.gstin) { doc.font('Helvetica').fontSize(8).fillColor('#444').text('GSTIN: ' + co.gstin, cx, y, { width: cw, align: 'center' }).fillColor('#000'); y += 12; }
+    y += 8;
+    // Dateline
+    doc.font('Helvetica').fontSize(8.5);
+    doc.text('Date: ', cx + 2, y, { continued: true }).font('Helvetica-Bold').text(dateStr);
+    doc.font('Helvetica').text('Trade #' + ano, cx, y, { width: cw - 2, align: 'right' });
+    y += 14;
+    doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).dash(2, { space: 2 }).lineWidth(0.5).stroke().undash();
+    y += 8;
+    // Meta table
+    const metaRow = (lbl, val, mono) => {
+      doc.font('Helvetica-Bold').fontSize(8.5).text(lbl, cx + 2, y, { width: 48 });
+      doc.font(mono ? 'Courier' : 'Helvetica').fontSize(8.5).text(String(val || ''), cx + 52, y, { width: cw - 54 });
+      y += 13;
+    };
+    metaRow('Name', g.name || '');
+    metaRow('Place', place);
+    metaRow('CR', cr);
+    if (acctMasked) metaRow('A/C No', acctMasked, true);
+    if (ifsc) metaRow('IFSC', ifsc, true);
+    // Lot table
+    y += 2;
+    const lcLot = cx + 4, lcBag = cx + cw - 150, lcQty = cx + cw - 100, lcGross = cx + cw - 4;
+    doc.font('Helvetica-Bold').fontSize(8);
+    doc.rect(cx + 2, y - 2, cw - 4, 14).fillAndStroke('#f6f6f6', '#cccccc');
+    doc.fillColor('#000');
+    doc.text('Lot', lcLot, y + 1, { width: 60 });
+    doc.text('Bag', lcBag - 40, y + 1, { width: 50, align: 'right' });
+    doc.text('Qty', lcQty - 20, y + 1, { width: 50, align: 'right' });
+    doc.text('Gross Wt', lcGross - 60, y + 1, { width: 60, align: 'right' });
+    y += 14;
+    doc.font('Helvetica').fontSize(8.5);
+    let totalBags = 0, totalQty = 0, totalGross = 0;
+    g.lots.forEach(l => {
+      totalBags += parseInt(l.bags, 10) || 0;
+      totalQty += Number(l.qty) || 0;
+      totalGross += Number(l.gross_wt) || 0;
+      doc.text(String(l.lot_no || ''), lcLot, y + 1, { width: 60 });
+      doc.text(String(l.bags || 0), lcBag - 40, y + 1, { width: 50, align: 'right' });
+      doc.text(num(l.qty, 3), lcQty - 20, y + 1, { width: 50, align: 'right' });
+      doc.text(num(l.gross_wt, 3), lcGross - 60, y + 1, { width: 60, align: 'right' });
+      doc.moveTo(cx + 2, y + 13).lineTo(cx + cw - 2, y + 13).lineWidth(0.3).strokeColor('#eeeeee').stroke().strokeColor('#000');
+      y += 14;
+    });
+    // Summary
+    doc.rect(cx + 2, y, cw - 4, 16).fillAndStroke('#fafafa', '#cccccc');
+    doc.fillColor('#000').font('Helvetica-Bold').fontSize(8);
+    doc.text(`${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${num(totalQty, 3)} | Gross Wt: ${num(totalGross, 3)}`,
+      cx + 2, y + 4, { width: cw - 4, align: 'center' });
+    y += 16;
+    y += 12;
+    doc.font('Helvetica-Bold').fontSize(9).text('** THANK YOU **', cx, y, { width: cw, align: 'center' });
+  }
+
+  const isCompact = format === 'compact';
+  const pageW = isCompact ? 226 : 200;
+  const margin = 10;
+  const contentW = pageW - margin * 2;
+  const heightFn = isCompact ? compactHeight : detailedHeight;
+  const drawFn = isCompact ? drawCompact : drawDetailed;
+
+  const safeGroups = groups.length ? groups : [{ name: '', lots: [] }];
+  const doc = new PDFDocument({ size: [pageW, heightFn(safeGroups[0])], margin });
+  const buffers = [];
+  doc.on('data', b => buffers.push(b));
+
+  safeGroups.forEach((g, idx) => {
+    if (idx > 0) doc.addPage({ size: [pageW, heightFn(g)], margin });
+    drawFn(doc, g, contentW, margin);
+  });
+
+  return new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(buffers)));
+    doc.end();
+  });
+}
+
+module.exports = { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateLotReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF };
 
 /**
  * Sales Invoice PDF (Tax Invoice)

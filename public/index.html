@@ -12086,13 +12086,21 @@ function leBuildReceiptText(traderName, lots, ctx) {
 }
 
 // WhatsApp send for the print-receipt modal. One message per trader (same
-// grouping rule the receipt PDF uses). Tries the cloud API first; falls
-// back to the wa.me browser flow when the server isn't configured.
+// grouping rule the printed receipt uses), and each message now carries
+// the SAME receipt slip as a PDF attachment — rendered server-side from
+// the identical payload the HTML print path uses (POST /api/lot-receipt/
+// pdf), so the WhatsApp slip matches the paper slip. Falls back to a text
+// message when the PDF can't be built or the Cloud API isn't configured.
 async function leWhatsappReceipt() {
   if (!_le_pending_print) return;
   const errEl = document.getElementById('le-print-err');
   const showErr = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
   errEl.style.display = 'none'; errEl.textContent = '';
+
+  // Honour the format the operator picked in the modal (compact/detailed),
+  // same as leConfirmPrint — the attachment should match the chosen slip.
+  const selectedCard = document.querySelector('.le-print-fmt.selected');
+  const fmt = selectedCard ? selectedCard.dataset.format : (_le.receiptFormat === 'compact' ? 'compact' : 'detailed');
 
   let cfg = {};
   try { cfg = await j('/api/company-settings/flat'); } catch (_) {}
@@ -12104,35 +12112,62 @@ async function leWhatsappReceipt() {
   } catch (_) {}
 
   const lots = _le_pending_print.lots;
-  // Group by trader (same key the by-seller print uses) so one chat thread
-  // gets one message containing all of that seller's lots.
-  const groups = lots.reduce((m, l) => {
-    const k = l.trader_id != null ? `id:${l.trader_id}` : `name:${l.name || ''}`;
-    (m[k] = m[k] || { traderName: l.name || '', lots: [] }).lots.push(l);
-    return m;
-  }, {});
-  const items = Object.values(groups);
-  if (!items.length) { showErr('Nothing to send.'); return; }
 
-  const useApi = await _waCloudApiAvailable();
-  const company = (cfg.trade_name || cfg.short_name || cfg.tally_company_name || cfg.legal_name || 'Company').toUpperCase();
-  let sent = 0, opened = 0;
-  for (const grp of items) {
-    const phone = await _lookupSellerPhone(grp.traderName);
-    const msg = leBuildReceiptText(grp.traderName, grp.lots, { cfg, auction });
-    if (useApi && phone) {
-      // The multi-line receipt is flattened to a single line server-side
-      // (template body params can't contain newlines).
-      const ok = await _waCloudSendText(phone, [grp.traderName, msg, company]);
-      if (ok) { sent++; continue; }
-    }
-    _waOpenText(phone, msg);
-    opened++;
+  // Detailed slips show the seller's bank A/C + IFSC — fetch each unique
+  // trader once (mirrors leConfirmPrint). Compact skips this.
+  const traderInfo = {};
+  if (fmt === 'detailed') {
+    const ids = [...new Set(lots.map(l => l.trader_id).filter(Boolean))];
+    await Promise.all(ids.map(async id => {
+      try {
+        const t = await j(`/api/traders/${id}`);
+        const def = (t.banks || []).find(b => b.is_default) || (t.banks || [])[0];
+        traderInfo[id] = { ...t, defaultBank: def || null };
+      } catch (e) { traderInfo[id] = null; }
+    }));
   }
-  toast(useApi && sent
-    ? `WhatsApp sent to ${sent} seller${sent===1?'':'s'}${opened?` · ${opened} opened in browser`:''}`
-    : `Opened ${opened} WhatsApp tab${opened===1?'':'s'}`);
+
+  // Shared prep → identical data to the printed slip. groups already carry
+  // one entry per trader (so one chat thread gets one message + one PDF).
+  const prep = leReceiptPrep(fmt, lots, { cfg, auction, traderInfo });
+  if (!prep.groups.length) { showErr('Nothing to send.'); return; }
+
+  const company = (cfg.trade_name || cfg.short_name || cfg.tally_company_name || cfg.legal_name || 'Company').toUpperCase();
+
+  // Build one WhatsApp queue item per trader: a per-trader receipt PDF
+  // (rendered server-side) + a concise caption. _runWaQueue auto-sends via
+  // the Cloud API when configured, else opens the wa.me flow per item.
+  const items = [];
+  for (const grp of prep.groups) {
+    const phone = await _lookupSellerPhone(grp.name);
+    const totalBags = grp.lots.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0);
+    const totalQty  = grp.lots.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+    const nLots = grp.lots.length;
+    const summary = `your LOT RECEIPT (Auction ${prep.ano}) — ${nLots} lot${nLots === 1 ? '' : 's'}, ${totalBags} bag, ${totalQty.toFixed(3)} kg — is attached.`;
+    let blob = null;
+    try {
+      // Send just THIS trader's group so the PDF is a single-seller slip.
+      blob = await _fetchPdfBlob('/api/lot-receipt/pdf', {
+        format: prep.format, co: prep.co, dateStr: prep.dateStr,
+        ano: prep.ano, printedAt: prep.printedAt, traderInfo: prep.traderInfo,
+        groups: [grp],
+      });
+    } catch (e) { console.warn('Lot receipt PDF failed for', grp.name, e); }
+    // No PDF → fall back to the full text breakdown so nothing is lost.
+    const fallbackText = leBuildReceiptText(grp.name, grp.lots, { cfg, auction });
+    const fileSafe = String(grp.name || 'seller').replace(/[^\w]+/g, '_').slice(0, 40);
+    items.push({
+      name: grp.name,
+      phone,
+      blob: blob || undefined,
+      filename: blob ? `Receipt_${fileSafe}.pdf` : undefined,
+      message: blob ? summary : fallbackText,
+      params: [grp.name, blob ? summary : fallbackText, company],
+    });
+  }
+
   hideModal('le-print-modal');
+  await _runWaQueue(items);
   _le_pending_print = null;
 }
 
@@ -12141,6 +12176,21 @@ async function leWhatsappReceipt() {
 // document string. Easy to unit-test in isolation. Both formats group
 // lots by trader so a seller's multiple lots print on one receipt.
 function leBuildReceiptHtml(format, lots, ctx) {
+  const prep = leReceiptPrep(format, lots, ctx);
+  const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  if (format === 'compact') {
+    return leBuildCompactHtml({ ...prep, escapeHtml });
+  }
+  return leBuildDetailedHtml({ ...prep, escapeHtml });
+}
+
+// Shared receipt-prep: resolves company identity (state-aware GSTIN,
+// nickname, logo), groups lots by trader, and stamps trade ANO/date.
+// Used by BOTH the HTML print path (leBuildReceiptHtml) and the
+// WhatsApp PDF path (leWhatsappReceipt → POST /api/lot-receipt/pdf) so
+// the printed slip and the WhatsApp attachment are built from identical
+// data. Returns { format, groups, co, dateStr, ano, printedAt, traderInfo }.
+function leReceiptPrep(format, lots, ctx) {
   const groups = leGroupLotsByTrader(lots);
   const auction = ctx.auction || {};
   const cfg = ctx.cfg || {};
@@ -12180,13 +12230,8 @@ function leBuildReceiptHtml(format, lots, ctx) {
   const dateStr = (auction.date || '').split('T')[0] || printedAt;
   const ano = auction.ano || '?';
 
-  const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-
   const co = { nickname, tradeName, shortName, phone, email, addr1, addr2, place, pin, gstin, pan, fssai, sbl, branch, logoUrl };
-  if (format === 'compact') {
-    return leBuildCompactHtml({ groups, co, dateStr, ano, printedAt, escapeHtml });
-  }
-  return leBuildDetailedHtml({ groups, co, dateStr, ano, printedAt, traderInfo, escapeHtml });
+  return { format, groups, co, dateStr, ano, printedAt, traderInfo };
 }
 
 function leGroupLotsByTrader(lots) {

@@ -489,7 +489,7 @@ async function truckListPdf(db, auctionId) {
     doc.font('Helvetica');
     doc.text(fmtQty(r.qty),       colX[4] + 4, y + 5, { width: colW[4] - 8, align: 'right',  lineBreak: false });
     doc.text(fmtMoney(r.amount),  colX[5] + 4, y + 5, { width: colW[5] - 8, align: 'right',  lineBreak: false });
-    doc.moveTo(m, y + ROW_H).lineTo(m + usableW, y + ROW_H).lineWidth(0.25).strokeColor('#BBB').stroke();
+    doc.moveTo(m, y + ROW_H).lineTo(m + usableW, y + ROW_H).lineWidth(0.3).strokeColor('#999').stroke();
     y += ROW_H;
   }
 

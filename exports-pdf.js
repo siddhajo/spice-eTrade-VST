@@ -359,7 +359,10 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
         });
       }
     });
-    doc.moveTo(m, y + rowH).lineTo(m + usableW, y + rowH).lineWidth(0.25).strokeColor('#DDD').stroke();
+    // Per-row horizontal separator. Drawn at #999 / 0.3pt to match the
+    // vertical dividers so every row sits in a clearly-lined grid (the old
+    // #DDD / 0.25pt line was nearly invisible, so rows looked unseparated).
+    doc.moveTo(m, y + rowH).lineTo(m + usableW, y + rowH).lineWidth(0.3).strokeColor('#999').stroke();
     y += rowH;
   }
 

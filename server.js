@@ -19,7 +19,7 @@ const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
 const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0 } = require('./calculations');
-const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
+const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateLotReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
 const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
 const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
 const { exportPdf: exportAnyPdf } = require('./exports-pdf');
@@ -9535,6 +9535,28 @@ app.get('/api/receipt/:lotId', requireView, async (req, res) => {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="Receipt_${lot.lot_no}.pdf"`);
   res.send(pdf);
+});
+
+// ── Lot-entry receipt PDF (for WhatsApp attachment) ──────────
+// Pure renderer of the SAME slip the Lot Entry print modal shows. The
+// client already builds the receipt payload (co / groups / dateStr /
+// ano / printedAt / traderInfo) for the HTML print path; it POSTs that
+// same payload here to get a PDF blob it can attach to a WhatsApp
+// document message (the browser print flow can't yield a PDF blob).
+// Available to lot-entry users since they own this screen.
+app.post('/api/lot-receipt/pdf', requireViewOrLotEntry, async (req, res) => {
+  try {
+    const payload = req.body || {};
+    if (!Array.isArray(payload.groups) || !payload.groups.length) {
+      return res.status(400).json({ error: 'No lots to render' });
+    }
+    const pdf = await generateLotReceiptPDF(payload);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="LotReceipt.pdf"');
+    res.send(pdf);
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Receipt PDF failed' });
+  }
 });
 
 // ══════════════════════════════════════════════════════════════

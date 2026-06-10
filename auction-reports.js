@@ -868,7 +868,7 @@ async function collectionPdf(db, auctionId) {
       });
     });
     doc.moveTo(m, y + rowH).lineTo(m + usableW, y + rowH)
-       .lineWidth(0.25).strokeColor('#CCC').stroke();
+       .lineWidth(0.3).strokeColor('#999').stroke();
     y += rowH;
   }
 
