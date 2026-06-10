@@ -15621,8 +15621,13 @@ async function downloadLorry(type,format){
       toast(msg);return;
     }
     const blob=await r.blob();
+    // Prefer the server's filename (named by trade NO / ano); fall back to
+    // the id-based name only if the header is missing.
+    let filename=`${type}_${aid}.${format}`;
+    const cd=r.headers.get('Content-Disposition')||'';
+    const fm=/filename="?([^";]+)"?/i.exec(cd); if(fm) filename=fm[1];
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-    a.download=`${type}_${aid}.${format}`;a.click();
+    a.download=filename;a.click();
     URL.revokeObjectURL(a.href);
   });
 }
@@ -19952,7 +19957,12 @@ async function exportType(type,format,aidOverride){format=format||'xlsx';
       return;
     }
     const blob=await r.blob();
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${type}_${aid}.${format}`;a.click();
+    // Prefer the server's filename (named by trade NO / ano); fall back to
+    // the id-based name only if the header is missing.
+    let filename=`${type}_${aid}.${format}`;
+    const cd=r.headers.get('Content-Disposition')||'';
+    const fm=/filename="?([^";]+)"?/i.exec(cd); if(fm) filename=fm[1];
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();
   });
 }
 
@@ -20785,8 +20795,11 @@ async function tallyDownload(type){
       toast(msg);return;
     }
     const blob=await r.blob();
+    let filename=`Tally_${label.replace(/\s/g,'')}_${aid}.xml`;
+    const cd=r.headers.get('Content-Disposition')||'';
+    const fm=/filename="?([^";]+)"?/i.exec(cd); if(fm) filename=fm[1];
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-    a.download=`Tally_${label.replace(/\s/g,'')}_${aid}.xml`;a.click();
+    a.download=filename;a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),5000);
     toast(`Downloaded Tally ${label} XML`);
   });
@@ -20882,9 +20895,12 @@ async function tallyDownloadParty(kind,partyName){
       toast(msg);return;
     }
     const blob=await r.blob();
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
     const safeName=partyName.replace(/[^a-zA-Z0-9]/g,'_').slice(0,40);
-    a.download=`Tally_PartyLedger_${kind}_${safeName}_${aid}.xml`;a.click();
+    let filename=`Tally_PartyLedger_${kind}_${safeName}_${aid}.xml`;
+    const cd=r.headers.get('Content-Disposition')||'';
+    const fm=/filename="?([^";]+)"?/i.exec(cd); if(fm) filename=fm[1];
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=filename;a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),5000);
     toast(`Downloaded ledger for ${partyName}`);
   });
@@ -21017,9 +21033,12 @@ async function tallyDownloadPartyVoucher(type,partyName){
       toast(msg);return;
     }
     const blob=await r.blob();
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
     const safeName=partyName.replace(/[^a-zA-Z0-9]/g,'_').slice(0,40);
-    a.download=`Tally_${type}_${safeName}_${aid}.xml`;a.click();
+    let filename=`Tally_${type}_${safeName}_${aid}.xml`;
+    const cd=r.headers.get('Content-Disposition')||'';
+    const fm=/filename="?([^";]+)"?/i.exec(cd); if(fm) filename=fm[1];
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=filename;a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),5000);
     toast(`Downloaded ${TALLY_LABELS[type]||type} voucher for ${partyName}`);
   });

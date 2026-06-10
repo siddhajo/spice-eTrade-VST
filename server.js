@@ -8024,6 +8024,20 @@ function registerOpts(req, cfg) {
   };
 }
 
+// Resolve an auction's human-facing trade number (ano) for use in export
+// filenames. Downloads must be named by the trade no the user knows, NOT
+// the internal auctions.id. Falls back to the raw id only if the auction
+// can't be found, and sanitises for filesystem safety.
+function anoForFile(db, auctionId) {
+  if (auctionId == null || auctionId === '') return '';
+  let val = String(auctionId);
+  try {
+    const a = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
+    if (a && a.ano != null && String(a.ano).trim() !== '') val = String(a.ano);
+  } catch (e) { /* fall back to id */ }
+  return val.replace(/[^\w.-]+/g, '_');
+}
+
 app.get('/api/registers/purchase', requireView, (req, res) => {
   const { getPurchaseRegister } = require('./calculations');
   const db = getDb();
@@ -8315,7 +8329,7 @@ app.get('/api/payments/pdf/:auctionId/:sellerName', requireView, (req, res) => {
     // produce malformed headers — browsers then fail the print/download
     // silently. Same pattern the purchase-invoice + sales-invoice routes use.
     const safeName = String(sellerName || '').replace(/[^\w]/g, '_').slice(0, 80) || 'seller';
-    res.setHeader('Content-Disposition', `inline; filename="Payment_${safeName}_${auctionId}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="Payment_${safeName}_${anoForFile(db, auctionId)}.pdf"`);
     doc.pipe(res); piped = true;
     res.on('close', () => { try { doc.destroy(); } catch(_){} });
     _renderPaymentStatement(doc, db, auctionId, sellerName, cfg);
@@ -8348,7 +8362,7 @@ app.post('/api/payments/pdf-lots', requireView, (req, res) => {
     doc = new PDFDocument({ size: 'A4', margin: 30 });
     res.setHeader('Content-Type', 'application/pdf');
     const safeName = sellerName.replace(/[^\w]/g, '_').slice(0, 80) || 'seller';
-    res.setHeader('Content-Disposition', `inline; filename="Payment_${safeName}_${auctionId}_partial.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="Payment_${safeName}_${anoForFile(db, auctionId)}_partial.pdf"`);
     doc.pipe(res); piped = true;
     res.on('close', () => { try { doc.destroy(); } catch(_){} });
     _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds);
@@ -8412,7 +8426,7 @@ app.get('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
       const buffer = await exportAnyPdf(db, type, auctionId, cfg, { state: req.query.state });
       const niceName = (EXPORT_TYPES[type] && EXPORT_TYPES[type].name) || type;
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${niceName}_${auctionId}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${niceName}_${anoForFile(db, auctionId)}.pdf"`);
       return res.send(buffer);
     } catch (e) {
       return res.status(500).json({ error: e.message });
@@ -8454,7 +8468,7 @@ app.get('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
     // doesn't get confused with the full export later.
     const suffix = opts ? '_selected' : '';
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}${suffix}_${auctionId}.${ext}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}${suffix}_${anoForFile(db, auctionId)}.${ext}"`);
     res.send(Buffer.from(buffer));
   } catch(e) {
     res.status(500).json({ error: e.message });
@@ -8522,7 +8536,7 @@ app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
       const niceName = exportDef.name || type;
       const suffix = opts ? '_selected' : '';
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${niceName}${suffix}_${auctionId}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${niceName}${suffix}_${anoForFile(db, auctionId)}.pdf"`);
       return res.send(buffer);
     }
     let buffer;
@@ -8536,7 +8550,7 @@ app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
     const mime = exportDef.mime || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     const suffix = opts ? '_selected' : '';
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}${suffix}_${auctionId}.${ext}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportDef.name}${suffix}_${anoForFile(db, auctionId)}.${ext}"`);
     res.send(Buffer.from(buffer));
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -8574,12 +8588,12 @@ app.get('/api/lorry-reports/:type/:auctionId', requireExport, async (req, res) =
     if (format === 'pdf') {
       const buf = await def.pdf(db, auctionId);
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${def.name}_${auctionId}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${def.name}_${anoForFile(db, auctionId)}.pdf"`);
       return res.send(buf);
     }
     const buf = await def.xlsx(db, auctionId);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${def.name}_${auctionId}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${def.name}_${anoForFile(db, auctionId)}.xlsx"`);
     return res.send(Buffer.from(buf));
   } catch (e) {
     console.error('lorry-reports error:', e);
@@ -8974,10 +8988,11 @@ app.get('/api/dbf-exports/:type', requireExport, async (req, res) => {
       opts.to = req.query.to;
     }
 
-    // Build a descriptive filename: CPA1_3.xlsx, INV_2026-04-01_to_2026-04-30.dbf, NAM.dbf
+    // Build a descriptive filename keyed by the trade NO (ano), not the
+    // internal auctions.id: CPA1_4.xlsx, INV_2026-04-01_to_2026-04-30.dbf, NAM.dbf
     let filename = def.name;
-    if (opts.auctionId) filename += `_${opts.auctionId}`;
-    else if (opts.ano) filename += `_${opts.ano}`;
+    if (opts.auctionId) filename += `_${anoForFile(db, opts.auctionId)}`;
+    else if (opts.ano) filename += `_${String(opts.ano).replace(/[^\w.-]+/g, '_')}`;
     if (opts.from && opts.to) filename += `_${opts.from}_to_${opts.to}`;
 
     if (format === 'xlsx') {
@@ -9402,7 +9417,7 @@ app.get('/api/tally/party-ledger/:kind/:auctionId', requireExport, (req, res) =>
     }
     const xml = generLedgerXML(rows, cfg, { companyName: resolveTallyCompanyName(cfg, partyDef.company) });
     const safeName = String(partyName).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
-    const filename = `Tally_PartyLedger_${kind}_${safeName}_${auctionId}.xml`;
+    const filename = `Tally_PartyLedger_${kind}_${safeName}_${anoForFile(db, auctionId)}.xml`;
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(xml);
@@ -9474,7 +9489,7 @@ app.get('/api/tally/party-voucher/:type/:auctionId', requireExport, (req, res) =
     }
     const xml = def.generator(rows, cfg, { companyName: resolveTallyCompanyName(cfg, def.company) });
     const safeName = String(partyName).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
-    const filename = `${def.name}_${safeName}_${auctionId}.xml`;
+    const filename = `${def.name}_${safeName}_${anoForFile(db, auctionId)}.xml`;
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(xml);
@@ -9501,7 +9516,7 @@ app.get('/api/tally/export/:type/:auctionId', requireExport, (req, res) => {
       return res.status(404).json({ error: `No ${what} found for auction ${auctionId}` });
     }
     const xml = def.generator(rows, cfg, { companyName: resolveTallyCompanyName(cfg, def.company) });
-    const filename = `${def.name}_${auctionId}.xml`;
+    const filename = `${def.name}_${anoForFile(db, auctionId)}.xml`;
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(xml);
