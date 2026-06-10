@@ -6481,16 +6481,15 @@ app.get('/api/purchases/pdf/:auctionId/:sellerName', requireView, async (req, re
 // the app (ASP when Kerala+e-Trade, else ISP from company_settings).
 function enrichPurchaseForPDF(invoice, cfg, db, auctionId) {
   if (!invoice) return invoice;
-  // Stamp auction date + e-TRADE no
-  if (!invoice.invoiceDate && auctionId) {
-    const auction = db.get('SELECT date FROM auctions WHERE id = ?', [auctionId]);
-    if (auction && auction.date) {
-      const d = new Date(auction.date);
-      if (!isNaN(d)) invoice.invoiceDate = fmtDate(auction.date);
-    }
+  // Stamp auction date + e-TRADE no. The e-TRADE no shown on the invoice
+  // must be the trade NUMBER (auctions.ano), never the internal row id.
+  const auction = auctionId ? db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) : null;
+  if (!invoice.invoiceDate && auction && auction.date) {
+    const d = new Date(auction.date);
+    if (!isNaN(d)) invoice.invoiceDate = fmtDate(auction.date);
   }
   if (!invoice.invoiceDate) invoice.invoiceDate = fmtDate(todayLocalISO());
-  if (!invoice.eTradeNo) invoice.eTradeNo = String(auctionId || '');
+  if (!invoice.eTradeNo) invoice.eTradeNo = String((auction && auction.ano != null) ? auction.ano : (auctionId || ''));
 
   // Buyer block — populated from the central company identity (name /
   // PAN / etc.) and the state-specific address slot. Single-company
@@ -6791,13 +6790,14 @@ app.get('/api/bills/pdf/:auctionId/:sellerName', requireView, async (req, res) =
     if (bill.seller && !bill.seller.crno) bill.seller.crno = bill.seller.cr || '';
     // Stamp the bill date + e-TRADE number so the new layout can render them
     // in the top strip (Invoice No / e-TRADE No / Date).
-    const auction = db.get('SELECT date FROM auctions WHERE id = ?', [req.params.auctionId]);
+    const auction = db.get('SELECT ano, date FROM auctions WHERE id = ?', [req.params.auctionId]);
     if (auction && auction.date) {
       const d = new Date(auction.date);
       if (!isNaN(d)) bill.billDate = fmtDate(auction.date);
     }
     if (!bill.billDate) bill.billDate = fmtDate(todayLocalISO());
-    bill.eTradeNo = req.query.eTradeNo || req.params.auctionId;
+    // e-TRADE No is the trade NUMBER (auctions.ano), not the row id.
+    bill.eTradeNo = req.query.eTradeNo || (auction && auction.ano != null ? String(auction.ano) : req.params.auctionId);
 
     const pdf = await generateAgriBillPDF(bill, cfg, billNo);
     res.setHeader('Content-Type', 'application/pdf');
@@ -6848,15 +6848,19 @@ app.post('/api/bills/pdf-bulk', requireView, async (req, res) => {
       }
       // Enrich for new renderer layout (Invoice No / e-TRADE No / Date strip)
       if (bill.seller && !bill.seller.crno) bill.seller.crno = bill.seller.cr || '';
+      // e-TRADE No is the trade NUMBER. Prefer the bill's own `ano`
+      // column; fall back to the auction's ano — never the row id.
+      let billAno = stored.ano != null ? String(stored.ano) : '';
       if (stored.auction_id) {
-        const auction = db.get('SELECT date FROM auctions WHERE id = ?', [stored.auction_id]);
+        const auction = db.get('SELECT ano, date FROM auctions WHERE id = ?', [stored.auction_id]);
         if (auction && auction.date) {
           const d = new Date(auction.date);
           if (!isNaN(d)) bill.billDate = fmtDate(auction.date);
         }
+        if (!billAno && auction && auction.ano != null) billAno = String(auction.ano);
       }
       if (!bill.billDate) bill.billDate = fmtDate(todayLocalISO());
-      bill.eTradeNo = stored.auction_id || '';
+      bill.eTradeNo = billAno;
       payloads.push({ billData: bill, billNo: stored.bil });
     }
 

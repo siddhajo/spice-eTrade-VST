@@ -16244,7 +16244,8 @@ function openLotEdit(l){
       //
       // Both zero the price so amount (qty × price) collapses to 0,
       // matching every downstream report's "no transaction" filter.
-      // GSTIN stays cleared because there's no real counterparty.
+      // The CR/GSTIN field belongs to the SELLER and is left untouched —
+      // it is not the buyer's, so a buyer/status change must never alter it.
       const SPECIAL = {
         WD: { buyer: 'WD', buyer1: 'Withdrawn', sale: 'W', toast: 'Marked as Withdrawn — buyer set to WD / Withdrawn, sale type W, price zeroed' },
         NA: { buyer: 'NA', buyer1: 'N/A',       sale: 'N', toast: 'Marked as N/A — buyer set to NA / N/A, sale type N, price zeroed' },
@@ -16255,11 +16256,9 @@ function openLotEdit(l){
         if (amtEl)   amtEl.value   = '0.00';
         const buyerEl  = document.getElementById('l-buyer');
         const buyer1El = document.getElementById('l-buyer1');
-        const crEl     = document.getElementById('l-cr');
         const saleEl   = document.getElementById('l-sale');
         if (buyerEl)  buyerEl.value  = s.buyer;
         if (buyer1El) buyer1El.value = s.buyer1;
-        if (crEl)     crEl.value     = '';
         if (saleEl)   saleEl.value   = s.sale;
         codeEl.value = code;
         if (typeof toast === 'function') toast(s.toast);
@@ -16293,7 +16292,11 @@ function openLotEdit(l){
         };
         setIf('l-buyer',  match.buyer  || '');
         setIf('l-buyer1', match.buyer1 || '');
-        setIf('l-cr',     match.gstin  || match.cr || '');
+        // NOTE: do NOT touch l-cr here. CR/GSTIN is the SELLER's, denormalised
+        // from the trader; the buyer's GSTIN is resolved separately from the
+        // buyers master during sales-invoice generation. Writing the buyer's
+        // gstin here corrupted the seller's CR (and broke the seller-state
+        // detection in purchase/bill calcs that reads lot.cr).
         setIf('l-sale',   match.sale   || '');
         // Normalize the code field too — if user typed lowercase, snap to canonical
         codeEl.value = match.code || code;
