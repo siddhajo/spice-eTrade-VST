@@ -10152,10 +10152,16 @@ const IMPORT_MODULES = {
   sales_invoice: {
     label: 'Sales Invoices',
     table: 'invoices',
-    // Dedup on trade-no + invoice-no. Invoice numbers restart per trade,
-    // so keying on `invo` alone wrongly skips a legit invoice whose number
-    // already exists under a different trade. `ano` scopes it to the trade.
-    keyCols: ['ano', 'invo'],
+    // Dedup on trade-no + sale-type + invoice-no, mirroring the live
+    // numbering rule (a new invoice's number is checked unique within
+    // auction_id + sale, see the POST /invoices guard). Invoice numbers
+    // restart per trade AND per sale type, so the same `invo` can legitly
+    // appear twice in one trade under L vs I vs E — keying on `ano+invo`
+    // alone would wrongly skip the second. `state` is deliberately NOT a
+    // key: it holds the company's own business_state, identical on every
+    // invoice in a trade, so it can't discriminate (and keyCols double as
+    // a required-field gate, which would reject rows lacking a state col).
+    keyCols: ['ano', 'sale', 'invo'],
     // auction_id is auto-derived from `ano` at import time so the
     // imported rows show up under the matching trade in the Sales tab
     // (the list filters by auction_id, not ano).
