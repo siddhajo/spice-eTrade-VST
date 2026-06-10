@@ -3677,6 +3677,37 @@ input[type="search"]:focus{
         </div>
       </div>
 
+      <!-- Activity Log — who ENTERED / EDITED / DELETED lots in this
+           trade, newest first. Shares the le-collapsible pattern (so it
+           toggles + remembers state like Recent Entries) and defaults
+           collapsed to keep the entry screen clean. Fixed-height scroll
+           area with a sticky header + pagination underneath. -->
+      <div class="card le-collapsible is-collapsed" id="le-activity-card" data-section="le-activity" style="padding:0;margin-top:16px">
+        <div class="le-collapse-head le-collapse-head-themed" onclick="leToggleSection('le-activity')" role="button" tabindex="0" style="display:flex;align-items:center;gap:8px;padding:14px 20px;cursor:pointer;background:var(--green-bg);color:var(--spice-cardamom-dk);border-radius:14px 14px 0 0">
+          <span class="le-collapse-chev" style="display:inline-block;width:14px;font-weight:700;color:var(--spice-cardamom-dk)">▾</span>
+          <span style="font-weight:700;font-size:14px;color:var(--spice-cardamom-dk)">Activity Log — this trade</span>
+          <span id="le-activity-count" style="font-weight:400;color:var(--spice-cardamom-dk);opacity:.7;font-size:12px;margin-left:4px"></span>
+          <span style="flex:1"></span>
+          <button type="button" onclick="event.stopPropagation();leLoadActivity(1)" class="le-toolbar-btn le-tb-ghost" title="Refresh the activity log">↻ Refresh</button>
+        </div><!-- /le-collapse-head -->
+        <div class="le-collapse-body" style="padding:0 20px 16px">
+          <div style="max-height:320px;overflow-y:auto;margin-top:8px;border:1px solid var(--border);border-radius:8px">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+              <thead><tr style="position:sticky;top:0;background:var(--green-bg);z-index:1;color:var(--spice-cardamom-dk)">
+                <th style="text-align:left;padding:8px 10px;white-space:nowrap">When</th>
+                <th style="text-align:left;padding:8px 10px">User</th>
+                <th style="text-align:left;padding:8px 10px">Action</th>
+                <th style="text-align:left;padding:8px 10px">Lot</th>
+                <th style="text-align:left;padding:8px 10px">Seller</th>
+                <th style="text-align:left;padding:8px 10px">Changed</th>
+              </tr></thead>
+              <tbody id="le-activity-list"></tbody>
+            </table>
+          </div>
+          <div id="le-activity-pager" style="display:none;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:12.5px;color:var(--text2)"></div>
+        </div><!-- /le-collapse-body -->
+      </div>
+
       <!-- Change Seller modal lives at the global-modal level (outside
            the tab containers) so it works from BOTH the Lot Entry tab's
            Recent-Entries toolbar AND the Lots tab's lot-edit modal.
@@ -4050,11 +4081,13 @@ input[type="search"]:focus{
                  the "full payable + every seller" output. -->
             <button id="pay-bulk-bank-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportBankPaymentSelected()" title="Export the bank RTGS/NEFT file containing ONLY the ticked sellers (and only their picked lots, if any)">📤 Bank Payment ← <span id="pay-bulk-bank-export-cnt">0</span> sellers</button>
             <button id="pay-bulk-xlsx-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentXlsxSelected()" title="Export the per-lot Payment XLSX containing ONLY the ticked sellers (and only their picked lots, if any)">📊 Payment XLSX ← <span id="pay-bulk-xlsx-export-cnt">0</span> sellers</button>
+            <button id="pay-bulk-pdf-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentPdfSelected()" title="Export the per-lot Payment PDF containing ONLY the ticked sellers (and only their picked lots, if any)">📄 Payment PDF ← <span id="pay-bulk-pdf-export-cnt">0</span> sellers</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('bank_payment')" title="Export bulk RTGS/NEFT file for bank portal upload">📤 Export Bank Payment</button>
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment')" title="Per-lot detailed payment breakdown">📊 Export Payment XLSX</button>
+            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment','pdf')" title="Per-lot detailed payment breakdown (PDF)">📄 Export Payment PDF</button>
             <!-- Toolbar batch undo. Hidden when no batches exist for the
                  current auction; otherwise shows "↶ Undo Last Export (N)"
                  where N is the number of batches still on the stack. -->
@@ -4209,16 +4242,14 @@ input[type="search"]:focus{
             <span style="font-weight:400;font-size:12px;color:var(--text3);margin-left:8px">FoxPro-compatible format for legacy integration</span>
           </h3>
           <div class="tally-section-body">
-            <p style="font-size:12px;color:var(--text2);margin:12px 0">These exports produce .dbf files that your dad's FoxPro application can read directly. Date format: DD/MM/YYYY. Lot numbers preserve leading zeros.</p>
+            <p style="font-size:12px;color:var(--text2);margin:12px 0">Export each module as a FoxPro-compatible <b>.dbf</b> or a branded <b>.xlsx</b> spreadsheet. Transaction modules honour the Trade and date-range filters below; master data exports the full table. Date format: DD/MM/YYYY. Lot numbers preserve leading zeros.</p>
 
-            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Per Auction</h3>
-            <div style="display:flex;gap:8px;align-items:end;margin-bottom:12px;flex-wrap:wrap">
-              <div class="fg" style="margin:0;flex:1;min-width:200px"><label>Trade</label><select id="dbf-auction" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:100%"></select></div>
-              <button class="btn btn-a" onclick="downloadDbf('lots',{auctionId:document.getElementById('dbf-auction').value})">Lots (CPA1.DBF)</button>
-            </div>
-
-            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Date Range</h3>
-            <div style="display:flex;gap:8px;align-items:end;margin-bottom:10px;flex-wrap:wrap">
+            <!-- Shared filter bar — applies to every transaction module
+                 below. Trade is optional (blank = all trades); date range
+                 is optional too (blank = all dates). The same controls
+                 drive both DBF and XLSX downloads. -->
+            <div style="display:flex;gap:10px;align-items:end;margin-bottom:14px;flex-wrap:wrap;padding:12px;background:var(--green-bg,#f3f7f3);border-radius:8px">
+              <div class="fg" style="margin:0;flex:1;min-width:180px"><label>Trade (optional)</label><select id="dbf-auction" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:100%"></select></div>
               <div class="fg" style="margin:0"><label>From</label><input type="date" id="dbf-from"></div>
               <div class="fg" style="margin:0"><label>To</label><input type="date" id="dbf-to"></div>
               <div class="date-quickpicks" style="display:flex;gap:4px;flex-wrap:wrap;align-self:flex-end;margin-bottom:1px">
@@ -4227,19 +4258,65 @@ input[type="search"]:focus{
                 <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','last_month')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">Last Month</button>
                 <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','quarter')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Quarter</button>
                 <button type="button" onclick="dateQuickPick('dbf-from','dbf-to','year')" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">This Year</button>
+                <button type="button" onclick="dbfClearFilters()" style="padding:7px 11px;font-size:12px;font-weight:600;background:#fff;border:1px solid var(--spice-line);border-radius:6px;cursor:pointer">Clear</button>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
-              <button class="btn btn-a" onclick="downloadDbfRange('invoices')">Sales Invoices (INV.DBF)</button>
-              <button class="btn btn-a" onclick="downloadDbfRange('purchases')">Purchases (PURCHASE.DBF)</button>
-              <button class="btn btn-a" onclick="downloadDbfRange('bills')">Bills of Supply (BILL.DBF)</button>
-              <button class="btn btn-a" onclick="downloadDbfRange('debit_notes')">Debit Notes</button>
+
+            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Transactions — trade &amp; date filtered</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Lots <span style="color:var(--text3);font-weight:400">· CPA1</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('lots','dbf',true)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('lots','xlsx',true)">XLSX</button>
+                </div>
+              </div>
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Sales Invoices <span style="color:var(--text3);font-weight:400">· INV</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('invoices','dbf',true)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('invoices','xlsx',true)">XLSX</button>
+                </div>
+              </div>
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Purchases <span style="color:var(--text3);font-weight:400">· PURCHASE</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('purchases','dbf',true)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('purchases','xlsx',true)">XLSX</button>
+                </div>
+              </div>
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Bills of Supply <span style="color:var(--text3);font-weight:400">· BILL</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('bills','dbf',true)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('bills','xlsx',true)">XLSX</button>
+                </div>
+              </div>
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Debit Notes <span style="color:var(--text3);font-weight:400">· DEBIT</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('debit_notes','dbf',true)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('debit_notes','xlsx',true)">XLSX</button>
+                </div>
+              </div>
             </div>
 
-            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Master Data</h3>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
-              <button class="btn btn-a" onclick="downloadDbf('traders')">Sellers (NAM.DBF)</button>
-              <button class="btn btn-a" onclick="downloadDbf('buyers')">Buyers (SBL.DBF)</button>
+            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Master Data — full table</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Sellers <span style="color:var(--text3);font-weight:400">· NAM</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('traders','dbf',false)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('traders','xlsx',false)">XLSX</button>
+                </div>
+              </div>
+              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Buyers <span style="color:var(--text3);font-weight:400">· SBL</span></div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('buyers','dbf',false)">DBF</button>
+                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('buyers','xlsx',false)">XLSX</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -9142,9 +9219,90 @@ function leRestoreCollapseState(){
     document.querySelectorAll('.le-collapsible[data-section]').forEach(card => {
       const key = card.getAttribute('data-section');
       const v = localStorage.getItem('le_collapsed_'+key);
+      // Honour BOTH saved states explicitly: '1' collapses, '0' expands.
+      // The expand branch matters for cards whose HTML defaults to
+      // is-collapsed (e.g. the Activity Log) — without it a user who
+      // expanded the panel would find it collapsed again next visit.
       if (v === '1') card.classList.add('is-collapsed');
+      else if (v === '0') card.classList.remove('is-collapsed');
     });
   } catch(_){}
+}
+
+// ── Lot Entry: Activity Log ──────────────────────────────────────
+// Renders the audit feed (/api/lot-activity) for the currently-picked
+// trade. Paginated server-side; the table body scrolls within a fixed
+// height. Refreshed automatically after every create / edit / delete and
+// whenever the operator switches trades, plus a manual ↻ Refresh button.
+const _leAct = { page: 1, pageSize: 20, total: 0 };
+async function leLoadActivity(page){
+  const listEl = document.getElementById('le-activity-list');
+  if (!listEl) return;
+  if (page) _leAct.page = page;
+  const aidEl = document.getElementById('le-auction');
+  const aid = aidEl ? aidEl.value : '';
+  const cntEl = document.getElementById('le-activity-count');
+  const pager = document.getElementById('le-activity-pager');
+  if (!aid) {
+    listEl.innerHTML = '<tr><td colspan="6" style="padding:14px;color:var(--text3)">Select a trade to see its activity.</td></tr>';
+    if (cntEl) cntEl.textContent = '';
+    if (pager) pager.style.display = 'none';
+    return;
+  }
+  try {
+    const data = await j(`/api/lot-activity?auctionId=${encodeURIComponent(aid)}&page=${_leAct.page}&pageSize=${_leAct.pageSize}`);
+    _leAct.total = data.total || 0;
+    renderLeActivity(data.items || []);
+  } catch(e) {
+    listEl.innerHTML = `<tr><td colspan="6" style="padding:14px;color:#991B1B">Failed to load activity: ${esc((e&&e.message)||String(e))}</td></tr>`;
+    if (pager) pager.style.display = 'none';
+  }
+}
+function renderLeActivity(items){
+  const listEl = document.getElementById('le-activity-list');
+  const cntEl  = document.getElementById('le-activity-count');
+  const pager  = document.getElementById('le-activity-pager');
+  if (cntEl) cntEl.textContent = _leAct.total ? `(${_leAct.total})` : '';
+  if (!items.length) {
+    listEl.innerHTML = '<tr><td colspan="6" style="padding:14px;color:var(--text3)">No activity recorded yet for this trade.</td></tr>';
+  } else {
+    const badge = (a) => {
+      const map = { create:['Entered','#065f46','#d1fae5'], update:['Edited','#92400e','#fef3c7'], delete:['Deleted','#991b1b','#fee2e2'] };
+      const m = map[a] || [a, '#374151', '#e5e7eb'];
+      return `<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;color:${m[1]};background:${m[2]}">${esc(m[0])}</span>`;
+    };
+    listEl.innerHTML = items.map(it => {
+      const changed = (it.fields && it.fields.length) ? esc(it.fields.join(', ')) : '';
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:7px 10px;white-space:nowrap">${esc(leFmtActWhen(it.created_at))}</td>
+        <td style="padding:7px 10px">${esc(it.user||'')}</td>
+        <td style="padding:7px 10px">${badge(it.action)}</td>
+        <td style="padding:7px 10px">${esc(it.lot_no||'')}</td>
+        <td style="padding:7px 10px">${esc(it.name||'')}</td>
+        <td style="padding:7px 10px;color:var(--text2)">${changed}</td>
+      </tr>`;
+    }).join('');
+  }
+  const totalPages = Math.max(1, Math.ceil(_leAct.total / _leAct.pageSize));
+  if (totalPages <= 1) { if (pager) pager.style.display = 'none'; return; }
+  pager.style.display = 'flex';
+  pager.innerHTML = `
+    <span>Page ${_leAct.page} of ${totalPages}</span>
+    <span style="display:flex;gap:6px">
+      <button class="btn btn-o" style="height:30px;padding:0 12px" ${_leAct.page<=1?'disabled':''} onclick="leActivityGo(${_leAct.page-1})">‹ Prev</button>
+      <button class="btn btn-o" style="height:30px;padding:0 12px" ${_leAct.page>=totalPages?'disabled':''} onclick="leActivityGo(${_leAct.page+1})">Next ›</button>
+    </span>`;
+}
+function leActivityGo(p){
+  const totalPages = Math.max(1, Math.ceil(_leAct.total / _leAct.pageSize));
+  _leAct.page = Math.min(Math.max(1, p), totalPages);
+  leLoadActivity();
+}
+// Format the localtime 'YYYY-MM-DD HH:MM:SS' stamp into a compact
+// 'DD/MM HH:MM' for the narrow When column.
+function leFmtActWhen(s){
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(s||''));
+  return m ? `${m[3]}/${m[2]} ${m[4]}:${m[5]}` : String(s||'');
 }
 
 async function loadLotEntry(){
@@ -9276,6 +9434,7 @@ function leOnAuctionChange(){
     const sb = document.getElementById('le-recent-search'); if (sb) sb.value = '';
     if (_le.selectedForPrint) _le.selectedForPrint.clear();
     renderLeRecent();
+    leLoadActivity(1);
     const card = document.getElementById('le-alloc-card'); if (card) card.style.display = 'none';
     return;
   }
@@ -9291,6 +9450,7 @@ function leOnAuctionChange(){
   // Focus seller search to start fast entry flow
   setTimeout(() => document.getElementById('le-seller-search').focus(), 50);
   loadLeRecent();
+  leLoadActivity(1);
   leLoadAllocBar();
 }
 
@@ -9724,6 +9884,7 @@ async function leSaveLot(){
     if (cropEl)     cropEl.value = '';
     setTimeout(() => document.getElementById('le-lotno').focus(), 50);
     await loadLeRecent();
+    leLoadActivity(1);
     // After a successful create (not edit), auto-suggest the next lot
     // number for this branch so the user can hit Save again immediately.
     if (!wasEditing) leAutoSuggestLotNo();
@@ -9860,6 +10021,7 @@ async function leDeleteLot(lotId, lotNo){
     // And drop it from the print-selection set so it can't be re-included
     if (_le.selectedForPrint) _le.selectedForPrint.delete(lotId);
     await loadLeRecent();
+    leLoadActivity(1);
     leUpdateStats();
     leLoadAllocBar();
   } catch (e) {
@@ -15395,7 +15557,13 @@ async function doGenerateAll(){
 function loadPayAuctions(){fillAucSelect('pay-auction').then(()=>loadPayments())}
 function loadExpAuctions(){
   fillAucSelect('exp-auction').then(renderExportBtns);
-  fillAucSelect('dbf-auction');
+  // The DBF/XLSX Trade picker is an OPTIONAL filter, so prepend an
+  // "All trades" choice and default to it (fillAucSelect otherwise
+  // auto-selects a specific trade via _wireAuctionSync).
+  fillAucSelect('dbf-auction').then(()=>{
+    const sel=document.getElementById('dbf-auction');
+    if(sel){ sel.insertAdjacentHTML('afterbegin','<option value="">— All trades —</option>'); sel.value=''; }
+  });
   // Default DBF date range: current month
   const today=new Date().toISOString().slice(0,10);
   const firstOfMonth=today.slice(0,8)+'01';
@@ -15446,11 +15614,31 @@ async function downloadDbf(type, extraParams={}){
   }catch(e){showError(e)}
 }
 
-async function downloadDbfRange(type){
-  const from=document.getElementById('dbf-from').value;
-  const to=document.getElementById('dbf-to').value;
-  if(!from||!to){alert('Select From and To dates');return}
-  await downloadDbf(type,{from,to});
+// Read the shared DBF/XLSX filter bar. Trade (auction id) and date range
+// are BOTH optional — a blank trade means all trades, a blank/partial date
+// range means all dates. The server applies whatever it's given.
+function dbfFilterParams(){
+  const p={};
+  const aid=document.getElementById('dbf-auction')?.value;
+  if(aid) p.auctionId=aid;
+  const from=document.getElementById('dbf-from')?.value;
+  const to=document.getElementById('dbf-to')?.value;
+  if(from&&to){p.from=from;p.to=to;}
+  return p;
+}
+function dbfClearFilters(){
+  const a=document.getElementById('dbf-auction'); if(a) a.value='';
+  const f=document.getElementById('dbf-from'); if(f) f.value='';
+  const t=document.getElementById('dbf-to'); if(t) t.value='';
+}
+// Unified export trigger. type = module key, format = 'dbf'|'xlsx',
+// useFilters = whether to attach the shared trade/date filters (false for
+// master-data dumps). Routes through downloadDbf, which already streams
+// the blob and names the file from the server's Content-Disposition.
+async function dbfGo(type, format, useFilters){
+  const params = useFilters ? dbfFilterParams() : {};
+  if(format==='xlsx') params.format='xlsx';
+  await downloadDbf(type, params);
 }
 
 // ── Lots ──────────────────────────────────────────────────
@@ -18014,6 +18202,13 @@ async function exportPaymentXlsxSelected() {
   if (!names.length) { alert('Tick one or more sellers first'); return; }
   await _payDownloadSelected('payment', 'xlsx', aid, names);
 }
+async function exportPaymentPdfSelected() {
+  const aid = Number(document.getElementById('pay-auction')?.value || 0);
+  const names = _collectSelectedPaymentNames();
+  if (!aid) { alert('Select an auction first'); return; }
+  if (!names.length) { alert('Tick one or more sellers first'); return; }
+  await _payDownloadSelected('payment', 'pdf', aid, names);
+}
 async function _payDownloadSelected(type, format, aid, names) {
   const label = (typeof EXP_LABELS === 'object' && EXP_LABELS[type]) || type;
   // Pull per-seller state. Two independent maps go into the body:
@@ -18669,6 +18864,7 @@ function updatePaymentBulkButtons() {
   _bulkBtnSetVisible(document.getElementById('pay-bulk-whatsapp'), checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-bank-export'), checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-xlsx-export'), checked > 0);
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-pdf-export'), checked > 0);
   // Live-update the seller count inside each Selected button label so
   // the operator can see at a glance how many sellers the next click
   // will export. Helps catch "wait, I forgot to tick one" before firing.
@@ -18676,6 +18872,8 @@ function updatePaymentBulkButtons() {
   if (bcnt) bcnt.textContent = String(checked);
   const xcnt = document.getElementById('pay-bulk-xlsx-export-cnt');
   if (xcnt) xcnt.textContent = String(checked);
+  const pcnt = document.getElementById('pay-bulk-pdf-export-cnt');
+  if (pcnt) pcnt.textContent = String(checked);
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');
@@ -19647,7 +19845,7 @@ const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',
   lot_buyer:'Lot Buyer',lot_name:'Lot Name',lot_payment:'Lot Payment Summary',
   praman_csv:'e-Trade CSV (Praman)',price_list_before:'Price List (Before)',price_list:'Price List',bank_payment_before:'Bank Payment (Before)',bank_payment:'Bank Payment (RTGS/NEFT)',
   pooler_register:'Pooler Register',full_file:'Full File',collection:'Collection',trade_report:'Trade Report',dealer_list:'Dealer List',
-  payment:'Payment Summary'};
+  payment:'Payment Summary',payment_partywise:'Payment Summary - Party wise'};
 // Export types that only support a specific format (no XLSX/PDF choice).
 // e.g., Praman is a CSV-only upload format for the Praman auction platform.
 const EXP_CSV_ONLY = new Set(['praman_csv']);

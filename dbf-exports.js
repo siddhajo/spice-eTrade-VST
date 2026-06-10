@@ -65,13 +65,98 @@ async function writeDbfBuffer(fields, records) {
   }
 }
 
+// Resolve the trade-wise filter value (ano) for transaction tables that
+// key on the auction NUMBER rather than its row id. The DBF/Excel UI uses
+// a single Trade dropdown whose value is the auction id, so when an
+// auctionId is supplied we look the ano up here; an explicit ano wins.
+function anoFilter(db, opts) {
+  if (opts && opts.ano) return opts.ano;
+  if (opts && opts.auctionId) {
+    const a = db.get('SELECT ano FROM auctions WHERE id = ?', [opts.auctionId]);
+    return a ? a.ano : null;
+  }
+  return null;
+}
+
+// Map DBF field defs → ExcelJS column defs so the XLSX twin of each export
+// carries the same headers, order, and numeric precision as the .dbf.
+function dbfFieldsToCols(fields) {
+  return fields.map(f => {
+    const col = {
+      key: f.name,
+      header: f.name,
+      width: Math.min(Math.max(Math.round((f.size || 12) * 0.95), 8), 42),
+    };
+    if (f.type === 'N') {
+      col.align = 'right';
+      const dp = f.decimalPlaces || 0;
+      col.numFmt = dp > 0 ? ('#,##0.' + '0'.repeat(dp)) : '#,##0';
+    } else {
+      col.align = 'left';
+    }
+    return col;
+  });
+}
+
+// Lazy require to avoid any load-order coupling with exports.js (which is a
+// large module). Reuses the shared branded XLSX builder.
+let _createExcelBuffer = null;
+function getExcelWriter() {
+  if (!_createExcelBuffer) ({ createExcelBuffer: _createExcelBuffer } = require('./exports'));
+  return _createExcelBuffer;
+}
+
+// Human-readable meta lines (trade + date range) shown in the XLSX header
+// band so the recipient can see exactly what the sheet was filtered to.
+function metaForOpts(db, opts) {
+  const lines = [];
+  if (opts && opts.auctionId) {
+    const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [opts.auctionId]);
+    if (a) lines.push(`Trade: ${a.ano}${a.date ? ' (' + fmtDate(a.date) + ')' : ''}`);
+  } else if (opts && opts.ano) {
+    lines.push(`Trade: ${opts.ano}`);
+  }
+  if (opts && opts.from && opts.to) lines.push(`Period: ${fmtDate(opts.from)} – ${fmtDate(opts.to)}`);
+  return lines;
+}
+
+// Generic writers — every module exposes a build(db, opts) → {fields,
+// records}; these turn that into a .dbf or .xlsx buffer respectively.
+async function exportDbf(db, type, opts = {}) {
+  const def = DBF_EXPORTS[type];
+  if (!def) throw new Error(`Unknown DBF export type: ${type}`);
+  const { fields, records } = def.build(db, opts);
+  return writeDbfBuffer(fields, records);
+}
+async function exportXlsx(db, type, opts = {}) {
+  const def = DBF_EXPORTS[type];
+  if (!def) throw new Error(`Unknown export type: ${type}`);
+  const { fields, records } = def.build(db, opts);
+  const createExcelBuffer = getExcelWriter();
+  return createExcelBuffer(def.name, dbfFieldsToCols(fields), records, {
+    db, title: def.label, metaLines: metaForOpts(db, opts),
+  });
+}
+
 // ── LOTS (CPA1.DBF structure) ─────────────────────────────────
-async function exportLotsDbf(db, auctionId) {
-  const rows = db.all(`
-    SELECT l.*, a.ano as trade_no, a.date as trade_date 
+function buildLots(db, opts = {}) {
+  // Trade-wise (auctionId) and/or date-wise (from/to over the auction
+  // date). With neither filter, every lot across all trades is returned.
+  let query = `
+    SELECT l.*, a.ano as trade_no, a.date as trade_date
     FROM lots l JOIN auctions a ON a.id = l.auction_id
-    WHERE l.auction_id = ? ORDER BY l.lot_no
-  `, [auctionId]);
+    WHERE 1=1`;
+  const params = [];
+  if (opts.auctionId) {
+    // A specific trade already pins the date, so the date range is
+    // redundant here — applying it too would wrongly drop the trade's
+    // lots whenever the (optional) range doesn't cover the trade's date.
+    query += ' AND l.auction_id = ?'; params.push(opts.auctionId);
+  } else if (opts.from && opts.to) {
+    query += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to);
+  }
+  query += ' ORDER BY a.date, CAST(l.lot_no AS INTEGER), l.lot_no';
+  const rows = db.all(query, params);
 
   const fields = [
     { name: 'ANO',      type: 'C', size: 10 },
@@ -153,15 +238,18 @@ async function exportLotsDbf(db, auctionId) {
     BALANCE: num(r.balance, 2),
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── SALES INVOICES (INV.DBF structure) ────────────────────────
-async function exportInvoicesDbf(db, filters = {}) {
+function buildInvoices(db, opts = {}) {
   let query = 'SELECT * FROM invoices WHERE 1=1';
   const params = [];
-  if (filters.ano) { query += ' AND ano = ?'; params.push(filters.ano); }
-  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  // Trade-wise OR date-wise: a chosen trade scopes the export on its own,
+  // so the date range only applies when no specific trade is selected.
+  const ano = anoFilter(db, opts);
+  if (ano) { query += ' AND ano = ?'; params.push(ano); }
+  else if (opts.from && opts.to) { query += ' AND date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
   query += ' ORDER BY date, sale, invo';
   const rows = db.all(query, params);
 
@@ -213,15 +301,18 @@ async function exportInvoicesDbf(db, filters = {}) {
     TOT: num(r.tot, 2),
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── PURCHASES (PURCHASE.DBF structure) ────────────────────────
-async function exportPurchasesDbf(db, filters = {}) {
+function buildPurchases(db, opts = {}) {
   let query = 'SELECT * FROM purchases WHERE 1=1';
   const params = [];
-  if (filters.ano) { query += ' AND ano = ?'; params.push(filters.ano); }
-  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  // Trade-wise OR date-wise: a chosen trade scopes the export on its own,
+  // so the date range only applies when no specific trade is selected.
+  const ano = anoFilter(db, opts);
+  if (ano) { query += ' AND ano = ?'; params.push(ano); }
+  else if (opts.from && opts.to) { query += ' AND date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
   query += ' ORDER BY date, invo';
   const rows = db.all(query, params);
 
@@ -265,15 +356,18 @@ async function exportPurchasesDbf(db, filters = {}) {
     TDS: num(r.tds, 2),
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── BILLS of SUPPLY (BILL.DBF structure) ──────────────────────
-async function exportBillsDbf(db, filters = {}) {
+function buildBills(db, opts = {}) {
   let query = 'SELECT * FROM bills WHERE 1=1';
   const params = [];
-  if (filters.ano) { query += ' AND ano = ?'; params.push(filters.ano); }
-  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  // Trade-wise OR date-wise: a chosen trade scopes the export on its own,
+  // so the date range only applies when no specific trade is selected.
+  const ano = anoFilter(db, opts);
+  if (ano) { query += ' AND ano = ?'; params.push(ano); }
+  else if (opts.from && opts.to) { query += ' AND date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
   query += ' ORDER BY date, bil';
   const rows = db.all(query, params);
 
@@ -317,11 +411,11 @@ async function exportBillsDbf(db, filters = {}) {
     NET: num(r.net, 2),
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── TRADERS / SELLERS (NAM.DBF structure) ─────────────────────
-async function exportTradersDbf(db) {
+function buildTraders(db) {
   const rows = db.all('SELECT * FROM traders ORDER BY name');
 
   const fields = [
@@ -356,11 +450,11 @@ async function exportTradersDbf(db) {
     HOLDER_NM: fit(r.holder_name, 50),
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── BUYERS / DEALERS (SBL.DBF structure) ──────────────────────
-async function exportBuyersDbf(db) {
+function buildBuyers(db) {
   const rows = db.all('SELECT * FROM buyers ORDER BY buyer');
 
   const fields = [
@@ -395,14 +489,18 @@ async function exportBuyersDbf(db) {
     SALE: fit(r.sale, 2) || 'L',
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── DEBIT NOTES ───────────────────────────────────────────────
-async function exportDebitNotesDbf(db, filters = {}) {
+function buildDebitNotes(db, opts = {}) {
   let query = 'SELECT * FROM debit_notes WHERE 1=1';
   const params = [];
-  if (filters.from && filters.to) { query += ' AND date BETWEEN ? AND ?'; params.push(filters.from, filters.to); }
+  // Trade-wise OR date-wise: a chosen trade scopes the export on its own,
+  // so the date range only applies when no specific trade is selected.
+  const ano = anoFilter(db, opts);
+  if (ano) { query += ' AND ano = ?'; params.push(ano); }
+  else if (opts.from && opts.to) { query += ' AND date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
   query += ' ORDER BY date, note_no';
   const rows = db.all(query, params);
 
@@ -432,27 +530,28 @@ async function exportDebitNotesDbf(db, filters = {}) {
     TOTAL: num(r.total, 2),
   }));
 
-  return writeDbfBuffer(fields, records);
+  return { fields, records };
 }
 
 // ── Registry for easy routing ─────────────────────────────────
+// Each entry exposes a build(db, opts) → {fields, records}; the generic
+// exportDbf / exportXlsx writers above turn that into the requested
+// format. Capability flags drive the UI:
+//   trade     — a Trade dropdown applies (auctionId → ano where needed)
+//   dateRange — a From/To date filter applies
+// Masters (traders, buyers) carry neither; they're full-table dumps.
 const DBF_EXPORTS = {
-  lots:         { fn: exportLotsDbf,        name: 'CPA1',     needsAuction: true, label: 'Lots (CPA1.DBF)' },
-  invoices:     { fn: exportInvoicesDbf,    name: 'INV',      needsDateRange: true, label: 'Sales Invoices (INV.DBF)' },
-  purchases:    { fn: exportPurchasesDbf,   name: 'PURCHASE', needsDateRange: true, label: 'Purchases (PURCHASE.DBF)' },
-  bills:        { fn: exportBillsDbf,       name: 'BILL',     needsDateRange: true, label: 'Bills of Supply (BILL.DBF)' },
-  traders:      { fn: exportTradersDbf,     name: 'NAM',      label: 'Sellers (NAM.DBF)' },
-  buyers:       { fn: exportBuyersDbf,      name: 'SBL',      label: 'Buyers (SBL.DBF)' },
-  debit_notes:  { fn: exportDebitNotesDbf,  name: 'DEBIT',    needsDateRange: true, label: 'Debit Notes' },
+  lots:         { build: buildLots,       name: 'CPA1',     trade: true,  dateRange: true,  label: 'Lots (CPA1.DBF)' },
+  invoices:     { build: buildInvoices,   name: 'INV',      trade: true,  dateRange: true,  label: 'Sales Invoices (INV.DBF)' },
+  purchases:    { build: buildPurchases,  name: 'PURCHASE', trade: true,  dateRange: true,  label: 'Purchases (PURCHASE.DBF)' },
+  bills:        { build: buildBills,      name: 'BILL',     trade: true,  dateRange: true,  label: 'Bills of Supply (BILL.DBF)' },
+  debit_notes:  { build: buildDebitNotes, name: 'DEBIT',    trade: true,  dateRange: true,  label: 'Debit Notes' },
+  traders:      { build: buildTraders,    name: 'NAM',      trade: false, dateRange: false, label: 'Sellers (NAM.DBF)' },
+  buyers:       { build: buildBuyers,     name: 'SBL',      trade: false, dateRange: false, label: 'Buyers (SBL.DBF)' },
 };
 
 module.exports = {
   DBF_EXPORTS,
-  exportLotsDbf,
-  exportInvoicesDbf,
-  exportPurchasesDbf,
-  exportBillsDbf,
-  exportTradersDbf,
-  exportBuyersDbf,
-  exportDebitNotesDbf,
+  exportDbf,
+  exportXlsx,
 };

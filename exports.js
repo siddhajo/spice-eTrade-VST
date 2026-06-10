@@ -682,6 +682,10 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
   // We compute it per-row by adding debit_notes (joined by ano + name).
   const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
   const discountCol = (mode === 'auction') ? 'advance' : 'refund';
+  // GST 5% is the GST-on-discount the calc already stored in `advance`
+  // (cgst+sgst+igst). In auction mode `advance` is repurposed as the
+  // discount itself, so there's no separate GST column → 0.
+  const gstCol = (mode === 'auction') ? '0' : 'advance';
   const auction = db.get('SELECT ano FROM auctions WHERE id = ?', [auctionId]);
   const ano = auction ? auction.ano : null;
   // Build name → manual debit total map (debit_notes can have multiple
@@ -711,7 +715,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
   }
   let rows = db.all(
     `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
-      pqty, prate, puramt, ${discountCol} as lot_discount, balance as payable
+      pqty, prate, puramt, ${discountCol} as lot_discount, ${gstCol} as lot_gst, balance as payable
      FROM lots WHERE auction_id = ? AND amount > 0${whereExtra}
      ORDER BY state, name`, params
   );
@@ -757,9 +761,14 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
       ? (Number(debitMap[r.poolername]) || 0)
       : 0;
     seenSellers.add(r.poolername);
+    const discount = lotDisc + manualDisc;
     return {
       ...r,
-      discount: lotDisc + manualDisc,
+      discount,
+      // GST 5% = the stored GST-on-discount (`advance`). It's already
+      // netted inside `balance`/PAYABLE, so we only DISPLAY it here and
+      // never subtract it again.
+      gst5: Number(r.lot_gst) || 0,
       payable: (Number(r.payable) || 0) - manualDisc,
     };
   });
@@ -767,7 +776,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
   // Interleave per-pooler subtotal rows after each name group — mirrors
   // the PDF's groupByKey:'poolername' subtotalKeys behaviour. Rows are
   // already sorted by (state, name) so a single linear pass groups them.
-  const SUB_KEYS = ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'payable'];
+  const SUB_KEYS = ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'];
   const enriched = [];
   let curName = null;
   let acc = null;
@@ -795,6 +804,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     { header: 'AMOUNT', key: 'amount', width: 14 }, { header: 'PQTY', key: 'pqty', width: 12 },
     { header: 'PRATE', key: 'prate', width: 10 }, { header: 'PURAMT', key: 'puramt', width: 14 },
     { header: 'DISCOUNT', key: 'discount', width: 14 },
+    { header: 'GST 5%', key: 'gst5', width: 12 },
     { header: 'PAYABLE', key: 'payable', width: 14 },
   ];
   // Footer totals — sum every numeric column. The earlier export had no
@@ -813,11 +823,85 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
       pqty:    sum('pqty'),
       puramt:  sum('puramt'),
       discount:sum('discount'),
+      gst5:    sum('gst5'),
       payable: sum('payable'),
     },
   };
   return createExcelBuffer('Payment', cols, enriched, {
     db, title: 'Payment Summary', metaLines: auctionMeta(db, auctionId),
+    grandTotal,
+  });
+}
+
+// ── Export: Payment Summary — Party wise ─────────────────────
+// One aggregated row PER POOLER (seller), grouped by state with a
+// per-state subtotal and a grand total. Mirrors the legacy DOS
+// "party-wise payment" report: columns POOLER NAME | P_QTY | P_RATE |
+// PURAMOUNT | DISCOUNT | GST 5% | PAYABLE. P_RATE is intentionally blank
+// (a party spans many lots at different rates, so a party-level rate is
+// meaningless). DISCOUNT = refund, GST 5% = stored GST-on-discount
+// (`advance`), PAYABLE = balance (GST already netted in).
+async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
+  const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
+  const discountCol = (mode === 'auction') ? 'advance' : 'refund';
+  const gstCol = (mode === 'auction') ? '0' : 'advance';
+  const rows = db.all(
+    `SELECT state,
+            name           as poolername,
+            SUM(pqty)      as pqty,
+            SUM(puramt)    as puramt,
+            SUM(${discountCol}) as discount,
+            SUM(${gstCol}) as gst5,
+            SUM(balance)   as payable
+       FROM lots
+      WHERE auction_id = ? AND amount > 0
+      GROUP BY state, name
+      ORDER BY state, name`, [auctionId]);
+
+  // Interleave a per-state header row and a per-state subtotal row,
+  // matching the reference layout (STATE … parties … STATE TOTAL).
+  const SUB_KEYS = ['pqty', 'puramt', 'discount', 'gst5', 'payable'];
+  const out = [];
+  let curState = null;
+  let acc = null;
+  const flush = () => {
+    if (!acc || curState == null) return;
+    const sub = { _isSubtotal: true, poolername: `${curState} TOTAL` };
+    SUB_KEYS.forEach(k => { sub[k] = acc[k] || 0; });
+    out.push(sub);
+  };
+  for (const r of rows) {
+    const st = r.state || '';
+    if (st !== curState) {
+      flush();
+      curState = st;
+      acc = Object.fromEntries(SUB_KEYS.map(k => [k, 0]));
+      out.push({ poolername: st });   // state header line
+    }
+    SUB_KEYS.forEach(k => { acc[k] += Number(r[k]) || 0; });
+    out.push(r);
+  }
+  flush();
+
+  const cols = [
+    { header: 'POOLER NAME', key: 'poolername', width: 34 },
+    { header: 'P_QTY',     key: 'pqty',    width: 12, numFmt: '#,##0.000' },
+    { header: 'P_RATE',    key: 'prate',   width: 10, align: 'right' },
+    { header: 'PURAMOUNT', key: 'puramt',  width: 16, numFmt: '#,##0.00' },
+    { header: 'DISCOUNT',  key: 'discount',width: 14, numFmt: '#,##0.00' },
+    { header: 'GST 5%',    key: 'gst5',    width: 12, numFmt: '#,##0.00' },
+    { header: 'PAYABLE',   key: 'payable', width: 16, numFmt: '#,##0.00' },
+  ];
+  const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const grandTotal = {
+    label: 'TOTAL',
+    values: {
+      pqty: sum('pqty'), puramt: sum('puramt'), discount: sum('discount'),
+      gst5: sum('gst5'), payable: sum('payable'),
+    },
+  };
+  return createExcelBuffer('PaymentPartywise', cols, out, {
+    db, title: 'Payment Summary - Party wise', metaLines: auctionMeta(db, auctionId),
     grandTotal,
   });
 }
@@ -1175,6 +1259,7 @@ const EXPORT_TYPES = {
   dealer_list:        { fn: exportDealerList,        name: 'DealerList' },
   sales_taxes:        { fn: exportSalesTaxes,        name: 'SalesTaxes' },
   payment:            { fn: exportPaymentSummary,    name: 'Payment',           needsCfg: true },
+  payment_partywise:  { fn: exportPaymentPartywise,  name: 'PaymentPartywise',  needsCfg: true },
   tally_purchase:     { fn: exportTallyPurchase,     name: 'TallyPurchase',     needsCfg: true },
 };
 
@@ -1188,6 +1273,6 @@ module.exports = {
   exportPramanCSV, exportPriceList, exportPriceListBefore,
   exportBankPayment, exportBankPaymentBefore,
   exportPoolerRegister, exportFullFile, exportCollection, exportTradeReport, exportDealerList,
-  exportSalesTaxes, exportPaymentSummary, exportTDSReturn, exportTallyPurchase,
+  exportSalesTaxes, exportPaymentSummary, exportPaymentPartywise, exportTDSReturn, exportTallyPurchase,
   exportSalesJournal, exportPurchaseJournal,
 };

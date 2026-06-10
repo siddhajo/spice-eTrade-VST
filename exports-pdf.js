@@ -620,7 +620,19 @@ const COLS = {
     { header: 'PRATE',      key: 'prate',       width: 9  },
     { header: 'PURAMT',     key: 'puramt',      width: 14 },
     { header: 'DISCOUNT',   key: 'discount',    width: 10 },
+    { header: 'GST 5%',     key: 'gst5',        width: 10 },
     { header: 'PAYABLE',    key: 'payable',     width: 14 },
+  ],
+  // Party-wise payment summary — one aggregated row per pooler, grouped
+  // by state. P_RATE stays blank (party spans many lots/rates).
+  payment_partywise: [
+    { header: 'POOLER NAME', key: 'poolername', width: 30 },
+    { header: 'P_QTY',     key: 'pqty',    width: 12 },
+    { header: 'P_RATE',    key: 'prate',   width: 9  },
+    { header: 'PURAMOUNT', key: 'puramt',  width: 16 },
+    { header: 'DISCOUNT',  key: 'discount',width: 13 },
+    { header: 'GST 5%',    key: 'gst5',    width: 11 },
+    { header: 'PAYABLE',   key: 'payable', width: 16 },
   ],
   tally_purchase: [
     { header: 'NAME', key: 'name', width: 24 }, { header: 'ADD', key: 'add', width: 24 },
@@ -656,7 +668,8 @@ const TOTAL_KEYS = {
   collection:      ['bag', 'qty'],
   dealer_list:     ['lots', 'bags', 'qty'],
   sales_taxes:     ['bag', 'qty', 'cardamom_cost', 'gunny_cost', 'cgst', 'sgst', 'igst', 'tcs', 'transport', 'insurance', 'total'],
-  payment:         ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'payable'],
+  payment:         ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'],
+  payment_partywise: ['pqty', 'puramt', 'discount', 'gst5', 'payable'],
   tally_purchase:  ['bag', 'qty', 'amount', 'cgst', 'sgst', 'igst', 'discount', 'bilamt'],
   tds_return:      ['assess_value', 'tds'],
 };
@@ -676,6 +689,7 @@ const TITLES = {
   dealer_list:     'Dealer List',
   sales_taxes:     'Sales & Taxes',
   payment:         'Payment Summary',
+  payment_partywise: 'Payment Summary - Party wise',
   tally_purchase:  'Tally Purchase',
   tds_return:      'TDS Return',
 };
@@ -717,7 +731,14 @@ const ROW_PREPROCESS = {
   payment: {
     serialKey: '_sn',
     groupByKey: 'poolername',
-    subtotalKeys: ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'payable'],
+    subtotalKeys: ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'],
+    subtotalLabelKey: 'poolername',
+  },
+  // Party-wise — group by state, subtotal each state. No serial column;
+  // the subtotal label lands in the POOLER NAME column ("KERALA TOTAL").
+  payment_partywise: {
+    groupByKey: 'state',
+    subtotalKeys: ['pqty', 'puramt', 'discount', 'gst5', 'payable'],
     subtotalLabelKey: 'poolername',
   },
 };
@@ -857,11 +878,71 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       // Mode-aware discount column — see exports.js exportPaymentSummary.
       const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
       const discountCol = (mode === 'auction') ? 'advance' : 'refund';
-      return db.all(
+      // GST 5% = stored GST-on-discount (`advance`); see exports.js. In
+      // auction mode `advance` is the discount, so no separate GST → 0.
+      const gstCol = (mode === 'auction') ? '0' : 'advance';
+      // Optional seller-name filter — drives the Payments-tab "Export
+      // Selected → PDF" button. Same opts shape as exports.js
+      // exportPaymentSummary (names / lots / excludeLots).
+      const opts = (extra && extra.opts) || null;
+      const filterNames = (opts && Array.isArray(opts.names) && opts.names.length)
+        ? opts.names.map(n => String(n || '').trim().toUpperCase()).filter(Boolean)
+        : null;
+      let whereExtra = '';
+      const params = [auctionId];
+      if (filterNames) {
+        whereExtra = ` AND UPPER(TRIM(name)) IN (${filterNames.map(() => '?').join(',')})`;
+        params.push(...filterNames);
+      }
+      let prows = db.all(
         `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
-          pqty, prate, puramt, ${discountCol} as discount, balance as payable
-         FROM lots WHERE auction_id = ? AND amount > 0
-         ORDER BY state, name`, [auctionId]);
+          pqty, prate, puramt, ${discountCol} as discount, ${gstCol} as gst5, balance as payable
+         FROM lots WHERE auction_id = ? AND amount > 0${whereExtra}
+         ORDER BY state, name`, params);
+      // Per-seller lot picks / already-exported exclusions (same semantics
+      // as exports.js exportPaymentSummary).
+      const lotPicks    = (opts && opts.lots        && typeof opts.lots        === 'object') ? opts.lots        : null;
+      const excludeLots = (opts && opts.excludeLots && typeof opts.excludeLots === 'object') ? opts.excludeLots : null;
+      if (lotPicks || excludeLots) {
+        const toSetMap = (src) => {
+          const m = {};
+          if (src) for (const k of Object.keys(src)) {
+            const arr = Array.isArray(src[k]) ? src[k] : [];
+            if (arr.length) m[k.trim().toUpperCase()] = new Set(arr.map(x => String(x)));
+          }
+          return m;
+        };
+        const picksUpper   = toSetMap(lotPicks);
+        const excludeUpper = toSetMap(excludeLots);
+        prows = prows.filter(r => {
+          const key = String(r.poolername || '').trim().toUpperCase();
+          const lotKey = String(r.lot);
+          const picks = picksUpper[key];
+          if (picks && !picks.has(lotKey)) return false;
+          const excl = excludeUpper[key];
+          if (excl && excl.has(lotKey)) return false;
+          return true;
+        });
+      }
+      // gst5 comes straight from the stored `advance` column (already
+      // netted in PAYABLE) — display only. Mirrors exportPaymentSummary.
+      return prows;
+    }
+
+    case 'payment_partywise': {
+      // One aggregated row per pooler, grouped by state. DISCOUNT =
+      // refund, GST 5% = stored GST-on-discount (`advance`), PAYABLE =
+      // balance. See exports.js exportPaymentPartywise.
+      const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
+      const discountCol = (mode === 'auction') ? 'advance' : 'refund';
+      const gstCol = (mode === 'auction') ? '0' : 'advance';
+      return db.all(
+        `SELECT state, name as poolername,
+                SUM(pqty) as pqty, SUM(puramt) as puramt,
+                SUM(${discountCol}) as discount, SUM(${gstCol}) as gst5,
+                SUM(balance) as payable
+           FROM lots WHERE auction_id = ? AND amount > 0
+          GROUP BY state, name ORDER BY state, name`, [auctionId]);
     }
 
     case 'tally_purchase': {

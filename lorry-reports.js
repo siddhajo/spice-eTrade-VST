@@ -117,7 +117,7 @@ function getLotsWithBuyer(db, auctionId) {
       ON UPPER(TRIM(b.code))  = UPPER(TRIM(l.code))
       OR UPPER(TRIM(b.buyer)) = UPPER(TRIM(l.buyer))
     WHERE l.auction_id = ?
-      AND l.amount > 0
+      AND (l.amount > 0 OR UPPER(TRIM(COALESCE(l.code,''))) = 'WD')
     ORDER BY CAST(l.lot_no AS INTEGER), l.lot_no
   `, [auctionId]);
 }
@@ -135,7 +135,7 @@ function getLotSlipRows(db, auctionId) {
       COALESCE(NULLIF(l.code,''), '') AS bidder
     FROM lots l
     WHERE l.auction_id = ?
-      AND l.amount > 0
+      AND (l.amount > 0 OR UPPER(TRIM(COALESCE(l.code,''))) = 'WD')
     ORDER BY CAST(l.lot_no AS INTEGER), l.lot_no
   `, [auctionId]);
 }
@@ -363,7 +363,7 @@ function getTruckListRows(db, auctionId) {
       SUM(l.amount)   AS amount
     FROM lots l
     WHERE l.auction_id = ?
-      AND l.amount > 0
+      AND (l.amount > 0 OR UPPER(TRIM(COALESCE(l.code,''))) = 'WD')
     GROUP BY COALESCE(NULLIF(l.code,''), 'UNKNOWN')
     ORDER BY CASE WHEN COALESCE(NULLIF(l.code,''), 'UNKNOWN')='UNKNOWN' THEN 1 ELSE 0 END,
              code

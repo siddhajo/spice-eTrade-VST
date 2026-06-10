@@ -23,7 +23,7 @@ const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateAgriBillPDF,
 const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
 const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
 const { exportPdf: exportAnyPdf } = require('./exports-pdf');
-const { DBF_EXPORTS } = require('./dbf-exports');
+const { DBF_EXPORTS, exportDbf, exportXlsx } = require('./dbf-exports');
 const { REPORTS: LORRY_REPORTS } = require('./lorry-reports');
 // Defensive resolution — see _company-identity-fallback.js. Uses the
 // real getCompanyIdentity from report-formatters.js when available,
@@ -4294,6 +4294,22 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
   res.json(db.all(q, p));
 });
 
+// Append a row to audit_log for a lot create / edit / delete so the Lot
+// Entry activity feed can show WHO did WHAT and WHEN. The auction_id is
+// always written as the FIRST key of the JSON details so the feed
+// endpoint can filter by trade with a collision-free LIKE prefix
+// ('{"auction_id":<id>,'). Audit is best-effort — a logging failure must
+// never break the actual lot mutation, so the whole thing is wrapped.
+function logLotActivity(db, req, action, lotId, details) {
+  try {
+    const user = (req && req.user && req.user.username) || 'unknown';
+    db.run(
+      'INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES (?,?,?,?,?)',
+      [String(user), action, 'lot', lotId != null ? Number(lotId) : null, JSON.stringify(details || {})]
+    );
+  } catch (e) { /* best-effort audit; ignore */ }
+}
+
 app.post('/api/lots', requireLotWrite, (req, res) => {
   const l = req.body;
   const db = getDb();
@@ -4387,10 +4403,11 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
   // seller has no banks or the operator didn't pick one (export then uses
   // the seller's default account).
   const bankId = (l.bank_id != null && l.bank_id !== '') ? (Number(l.bank_id) || null) : null;
-  db.run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,weight_with_gunny,moisture,crop_receipt_no,reserved_price,bank_id,user_id)
+  const ins = db.run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,weight_with_gunny,moisture,crop_receipt_no,reserved_price,bank_id,user_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [auctionId,lotNoStr,l.crop||'',l.grade||'',l.crpt||'',branch,l.state||'TAMIL NADU',l.trader_id||null,l.name||'',l.padd||'',l.ppla||'',l.ppin||'',l.pstate||'',l.pst_code||'',l.cr||'',l.pan||'',l.tel||'',l.aadhar||'',l.bags||0,l.litre||'',l.qty||0,l.gross_wt||0,l.sample_wt||0,Number(l.weight_with_gunny)||0,l.moisture||'',cropReceiptNo,Number(l.reserved_price)||0,bankId,l.user_id||'']);
   pcClearGate(db, auctionId);
+  logLotActivity(db, req, 'create', ins && ins.lastInsertRowid, { auction_id: auctionId, lot_no: lotNoStr, name: l.name || '' });
   res.json({ success: true, crop_receipt_no: cropReceiptNo });
 });
 
@@ -4501,18 +4518,62 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   // the verify run looked at has changed. Operator must re-verify
   // before the next calculate/invoice/etc.
   if (current && current.auction_id) pcClearGate(db, current.auction_id);
+  if (current) {
+    const changedFields = Object.keys(l).filter(k => LOT_UPDATE_COLUMNS.has(k));
+    const newLotNo = (l.lot_no != null) ? String(l.lot_no).trim() : current.lot_no;
+    logLotActivity(db, req, 'update', lotId, { auction_id: current.auction_id, lot_no: newLotNo, name: l.name, fields: changedFields });
+  }
   res.json({ success: true });
 });
 
 app.delete('/api/lots/:id', requireDelete, (req, res) => {
   const db = getDb();
-  const cur = db.get('SELECT auction_id, locked_at FROM lots WHERE id = ?', [req.params.id]);
+  const cur = db.get('SELECT auction_id, lot_no, name, locked_at FROM lots WHERE id = ?', [req.params.id]);
   if (cur && cur.locked_at && !isAdmin(req)) {
     return res.status(423).json({ error: 'This lot is locked — only an admin can delete it.' });
   }
   db.run('DELETE FROM lots WHERE id = ?', [req.params.id]);
   if (cur && cur.auction_id) pcClearGate(db, cur.auction_id);
+  if (cur) logLotActivity(db, req, 'delete', Number(req.params.id), { auction_id: cur.auction_id, lot_no: cur.lot_no, name: cur.name });
   res.json({ success: true });
+});
+
+// ── Lot activity feed ──────────────────────────────────────────
+// Powers the collapsible "Activity Log" panel in the Lot Entry screen.
+// Returns who created / edited / deleted lots, newest first, paginated.
+// Optional ?auctionId= scopes to one trade via a collision-free LIKE on
+// the auction_id stored as the first key of each details JSON.
+app.get('/api/lot-activity', requireAuth, (req, res) => {
+  try {
+    const db = getDb();
+    const auctionId = req.query.auctionId ? parseInt(req.query.auctionId, 10) : null;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    let where = "entity = 'lot'";
+    const params = [];
+    if (auctionId) { where += ' AND details LIKE ?'; params.push(`{"auction_id":${auctionId},%`); }
+    const totalRow = db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE ${where}`, params);
+    const total = (totalRow && totalRow.n) || 0;
+    const rows = db.all(
+      `SELECT id, user_id, action, entity_id, details, created_at
+         FROM audit_log WHERE ${where}
+        ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize]
+    );
+    const items = rows.map(r => {
+      let d = {};
+      try { d = JSON.parse(r.details || '{}'); } catch (e) { /* tolerate legacy rows */ }
+      return {
+        id: r.id, user: r.user_id, action: r.action, lot_id: r.entity_id,
+        lot_no: d.lot_no || '', name: d.name || '',
+        fields: Array.isArray(d.fields) ? d.fields : null,
+        auction_id: d.auction_id || null, created_at: r.created_at,
+      };
+    });
+    res.json({ items, total, page, pageSize });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ══════════════════════════════════════════════════════════════
@@ -8348,14 +8409,6 @@ app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
   const { type, auctionId } = req.params;
   const format = String((req.body && req.body.format) || 'xlsx').toLowerCase();
 
-  if (format === 'pdf') {
-    // PDF generation on this route is intentionally not implemented —
-    // the Payments-tab selected exports are XLSX-only. Adding PDF later
-    // is straightforward: thread `opts` through exportAnyPdf the same
-    // way the GET route does for ?state=...
-    return res.status(400).json({ error: 'PDF format is not supported on the selected-export route. Use the GET endpoint for a full PDF.' });
-  }
-
   const exportDef = EXPORT_TYPES[type];
   if (!exportDef) return res.status(400).json({ error: 'Unknown export type', available: Object.keys(EXPORT_TYPES) });
 
@@ -8392,6 +8445,19 @@ app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
         const c = cleanMap(excludeLots);
         if (c) opts.excludeLots = c;
       }
+    }
+    // PDF variant of the selected export — thread `opts` through the PDF
+    // generator the same way the GET route threads ?state=. The PDF row
+    // source (exports-pdf.js getRowsForType) applies the names/lots/
+    // excludeLots filter for the payment type.
+    if (format === 'pdf') {
+      const cfg = getSettingsFlat(db);
+      const buffer = await exportAnyPdf(db, type, auctionId, cfg, { state: body.state || null, opts });
+      const niceName = exportDef.name || type;
+      const suffix = opts ? '_selected' : '';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${niceName}${suffix}_${auctionId}.pdf"`);
+      return res.send(buffer);
     }
     let buffer;
     if (exportDef.needsCfg) {
@@ -8802,56 +8868,66 @@ app.get('/api/reports/summary-pdf/:auctionId', (req, res, next) => {
 // DBF EXPORTS (FoxPro-compatible format)
 // ══════════════════════════════════════════════════════════════
 
-// List all available DBF export types with labels
+// List all available DBF/XLSX export types with labels + capability flags.
 app.get('/api/dbf-exports/list', requireExport, (req, res) => {
   const list = {};
   for (const [key, def] of Object.entries(DBF_EXPORTS)) {
     list[key] = {
       label: def.label,
       name: def.name,
-      needsAuction: !!def.needsAuction,
-      needsDateRange: !!def.needsDateRange,
+      trade: !!def.trade,
+      dateRange: !!def.dateRange,
     };
   }
   res.json(list);
 });
 
-// Generic DBF export endpoint
+// Generic export endpoint — same data, two formats. ?format=xlsx returns
+// the branded spreadsheet twin; anything else (default) returns the .dbf.
+// Filters (all optional, applied where the module supports them):
+//   ?auctionId=  trade-wise (lots key on it directly; transaction tables
+//                resolve it to their ano)
+//   ?ano=        explicit trade number (wins over auctionId)
+//   ?from=&to=   inclusive date range
 app.get('/api/dbf-exports/:type', requireExport, async (req, res) => {
   const { type } = req.params;
   const def = DBF_EXPORTS[type];
-  if (!def) return res.status(400).json({ error: 'Unknown DBF export type', available: Object.keys(DBF_EXPORTS) });
+  if (!def) return res.status(400).json({ error: 'Unknown export type', available: Object.keys(DBF_EXPORTS) });
+
+  const format = String(req.query.format || 'dbf').toLowerCase();
 
   try {
     const db = getDb();
-    let buffer;
-
-    if (def.needsAuction) {
-      const { auctionId } = req.query;
-      if (!auctionId) return res.status(400).json({ error: 'auctionId query parameter required' });
-      buffer = await def.fn(db, auctionId);
-    } else if (def.needsDateRange) {
-      const { from, to, ano } = req.query;
-      const filters = {};
-      if (ano) filters.ano = ano;
-      if (from && to) { filters.from = from; filters.to = to; }
-      buffer = await def.fn(db, filters);
-    } else {
-      buffer = await def.fn(db);
+    const opts = {};
+    if (def.trade) {
+      if (req.query.auctionId) opts.auctionId = req.query.auctionId;
+      if (req.query.ano) opts.ano = req.query.ano;
+    }
+    if (def.dateRange && req.query.from && req.query.to) {
+      opts.from = req.query.from;
+      opts.to = req.query.to;
     }
 
-    // Build filename: LOTS_1.dbf, INV_2026-04-01_to_2026-04-30.dbf, NAM.dbf
+    // Build a descriptive filename: CPA1_3.xlsx, INV_2026-04-01_to_2026-04-30.dbf, NAM.dbf
     let filename = def.name;
-    if (def.needsAuction && req.query.auctionId) filename += `_${req.query.auctionId}`;
-    if (def.needsDateRange && req.query.from) filename += `_${req.query.from}_to_${req.query.to}`;
-    filename += '.dbf';
+    if (opts.auctionId) filename += `_${opts.auctionId}`;
+    else if (opts.ano) filename += `_${opts.ano}`;
+    if (opts.from && opts.to) filename += `_${opts.from}_to_${opts.to}`;
 
+    if (format === 'xlsx') {
+      const buffer = await exportXlsx(db, type, opts);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
+      return res.send(Buffer.from(buffer));
+    }
+
+    const buffer = await exportDbf(db, type, opts);
     res.setHeader('Content-Type', 'application/x-dbase');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.dbf"`);
     res.send(buffer);
   } catch(e) {
-    console.error('DBF export error:', e);
-    res.status(500).json({ error: 'DBF export failed: ' + e.message });
+    console.error('Export error:', e);
+    res.status(500).json({ error: 'Export failed: ' + e.message });
   }
 });
 
