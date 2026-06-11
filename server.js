@@ -10498,7 +10498,15 @@ function _normGstinForLookup(s) {
   let v = String(s == null ? '' : s).trim().toUpperCase();
   if (v.startsWith('GSTIN.')) v = v.slice(6);
   else if (v.startsWith('GSTIN')) v = v.slice(5);
-  return v.trim();
+  v = v.trim();
+  // Only a genuine 15-char GSTIN is a safe key. Placeholders that
+  // sellers without a GSTIN carry — "CR.", case/registration numbers
+  // like "CR.A9/1103/19", etc. — are NOT unique, so keying on them
+  // collapses thousands of distinct sellers onto one master record
+  // (first-wins in _buildGstinNameMap) and silently overwrites every
+  // matching row's name. Reject anything that isn't a real GSTIN so it
+  // never becomes a map key and never matches on lookup.
+  return GSTIN_RE.test(v) ? v : '';
 }
 
 // Build the GSTIN → name map for a given master table. Reads every
