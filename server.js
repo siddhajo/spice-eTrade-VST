@@ -5072,18 +5072,19 @@ app.get('/api/invoices', requireView, (req, res) => {
   if (auction_id) { q += ' AND auction_id = ?'; p.push(parseInt(auction_id)); }
   if (ano) { q += ' AND ano = ?'; p.push(ano); }
   // Free-text search within the selected trade — invoice no, buyer
-  // code, trade name, GSTIN. Trade no isn't included because the user
-  // already picked one in the auction dropdown.
+  // code, trade name, GSTIN, and lorry/vehicle no. Trade no isn't
+  // included because the user already picked one in the auction dropdown.
   const searchTerm = String(search || '').trim();
   if (searchTerm) {
     const wild = `%${searchTerm}%`;
     q += ` AND (
-            COALESCE(invo,'')   LIKE ?
-            OR COALESCE(buyer,'')  LIKE ?
-            OR COALESCE(buyer1,'') LIKE ?
-            OR COALESCE(gstin,'')  LIKE ?
+            COALESCE(invo,'')     LIKE ?
+            OR COALESCE(buyer,'')    LIKE ?
+            OR COALESCE(buyer1,'')   LIKE ?
+            OR COALESCE(gstin,'')    LIKE ?
+            OR COALESCE(lorry_no,'') LIKE ?
           )`;
-    p.push(wild, wild, wild, wild);
+    p.push(wild, wild, wild, wild, wild);
   }
   if (from && to) { q += ' AND date BETWEEN ? AND ?'; p.push(from, to); }
   // Sale-type filter — L=Local, I=Inter-state, E=Export. Whitelisted

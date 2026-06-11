@@ -697,13 +697,18 @@ function generateLotReceiptPDF(payload) {
   const printedAt = String((payload && payload.printedAt) || '');
 
   const num = (v, dp = 3) => Number(v || 0).toFixed(dp);
+  // Gross weight on the receipt is ALWAYS Net + Sample — the form's own
+  // definition (leCalcGross in index.html). Computed live here so a lot
+  // whose stored gross_wt is stale or 0 still prints the correct value,
+  // and Gross never silently collapses to Net when sample data is present.
+  const grossOf = (l) => (Number(l.qty) || 0) + (Number(l.sample_wt) || 0);
   const { getLogoSource } = require('./logo-paths');
 
   // ── Compact 80mm thermal slip ──
   function compactHeight(g) {
     const rows = g.lots.length;
     const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
-    const totalGross  = g.lots.reduce((s, l) => s + (Number(l.gross_wt)  || 0), 0);
+    const totalGross  = g.lots.reduce((s, l) => s + grossOf(l), 0);
     let h = 12 + 18;                         // pad + nickname
     if (g.branch) h += 12;
     if (co.gstin) h += 12;
@@ -727,10 +732,10 @@ function generateLotReceiptPDF(payload) {
     if (g.branch) { doc.fontSize(9).text(String(g.branch).toUpperCase(), cx, y, { width: cw, align: 'center' }); y += 12; }
     if (co.gstin) { doc.fontSize(9).text('GSTIN: ' + co.gstin, cx, y, { width: cw, align: 'center' }); y += 12; }
     y += 8;
-    doc.fontSize(10).text('Planter: ', cx + 2, y, { continued: true }).font('Helvetica-Bold').text(g.name || '—');
+    doc.fontSize(10).text('Name: ', cx + 2, y, { continued: true }).font('Helvetica-Bold').text(g.name || '—');
     doc.font('Helvetica');
     y += 14;
-    doc.fontSize(9).text(`Auction: ${ano}    Date: ${dateStr}`, cx + 2, y, { width: cw - 2 });
+    doc.fontSize(9).text(`Trade: ${ano}    Date: ${dateStr}`, cx + 2, y, { width: cw - 2 });
     y += 12 + 10;
     // Table header
     const c1 = cx + 2, c2 = cx + 30, c3r = cx + cw - 90, c4r = cx + cw - 2;
@@ -751,7 +756,7 @@ function generateLotReceiptPDF(payload) {
       y += 13;
     });
     const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
-    const totalGross  = g.lots.reduce((s, l) => s + (Number(l.gross_wt)  || 0), 0);
+    const totalGross  = g.lots.reduce((s, l) => s + grossOf(l), 0);
     if (totalSample > 0) {
       doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).dash(2, { space: 2 }).stroke().undash();
       doc.text('Sample', c1, y + 1, { width: 96 });
@@ -861,11 +866,11 @@ function generateLotReceiptPDF(payload) {
     g.lots.forEach(l => {
       totalBags += parseInt(l.bags, 10) || 0;
       totalQty += Number(l.qty) || 0;
-      totalGross += Number(l.gross_wt) || 0;
+      totalGross += grossOf(l);
       doc.text(String(l.lot_no || ''), lcLot, y + 1, { width: 60 });
       doc.text(String(l.bags || 0), lcBag - 40, y + 1, { width: 50, align: 'right' });
       doc.text(num(l.qty, 3), lcQty - 20, y + 1, { width: 50, align: 'right' });
-      doc.text(num(l.gross_wt, 3), lcGross - 60, y + 1, { width: 60, align: 'right' });
+      doc.text(num(grossOf(l), 3), lcGross - 60, y + 1, { width: 60, align: 'right' });
       doc.moveTo(cx + 2, y + 13).lineTo(cx + cw - 2, y + 13).lineWidth(0.3).strokeColor('#eeeeee').stroke().strokeColor('#000');
       y += 14;
     });
