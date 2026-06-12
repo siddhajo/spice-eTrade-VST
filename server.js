@@ -10323,6 +10323,159 @@ app.post('/api/system/restore', requireAdmin, restoreUpload.single('file'), asyn
 });
 
 // ══════════════════════════════════════════════════════════════
+// DEV DATA EDITOR — in-app DB Browser (admin-only, dev-gated UI)
+// ══════════════════════════════════════════════════════════════
+// Lets a developer view/edit/insert/delete rows of ANY table and run
+// raw SQL straight from the app, replacing the download-backup →
+// DB-Browser → restore round-trip. The UI is revealed only by the
+// `spiceDev(true)` console flag (see public/index.html), but these
+// endpoints additionally require an admin session — so the data can't
+// be touched without admin auth even if the flag is discovered.
+//
+// SAFETY: every mutating call (insert/update/delete/non-SELECT SQL)
+// first takes an automatic `predev-*.db` snapshot into the backups
+// folder, so any mistake is one restore away.
+
+// Take a pre-edit snapshot of the live DB. Mirrors /api/system/backup-now.
+function _devSnapshot(tag) {
+  const bkDir = path.join(path.dirname(DB_PATH), 'backups');
+  if (!fs.existsSync(bkDir)) fs.mkdirSync(bkDir, { recursive: true });
+  require('./db').flushSave();
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const out = path.join(bkDir, `predev-${tag}-${stamp}.db`);
+  fs.copyFileSync(DB_PATH, out);
+  return path.basename(out);
+}
+
+// Guard: confirm `name` is a real, plainly-named base table (not a view,
+// not sqlite internal, no funny characters). Returns true/false. We both
+// check sqlite_master AND enforce a safe identifier charset because the
+// name is interpolated into SQL (parameters can't bind identifiers).
+function _devIsTable(db, name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name || '')) return false;
+  return !!db.get(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", [name]);
+}
+
+// List every base table with its row count. Drives the left-hand picker.
+app.get('/api/dev/db/tables', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const tables = db.all(
+      "SELECT name FROM sqlite_master WHERE type='table' " +
+      "AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const out = tables.map(t => {
+      let count = null;
+      try { count = db.get(`SELECT COUNT(*) c FROM "${t.name}"`).c; } catch (_) {}
+      return { name: t.name, count };
+    });
+    res.json({ tables: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Read one table: column metadata + a page of rows. Every row carries a
+// stable `_rowid_` (SQLite's implicit rowid) so edits/deletes target an
+// exact row even when the table has no obvious primary key. `q` does a
+// substring match across all columns (cast to text).
+app.get('/api/dev/db/table/:name', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const name = req.params.name;
+    if (!_devIsTable(db, name)) return res.status(404).json({ error: 'Unknown table' });
+    const cols = db.all(`PRAGMA table_info("${name}")`);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 1000);
+    const offset = parseInt(req.query.offset, 10) || 0;
+    const q = (req.query.q || '').trim();
+    let where = '', params = [];
+    if (q) {
+      where = 'WHERE ' + cols.map(c => `CAST("${c.name}" AS TEXT) LIKE ?`).join(' OR ');
+      params = cols.map(() => `%${q}%`);
+    }
+    const total = db.get(`SELECT COUNT(*) c FROM "${name}" ${where}`, params).c;
+    const rows = db.all(
+      `SELECT rowid AS _rowid_, * FROM "${name}" ${where} ORDER BY rowid LIMIT ? OFFSET ?`,
+      [...params, limit, offset]);
+    res.json({ name, columns: cols, rows, total, limit, offset });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Insert a row. Body: { values: { col: val, … } }. Unknown columns are
+// ignored; '' / null pass through as given.
+app.post('/api/dev/db/table/:name', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const name = req.params.name;
+    if (!_devIsTable(db, name)) return res.status(404).json({ error: 'Unknown table' });
+    const valid = new Set(db.all(`PRAGMA table_info("${name}")`).map(c => c.name));
+    const vals = req.body.values || {};
+    const keys = Object.keys(vals).filter(k => valid.has(k));
+    if (!keys.length) return res.status(400).json({ error: 'No valid columns supplied' });
+    _devSnapshot('insert');
+    const info = db.run(
+      `INSERT INTO "${name}" (${keys.map(k => `"${k}"`).join(',')}) ` +
+      `VALUES (${keys.map(() => '?').join(',')})`,
+      keys.map(k => vals[k]));
+    res.json({ success: true, rowid: info.lastInsertRowid });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Update one row by rowid. Body: { values: { col: val, … } }. Used for
+// both single-cell saves and full-row edits.
+app.put('/api/dev/db/table/:name/:rowid', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const name = req.params.name;
+    if (!_devIsTable(db, name)) return res.status(404).json({ error: 'Unknown table' });
+    const valid = new Set(db.all(`PRAGMA table_info("${name}")`).map(c => c.name));
+    const vals = req.body.values || {};
+    const keys = Object.keys(vals).filter(k => valid.has(k));
+    if (!keys.length) return res.status(400).json({ error: 'No valid columns supplied' });
+    _devSnapshot('update');
+    const info = db.run(
+      `UPDATE "${name}" SET ${keys.map(k => `"${k}"=?`).join(',')} WHERE rowid=?`,
+      [...keys.map(k => vals[k]), parseInt(req.params.rowid, 10)]);
+    res.json({ success: true, changes: info.changes });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Delete one row by rowid.
+app.delete('/api/dev/db/table/:name/:rowid', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const name = req.params.name;
+    if (!_devIsTable(db, name)) return res.status(404).json({ error: 'Unknown table' });
+    _devSnapshot('delete');
+    const info = db.run(`DELETE FROM "${name}" WHERE rowid=?`, [parseInt(req.params.rowid, 10)]);
+    res.json({ success: true, changes: info.changes });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Raw SQL console. SELECT/PRAGMA/EXPLAIN/WITH return { columns, rows };
+// anything else is treated as a mutation (snapshot first) and returns
+// the affected-row count. Supports multi-statement scripts via exec().
+app.post('/api/dev/db/sql', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const sql = String(req.body.sql || '').trim();
+    if (!sql) return res.status(400).json({ error: 'Empty SQL' });
+    const isRead = /^(select|pragma|explain|with)\b/i.test(sql);
+    if (isRead) {
+      const rows = db.all(sql);
+      const columns = rows.length ? Object.keys(rows[0]) : [];
+      return res.json({ select: true, columns, rows, total: rows.length });
+    }
+    _devSnapshot('sql');
+    try {
+      const info = db.run(sql);          // single statement → real change count
+      res.json({ select: false, changes: info.changes });
+    } catch (_) {
+      db.exec(sql);                       // fall back for multi-statement scripts
+      res.json({ select: false, changes: null });
+    }
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
 // IMPORT OLD DATA (Task 8) — unified upload + preview + run flow
 // ══════════════════════════════════════════════════════════════
 // Supports SalesInvoice / Purchase / Bills / DebitNotes / Payments /

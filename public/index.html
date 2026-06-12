@@ -2631,6 +2631,15 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><path d="M14.5 19.5l2 2 4-4"/></svg>
           Formulas
         </button>
+        <!-- Data Editor — in-app DB Browser. View/edit/insert/delete any
+             table or run raw SQL without the backup→DB-Browser→restore
+             round-trip. Dev-only — same `spiceDev(true)` console flag as
+             Formulas reveals it; server endpoints additionally require an
+             admin session. Every write auto-snapshots a backup first. -->
+        <button id="side-dbedit" class="side-item" data-tab="dbedit" onclick="go('dbedit')" style="display:none">
+          <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+          Data Editor
+        </button>
         <button class="side-item needs-user-manage" data-tab="users" onclick="go('users')">
           <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Users
@@ -2773,6 +2782,9 @@ input[type="search"]:focus{
          No editable inputs — values you type in Settings drive what
          shows up in {curly braces} below. -->
     <div class="tc" id="tc-formulas"></div>
+
+    <!-- Data Editor (dev-only). Built entirely by loadDbEdit(). -->
+    <div class="tc" id="tc-dbedit"></div>
 
     <div class="tc" id="tc-settings">
       <!-- ── Appearance card — compact horizontal palette ──────────────
@@ -7211,22 +7223,243 @@ window._currentTab = 'dash';
 // hidden unless someone deliberately runs the console toggle.
 function _applySpiceDevMenu(){
   const on = localStorage.getItem('spice_dev') === '1';
-  const el = document.getElementById('side-formulas');
-  if (el) el.style.display = on ? '' : 'none';
+  ['side-formulas','side-dbedit'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.style.display = on ? '' : 'none';
+  });
 }
 window.spiceDev = function(on){
   if (on) localStorage.setItem('spice_dev', '1');
   else    localStorage.removeItem('spice_dev');
   _applySpiceDevMenu();
-  // If the user is currently viewing Formulas and turns dev off, send
-  // them to the dashboard so they can't keep looking at the hidden page.
-  if (!on && window._currentTab === 'formulas') go('dash');
+  // If the user is currently viewing a dev-only page and turns dev off,
+  // send them to the dashboard so the hidden page can't linger.
+  if (!on && ['formulas','dbedit'].includes(window._currentTab)) go('dash');
   return 'spiceDev → ' + (on ? 'ON' : 'OFF');
 };
 // Apply on page load. The button is `display:none` in markup so it's
 // hidden during parse; this only runs once the DOM is ready in case a
 // dev has the flag set and wants it visible immediately.
 document.addEventListener('DOMContentLoaded', _applySpiceDevMenu);
+
+// ══════════════════════════════════════════════════════════════
+// DATA EDITOR (dev-only) — in-app DB Browser
+// ══════════════════════════════════════════════════════════════
+// View/edit/insert/delete rows of any table and run raw SQL, instead
+// of the download-backup → DB-Browser → restore round-trip. Reached
+// via the spiceDev(true) flag; backed by /api/dev/db/* (admin-only).
+const DBE = { table:null, columns:[], rows:[], total:0, offset:0, limit:100, q:'' };
+
+async function loadDbEdit(){
+  const host = document.getElementById('tc-dbedit');
+  if(!host) return;
+  host.innerHTML = `
+    <style>
+      .dbe-wrap{display:flex;gap:14px;align-items:flex-start}
+      .dbe-side{flex:0 0 220px;max-height:70vh;overflow:auto;border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:6px;background:var(--card,#fff)}
+      .dbe-tbl{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;border:0;background:transparent;color:var(--text,#111);padding:7px 9px;border-radius:7px;cursor:pointer;font-size:13px}
+      .dbe-tbl:hover{background:var(--hover,#f1f5f9)}
+      .dbe-tbl.active{background:#2563eb;color:#fff}
+      .dbe-tbl span{font-size:11px;opacity:.7;font-variant-numeric:tabular-nums}
+      .dbe-main{flex:1 1 auto;min-width:0}
+      .dbe-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+      .dbe-bar input.dbe-q{flex:1 1 200px;min-width:160px}
+      .dbe-scroll{overflow:auto;max-height:62vh;border:1px solid var(--line,#e5e7eb);border-radius:10px}
+      table.dbe-grid{border-collapse:collapse;width:100%;font-size:12.5px}
+      table.dbe-grid th,table.dbe-grid td{border:1px solid var(--line,#e5e7eb);padding:5px 8px;text-align:left;white-space:nowrap;max-width:340px;overflow:hidden;text-overflow:ellipsis}
+      table.dbe-grid th{position:sticky;top:0;background:var(--card,#f8fafc);z-index:1}
+      .dbe-th-type{font-size:10px;font-weight:400;opacity:.6}
+      table.dbe-grid td[contenteditable]{cursor:text}
+      /* Windows-Electron focus-paint guard: force a visible caret+ring */
+      table.dbe-grid td[contenteditable]:focus{outline:2px solid #2563eb;outline-offset:-2px;caret-color:#2563eb;background:#eff6ff;color:#111}
+      td.dbe-null{color:var(--text3,#9ca3af);font-style:italic}
+      td.dbe-saved{background:#dcfce7!important;transition:background .4s}
+      td.dbe-rowact{text-align:center}
+      td.dbe-rowact button{border:0;background:transparent;color:#dc2626;cursor:pointer;font-size:14px;line-height:1}
+      #dbe-sql{width:100%;min-height:70px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;border:1px solid var(--line,#d1d5db);border-radius:8px;padding:8px;caret-color:#2563eb;color:var(--text,#111);background:var(--card,#fff)}
+      #dbe-sql:focus{outline:2px solid #2563eb;outline-offset:-1px}
+      .dbe-card{border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--card,#fff)}
+      .dbe-warn{font-size:12px;color:var(--text3,#6b7280);margin:2px 0 12px}
+      .dbe-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999}
+      .dbe-modal{background:var(--card,#fff);color:var(--text,#111);border-radius:12px;padding:18px;max-width:560px;width:92%;max-height:86vh;overflow:auto}
+      .dbe-modal label{display:block;font-size:12px;margin:8px 0 2px;opacity:.8}
+      .dbe-modal input{width:100%;padding:7px 9px;border:1px solid var(--line,#d1d5db);border-radius:7px;caret-color:#2563eb;color:var(--text,#111);background:var(--card,#fff)}
+      .dbe-modal input:focus{outline:2px solid #2563eb;outline-offset:-1px}
+    </style>
+    <div class="dbe-card">
+      <strong>SQL console</strong>
+      <div class="dbe-warn">SELECT / PRAGMA queries show results below. Anything else (UPDATE, DELETE, INSERT, ALTER…) auto-saves a backup first, then runs. Use ⌘/Ctrl+Enter to run.</div>
+      <textarea id="dbe-sql" placeholder="SELECT * FROM lots WHERE auction_id = 1;" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter')dbeRunSql()"></textarea>
+      <div style="margin-top:8px"><button class="btn" onclick="dbeRunSql()">Run SQL</button></div>
+      <div id="dbe-sql-out" style="margin-top:10px"></div>
+    </div>
+    <div class="dbe-wrap">
+      <div class="dbe-side" id="dbe-tables"><div class="dbe-warn" style="padding:8px">Loading…</div></div>
+      <div class="dbe-main" id="dbe-main"><div class="dbe-warn">Pick a table on the left to view and edit its rows.</div></div>
+    </div>`;
+  await dbeLoadTables();
+  if (DBE.table) await dbeRender();
+}
+
+async function dbeLoadTables(){
+  const el = document.getElementById('dbe-tables');
+  try{
+    const d = await j('/api/dev/db/tables');
+    el.innerHTML = d.tables.map(t=>
+      `<button class="dbe-tbl ${t.name===DBE.table?'active':''}" onclick="dbeOpen('${esc(t.name)}')">`+
+      `<span style="opacity:1;font-size:13px">${esc(t.name)}</span><span>${t.count==null?'?':t.count}</span></button>`
+    ).join('');
+  }catch(e){ el.innerHTML = `<div class="dbe-warn" style="padding:8px;color:#dc2626">${esc(e.message||e)}</div>`; }
+}
+
+function dbeOpen(name){ DBE.table=name; DBE.offset=0; DBE.q=''; document.querySelectorAll('.dbe-tbl').forEach(b=>b.classList.toggle('active', b.textContent.startsWith(name))); dbeRender(); }
+
+function dbeCellHtml(v){
+  if (v===null || v===undefined) return `<span style="display:none"></span>`;
+  return esc(String(v));
+}
+
+async function dbeRender(){
+  const main = document.getElementById('dbe-main');
+  if(!DBE.table){ main.innerHTML = '<div class="dbe-warn">Pick a table on the left.</div>'; return; }
+  main.innerHTML = '<div class="dbe-warn">Loading rows…</div>';
+  let d;
+  try{
+    const p = new URLSearchParams({ limit:DBE.limit, offset:DBE.offset, q:DBE.q });
+    d = await j(`/api/dev/db/table/${encodeURIComponent(DBE.table)}?${p}`);
+  }catch(e){ main.innerHTML = `<div class="dbe-warn" style="color:#dc2626">${esc(e.message||e)}</div>`; return; }
+  DBE.columns = d.columns; DBE.rows = d.rows; DBE.total = d.total;
+  const cols = d.columns;
+  const from = d.total ? DBE.offset+1 : 0;
+  const to = Math.min(DBE.offset+DBE.limit, d.total);
+  let html = `
+    <div class="dbe-bar">
+      <strong style="font-size:15px">${esc(DBE.table)}</strong>
+      <input class="dbe-q fg" placeholder="Search all columns…" value="${esc(DBE.q)}"
+             onkeydown="if(event.key==='Enter'){DBE.q=this.value;DBE.offset=0;dbeRender()}">
+      <button class="btn" onclick="dbeAddRow()">+ Add row</button>
+      <span style="margin-left:auto;font-size:12px;color:var(--text3,#6b7280)">${from}–${to} of ${d.total}</span>
+      <button class="btn" ${DBE.offset<=0?'disabled':''} onclick="DBE.offset=Math.max(0,DBE.offset-DBE.limit);dbeRender()">‹</button>
+      <button class="btn" ${to>=d.total?'disabled':''} onclick="DBE.offset+=DBE.limit;dbeRender()">›</button>
+    </div>
+    <div class="dbe-warn">Click a cell to edit it; it saves when you click away. Type <code>NULL</code> (uppercase) to set a cell to NULL. Every save snapshots a backup first.</div>
+    <div class="dbe-scroll"><table class="dbe-grid"><thead><tr><th></th>${
+      cols.map(c=>`<th>${esc(c.name)}<div class="dbe-th-type">${esc(c.type||'')}${c.pk?' · pk':''}</div></th>`).join('')
+    }</tr></thead><tbody>`;
+  if(!d.rows.length){
+    html += `<tr><td colspan="${cols.length+1}" class="dbe-warn" style="padding:14px">No rows.</td></tr>`;
+  } else {
+    html += d.rows.map(r=>{
+      const rid = r._rowid_;
+      return `<tr data-rowid="${rid}"><td class="dbe-rowact"><button title="Delete row" onclick="dbeDelRow(${rid})">✕</button></td>`+
+        cols.map(c=>{
+          const v = r[c.name];
+          const isNull = (v===null||v===undefined);
+          return `<td contenteditable spellcheck="false" data-col="${esc(c.name)}" data-rowid="${rid}"`+
+            ` data-orig="${esc(String(isNull?'':v))}" data-wasnull="${isNull?1:0}"`+
+            ` class="${isNull?'dbe-null':''}" onfocus="dbeCellFocus(this)" onblur="dbeCellBlur(this)">`+
+            `${isNull?'NULL':esc(String(v))}</td>`;
+        }).join('') + '</tr>';
+    }).join('');
+  }
+  html += '</tbody></table></div>';
+  main.innerHTML = html;
+}
+
+function dbeCellFocus(td){
+  if(td.dataset.wasnull==='1' && td.innerText==='NULL'){ td.innerText=''; td.classList.remove('dbe-null'); }
+}
+
+async function dbeCellBlur(td){
+  const col = td.dataset.col, rid = td.dataset.rowid;
+  let text = td.innerText.replace(/\n$/,'');
+  const orig = td.dataset.orig;
+  const wasNull = td.dataset.wasnull==='1';
+  // Restore NULL display if user left a was-null cell untouched/empty.
+  if(text==='' && wasNull){ td.innerText='NULL'; td.classList.add('dbe-null'); return; }
+  if(text===orig && !wasNull) return;     // nothing changed
+  if(text===orig && wasNull && td.innerText==='NULL') return;
+  const send = (text==='NULL') ? null : text;
+  try{
+    await j(`/api/dev/db/table/${encodeURIComponent(DBE.table)}/${rid}`,
+      { method:'PUT', body: JSON.stringify({ values:{ [col]: send } }) });
+    td.dataset.orig = (send===null)?'':text;
+    td.dataset.wasnull = (send===null)?'1':'0';
+    td.classList.toggle('dbe-null', send===null);
+    if(send===null) td.innerText='NULL';
+    td.classList.add('dbe-saved'); setTimeout(()=>td.classList.remove('dbe-saved'),900);
+    toast(`${DBE.table}.${col} saved`);
+  }catch(e){
+    td.innerText = wasNull ? 'NULL' : orig;   // revert on failure
+    td.classList.toggle('dbe-null', wasNull);
+    toast('Save failed: '+(e.message||e));
+  }
+}
+
+async function dbeDelRow(rid){
+  if(!confirm(`Delete this row from "${DBE.table}"?\n\nA backup snapshot is taken automatically first.`)) return;
+  try{
+    await j(`/api/dev/db/table/${encodeURIComponent(DBE.table)}/${rid}`, { method:'DELETE' });
+    toast('Row deleted'); await dbeRender(); await dbeLoadTables();
+  }catch(e){ toast('Delete failed: '+(e.message||e)); }
+}
+
+function dbeAddRow(){
+  const cols = DBE.columns;
+  const fields = cols.map(c=>{
+    const auto = c.pk && /int/i.test(c.type||'');   // hint integer PKs auto-fill
+    return `<label>${esc(c.name)} <span style="opacity:.6">${esc(c.type||'')}${c.pk?' · pk':''}${auto?' · leave blank to auto':''}</span></label>`+
+      `<input data-col="${esc(c.name)}" placeholder="${auto?'(auto)':''}">`;
+  }).join('');
+  const bg = document.createElement('div');
+  bg.className = 'dbe-modal-bg';
+  bg.innerHTML = `<div class="dbe-modal">
+    <strong style="font-size:15px">Add row to ${esc(DBE.table)}</strong>
+    <div class="dbe-warn">Leave a field blank to use its default. Type NULL for an explicit NULL.</div>
+    ${fields}
+    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" id="dbe-add-cancel">Cancel</button>
+      <button class="btn" id="dbe-add-save">Insert</button>
+    </div></div>`;
+  document.body.appendChild(bg);
+  bg.addEventListener('click', e=>{ if(e.target===bg) bg.remove(); });
+  bg.querySelector('#dbe-add-cancel').onclick = ()=>bg.remove();
+  bg.querySelector('#dbe-add-save').onclick = async ()=>{
+    const values = {};
+    bg.querySelectorAll('input[data-col]').forEach(inp=>{
+      const v = inp.value;
+      if(v==='') return;                  // blank → omit (use column default)
+      values[inp.dataset.col] = (v==='NULL') ? null : v;
+    });
+    try{
+      await j(`/api/dev/db/table/${encodeURIComponent(DBE.table)}`,
+        { method:'POST', body: JSON.stringify({ values }) });
+      bg.remove(); toast('Row inserted'); await dbeRender(); await dbeLoadTables();
+    }catch(e){ toast('Insert failed: '+(e.message||e)); }
+  };
+  setTimeout(()=>{ const f=bg.querySelector('input[data-col]'); if(f) f.focus(); }, 30);
+}
+
+async function dbeRunSql(){
+  const sql = (document.getElementById('dbe-sql').value||'').trim();
+  const out = document.getElementById('dbe-sql-out');
+  if(!sql){ out.innerHTML=''; return; }
+  out.innerHTML = '<div class="dbe-warn">Running…</div>';
+  try{
+    const d = await j('/api/dev/db/sql', { method:'POST', body: JSON.stringify({ sql }) });
+    if(d.select){
+      if(!d.rows.length){ out.innerHTML = '<div class="dbe-warn">0 rows.</div>'; return; }
+      out.innerHTML = `<div class="dbe-warn">${d.total} row(s)</div><div class="dbe-scroll" style="max-height:40vh">`+
+        `<table class="dbe-grid"><thead><tr>${d.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`+
+        d.rows.map(r=>`<tr>${d.columns.map(c=>{const v=r[c];return `<td class="${v==null?'dbe-null':''}">${v==null?'NULL':esc(String(v))}</td>`;}).join('')}</tr>`).join('')+
+        '</tbody></table></div>';
+    } else {
+      out.innerHTML = `<div class="dbe-warn" style="color:#16a34a">Done${d.changes==null?'':' — '+d.changes+' row(s) affected'}. Backup snapshot saved.</div>`;
+      await dbeLoadTables();
+      if(DBE.table) await dbeRender();
+    }
+  }catch(e){ out.innerHTML = `<div class="dbe-warn" style="color:#dc2626">${esc(e.message||e)}</div>`; }
+}
 
 function go(tab){
   window._currentTab = tab;
@@ -7241,7 +7474,7 @@ function go(tab){
   if (typeof applyLogoBadge === 'function') {
     try { applyLogoBadge(); } catch(_) {}
   }
-  const loaders={dash:loadStats,insights:loadInsights,settings:loadSettings,formulas:loadFormulas,lotentry:loadLotEntry,users:loadUsers,reports:loadReports,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
+  const loaders={dash:loadStats,insights:loadInsights,settings:loadSettings,formulas:loadFormulas,dbedit:loadDbEdit,lotentry:loadLotEntry,users:loadUsers,reports:loadReports,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
     bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,registers:loadRegisterDefault,tally:loadTallyAuctions,
@@ -13358,13 +13591,13 @@ function renderTallyPanel(fields){
     `<div class="tally-grouplbl">Gunny</div>` +
     row(ti('tally_gunny_inter','Inter-State'),  ti('tally_gunny_intra','Local'),  ti('tally_gunny_export','Export')) +
     `<div class="tally-grouplbl">Dealer-Side Sales</div>` +
-    row(ti('tally_dealer_sale_inter','Interstate Dealer-Purch'), ti('tally_dealer_sale_intra','Local Dealer-Purcha'))
+    row(ti('tally_dealer_sale_inter','Interstate Dealer'), ti('tally_dealer_sale_intra','Local Dealer'))
   );
 
   // ── 3. PURCHASE LEDGERS ─────────────────────────────────────
   const purchaseBox = box('Purchase Ledgers',
     row(ti('tally_purchase_dealer','Trade Purchase From Dealer (base)',{style:'flex:1'})) +
-    row(ti('tally_purchase_dealer_inter','Interstate Dealer'), ti('tally_purchase_dealer_intra','Local Dealer')) +
+    row(ti('tally_purchase_dealer_inter','Interstate Dealer-Pur'), ti('tally_purchase_dealer_intra','Local Dealer-Pur')) +
     row(ti('tally_purchase_auction','Purchase From Agriculturist (URD)',{style:'flex:1'})) +
     row(ti('tally_dn_discount','Discount on Purch (Debit Note)'), ti('tally_tds_paid_sales','TDS Paid on Sales'))
   );

@@ -304,13 +304,13 @@ const DEFAULTS = [
   { key: 'tally_gunny_export',    value: 'Gunny Sales - Export',       category: 'tally', label: 'Gunny Export Sales',          type: 'text' },
 
   // Dealer-Side Sales (when the company sells to a dealer)
-  { key: 'tally_dealer_sale_inter', value: 'Interstate Dealer-Purchase', category: 'tally', label: 'Interstate Dealer-Purch (sales-side)', type: 'text' },
-  { key: 'tally_dealer_sale_intra', value: 'Local Dealer-Purchase',      category: 'tally', label: 'Local Dealer-Purcha (sales-side)',      type: 'text' },
+  { key: 'tally_dealer_sale_inter', value: 'Interstate Dealer-Purchase', category: 'tally', label: 'Interstate Dealer (sales-side)', type: 'text' },
+  { key: 'tally_dealer_sale_intra', value: 'Local Dealer-Purchase',      category: 'tally', label: 'Local Dealer (sales-side)',      type: 'text' },
 
   // RD Purchase ledgers (when the company buys from a dealer)
   { key: 'tally_purchase_dealer',     value: 'Trade Purchase From Dealer',category: 'tally', label: 'Trade Purchase From Dealer (base; gets -Local / -Inter_State suffix)', type: 'text' },
-  { key: 'tally_purchase_dealer_inter', value: 'Interstate Dealer',      category: 'tally', label: 'Interstate Dealer (purchase-side)',     type: 'text' },
-  { key: 'tally_purchase_dealer_intra', value: 'Local Dealer',           category: 'tally', label: 'Local Dealer (purchase-side)',          type: 'text' },
+  { key: 'tally_purchase_dealer_inter', value: 'Interstate Dealer',      category: 'tally', label: 'Interstate Dealer-Pur (purchase-side)',     type: 'text' },
+  { key: 'tally_purchase_dealer_intra', value: 'Local Dealer',           category: 'tally', label: 'Local Dealer-Pur (purchase-side)',          type: 'text' },
 
   // Agriculturist & TDS-on-sales
   { key: 'tally_purchase_auction',value: 'Purchase From Agriculturist', category: 'tally', label: 'Purchase From Agriculturist (URD ledger)', type: 'text' },
