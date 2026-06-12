@@ -2640,6 +2640,14 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
           Data Editor
         </button>
+        <!-- Fix Data — gentle, no-SQL editor for the end user (dad).
+             Same spiceDev(true) reveal; enable it once on his machine and
+             it persists. Read-only until he flips "Edit mode"; every
+             change spells out the exact before→after and asks again. -->
+        <button id="side-fixdata" class="side-item" data-tab="fixdata" onclick="go('fixdata')" style="display:none">
+          <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          Fix Data
+        </button>
         <button class="side-item needs-user-manage" data-tab="users" onclick="go('users')">
           <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Users
@@ -2785,6 +2793,9 @@ input[type="search"]:focus{
 
     <!-- Data Editor (dev-only). Built entirely by loadDbEdit(). -->
     <div class="tc" id="tc-dbedit"></div>
+
+    <!-- Fix Data (gentle no-SQL editor). Built entirely by loadFixData(). -->
+    <div class="tc" id="tc-fixdata"></div>
 
     <div class="tc" id="tc-settings">
       <!-- ── Appearance card — compact horizontal palette ──────────────
@@ -7223,7 +7234,7 @@ window._currentTab = 'dash';
 // hidden unless someone deliberately runs the console toggle.
 function _applySpiceDevMenu(){
   const on = localStorage.getItem('spice_dev') === '1';
-  ['side-formulas','side-dbedit'].forEach(id=>{
+  ['side-formulas','side-dbedit','side-fixdata'].forEach(id=>{
     const el = document.getElementById(id);
     if (el) el.style.display = on ? '' : 'none';
   });
@@ -7234,7 +7245,7 @@ window.spiceDev = function(on){
   _applySpiceDevMenu();
   // If the user is currently viewing a dev-only page and turns dev off,
   // send them to the dashboard so the hidden page can't linger.
-  if (!on && ['formulas','dbedit'].includes(window._currentTab)) go('dash');
+  if (!on && ['formulas','dbedit','fixdata'].includes(window._currentTab)) go('dash');
   return 'spiceDev → ' + (on ? 'ON' : 'OFF');
 };
 // Apply on page load. The button is `display:none` in markup so it's
@@ -7461,6 +7472,194 @@ async function dbeRunSql(){
   }catch(e){ out.innerHTML = `<div class="dbe-warn" style="color:#dc2626">${esc(e.message||e)}</div>`; }
 }
 
+// ══════════════════════════════════════════════════════════════
+// FIX DATA (dev-revealed) — gentle, no-SQL editor for the end user
+// ══════════════════════════════════════════════════════════════
+// Friendly section cards, read-only until "Edit mode" is switched on,
+// locked cells greyed out, and EVERY update/delete shows the exact
+// before→after and asks for a second confirmation. Backed by the
+// whitelisted /api/data/* endpoints (admin-only, auto-backup).
+const FD = { entity:null, label:'', columns:[], rows:[], total:0, offset:0, limit:100, q:'', edit:false, undo:null };
+
+async function loadFixData(){
+  const host = document.getElementById('tc-fixdata');
+  if(!host) return;
+  host.innerHTML = `
+    <style>
+      .fd-cards{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 16px}
+      .fd-card{border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:13px 16px;min-width:140px;cursor:pointer;background:var(--card,#fff)}
+      .fd-card:hover{border-color:#2563eb}
+      .fd-card.active{border-color:#2563eb;box-shadow:0 0 0 2px #2563eb22}
+      .fd-card b{font-size:15px}
+      .fd-card span{display:block;font-size:12px;color:var(--text3,#6b7280);margin-top:3px}
+      .fd-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
+      .fd-q{flex:1 1 200px;min-width:150px}
+      .fd-switch{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;cursor:pointer;user-select:none;padding:5px 10px;border:1px solid var(--line,#d1d5db);border-radius:8px}
+      .fd-switch input{width:15px;height:15px}
+      .fd-scroll{overflow:auto;max-height:60vh;border:1px solid var(--line,#e5e7eb);border-radius:10px}
+      table.fd-grid{border-collapse:collapse;width:100%;font-size:13px}
+      table.fd-grid th,table.fd-grid td{border:1px solid var(--line,#e5e7eb);padding:6px 9px;text-align:left;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+      table.fd-grid th{position:sticky;top:0;background:var(--card,#f8fafc);z-index:1}
+      td.fd-edit{cursor:text;background:#fffbeb}
+      /* Windows-Electron focus-paint guard: force a visible caret + ring */
+      td.fd-edit:focus{outline:2px solid #2563eb;outline-offset:-2px;caret-color:#2563eb;background:#eff6ff;color:#111}
+      td.fd-lock{color:var(--text3,#9ca3af);background:repeating-linear-gradient(45deg,transparent,transparent 6px,#0000000a 6px,#0000000a 12px)}
+      td.fd-saved{background:#dcfce7!important;transition:background .5s}
+      td.fd-rowact{text-align:center}
+      td.fd-rowact button{border:0;background:transparent;cursor:pointer;font-size:15px}
+      .fd-null{color:var(--text3,#9ca3af)}
+      .fd-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999}
+      .fd-modal{background:var(--card,#fff);color:var(--text,#111);border-radius:12px;padding:20px;max-width:460px;width:92%}
+      .fd-fromto table{font-size:14px}
+      .fd-fromto td{padding:3px 14px 3px 0}
+    </style>
+    <div style="margin-bottom:4px"><strong style="font-size:18px">Fix Data</strong></div>
+    <div style="font-size:13px;color:var(--text3,#6b7280);margin-bottom:6px">Browse your records below. To change something, open a section and switch on <b>Edit mode</b> — you'll see exactly what will change and confirm before it's saved. Every change keeps an automatic backup.</div>
+    <div id="fd-cards" class="fd-cards"></div>
+    <div id="fd-view"></div>`;
+  await fdLoadCatalog();
+  if(FD.entity) await fdRender();
+}
+
+async function fdLoadCatalog(){
+  const el = document.getElementById('fd-cards');
+  try{
+    const d = await j('/api/data/catalog');
+    el.innerHTML = d.entities.map(e=>
+      `<div class="fd-card ${e.key===FD.entity?'active':''}" onclick="fdOpen('${e.key}')">`+
+      `<b>${esc(e.label)}</b><span>${e.count==null?'—':e.count+' records'}</span></div>`).join('');
+  }catch(e){ el.innerHTML = `<div style="color:#dc2626;font-size:13px">${esc(e.message||e)}</div>`; }
+}
+
+function fdOpen(key){ FD.entity=key; FD.offset=0; FD.q=''; FD.undo=null; fdLoadCatalog(); fdRender(); }
+
+async function fdRender(){
+  const view = document.getElementById('fd-view');
+  if(!FD.entity){ view.innerHTML=''; return; }
+  view.innerHTML = '<div style="padding:14px;color:#888">Loading…</div>';
+  let d;
+  try{
+    const p = new URLSearchParams({ limit:FD.limit, offset:FD.offset, q:FD.q });
+    d = await j(`/api/data/${encodeURIComponent(FD.entity)}?${p}`);
+  }catch(e){ view.innerHTML = `<div style="padding:14px;color:#dc2626">${esc(e.message||e)}</div>`; return; }
+  FD.label=d.label; FD.columns=d.columns; FD.rows=d.rows; FD.total=d.total;
+  const cols = d.columns;
+  const from = d.total ? FD.offset+1 : 0, to = Math.min(FD.offset+FD.limit, d.total);
+  let html = `<div class="fd-bar">
+    <strong style="font-size:16px">${esc(d.label)}</strong>
+    <label class="fd-switch"><input type="checkbox" ${FD.edit?'checked':''} onchange="FD.edit=this.checked;fdRender()"> Edit mode</label>
+    <input class="fd-q fg" placeholder="Search…" value="${esc(FD.q)}" onkeydown="if(event.key==='Enter'){FD.q=this.value;FD.offset=0;fdRender()}">
+    <button id="fd-undo" class="btn" ${FD.undo?'':'disabled'} onclick="fdUndo()">↶ Undo last change</button>
+    <span style="margin-left:auto;font-size:12px;color:#888">${from}–${to} of ${d.total}</span>
+    <button class="btn" ${FD.offset<=0?'disabled':''} onclick="FD.offset=Math.max(0,FD.offset-FD.limit);fdRender()">‹</button>
+    <button class="btn" ${to>=d.total?'disabled':''} onclick="FD.offset+=FD.limit;fdRender()">›</button>
+  </div>`;
+  html += FD.edit
+    ? `<div style="font-size:12.5px;color:#b45309;margin-bottom:8px">✎ Edit mode is ON. Click a yellow cell to change it; greyed cells are locked for safety. You'll confirm every change.</div>`
+    : `<div style="font-size:12.5px;color:#888;margin-bottom:8px">Viewing only — nothing can be changed. Switch on <b>Edit mode</b> above to make a change.</div>`;
+  html += `<div class="fd-scroll"><table class="fd-grid"><thead><tr>${FD.edit?'<th></th>':''}${
+    cols.map(c=>`<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>`;
+  if(!d.rows.length){
+    html += `<tr><td colspan="${cols.length+1}" style="padding:14px;color:#888">No records.</td></tr>`;
+  } else {
+    html += d.rows.map(r=>{
+      const rid = r._rowid_;
+      const tds = cols.map(c=>{
+        const v = r[c.name]; const isNull = (v==null);
+        if(c.locked) return `<td class="fd-lock" title="Locked for safety">${isNull?'':esc(String(v))}</td>`;
+        if(FD.edit) return `<td class="fd-edit" contenteditable spellcheck="false" data-col="${esc(c.name)}" data-label="${esc(c.label)}" data-type="${c.type}" data-rowid="${rid}" data-orig="${esc(String(isNull?'':v))}" data-wasnull="${isNull?1:0}" onblur="fdCellBlur(this)">${isNull?'':esc(String(v))}</td>`;
+        return `<td class="${isNull?'fd-null':''}">${isNull?'—':esc(String(v))}</td>`;
+      }).join('');
+      const act = FD.edit ? `<td class="fd-rowact"><button title="Delete this record" onclick="fdDelete(${rid})">🗑</button></td>` : '';
+      return `<tr data-rowid="${rid}">${act}${tds}</tr>`;
+    }).join('');
+  }
+  html += '</tbody></table></div>';
+  view.innerHTML = html;
+}
+
+// Custom confirm dialog → resolves true/false. Lets us show a formatted
+// before→after instead of a plain browser confirm().
+function fdConfirm(opts){
+  return new Promise(resolve=>{
+    const bg = document.createElement('div'); bg.className='fd-modal-bg';
+    bg.innerHTML = `<div class="fd-modal">
+      <strong style="font-size:16px">${esc(opts.title)}</strong>
+      <div style="margin-top:8px">${opts.body||''}</div>
+      <div style="margin-top:18px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" data-x="0">Cancel</button>
+        <button class="btn" data-x="1" style="${opts.danger?'background:#dc2626;color:#fff;border-color:#dc2626':'background:#2563eb;color:#fff;border-color:#2563eb'}">${esc(opts.confirmLabel||'Confirm')}</button>
+      </div></div>`;
+    document.body.appendChild(bg);
+    const done = v => { bg.remove(); resolve(v); };
+    bg.addEventListener('click', e=>{ if(e.target===bg) done(false); });
+    bg.querySelector('[data-x="0"]').onclick = ()=>done(false);
+    bg.querySelector('[data-x="1"]').onclick = ()=>done(true);
+    setTimeout(()=>{ const b=bg.querySelector('[data-x="1"]'); if(b) b.focus(); }, 30);
+  });
+}
+
+async function fdCellBlur(td){
+  const orig = td.dataset.orig, wasNull = td.dataset.wasnull==='1';
+  const text = td.innerText.replace(/\n+$/,'').trim();
+  if(text===orig) return;                       // nothing changed
+  const col=td.dataset.col, label=td.dataset.label, type=td.dataset.type, rid=td.dataset.rowid;
+  if(type==='number' && text!=='' && isNaN(Number(text.replace(/,/g,'')))){
+    toast(`${label} must be a number`); td.innerText = orig; return;
+  }
+  const oldDisp = (wasNull || orig==='') ? '(empty)' : orig;
+  const newDisp = text==='' ? '(empty)' : text;
+  const ok = await fdConfirm({
+    title:`Change ${label}?`,
+    body:`<div class="fd-fromto"><table>
+      <tr><td style="color:#888">From</td><td><b>${esc(oldDisp)}</b></td></tr>
+      <tr><td style="color:#888">To</td><td><b style="color:#2563eb">${esc(newDisp)}</b></td></tr></table></div>`,
+    confirmLabel:'Yes, change it'
+  });
+  if(!ok){ td.innerText = wasNull ? '' : orig; return; }
+  const send = text==='' ? (type==='number' ? null : '') : text;
+  try{
+    await j(`/api/data/${encodeURIComponent(FD.entity)}/${rid}`,
+      { method:'PUT', body: JSON.stringify({ values:{ [col]: send } }) });
+    FD.undo = { rid, col, label, prev: wasNull ? null : orig };
+    td.dataset.orig = text; td.dataset.wasnull = (send==null)?'1':'0';
+    td.classList.add('fd-saved'); setTimeout(()=>td.classList.remove('fd-saved'),1000);
+    const ub = document.getElementById('fd-undo'); if(ub) ub.disabled = false;
+    toast(`${label} updated — backup saved`);
+  }catch(e){ td.innerText = wasNull ? '' : orig; toast('Could not save: '+(e.message||e)); }
+}
+
+async function fdUndo(){
+  if(!FD.undo) return;
+  const u = FD.undo;
+  const ok = await fdConfirm({ title:`Undo change to ${u.label}?`,
+    body:`This puts <b>${esc(u.label)}</b> back to its previous value.`, confirmLabel:'Undo it' });
+  if(!ok) return;
+  try{
+    await j(`/api/data/${encodeURIComponent(FD.entity)}/${u.rid}`,
+      { method:'PUT', body: JSON.stringify({ values:{ [u.col]: u.prev } }) });
+    FD.undo = null; toast('Change undone'); fdRender();
+  }catch(e){ toast('Undo failed: '+(e.message||e)); }
+}
+
+async function fdDelete(rid){
+  const row = FD.rows.find(r=>r._rowid_==rid) || {};
+  const summ = FD.columns.filter(c=>!c.locked && row[c.name]!=null && String(row[c.name]).trim()!=='')
+    .slice(0,3).map(c=>`${esc(c.label)}: <b>${esc(String(row[c.name]))}</b>`).join('<br>') || `Record #${rid}`;
+  const noun = FD.label.replace(/s$/,'');
+  const ok = await fdConfirm({
+    title:`Delete this ${noun}?`,
+    body:`<div class="fd-fromto" style="margin-bottom:10px">${summ}</div>`+
+         `<div style="color:#b45309;font-size:13px">This permanently removes the record. A backup is saved first, so it can be recovered if needed.</div>`,
+    confirmLabel:'Delete', danger:true
+  });
+  if(!ok) return;
+  try{
+    await j(`/api/data/${encodeURIComponent(FD.entity)}/${rid}`, { method:'DELETE' });
+    FD.undo = null; toast('Record deleted — backup saved'); fdLoadCatalog(); fdRender();
+  }catch(e){ toast('Delete failed: '+(e.message||e)); }
+}
+
 function go(tab){
   window._currentTab = tab;
   document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
@@ -7474,7 +7673,7 @@ function go(tab){
   if (typeof applyLogoBadge === 'function') {
     try { applyLogoBadge(); } catch(_) {}
   }
-  const loaders={dash:loadStats,insights:loadInsights,settings:loadSettings,formulas:loadFormulas,dbedit:loadDbEdit,lotentry:loadLotEntry,users:loadUsers,reports:loadReports,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
+  const loaders={dash:loadStats,insights:loadInsights,settings:loadSettings,formulas:loadFormulas,dbedit:loadDbEdit,fixdata:loadFixData,lotentry:loadLotEntry,users:loadUsers,reports:loadReports,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
     bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,registers:loadRegisterDefault,tally:loadTallyAuctions,

@@ -10476,6 +10476,147 @@ app.post('/api/dev/db/sql', requireAdmin, (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// FIX DATA — gentle, no-SQL data editor for a non-technical user
+// ══════════════════════════════════════════════════════════════
+// A safe face over the same engine for the day-to-day end user (dad).
+// The UI is dev-revealed (spiceDev flag) and admin-authenticated, but
+// the real safety is here on the server: a hard whitelist means these
+// endpoints can ONLY ever touch the 8 business tables, never users /
+// sessions / license_state / password hashes — and never via raw SQL.
+//
+// Locked columns (primary key, foreign-key links, machine timestamps)
+// can be READ but never WRITTEN, so a stray edit can't re-link a lot to
+// the wrong auction or corrupt invoices/payments. Every write snapshots
+// a backup first and is recorded in audit_log.
+
+// Friendly key → { label, table }. Anything not listed is unreachable.
+const DATA_ENTITIES = {
+  sellers:     { label: 'Sellers',         table: 'traders' },
+  buyers:      { label: 'Buyers',          table: 'buyers' },
+  auctions:    { label: 'Auctions',        table: 'auctions' },
+  lots:        { label: 'Lots',            table: 'lots' },
+  invoices:    { label: 'Sales Invoices',  table: 'invoices' },
+  purchases:   { label: 'Purchases',       table: 'purchases' },
+  bills:       { label: 'Bills of Supply', table: 'bills' },
+  debit_notes: { label: 'Debit Notes',     table: 'debit_notes' },
+};
+
+// Columns the simple editor must never let the user change.
+function _dataLocked(col) {
+  return col === 'id'
+    || /_id$/.test(col)              // foreign-key links (auction_id, trader_id…)
+    || col === 'created_at'
+    || col === 'locked_at'
+    || col === 'price_checked_at'
+    || /_hash$/.test(col);
+}
+
+// Prettier column labels; falls back to Title Case of the raw name.
+const DATA_COL_LABELS = {
+  name:'Name', cr:'Code', pan:'PAN', tel:'Phone', aadhar:'Aadhaar',
+  padd:'Address', pin:'PIN', pstate:'State', ifsc:'IFSC', acctnum:'Account No',
+  holder_name:'Account Holder', whatsapp:'WhatsApp', email:'Email',
+  buyer:'Buyer Code', buyer1:'Buyer Name', code:'Code', gstin:'GSTIN',
+  place:'Place', state:'State', ano:'Trade No', invo:'Invoice No', date:'Date',
+  qty:'Quantity', amount:'Amount', cgst:'CGST', sgst:'SGST', igst:'IGST',
+  lorry_no:'Lorry No', distance_km:'Distance (km)', lot_no:'Lot No',
+  crop:'Crop', grade:'Grade', price:'Price', net:'Net', cost:'Cost',
+  note_no:'Note No', total:'Total', tds:'TDS',
+};
+function _dataColLabel(c) {
+  return DATA_COL_LABELS[c] ||
+    c.replace(/_/g, ' ').replace(/\b\w/g, m => m.toUpperCase());
+}
+function _dataColType(sqliteType, name) {
+  if (/date/i.test(name)) return 'date';
+  return /INT|REAL|NUM|DEC|FLOA|DOUB/i.test(sqliteType || '') ? 'number' : 'text';
+}
+
+// Catalog: the friendly menu of editable entities + row counts.
+app.get('/api/data/catalog', requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const out = Object.entries(DATA_ENTITIES).map(([key, def]) => {
+      let count = null;
+      try { count = db.get(`SELECT COUNT(*) c FROM "${def.table}"`).c; } catch (_) {}
+      return { key, label: def.label, count };
+    });
+    res.json({ entities: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Read one entity: friendly column metadata + a page of rows.
+app.get('/api/data/:entity', requireAdmin, (req, res) => {
+  try {
+    const def = DATA_ENTITIES[req.params.entity];
+    if (!def) return res.status(404).json({ error: 'Unknown data section' });
+    const db = getDb();
+    const cols = db.all(`PRAGMA table_info("${def.table}")`).map(c => ({
+      name: c.name,
+      label: _dataColLabel(c.name),
+      type: _dataColType(c.type, c.name),
+      locked: _dataLocked(c.name),
+    }));
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 1000);
+    const offset = parseInt(req.query.offset, 10) || 0;
+    const q = (req.query.q || '').trim();
+    let where = '', params = [];
+    if (q) {
+      where = 'WHERE ' + cols.map(c => `CAST("${c.name}" AS TEXT) LIKE ?`).join(' OR ');
+      params = cols.map(() => `%${q}%`);
+    }
+    const total = db.get(`SELECT COUNT(*) c FROM "${def.table}" ${where}`, params).c;
+    const rows = db.all(
+      `SELECT rowid AS _rowid_, * FROM "${def.table}" ${where} ORDER BY rowid LIMIT ? OFFSET ?`,
+      [...params, limit, offset]);
+    res.json({ key: req.params.entity, label: def.label, columns: cols, rows, total, limit, offset });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update one row by rowid — only non-locked, real columns are honoured.
+app.put('/api/data/:entity/:rowid', requireAdmin, (req, res) => {
+  try {
+    const def = DATA_ENTITIES[req.params.entity];
+    if (!def) return res.status(404).json({ error: 'Unknown data section' });
+    const db = getDb();
+    const real = new Set(db.all(`PRAGMA table_info("${def.table}")`).map(c => c.name));
+    const vals = req.body.values || {};
+    const keys = Object.keys(vals).filter(k => real.has(k) && !_dataLocked(k));
+    const blocked = Object.keys(vals).filter(k => real.has(k) && _dataLocked(k));
+    if (blocked.length) return res.status(400).json({ error: `These fields are protected and can't be edited here: ${blocked.join(', ')}` });
+    if (!keys.length) return res.status(400).json({ error: 'No editable fields supplied' });
+    _devSnapshot('fixdata');
+    const rowid = parseInt(req.params.rowid, 10);
+    const info = db.run(
+      `UPDATE "${def.table}" SET ${keys.map(k => `"${k}"=?`).join(',')} WHERE rowid=?`,
+      [...keys.map(k => vals[k]), rowid]);
+    try {
+      db.run('INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES (?,?,?,?,?)',
+        [req.user.id, 'fixdata_update', def.table, String(rowid),
+         JSON.stringify(keys.map(k => ({ field: k, to: vals[k] })))]);
+    } catch (_) {}
+    res.json({ success: true, changes: info.changes });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Delete one row by rowid.
+app.delete('/api/data/:entity/:rowid', requireAdmin, (req, res) => {
+  try {
+    const def = DATA_ENTITIES[req.params.entity];
+    if (!def) return res.status(404).json({ error: 'Unknown data section' });
+    const db = getDb();
+    _devSnapshot('fixdata');
+    const rowid = parseInt(req.params.rowid, 10);
+    const info = db.run(`DELETE FROM "${def.table}" WHERE rowid=?`, [rowid]);
+    try {
+      db.run('INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES (?,?,?,?,?)',
+        [req.user.id, 'fixdata_delete', def.table, String(rowid), null]);
+    } catch (_) {}
+    res.json({ success: true, changes: info.changes });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
 // IMPORT OLD DATA (Task 8) — unified upload + preview + run flow
 // ══════════════════════════════════════════════════════════════
 // Supports SalesInvoice / Purchase / Bills / DebitNotes / Payments /
