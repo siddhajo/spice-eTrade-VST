@@ -10513,11 +10513,20 @@ function _dataLocked(col) {
 
 // Prettier column labels; falls back to Title Case of the raw name.
 const DATA_COL_LABELS = {
+  // Sellers (traders)
   name:'Name', cr:'Code', pan:'PAN', tel:'Phone', aadhar:'Aadhaar',
-  padd:'Address', pin:'PIN', pstate:'State', ifsc:'IFSC', acctnum:'Account No',
-  holder_name:'Account Holder', whatsapp:'WhatsApp', email:'Email',
-  buyer:'Buyer Code', buyer1:'Buyer Name', code:'Code', gstin:'GSTIN',
-  place:'Place', state:'State', ano:'Trade No', invo:'Invoice No', date:'Date',
+  padd:'Address', ppla:'Place', pin:'PIN', pstate:'State', pst_code:'State Code',
+  ifsc:'IFSC', acctnum:'Account No', holder_name:'Account Holder',
+  whatsapp:'WhatsApp', email:'Email',
+  // Buyers
+  buyer:'Buyer Code', buyer1:'Buyer Name', code:'Code', sbl:'SBL Code',
+  add1:'Address 1', add2:'Address 2', pla:'Place', state:'State',
+  st_code:'State Code', gstin:'GSTIN', ti:'TIN', sale:'Sale Type', tdsq:'TDS',
+  cbuyer1:'Consignee Name', cadd1:'Consignee Addr 1', cadd2:'Consignee Addr 2',
+  cpla:'Consignee Place', cpin:'Consignee PIN', cstate:'Consignee State',
+  cst_code:'Consignee State Code', cgstin:'Consignee GSTIN',
+  // Trades / invoices / lots / bills
+  place:'Place', ano:'Trade No', invo:'Invoice No', date:'Date',
   qty:'Quantity', amount:'Amount', cgst:'CGST', sgst:'SGST', igst:'IGST',
   lorry_no:'Lorry No', distance_km:'Distance (km)', lot_no:'Lot No',
   crop:'Crop', grade:'Grade', price:'Price', net:'Net', cost:'Cost',
@@ -10560,17 +10569,55 @@ app.get('/api/data/:entity', requireAdmin, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 1000);
     const offset = parseInt(req.query.offset, 10) || 0;
     const q = (req.query.q || '').trim();
-    let where = '', params = [];
+    // Per-column filters: ?filters={"tel":"99","name":"ravi"} — each is a
+    // substring match, AND-combined, on top of the global `q` (which is an
+    // OR across every column). Unknown columns are ignored.
+    let filters = {};
+    try { filters = req.query.filters ? JSON.parse(req.query.filters) : {}; } catch (_) {}
+    const colNames = new Set(cols.map(c => c.name));
+    const clauses = [], params = [];
     if (q) {
-      where = 'WHERE ' + cols.map(c => `CAST("${c.name}" AS TEXT) LIKE ?`).join(' OR ');
-      params = cols.map(() => `%${q}%`);
+      clauses.push('(' + cols.map(c => `CAST("${c.name}" AS TEXT) LIKE ?`).join(' OR ') + ')');
+      cols.forEach(() => params.push(`%${q}%`));
     }
+    for (const [col, val] of Object.entries(filters)) {
+      if (!colNames.has(col) || val == null || val === '') continue;
+      clauses.push(`CAST("${col}" AS TEXT) LIKE ?`);
+      params.push(`%${val}%`);
+    }
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
     const total = db.get(`SELECT COUNT(*) c FROM "${def.table}" ${where}`, params).c;
     const rows = db.all(
       `SELECT rowid AS _rowid_, * FROM "${def.table}" ${where} ORDER BY rowid LIMIT ? OFFSET ?`,
       [...params, limit, offset]);
     res.json({ key: req.params.entity, label: def.label, columns: cols, rows, total, limit, offset });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add a new row. Body: { values: { col: val, … } } — only non-locked,
+// real columns are accepted; blank fields are simply omitted so the
+// table's own defaults apply.
+app.post('/api/data/:entity', requireAdmin, (req, res) => {
+  try {
+    const def = DATA_ENTITIES[req.params.entity];
+    if (!def) return res.status(404).json({ error: 'Unknown data section' });
+    const db = getDb();
+    const real = new Set(db.all(`PRAGMA table_info("${def.table}")`).map(c => c.name));
+    const vals = req.body.values || {};
+    const keys = Object.keys(vals).filter(k => real.has(k) && !_dataLocked(k));
+    if (!keys.length) return res.status(400).json({ error: 'No fields supplied' });
+    _devSnapshot('fixdata');
+    const info = db.run(
+      `INSERT INTO "${def.table}" (${keys.map(k => `"${k}"`).join(',')}) ` +
+      `VALUES (${keys.map(() => '?').join(',')})`,
+      keys.map(k => vals[k]));
+    try {
+      db.run('INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES (?,?,?,?,?)',
+        [req.user.id, 'fixdata_insert', def.table, String(info.lastInsertRowid),
+         JSON.stringify(keys.map(k => ({ field: k, to: vals[k] })))]);
+    } catch (_) {}
+    res.json({ success: true, rowid: info.lastInsertRowid });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // Update one row by rowid — only non-locked, real columns are honoured.
