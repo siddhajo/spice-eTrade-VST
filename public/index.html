@@ -7499,8 +7499,12 @@ async function loadFixData(){
       .fd-card b{font-size:16px}
       .fd-card span{display:block;font-size:12.5px;color:var(--text3,#6b7280);margin-top:4px}
       .fd-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 12px}
-      .fd-q{flex:1 1 340px;min-width:240px;padding:10px 14px;font-size:15px;border:2px solid var(--fdc);border-radius:10px;background:var(--card,#fff);color:var(--text,#111);caret-color:var(--fdc)}
+      .fd-qwrap{position:relative;display:flex;flex:1 1 340px;min-width:240px}
+      .fd-q{flex:1 1 auto;min-width:0;padding:10px 38px 10px 14px;font-size:15px;border:2px solid var(--fdc);border-radius:10px;background:var(--card,#fff);color:var(--text,#111);caret-color:var(--fdc)}
       .fd-q:focus{outline:3px solid color-mix(in srgb,var(--fdc) 30%,transparent);outline-offset:0}
+      .fd-qclear{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:24px;height:24px;border:none;background:transparent;border-radius:50%;cursor:pointer;font-size:15px;line-height:1;color:var(--text3,#6b7280);display:none;align-items:center;justify-content:center;padding:0}
+      .fd-qclear:hover{background:color-mix(in srgb,var(--fdc) 15%,transparent);color:var(--fdc)}
+      .fd-qwrap.has-text .fd-qclear{display:inline-flex}
       .fd-switch{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:700;cursor:pointer;user-select:none;padding:8px 14px;border:2px solid var(--line,#d1d5db);border-radius:10px;background:var(--card,#fff)}
       .fd-switch input{width:17px;height:17px}
       .fd-switch:has(input:checked){background:#dcfce7;border-color:#16a34a;color:#15803d}
@@ -7571,7 +7575,10 @@ async function fdRender(){
   const noun = d.label.replace(/s$/,'');
   let html = `<div class="fd-bar">
     <label class="fd-switch"><input type="checkbox" ${FD.edit?'checked':''} onchange="FD.edit=this.checked;fdRender()"> Edit mode</label>
-    <input class="fd-q" placeholder="Search ${esc(d.label)}…" value="${esc(FD.q)}" oninput="fdSearchChanged(this.value)">
+    <span class="fd-qwrap${FD.q?' has-text':''}">
+      <input class="fd-q" placeholder="Search ${esc(d.label)}…" value="${esc(FD.q)}" oninput="fdSearchChanged(this.value,this)">
+      <button type="button" class="fd-qclear" title="Clear search" aria-label="Clear search" onclick="fdClearSearch(this)">✕</button>
+    </span>
     ${FD.edit?`<button class="fd-btn-add" onclick="fdAddRecord()">+ Add ${esc(noun)}</button>`:''}
     <button id="fd-undo" class="btn" ${FD.undo?'':'disabled'} onclick="fdUndo()">↶ Undo last change</button>
     <span id="fd-count" style="margin-left:auto;font-size:13px;color:#888;font-variant-numeric:tabular-nums"></span>
@@ -7623,7 +7630,8 @@ function fdUpdateCount(){
   const pp = document.getElementById('fd-prev'), pn = document.getElementById('fd-next');
   if(pp) pp.disabled = FD.offset<=0; if(pn) pn.disabled = to>=FD.total;
 }
-function fdSearchChanged(val){ FD.q=val; FD.offset=0; clearTimeout(FD._t); FD._t=setTimeout(fdFetch,300); }
+function fdSearchChanged(val,el){ FD.q=val; FD.offset=0; if(el){const w=el.closest('.fd-qwrap'); if(w) w.classList.toggle('has-text',!!val);} clearTimeout(FD._t); FD._t=setTimeout(fdFetch,300); }
+function fdClearSearch(btn){ const w=btn.closest('.fd-qwrap'); const inp=w&&w.querySelector('.fd-q'); if(inp){ inp.value=''; inp.focus(); } if(w) w.classList.remove('has-text'); FD.q=''; FD.offset=0; clearTimeout(FD._t); fdFetch(); }
 function fdFilterChanged(col,val){
   if(val==='') delete FD.filters[col]; else FD.filters[col]=val;
   FD.offset=0; clearTimeout(FD._t); FD._t=setTimeout(fdFetch,300);
