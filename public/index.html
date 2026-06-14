@@ -8458,8 +8458,8 @@ async function loadStats(auctionId){
   }
 
   // Headline metric tiles. Mirrors the Insights "Headline metrics"
-  // strip but always for the dashboard-selected trade (or current
-  // calendar month when "All Trades" is picked). The tile grid renders
+  // strip but always for the dashboard-selected trade (or all trades,
+  // lifetime, when "All Trades" is picked). The tile grid renders
   // synchronously above with a "Loading…" placeholder; this call fills
   // it in asynchronously so the dashboard paint is never blocked.
   renderDashHeadlineTiles(_dashSelectedAuctionId);
@@ -8496,8 +8496,9 @@ window.addEventListener('resize', () => {
 });
 
 // Fills #dash-headline-grid by querying /api/insights. When auctionId
-// is set we ask for that single trade; otherwise the endpoint defaults
-// to the current calendar month — the same default Insights uses.
+// is set we ask for that single trade; otherwise we ask for auction_id=all
+// so the totals span every trade (lifetime) — matching the card's
+// "All trades" label and "totals across every trade" sub-text.
 async function renderDashHeadlineTiles(auctionId){
   const grid = document.getElementById('dash-headline-grid');
   if (!grid) return;
@@ -8522,7 +8523,7 @@ async function renderDashHeadlineTiles(auctionId){
   try {
     const url = auctionId
       ? `/api/insights?auction_id=${auctionId}&_=${Date.now()}`
-      : `/api/insights?_=${Date.now()}`;
+      : `/api/insights?auction_id=all&_=${Date.now()}`;
     const d = await j(url);
     const t = (d && d.totals) || {};
     grid.innerHTML =

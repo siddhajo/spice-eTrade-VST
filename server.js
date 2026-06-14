@@ -9955,7 +9955,13 @@ app.get('/api/insights', requireView, (req, res) => {
   let from, to;
   let singleAuctionId = null;
   const rawAid = String(req.query.auction_id || '').trim();
-  if (rawAid && rawAid !== 'all') {
+  // Lifetime mode — the Dashboard's headline card asks for "All trades"
+  // via auction_id=all. Span the widest possible date range so every
+  // trade is included; the per-query BETWEEN predicates then aggregate
+  // across all auctions. (The Insights tab never uses this — it always
+  // passes explicit from/to.)
+  const allTrades = rawAid === 'all';
+  if (rawAid && !allTrades) {
     const n = parseInt(rawAid, 10);
     if (Number.isFinite(n) && n > 0) {
       const a = db.get('SELECT id, date FROM auctions WHERE id = ?', [n]);
@@ -9967,8 +9973,13 @@ app.get('/api/insights', requireView, (req, res) => {
     }
   }
   if (from == null) {
-    from = dateRe.test(String(req.query.from || '')) ? String(req.query.from) : isoMonthStart;
-    to   = dateRe.test(String(req.query.to   || '')) ? String(req.query.to)   : isoToday;
+    if (allTrades) {
+      from = '0000-01-01';
+      to   = '9999-12-31';
+    } else {
+      from = dateRe.test(String(req.query.from || '')) ? String(req.query.from) : isoMonthStart;
+      to   = dateRe.test(String(req.query.to   || '')) ? String(req.query.to)   : isoToday;
+    }
   }
 
   // Helper SQL fragment — "is this lot actually sold?" Code blank
