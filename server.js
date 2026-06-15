@@ -4240,7 +4240,8 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
     let aggSql =
       `SELECT COUNT(*) AS n,
               COALESCE(SUM(CAST(bags AS INTEGER)), 0) AS bags,
-              COALESCE(SUM(qty), 0)                  AS qty
+              COALESCE(SUM(qty), 0)                  AS qty,
+              COALESCE(SUM(CASE WHEN price > 0 THEN 1 ELSE 0 END), 0) AS priced
          FROM lots
         WHERE lots.auction_id = ?`
       + (branch ? ' AND lots.branch = ?' : '')
@@ -4263,8 +4264,8 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
             )
           )`;
     }
-    const row = db.get(aggSql, p) || { n:0, bags:0, qty:0 };
-    return res.json({ n: row.n, bags: row.bags, qty: row.qty });
+    const row = db.get(aggSql, p) || { n:0, bags:0, qty:0, priced:0 };
+    return res.json({ n: row.n, bags: row.bags, qty: row.qty, priced: row.priced });
   }
 
   // Pagination — opt-in via `paginated=1` so the existing callers
@@ -4571,6 +4572,25 @@ app.get('/api/lot-activity', requireAuth, (req, res) => {
       };
     });
     res.json({ items, total, page, pageSize });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Clear the lot activity feed. Scoped to a single trade when auctionId is
+// passed (the "Clear All" button on the Lot Entry activity panel only ever
+// clears the currently-picked trade). Deletes the matching audit_log rows —
+// destructive, so the client guards it behind a confirm(). The WHERE mirrors
+// the GET above so exactly the rows the user can see get wiped.
+app.delete('/api/lot-activity', requireAuth, (req, res) => {
+  try {
+    const db = getDb();
+    const auctionId = req.query.auctionId ? parseInt(req.query.auctionId, 10) : null;
+    let where = "entity = 'lot'";
+    const params = [];
+    if (auctionId) { where += ' AND details LIKE ?'; params.push(`{"auction_id":${auctionId},%`); }
+    const info = db.run(`DELETE FROM audit_log WHERE ${where}`, params);
+    res.json({ success: true, deleted: (info && info.changes) || 0 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
