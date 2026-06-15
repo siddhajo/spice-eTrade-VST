@@ -4320,62 +4320,26 @@ input[type="search"]:focus{
               </div>
             </div>
 
-            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Transactions — trade &amp; date filtered</h3>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Lots <span style="color:var(--text3);font-weight:400">· CPA1</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('lots','dbf',true)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('lots','xlsx',true)">XLSX</button>
-                </div>
-              </div>
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Sales Invoices <span style="color:var(--text3);font-weight:400">· INV</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('invoices','dbf',true)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('invoices','xlsx',true)">XLSX</button>
-                </div>
-              </div>
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Purchases <span style="color:var(--text3);font-weight:400">· PURCHASE</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('purchases','dbf',true)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('purchases','xlsx',true)">XLSX</button>
-                </div>
-              </div>
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Bills of Supply <span style="color:var(--text3);font-weight:400">· BILL</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('bills','dbf',true)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('bills','xlsx',true)">XLSX</button>
-                </div>
-              </div>
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Debit Notes <span style="color:var(--text3);font-weight:400">· DEBIT</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('debit_notes','dbf',true)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('debit_notes','xlsx',true)">XLSX</button>
-                </div>
+            <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:end;margin-top:4px">
+              <div class="fg" style="margin:0;flex:1;min-width:280px;max-width:560px">
+                <label>Module</label>
+                <select id="dbf-module" onchange="dbfRenderActions()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                  <optgroup label="Transactions — trade &amp; date filtered">
+                    <option value="lots">Lots · CPA1</option>
+                    <option value="invoices">Sales Invoices · INV</option>
+                    <option value="purchases">Purchases · PURCHASE</option>
+                    <option value="bills">Bills of Supply · BILL</option>
+                    <option value="debit_notes">Debit Notes · DEBIT</option>
+                  </optgroup>
+                  <optgroup label="Master Data — full table">
+                    <option value="traders">Sellers · NAM</option>
+                    <option value="buyers">Buyers · SBL</option>
+                  </optgroup>
+                </select>
               </div>
             </div>
-
-            <h3 style="font-size:13px;margin:16px 0 8px 0;color:var(--spice)">Master Data — full table</h3>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Sellers <span style="color:var(--text3);font-weight:400">· NAM</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('traders','dbf',false)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('traders','xlsx',false)">XLSX</button>
-                </div>
-              </div>
-              <div style="padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff">
-                <div style="font-weight:600;font-size:13px;margin-bottom:8px">Buyers <span style="color:var(--text3);font-weight:400">· SBL</span></div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-a" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('buyers','dbf',false)">DBF</button>
-                  <button class="btn btn-g" style="flex:1;padding:7px;font-size:12px" onclick="dbfGo('buyers','xlsx',false)">XLSX</button>
-                </div>
-              </div>
-            </div>
+            <div id="dbf-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px"></div>
+            <div id="dbf-filter-note" style="margin-top:10px;font-size:12px;color:var(--text3)"></div>
           </div>
         </div>
       </div>
@@ -16255,6 +16219,8 @@ function loadExpAuctions(){
     const sel=document.getElementById('dbf-auction');
     if(sel){ sel.insertAdjacentHTML('afterbegin','<option value="">— All trades —</option>'); sel.value=''; }
   });
+  // Paint the DBF module's action buttons + filter note for the default pick.
+  dbfRenderActions();
   // Default DBF date range: current month
   const today=new Date().toISOString().slice(0,10);
   const firstOfMonth=today.slice(0,8)+'01';
@@ -16359,6 +16325,43 @@ async function dbfGo(type, format, useFilters){
   const params = useFilters ? dbfFilterParams() : {};
   if(format==='xlsx') params.format='xlsx';
   await downloadDbf(type, params);
+}
+
+// DBF/XLSX module registry — drives the module dropdown + action buttons.
+// `filtered` modules honour the shared Trade/date filter bar; master-data
+// modules ignore it and dump the whole table.
+const DBF_MODULES = [
+  { key:'lots',        filtered:true  },
+  { key:'invoices',    filtered:true  },
+  { key:'purchases',   filtered:true  },
+  { key:'bills',       filtered:true  },
+  { key:'debit_notes', filtered:true  },
+  { key:'traders',     filtered:false },
+  { key:'buyers',      filtered:false },
+];
+// Paint the DBF/XLSX action buttons for the picked module + a note on
+// whether the filter bar applies. DBF exports have no PDF/preview pipeline,
+// so the actions are just the two real formats.
+function dbfRenderActions(){
+  const sel  = document.getElementById('dbf-module');
+  const host = document.getElementById('dbf-actions');
+  const note = document.getElementById('dbf-filter-note');
+  if (!sel || !host) return;
+  const m = DBF_MODULES.find(x => x.key === sel.value);
+  host.innerHTML =
+    `<button class="btn btn-a" onclick="dbfGoSelected('dbf')"  style="min-width:84px">DBF</button>` +
+    `<button class="btn btn-a" onclick="dbfGoSelected('xlsx')" style="min-width:84px">Excel</button>`;
+  if (note) note.textContent = (m && m.filtered)
+    ? 'Honours the Trade and date-range filters above.'
+    : 'Master data — exports the full table; the filters above are ignored.';
+}
+// Download the picked module in the chosen format, attaching the shared
+// filters only for transaction modules.
+function dbfGoSelected(format){
+  const sel = document.getElementById('dbf-module');
+  const m = DBF_MODULES.find(x => x.key === (sel && sel.value));
+  if (!m) return;
+  return dbfGo(m.key, format, m.filtered);
 }
 
 // ── Lots ──────────────────────────────────────────────────
