@@ -821,24 +821,18 @@ function renderLotGrid(){
   var myBranch=allocStats?allocStats.find(function(s){return s.branch===br}):null;
   if(!myBranch||!myBranch.ranges){grid.innerHTML='<span style="font-size:10px;color:var(--text3)">No lots allocated</span>';return}
   availableLots=[];
-  var html='';var total=0;
+  var html='';
   myBranch.ranges.forEach(function(rng){
     if(rng.lots){
       rng.lots.forEach(function(l){
-        total++;
-        // Show ONLY available (not-yet-entered) lots — skip lots already
-        // entered for this branch so the grid stays focused on what's left.
-        if(l.used)return;
         var cls='lot-chip';
-        if(selectedLots.indexOf(l.lot)>=0)cls+=' selected';
-        availableLots.push(l.lot);
-        html+='<span class="'+cls+'" data-lot="'+l.lot+'" onclick="toggleLotChip(this)">'+l.lot+'</span>';
+        if(l.used)cls+=' used';
+        else{availableLots.push(l.lot);if(selectedLots.indexOf(l.lot)>=0)cls+=' selected'}
+        html+='<span class="'+cls+'" data-lot="'+l.lot+'" '+(l.used?'':'onclick="toggleLotChip(this)"')+'>'+l.lot+'</span>';
       });
     }
   });
-  grid.innerHTML=html||(total>0
-    ? '<span style="font-size:10px;color:var(--green);font-weight:600">✓ All allotted lots entered</span>'
-    : '<span style="font-size:10px;color:var(--text3)">No lots</span>');
+  grid.innerHTML=html||'<span style="font-size:10px;color:var(--text3)">No lots</span>';
   updateLotSelection();
 }
 
@@ -915,6 +909,17 @@ function renderRecentLots(){
 
 // Open a print URL in a popup that auto-closes after printing.
 function printAndClose(url){
+  // Android Chrome can't print a PDF embedded in an iframe: contentWindow.print()
+  // silently fails and the fallback ends up printing the blank wrapper instead of
+  // the receipt — so the button looks "dead" on Android. iOS Safari (and desktop)
+  // render the PDF inline in the iframe and print fine. On Android we therefore open
+  // the PDF directly; Chrome's built-in PDF viewer exposes Print / Share, which is
+  // the reliable path there. Everywhere else, keep the auto-print + auto-close popup.
+  if(/Android/i.test(navigator.userAgent)){
+    var a=window.open(url,'_blank');
+    if(!a){location.href=url;}
+    return;
+  }
   var w=window.open('','_blank','width=420,height=620');
   if(!w){window.open(url,'_blank');return}
   var html='<!DOCTYPE html><html><head><title>Print Receipt</title><style>html,body{margin:0;padding:0;height:100%;background:#fff;font-family:system-ui,Arial,sans-serif}.bar{padding:8px 12px;background:#0d7c5f;color:#fff;font-size:12px;display:flex;gap:8px;align-items:center}.bar button{margin-left:auto;background:#fff;color:#0d7c5f;border:0;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer}iframe{border:0;width:100%;height:calc(100% - 34px)}<\/style></head><body>'
@@ -1886,6 +1891,7 @@ function renderAllocBars(){
     allHtml+='<div style="margin-bottom:8px'+(isMine?';background:rgba(29,158,117,.06);border-radius:6px;padding:4px 6px':'')+'">';
     allHtml+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:2px"><strong style="color:var(--text)">'+s.branch+(isMine?' ★':'')+'</strong><div style="display:flex;align-items:center;gap:6px"><span style="color:var(--text3);font-size:10px">'+s.used+'/'+s.total+'</span><button onclick="toggleUserGrid(\'mlg-'+si+'\',this)" style="background:var(--green);color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;font-family:inherit">▼ Lots</button></div></div>';
     allHtml+='<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+barColor+';border-radius:3px"></div></div>';
+    // Grid
     // Grid
     var gridHtml='';
     s.ranges.forEach(function(rng){
