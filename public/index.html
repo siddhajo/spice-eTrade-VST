@@ -5451,51 +5451,17 @@ input[type="search"]:focus{
       Once you import prices the lots table is overwritten with the auctioneer's data. These reports are your record of the pre-trade state.
       <span style="display:block;margin-top:4px">Snapshots use the trade picked in the topbar.</span>
     </div>
-    <!-- Per report: label on the left, XLSX + PDF buttons on the right.
-         Praman stays CSV-only since the export pipeline doesn't render
-         it in either spreadsheet form. -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
-        <span style="font-size:12px;font-weight:600;color:#7C2D12">Lot Slip</span>
-        <span style="display:flex;gap:4px">
-          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_slip','xlsx')" title="Download as Excel"  style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
-          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_slip','pdf')"  title="Download as PDF"    style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
-        </span>
+    <!-- Report dropdown + capability-aware download buttons, mirroring
+         the Exports tab's pre-trade panel. Pick a snapshot report from
+         the dropdown, then download it in its supported formats. Praman
+         stays CSV-only since the export pipeline doesn't render it in
+         either spreadsheet form. Populated by piPopulatePretrade(). -->
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end">
+      <div class="fg" style="margin:0;flex:1;min-width:200px">
+        <label style="font-size:12px;font-weight:600;color:#7C2D12">Report</label>
+        <select id="pi-pretrade-select" onchange="piRenderPretradeButtons()" style="width:100%;padding:7px 9px;border:1px solid #FDE68A;border-radius:6px;background:#FFFBEB;color:#7C2D12;font-weight:600;font-size:12px"></select>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
-        <span style="font-size:12px;font-weight:600;color:#7C2D12">Lot Buyer</span>
-        <span style="display:flex;gap:4px">
-          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_buyer','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
-          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_buyer','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
-        </span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
-        <span style="font-size:12px;font-weight:600;color:#7C2D12">Lot Name</span>
-        <span style="display:flex;gap:4px">
-          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_name','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
-          <button class="btn btn-o" type="button" onclick="piQuickExport('lot_name','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
-        </span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
-        <span style="font-size:12px;font-weight:600;color:#7C2D12">Praman</span>
-        <span style="display:flex;gap:4px">
-          <button class="btn btn-o" type="button" onclick="piQuickExport('praman_csv','csv')" title="Download as CSV" style="padding:3px 8px;font-size:11px;font-weight:600">📄 CSV</button>
-        </span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
-        <span style="font-size:12px;font-weight:600;color:#7C2D12">Price List (Before)</span>
-        <span style="display:flex;gap:4px">
-          <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
-          <button class="btn btn-o" type="button" onclick="piQuickExport('price_list_before','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
-        </span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:4px 8px">
-        <span style="font-size:12px;font-weight:600;color:#7C2D12">Dealer List</span>
-        <span style="display:flex;gap:4px">
-          <button class="btn btn-o" type="button" onclick="piQuickExport('dealer_list','xlsx')" title="Download as Excel" style="padding:3px 8px;font-size:11px;font-weight:600">📊 XLSX</button>
-          <button class="btn btn-o" type="button" onclick="piQuickExport('dealer_list','pdf')"  title="Download as PDF"   style="padding:3px 8px;font-size:11px;font-weight:600">📄 PDF</button>
-        </span>
-      </div>
+      <div id="pi-pretrade-actions" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
     <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#7C2D12;margin-top:10px;cursor:pointer;font-weight:600">
       <input type="checkbox" id="pi-ack" onchange="piAckChanged()">
@@ -15817,7 +15783,37 @@ function openPriceImport(){
   if(ack) ack.checked=false;
   const submit=document.getElementById('pi-submit');
   if(submit) submit.disabled=true;
+  piPopulatePretrade();
   showModal('price-import-modal');
+}
+// Fill the reminder banner's report dropdown from the same pre-trade
+// snapshot list the Exports tab uses (EXP_PRETRADE), preserving the
+// operator's previous pick across reopens, then paint its buttons.
+function piPopulatePretrade(){
+  const sel=document.getElementById('pi-pretrade-select');
+  if(!sel) return;
+  const prev=sel.value;
+  sel.innerHTML=EXP_PRETRADE
+    .filter(k=>EXP_LABELS[k])
+    .map(k=>`<option value="${k}">${esc(EXP_LABELS[k])}</option>`)
+    .join('');
+  if(prev && EXP_PRETRADE.includes(prev)) sel.value=prev;
+  piRenderPretradeButtons();
+}
+// Paint format buttons for the selected snapshot report, capability-aware
+// via the shared expTypeCaps() (e.g. Praman is CSV-only). Each button
+// routes through piQuickExport(), which uses the topbar's shared trade.
+function piRenderPretradeButtons(){
+  const sel=document.getElementById('pi-pretrade-select');
+  const host=document.getElementById('pi-pretrade-actions');
+  if(!sel||!host) return;
+  const caps=expTypeCaps(sel.value);
+  const b=(label,fmt)=>`<button class="btn btn-o" type="button" onclick="piQuickExport('${sel.value}','${fmt}')" style="padding:5px 12px;font-size:11px;font-weight:600">${label}</button>`;
+  let html='';
+  if(caps.csv)  html+=b('📄 CSV','csv');
+  if(caps.xlsx) html+=b('📊 XLSX','xlsx');
+  if(caps.pdf)  html+=b('📄 PDF','pdf');
+  host.innerHTML=html;
 }
 function piAckChanged(){
   const ack=document.getElementById('pi-ack');
