@@ -76,7 +76,10 @@ select:focus{border-color:var(--green)}
 .st{font-size:12px;font-weight:700;text-align:right;color:#fff}
 
 /* ── BOTTOM NAV (fixed, outside screens) ── */
-.bnav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);box-shadow:0 -4px 16px rgba(0,0,0,.06);height:56px;align-items:stretch;z-index:999}
+/* content-box + safe-area padding keeps the 56px of tappable items ABOVE
+   the phone's home-indicator / gesture strip — otherwise the OS eats taps
+   landing on the bottom edge and the button "doesn't respond". */
+.bnav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);box-shadow:0 -4px 16px rgba(0,0,0,.06);height:56px;box-sizing:content-box;padding-bottom:env(safe-area-inset-bottom,0px);align-items:stretch;z-index:999}
 .bnav.visible{display:flex}
 .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0;cursor:pointer;font-size:9px;color:var(--text3);gap:3px;font-weight:700;transition:all .15s;-webkit-tap-highlight-color:transparent;user-select:none;height:100%;letter-spacing:.3px;text-transform:uppercase;position:relative;touch-action:manipulation;background:none;border:none;outline:none}
 .bnav-item,.bnav-item *{cursor:pointer}
@@ -407,12 +410,14 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
       <div class="lot-stat"><div class="val" id="ml-bags">0</div><div class="lbl">Bags</div></div>
       <div class="lot-stat"><div class="val" id="ml-qty">0</div><div class="lbl">Kg</div></div>
     </div>
+    <div id="ml-booked-note" style="display:none;font-size:10.5px;color:var(--text3);text-align:center;padding:2px 8px 4px"></div>
     <div class="lot-search"><div class="sx">
       <span class="sx-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
       <input type="search" id="ml-search" placeholder="Search seller name..." oninput="filterMyLots(this.value)">
       <button type="button" class="sx-clear" id="ml-search-clear" aria-label="Clear search">✕</button>
     </div></div>
     <div id="ml-actions" style="display:none;margin-bottom:8px;gap:6px;align-items:center;flex-wrap:wrap">
+      <button id="ml-selall-btn" style="background:var(--bg2);color:var(--text);border:1.5px solid var(--border);border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit" onclick="toggleSelectAllMyLots()" title="Select or clear every lot in the list">☑ Select all</button>
       <button style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,99,235,.2)" onclick="printSelectedMyLots()" title="Print receipts for selected lots">🖨 Print selected</button>
       <button style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,99,235,.2)" onclick="printAllBySellerUser()" title="Print all lots grouped by seller">🖨 Print all by seller</button>
       <button class="feat-whatsapp" style="background:#25D366;color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,211,102,.28)" onclick="whatsappSelectedMyLots()" title="WhatsApp a receipt to each selected lot's seller">💬 WhatsApp selected</button>
@@ -431,8 +436,8 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
 
 <!-- GLOBAL FIXED BOTTOM NAV -->
 <div class="bnav" id="global-bnav">
-  <div class="bnav-item active" id="bnav-entry" onclick="showTab('entry')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span>Entry</span></div>
-  <div class="bnav-item" id="bnav-mylots" onclick="showTab('mylots')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg><span>My Lots</span></div>
+  <div class="bnav-item active" id="bnav-entry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span>Entry</span></div>
+  <div class="bnav-item" id="bnav-mylots"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg><span>My Lots</span></div>
 </div>
 
 <div class="modal-overlay" id="edit-modal"><div class="modal">
@@ -602,6 +607,16 @@ function showTab(t){
   // Async work after visual update
   if(t==='entry'){refreshConfig();renderAllocBars()}else{loadMyLots();renderAllocBars()}
 }
+// Bind the bottom-nav buttons to fire on touchstart (instant — a tap that
+// lands right after a momentum scroll no longer gets swallowed) with a
+// guarded click fallback for non-touch. The guard stops the synthetic
+// click that follows a touch from switching twice.
+[['bnav-entry','entry'],['bnav-mylots','mylots']].forEach(function(pair){
+  var el=document.getElementById(pair[0]);if(!el)return;
+  var tab=pair[1],lastTouch=0;
+  el.addEventListener('touchstart',function(){lastTouch=Date.now();showTab(tab)},{passive:true});
+  el.addEventListener('click',function(){if(Date.now()-lastTouch<700)return;showTab(tab)});
+});
 
 async function refreshConfig(){
   try{
@@ -1310,7 +1325,23 @@ function resetFormKeepSeller(){
 function resetForm(){selT=null;selectedLots=[];lastSavedLot=null;document.getElementById('le-recent').innerHTML='';document.getElementById('le-name').value='';document.getElementById('le-grade').value='1';document.getElementById('le-bags').value='';document.getElementById('le-litre').value=cfgDefaultLitre||'';document.getElementById('le-qty').value='';document.getElementById('le-gross').value='';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';if(document.getElementById('le-moisture'))document.getElementById('le-moisture').value='';var wwgEl=document.getElementById('le-wwg');if(wwgEl)wwgEl.value='';var resEl=document.getElementById('le-reserved-price');if(resEl)resEl.value='';var crEl=document.getElementById('le-crop-receipt');if(crEl)crEl.value='';document.getElementById('le-lot-err').style.display='none';document.getElementById('le-res').style.display='none';document.getElementById('le-tc').style.display='none';document.getElementById('le-bank').style.display='none';document.getElementById('le-bank-form').style.display='none';document.getElementById('le-sw').style.display='block';hideSellerBookings();showLotGrid();renderLotGrid();selectNextAvailableLot();document.getElementById('le-scroll').scrollTop=0}
 
 // ── MY LOTS (by branch) ──
-async function loadMyLots(){if(!aid)return;try{const r=await fetch(B+'/api/lots?auction_id='+aid+'&branch='+encodeURIComponent(br),{headers:ah()});const d=await r.json();allMyLots=d.lots||[];const stats=d.stats||{};document.getElementById('ml-cnt').textContent=stats.lotCount||0;document.getElementById('ml-bags').textContent=stats.totalBags||0;document.getElementById('ml-qty').textContent=(stats.totalQty||0).toFixed(3);document.getElementById('ml-search').value='';renderMyLots(allMyLots)}catch(e){}}
+// A lot is "booked" once it has been allocated to a buyer (buyer code set)
+// or carries a sale price — those are no longer pending entry, so they're
+// hidden from My Lots. Stats are recomputed from the visible (unbooked) set
+// so the counts match what's on screen.
+function _isBooked(l){return (l.buyer!=null&&String(l.buyer).trim()!=='')||Number(l.price)>0}
+async function loadMyLots(){if(!aid)return;try{const r=await fetch(B+'/api/lots?auction_id='+aid+'&branch='+encodeURIComponent(br),{headers:ah()});const d=await r.json();
+  const raw=d.lots||[];
+  const bookedCount=raw.filter(_isBooked).length;
+  allMyLots=raw.filter(l=>!_isBooked(l));
+  const totBags=allMyLots.reduce((s,l)=>s+(parseInt(l.bags,10)||0),0);
+  const totQty=allMyLots.reduce((s,l)=>s+(Number(l.qty)||0),0);
+  document.getElementById('ml-cnt').textContent=allMyLots.length;
+  document.getElementById('ml-bags').textContent=totBags;
+  document.getElementById('ml-qty').textContent=totQty.toFixed(3);
+  var note=document.getElementById('ml-booked-note');
+  if(note){if(bookedCount>0){note.textContent=bookedCount+' booked lot'+(bookedCount===1?'':'s')+' hidden';note.style.display='block'}else{note.style.display='none'}}
+  document.getElementById('ml-search').value='';renderMyLots(allMyLots)}catch(e){}}
 function filterMyLots(q){if(!q||q.length<2){renderMyLots(allMyLots);return}const f=q.toUpperCase();renderMyLots(allMyLots.filter(l=>(l.trader_name||'').toUpperCase().includes(f)))}
 function renderMyLots(lots){const list=document.getElementById('ml-list');if(!lots.length){list.innerHTML='<div class="lot-empty">No lots found</div>';return}
 list.innerHTML=lots.map(l=>{const g=String(l.grade||''),q=Number(l.qty).toFixed(3);const tn=(l.trader_name||'Unknown').replace(/'/g,"\\'");const editBtns=editEnabled?` <button class="ico-btn ed" title="Edit lot" onclick="openEdit(${l.id},'${String(l.lot_no).replace(/'/g,"\\'")}','${tn}','${g.replace(/'/g,"\\'")}',${l.bags},${l.litre},${l.qty},${l.trader_id},${l.bank_id||'null'})">${ICO_EDIT}</button> <button class="ico-btn dl" title="Delete lot" onclick="deleteLot(${l.id},'${String(l.lot_no).replace(/'/g,"\\'")}')">${ICO_DEL}</button>`:'';
@@ -1330,7 +1361,10 @@ if(Number(l.weight_with_gunny)>0) bits.push('w/g '+Number(l.weight_with_gunny).t
 if(bits.length) extraLine='<div class="lot-meta" style="opacity:.85">'+bits.join(' · ')+'</div>';
 return`<div class="lot-card"><div class="lot-hdr"><label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="ml-cb" value="${l.id}" onchange="updateMySelCount()" style="width:16px;height:16px"><span class="lot-num">#${l.lot_no}</span></label><span style="font-size:10px;color:var(--text3)">${l.user_id} · ${l.created_at?l.created_at.split(' ')[1]||'':''}</span></div><div class="lot-row"><div class="lot-name"><span style="color:var(--green);text-decoration:underline;cursor:pointer" onclick="showBankPop(event,'${tn}','${(l.acctnum||'').replace(/'/g,"\\'")}','${(l.ifsc||'').replace(/'/g,"\\'")}','${(l.tel||'').replace(/'/g,"\\'")}','${(l.cr||'').replace(/'/g,"\\'")}')">${l.trader_name}</span></div><div class="lot-actions"><button class="ico-btn pr" onclick="printLot(${l.id})" title="Print receipt">${ICO_PRINT}</button> <button class="ico-btn wa feat-whatsapp" onclick="whatsappLot(${l.id})" title="Send receipt via WhatsApp">${ICO_WA}</button>${editBtns}</div></div><div class="lot-meta">${g} | ${l.bags} bags | ${l.litre} L | <strong>${q} kg</strong> · ${l.ppla||''}</div>${extraLine}</div>`}).join('');updateMySelCount()}
 
-function updateMySelCount(){const checked=document.querySelectorAll('.ml-cb:checked').length;const bar=document.getElementById('ml-actions');const cnt=document.getElementById('ml-sel-count');const hasLots=allMyLots&&allMyLots.length>0;bar.style.display=hasLots?'flex':'none';cnt.textContent=checked>0?checked+' selected':''}
+function updateMySelCount(){const cbs=document.querySelectorAll('.ml-cb');const checked=document.querySelectorAll('.ml-cb:checked').length;const bar=document.getElementById('ml-actions');const cnt=document.getElementById('ml-sel-count');const hasLots=allMyLots&&allMyLots.length>0;bar.style.display=hasLots?'flex':'none';cnt.textContent=checked>0?checked+' selected':'';const sa=document.getElementById('ml-selall-btn');if(sa)sa.textContent=(cbs.length&&checked===cbs.length)?'✕ Clear all':'☑ Select all'}
+// Toggle every checkbox currently rendered (respects the search filter, so
+// "Select all" picks exactly the lots the user can see).
+function toggleSelectAllMyLots(){const cbs=document.querySelectorAll('.ml-cb');if(!cbs.length){toast('No lots to select',true);return}const allChecked=Array.from(cbs).every(cb=>cb.checked);cbs.forEach(cb=>{cb.checked=!allChecked});updateMySelCount()}
 
 async function printSelectedMyLots(){var ids=Array.from(document.querySelectorAll('.ml-cb:checked')).map(cb=>parseInt(cb.value));if(!ids.length){toast('Select lots to print',true);return}printAndClose(B+'/api/lots/print-batch?ids='+ids.join(',')+'&branch='+encodeURIComponent(br)+'&token='+token+'&format='+printFmt())}
 
