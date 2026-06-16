@@ -137,7 +137,11 @@ select:focus{border-color:var(--green)}
 .lot-actions{display:flex;gap:4px;flex-shrink:0}
 .ico-btn{background:var(--bg2);border:1.5px solid var(--border);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s}
 .ico-btn:active{transform:scale(.85)}.ico-btn.ed{color:var(--green);border-color:var(--green)}.ico-btn.dl{color:var(--red);border-color:var(--red)}.ico-btn.pr{color:#2563eb;border-color:#2563eb}
+.ico-btn.wa{color:#25D366;border-color:#25D366}
 .ico-btn svg{width:14px;height:14px}
+/* WhatsApp feature flag — every .feat-whatsapp control stays hidden until
+   the org enables flag_whatsapp (mirrors the desktop data-feat-whatsapp gate). */
+body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
 .lot-empty{text-align:center;padding:40px 16px;color:var(--text3);font-size:13px;font-weight:500}
 .undo-item{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow)}
 .appbar-logo{height:30px;width:30px;object-fit:cover;margin-right:8px;vertical-align:middle;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.15);border:2px solid rgba(255,255,255,.3)}
@@ -411,6 +415,8 @@ select:focus{border-color:var(--green)}
     <div id="ml-actions" style="display:none;margin-bottom:8px;gap:6px;align-items:center;flex-wrap:wrap">
       <button style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,99,235,.2)" onclick="printSelectedMyLots()" title="Print receipts for selected lots">🖨 Print selected</button>
       <button style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,99,235,.2)" onclick="printAllBySellerUser()" title="Print all lots grouped by seller">🖨 Print all by seller</button>
+      <button class="feat-whatsapp" style="background:#25D366;color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,211,102,.28)" onclick="whatsappSelectedMyLots()" title="WhatsApp a receipt to each selected lot's seller">💬 WhatsApp selected</button>
+      <button class="feat-whatsapp" style="background:#25D366;color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(37,211,102,.28)" onclick="whatsappAllBySellerUser()" title="WhatsApp every seller their grouped receipt">💬 WhatsApp by seller</button>
       <button style="background:linear-gradient(135deg,#dc3545,#b91c1c);color:#fff;border:none;border-radius:8px;height:30px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(220,53,69,.2)" onclick="deleteSelectedMyLots()" title="Delete only the lots you have selected">🗑 Delete Selected</button>
       <span style="font-size:11px;color:var(--text3)" id="ml-sel-count"></span>
     </div>
@@ -541,6 +547,24 @@ select:focus{border-color:var(--green)}
   <div class="modal-foot"><button class="btn btn-sm btn-outline" onclick="document.getElementById('cp-modal').classList.remove('show')" style="flex:1">Cancel</button><button class="btn btn-sm" onclick="appChangePassword()" style="flex:2">Change Password</button></div>
 </div></div>
 
+<div class="modal-overlay" id="wa-queue-modal"><div class="modal" style="max-width:380px">
+  <div class="modal-hdr"><h2>Send WhatsApp <span id="wa-q-count" style="font-weight:400;color:var(--text3);font-size:13px"></span></h2></div>
+  <div class="modal-body">
+    <div id="wa-q-status" style="font-size:11px;color:var(--text3);margin-bottom:8px"></div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">To</div>
+      <div id="wa-q-name" style="font-weight:700;font-size:14px;margin:2px 0"></div>
+      <div id="wa-q-phone" style="font-size:12px;color:var(--text2);margin-bottom:6px"></div>
+      <div id="wa-q-pdf" style="font-size:11px;color:var(--text3);display:none">📎 <span></span></div>
+    </div>
+  </div>
+  <div class="modal-foot" style="gap:6px">
+    <button class="btn btn-sm btn-outline" onclick="_waQueueAct('stop')" style="flex:1">Stop</button>
+    <button class="btn btn-sm" onclick="_waQueueAct('skip')" style="flex:1;background:var(--turmeric,#d9a521)">Skip</button>
+    <button class="btn btn-sm" id="wa-q-send" onclick="_waQueueAct('send')" style="flex:2;background:#25D366">Send & Next →</button>
+  </div>
+</div></div>
+
 <div class="toast" id="toast"><span id="t-ico">&#10003;</span> <span id="t-msg"></span></div>
 
 <script>
@@ -555,6 +579,7 @@ let cfgDefaultLitre='';
 const ICO_EDIT='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
 const ICO_DEL='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
 const ICO_PRINT='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg>';
+const ICO_WA='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 3.5A11 11 0 0 0 3.6 17.3L2 22l4.8-1.5A11 11 0 1 0 20.5 3.5zM16.5 14.3c-.3-.2-1.7-.8-2-.9-.3-.1-.5-.2-.7.2s-.8.9-1 1.1c-.2.2-.4.2-.7 0a8 8 0 0 1-2.4-1.5 9 9 0 0 1-1.6-2c-.2-.3 0-.5.1-.7l.5-.5.3-.5a.6.6 0 0 0 0-.5l-.8-2c-.2-.5-.4-.4-.6-.4h-.5c-.2 0-.5 0-.7.4a3.4 3.4 0 0 0-1 2.4c0 1.5 1 2.9 1.2 3.1a11 11 0 0 0 4.5 4 5 5 0 0 0 3 .8c.5-.1 1.7-.7 1.9-1.4.2-.6.2-1.2.1-1.4l-.6-.2z"/></svg>';
 
 function togglePwdVis(id,btn){var inp=document.getElementById(id);if(inp.type==='password'){inp.type='text';btn.textContent='🙈'}else{inp.type='password';btn.textContent='👁'}}
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');var bn=document.getElementById('global-bnav');if(bn){if(id==='s-lots'||id==='s-mylots'){bn.classList.add('visible')}else{bn.classList.remove('visible')}}}
@@ -945,7 +970,7 @@ function editRecentLot(lotId){
   openEdit(l.id,String(l.lot_no),tn,String(l.grade||''),l.bags,l.litre,l.qty,l.trader_id,l.bank_id||null);
 }
 
-function goLots(){document.getElementById('le-title-text').textContent='Trade #'+tno+' — '+br;document.getElementById('le-user').textContent=user;document.getElementById('ml-title-text').textContent='Lots — '+br;document.getElementById('ml-user').textContent=user;document.getElementById('menu-undo').style.display=userRole==='admin'?'block':'none';loadAppLogo();refreshConfig();updUI();resetForm();show('s-lots')}
+function goLots(){document.getElementById('le-title-text').textContent='Trade #'+tno+' — '+br;document.getElementById('le-user').textContent=user;document.getElementById('ml-title-text').textContent='Lots — '+br;document.getElementById('ml-user').textContent=user;document.getElementById('menu-undo').style.display=userRole==='admin'?'block':'none';loadAppLogo();refreshConfig();loadWaFlag();updUI();resetForm();show('s-lots')}
 function updUI(){updProgress()}
 function updProgress(){
   var el=document.getElementById('le-progress');if(!el)return;
@@ -1303,7 +1328,7 @@ if(cfgShowExtraFields){
 // Weight w/ Gunny: always shown when present (independent of the flag).
 if(Number(l.weight_with_gunny)>0) bits.push('w/g '+Number(l.weight_with_gunny).toFixed(3)+' kg');
 if(bits.length) extraLine='<div class="lot-meta" style="opacity:.85">'+bits.join(' · ')+'</div>';
-return`<div class="lot-card"><div class="lot-hdr"><label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="ml-cb" value="${l.id}" onchange="updateMySelCount()" style="width:16px;height:16px"><span class="lot-num">#${l.lot_no}</span></label><span style="font-size:10px;color:var(--text3)">${l.user_id} · ${l.created_at?l.created_at.split(' ')[1]||'':''}</span></div><div class="lot-row"><div class="lot-name"><span style="color:var(--green);text-decoration:underline;cursor:pointer" onclick="showBankPop(event,'${tn}','${(l.acctnum||'').replace(/'/g,"\\'")}','${(l.ifsc||'').replace(/'/g,"\\'")}','${(l.tel||'').replace(/'/g,"\\'")}','${(l.cr||'').replace(/'/g,"\\'")}')">${l.trader_name}</span></div><div class="lot-actions"><button class="ico-btn pr" onclick="printLot(${l.id})" title="Print receipt">${ICO_PRINT}</button>${editBtns}</div></div><div class="lot-meta">${g} | ${l.bags} bags | ${l.litre} L | <strong>${q} kg</strong> · ${l.ppla||''}</div>${extraLine}</div>`}).join('');updateMySelCount()}
+return`<div class="lot-card"><div class="lot-hdr"><label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="ml-cb" value="${l.id}" onchange="updateMySelCount()" style="width:16px;height:16px"><span class="lot-num">#${l.lot_no}</span></label><span style="font-size:10px;color:var(--text3)">${l.user_id} · ${l.created_at?l.created_at.split(' ')[1]||'':''}</span></div><div class="lot-row"><div class="lot-name"><span style="color:var(--green);text-decoration:underline;cursor:pointer" onclick="showBankPop(event,'${tn}','${(l.acctnum||'').replace(/'/g,"\\'")}','${(l.ifsc||'').replace(/'/g,"\\'")}','${(l.tel||'').replace(/'/g,"\\'")}','${(l.cr||'').replace(/'/g,"\\'")}')">${l.trader_name}</span></div><div class="lot-actions"><button class="ico-btn pr" onclick="printLot(${l.id})" title="Print receipt">${ICO_PRINT}</button> <button class="ico-btn wa feat-whatsapp" onclick="whatsappLot(${l.id})" title="Send receipt via WhatsApp">${ICO_WA}</button>${editBtns}</div></div><div class="lot-meta">${g} | ${l.bags} bags | ${l.litre} L | <strong>${q} kg</strong> · ${l.ppla||''}</div>${extraLine}</div>`}).join('');updateMySelCount()}
 
 function updateMySelCount(){const checked=document.querySelectorAll('.ml-cb:checked').length;const bar=document.getElementById('ml-actions');const cnt=document.getElementById('ml-sel-count');const hasLots=allMyLots&&allMyLots.length>0;bar.style.display=hasLots?'flex':'none';cnt.textContent=checked>0?checked+' selected':''}
 
@@ -1315,6 +1340,149 @@ async function printAllBySellerUser(){
 }
 
 function printLot(id){printAndClose(B+'/api/lots/'+id+'/receipt?branch='+encodeURIComponent(br)+'&token='+token+'&format='+printFmt())}
+
+// ── WhatsApp (mobile) ─────────────────────────────────────────
+// Sends the SAME server-rendered receipt PDF the print buttons use, so the
+// slip a seller receives on WhatsApp is byte-for-byte the paper slip. Each
+// send tries, in order: (1) Cloud API auto-send when configured + reachable,
+// (2) native Web Share with the PDF attached (the natural phone flow — the
+// share sheet lets the user pick WhatsApp and the file rides along),
+// (3) download the PDF + open wa.me with the message pre-filled. All WhatsApp
+// UI is gated behind the flag_whatsapp feature flag (data-feat-whatsapp).
+var _waCfg=null;            // cached /api/company-settings/flat
+var _waApi=null;           // cached Cloud-API-configured boolean
+function _waOn(v){return v===true||v==='true'||v==='1'||v===1}
+// Pull the feature flag + company identity once per session and flip the
+// body attribute the .feat-whatsapp CSS keys off. Safe to call repeatedly.
+async function loadWaFlag(){
+  try{const r=await fetch(B+'/api/company-settings/flat',{headers:ah()});_waCfg=r.ok?await r.json():{}}catch(_){_waCfg={}}
+  document.body.setAttribute('data-feat-whatsapp',_waOn(_waCfg.flag_whatsapp)?'1':'0');
+}
+function _waCompany(){var c=_waCfg||{};return String(c.trade_name||c.short_name||c.tally_company_name||c.legal_name||appTitle||'Company').toUpperCase()}
+function _waNorm(tel){var d=String(tel||'').replace(/\D/g,'');if(!d)return'';return d.length===10?'91'+d:d}
+function _waIsMobile(){if(navigator.userAgentData&&typeof navigator.userAgentData.mobile==='boolean')return navigator.userAgentData.mobile;return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'')}
+async function _waFetchPdf(url){
+  const r=await fetch(url,{headers:ah()});
+  if(!r.ok){let m='Could not build receipt';try{const e=await r.json();if(e.error)m=e.error}catch(_){}throw new Error(m)}
+  return r.blob();
+}
+// Is the server-side Cloud API configured AND reachable for this user?
+// Field-staff tokens may lack 'view' (→ 403 here); that just routes us to
+// the manual share flow, which is the better phone UX anyway.
+async function _waApiAvail(){
+  if(_waApi!==null)return _waApi;
+  try{const r=await fetch(B+'/api/whatsapp/status',{headers:ah()});if(!r.ok){_waApi=false;return false}const d=await r.json().catch(()=>({}));_waApi=!!d.configured}catch(_){_waApi=false}
+  return _waApi;
+}
+// Cloud API document send. Returns true on success; false on any non-OK
+// (501 not-configured / 403 no-permission / 400 no-template) so the caller
+// falls back to the manual share flow.
+async function _waCloudDoc(phone,params,blob,filename){
+  try{
+    const fd=new FormData();
+    fd.append('file',blob,filename);
+    fd.append('phone',phone||'');
+    fd.append('params',JSON.stringify(params||[]));
+    fd.append('filename',filename||'receipt.pdf');
+    const r=await fetch(B+'/api/whatsapp/send-template-document',{method:'POST',headers:{'Authorization':'Bearer '+token},body:fd});
+    return r.ok;
+  }catch(_){return false}
+}
+// Manual flow: native share (PDF attached) on phones, else download + wa.me.
+// Returns true unless the user cancelled the share sheet.
+async function _waShareDoc(blob,filename,phone,message){
+  const file=new File([blob],filename,{type:'application/pdf'});
+  if(_waIsMobile()&&navigator.canShare&&navigator.canShare({files:[file]})){
+    try{await navigator.share({files:[file],text:message,title:filename});return true}
+    catch(e){if(e&&e.name==='AbortError')return false}
+  }
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  const wp=_waNorm(phone);
+  window.open(wp?('https://wa.me/'+wp+'?text='+encodeURIComponent(message)):('https://wa.me/?text='+encodeURIComponent(message)),'_blank');
+  toast('PDF downloaded — attach it in WhatsApp',false);
+  return true;
+}
+// One send: Cloud API first (needs a phone to route), else manual share.
+async function _waSendReceipt(it){
+  const blob=it.blob||await _waFetchPdf(it.url);
+  if(it.phone&&await _waApiAvail()){
+    const ok=await _waCloudDoc(_waNorm(it.phone),it.params,blob,it.filename);
+    if(ok){toast('WhatsApp sent (+'+_waNorm(it.phone)+')',false);return true}
+  }
+  return _waShareDoc(blob,it.filename,it.phone,it.message);
+}
+
+// Single lot → its seller. Mirrors the row's print button (one lot).
+async function whatsappLot(id){
+  const l=(allMyLots||[]).find(x=>x.id===id);
+  if(!l){toast('Lot not found',true);return}
+  try{
+    const company=_waCompany();
+    const summary='your Lot #'+l.lot_no+' receipt ('+(l.trader_name||'')+') is attached.';
+    const msg=(company+' — Lot #'+l.lot_no+' receipt for '+(l.trader_name||'')).trim();
+    await _waSendReceipt({
+      url:B+'/api/lots/'+id+'/receipt?branch='+encodeURIComponent(br)+'&format='+printFmt(),
+      filename:'Lot_'+l.lot_no+'_Receipt.pdf',
+      phone:l.tel,message:msg,params:[l.trader_name||'',summary,company],
+    });
+  }catch(e){toast(e.message||'WhatsApp failed',true)}
+}
+
+// ── Bulk queue ────────────────────────────────────────────────
+// One message per seller (same grouping as the printed slip). Cloud API
+// auto-advances; manual mode waits for the user to tap "Send & Next" so the
+// share sheet fires from a fresh user gesture each time.
+var _waQueueState=null;
+function _waQueueAct(a){if(_waQueueState&&_waQueueState.resolve)_waQueueState.resolve(a)}
+// Build queue items (one per seller) from a list of lot rows.
+function _waGroupBySeller(lots){
+  const groups={};
+  for(const l of lots){const k=l.trader_id||('u_'+(l.trader_name||'unknown'));(groups[k]||(groups[k]=[])).push(l)}
+  const company=_waCompany();
+  return Object.values(groups).map(g=>{
+    const first=g[0];
+    const bags=g.reduce((s,l)=>s+(parseInt(l.bags,10)||0),0);
+    const ids=g.map(l=>l.id).join(',');
+    const summary='your receipt — '+g.length+' lot'+(g.length===1?'':'s')+', '+bags+' bag — is attached.';
+    return {
+      name:first.trader_name||'Seller',phone:first.tel,
+      url:B+'/api/lots/print-batch?ids='+ids+'&branch='+encodeURIComponent(br)+'&format='+printFmt(),
+      filename:'Receipt_'+String(first.trader_name||'seller').replace(/[^\w]+/g,'_').slice(0,40)+'.pdf',
+      message:(company+' — receipt for '+(first.trader_name||'')).trim(),
+      params:[first.trader_name||'',summary,company],
+    };
+  });
+}
+async function _waRunQueue(items){
+  if(!items.length){toast('Nothing to send',true);return}
+  const useApi=await _waApiAvail();
+  const m=document.getElementById('wa-queue-modal');m.classList.add('show');
+  let sent=0,skipped=0;
+  for(let i=0;i<items.length;i++){
+    const it=items[i];
+    document.getElementById('wa-q-count').textContent='('+(i+1)+' of '+items.length+')';
+    document.getElementById('wa-q-name').textContent=it.name||'—';
+    document.getElementById('wa-q-phone').textContent=it.phone?('+'+_waNorm(it.phone)):'(no phone on file)';
+    const pdfRow=document.getElementById('wa-q-pdf');pdfRow.style.display='block';pdfRow.querySelector('span').textContent=it.filename;
+    document.getElementById('wa-q-status').textContent=useApi?'Cloud API — auto-send enabled':'Tap "Send & Next" to open WhatsApp for this seller';
+    const action=await new Promise(res=>{_waQueueState={resolve:res}});
+    if(action==='stop')break;
+    if(action==='skip'){skipped++;continue}
+    try{await _waSendReceipt(it);sent++}catch(e){toast(e.message||'Send failed',true)}
+  }
+  m.classList.remove('show');
+  toast('WhatsApp done — sent '+sent+', skipped '+skipped,false);
+}
+async function whatsappSelectedMyLots(){
+  const ids=Array.from(document.querySelectorAll('.ml-cb:checked')).map(cb=>parseInt(cb.value));
+  if(!ids.length){toast('Select lots first',true);return}
+  const lots=(allMyLots||[]).filter(l=>ids.indexOf(l.id)>=0);
+  await _waRunQueue(_waGroupBySeller(lots));
+}
+async function whatsappAllBySellerUser(){
+  if(!allMyLots||!allMyLots.length){toast('No lots to send',true);return}
+  await _waRunQueue(_waGroupBySeller(allMyLots));
+}
 
 var editBanks=[],editTraderId=null;
 var editLotBankId=null;
