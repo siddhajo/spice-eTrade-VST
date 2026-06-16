@@ -410,7 +410,6 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
       <div class="lot-stat"><div class="val" id="ml-bags">0</div><div class="lbl">Bags</div></div>
       <div class="lot-stat"><div class="val" id="ml-qty">0</div><div class="lbl">Kg</div></div>
     </div>
-    <div id="ml-booked-note" style="display:none;font-size:10.5px;color:var(--text3);text-align:center;padding:2px 8px 4px"></div>
     <div class="lot-search"><div class="sx">
       <span class="sx-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
       <input type="search" id="ml-search" placeholder="Search seller name..." oninput="filterMyLots(this.value)">
@@ -865,6 +864,11 @@ function renderLotGrid(){
   myBranch.ranges.forEach(function(rng){
     if(rng.lots){
       rng.lots.forEach(function(l){
+        // Booked lots (a buyer's bid has landed — amount>0) are finalised and
+        // can't be entered against, so hide them entirely. The grid then shows
+        // only free lots (clickable) + allocated ones (greyed, your own
+        // in-progress entries that aren't sold yet).
+        if(l.booked)return;
         var cls='lot-chip';
         if(l.used)cls+=' used';
         else{availableLots.push(l.lot);if(selectedLots.indexOf(l.lot)>=0)cls+=' selected'}
@@ -1325,23 +1329,7 @@ function resetFormKeepSeller(){
 function resetForm(){selT=null;selectedLots=[];lastSavedLot=null;document.getElementById('le-recent').innerHTML='';document.getElementById('le-name').value='';document.getElementById('le-grade').value='1';document.getElementById('le-bags').value='';document.getElementById('le-litre').value=cfgDefaultLitre||'';document.getElementById('le-qty').value='';document.getElementById('le-gross').value='';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';if(document.getElementById('le-moisture'))document.getElementById('le-moisture').value='';var wwgEl=document.getElementById('le-wwg');if(wwgEl)wwgEl.value='';var resEl=document.getElementById('le-reserved-price');if(resEl)resEl.value='';var crEl=document.getElementById('le-crop-receipt');if(crEl)crEl.value='';document.getElementById('le-lot-err').style.display='none';document.getElementById('le-res').style.display='none';document.getElementById('le-tc').style.display='none';document.getElementById('le-bank').style.display='none';document.getElementById('le-bank-form').style.display='none';document.getElementById('le-sw').style.display='block';hideSellerBookings();showLotGrid();renderLotGrid();selectNextAvailableLot();document.getElementById('le-scroll').scrollTop=0}
 
 // ── MY LOTS (by branch) ──
-// A lot is "booked" once it has been allocated to a buyer (buyer code set)
-// or carries a sale price — those are no longer pending entry, so they're
-// hidden from My Lots. Stats are recomputed from the visible (unbooked) set
-// so the counts match what's on screen.
-function _isBooked(l){return (l.buyer!=null&&String(l.buyer).trim()!=='')||Number(l.price)>0}
-async function loadMyLots(){if(!aid)return;try{const r=await fetch(B+'/api/lots?auction_id='+aid+'&branch='+encodeURIComponent(br),{headers:ah()});const d=await r.json();
-  const raw=d.lots||[];
-  const bookedCount=raw.filter(_isBooked).length;
-  allMyLots=raw.filter(l=>!_isBooked(l));
-  const totBags=allMyLots.reduce((s,l)=>s+(parseInt(l.bags,10)||0),0);
-  const totQty=allMyLots.reduce((s,l)=>s+(Number(l.qty)||0),0);
-  document.getElementById('ml-cnt').textContent=allMyLots.length;
-  document.getElementById('ml-bags').textContent=totBags;
-  document.getElementById('ml-qty').textContent=totQty.toFixed(3);
-  var note=document.getElementById('ml-booked-note');
-  if(note){if(bookedCount>0){note.textContent=bookedCount+' booked lot'+(bookedCount===1?'':'s')+' hidden';note.style.display='block'}else{note.style.display='none'}}
-  document.getElementById('ml-search').value='';renderMyLots(allMyLots)}catch(e){}}
+async function loadMyLots(){if(!aid)return;try{const r=await fetch(B+'/api/lots?auction_id='+aid+'&branch='+encodeURIComponent(br),{headers:ah()});const d=await r.json();allMyLots=d.lots||[];const stats=d.stats||{};document.getElementById('ml-cnt').textContent=stats.lotCount||0;document.getElementById('ml-bags').textContent=stats.totalBags||0;document.getElementById('ml-qty').textContent=(stats.totalQty||0).toFixed(3);document.getElementById('ml-search').value='';renderMyLots(allMyLots)}catch(e){}}
 function filterMyLots(q){if(!q||q.length<2){renderMyLots(allMyLots);return}const f=q.toUpperCase();renderMyLots(allMyLots.filter(l=>(l.trader_name||'').toUpperCase().includes(f)))}
 function renderMyLots(lots){const list=document.getElementById('ml-list');if(!lots.length){list.innerHTML='<div class="lot-empty">No lots found</div>';return}
 list.innerHTML=lots.map(l=>{const g=String(l.grade||''),q=Number(l.qty).toFixed(3);const tn=(l.trader_name||'Unknown').replace(/'/g,"\\'");const editBtns=editEnabled?` <button class="ico-btn ed" title="Edit lot" onclick="openEdit(${l.id},'${String(l.lot_no).replace(/'/g,"\\'")}','${tn}','${g.replace(/'/g,"\\'")}',${l.bags},${l.litre},${l.qty},${l.trader_id},${l.bank_id||'null'})">${ICO_EDIT}</button> <button class="ico-btn dl" title="Delete lot" onclick="deleteLot(${l.id},'${String(l.lot_no).replace(/'/g,"\\'")}')">${ICO_DEL}</button>`:'';
