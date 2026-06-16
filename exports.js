@@ -323,12 +323,13 @@ async function exportPriceListBefore(db, auctionId) {
   });
 }
 
-// ── Export Type 4: Bank Payment (RTGS/NEFT — bank-import format) ─
-// Bare 13-column sheet (no brand band, no totals) matching the bank's
+// ── Export Type 4: Bank Payment (IFT/NEFT/RTGS — bank-import format) ─
+// Bare 12-column sheet (no brand band, no totals) matching the bank's
 // upload template:
-//   TRANSACT_A | MESSAGETYP | DEBITACCOU | PAYMENTAMO | TRANSACT_B |
-//   VALUEDATE  | BENEFICI_A | BENEFIARYN | BENEFIARYB | BENEFIARYE |
-//   BENEFICI_B | REMARKS    | CLIENTCODE
+//   Transaction Type | Debit Account Number | Transaction Amount |
+//   Value Date | Beneficiary Account Number | Beneficiary Name |
+//   IFSC Code | Beneficiary Email ID | Beneficiary ID | Credit Remarks |
+//   Debit Remarks | Unique Customer Reference Number
 // Header on row 1, data from row 2. Bank software auto-ingests this
 // shape — adding a brand band would break the import.
 async function exportBankPayment(db, auctionId, cfg, _state, opts) {
@@ -440,12 +441,20 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
     payments = payments.filter(p => Number(p.amount) > 0);
   }
 
-  // Sender-side context (state-aware): debit account, IFSC for BT/LBT
-  // detection, and the email used in BENEFIARYE.
+  return buildBankPaymentSheet(db, auctionId, cfg, payments);
+}
+
+// Shared sheet builder for both Bank Payment variants (after-discount and
+// before-discount). Takes the already-computed `payments` rows and emits the
+// bank's 12-column upload template. Transaction Type / amount are derived
+// per-row, so the caller only has to decide which amount (balance vs puramt)
+// getBankPaymentData put on each `p.amount`.
+function buildBankPaymentSheet(db, auctionId, cfg, payments) {
+  // Sender-side context (state-aware): debit account + IFSC. The IFSC
+  // bank prefix decides IFT (same bank) vs NEFT/RTGS (other banks).
   const isKL = String(cfg.business_state || cfg.state || '').toUpperCase().includes('KERALA');
   const senderAcct  = (isKL ? cfg.bank_kl_acct  : cfg.bank_tn_acct)  || cfg.bank_tn_acct  || cfg.bank_kl_acct  || '';
   const senderIfsc  = (isKL ? cfg.bank_kl_ifsc  : cfg.bank_tn_ifsc)  || cfg.bank_tn_ifsc  || cfg.bank_kl_ifsc  || '';
-  const senderEmail = (isKL ? cfg.kl_email      : cfg.tn_email)      || cfg.tn_email      || cfg.kl_email      || '';
   const senderBankPrefix = String(senderIfsc).slice(0, 4).toUpperCase();
 
   // Auction context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
@@ -457,54 +466,59 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
     const amount = Number(p.amount) || 0;
     const beneIfsc = String(p.ifsc || '').toUpperCase();
     const benePrefix = beneIfsc.slice(0, 4);
-    // BT  = book transfer (same bank as sender)
-    // LBT = local bank transfer (different bank, RTGS/NEFT routed)
-    const transactA = (senderBankPrefix && benePrefix === senderBankPrefix) ? 'BT' : 'LBT';
+    // Transaction Type — single column collapsing the old BT/LBT + NEFT/RTGS pair:
+    //   IFT  = internal funds transfer (beneficiary is in the SAME bank as the
+    //          debit account, matched on the 4-char IFSC bank prefix)
+    //   RTGS = different bank, amount >= ₹2L
+    //   NEFT = different bank, amount  < ₹2L
+    const sameBank = senderBankPrefix && benePrefix === senderBankPrefix;
+    const transactionType = sameBank
+      ? 'IFT'
+      : (amount >= 200000 ? 'RTGS' : 'NEFT');
     return {
-      TRANSACT_A:  transactA,
-      MESSAGETYP:  p.transactionType || 'RTGS',
-      DEBITACCOU:  senderAcct,
-      PAYMENTAMO:  amount,
-      TRANSACT_B:  'INR',
-      VALUEDATE:   valueDate,
-      BENEFICI_A:  p.accountNo || '',
-      BENEFIARYN:  String(p.beneficiaryName || '').toUpperCase(),
-      BENEFIARYB:  beneIfsc,
-      BENEFIARYE:  senderEmail,
-      BENEFICI_B:  '',
-      // Pipe-delimited REMARKS: ano | seller | beneficiary | payment | lots
-      //   10 | ALUMKAL SPICES | VANDANMEDU SPICES TRADING LLP | PAYMENT 1388677.00 Credited | For lots 004,012,082,152
+      TRANS_TYPE:  transactionType,
+      DEBIT_ACCT:  senderAcct,
+      AMOUNT:      amount,
+      VALUE_DATE:  valueDate,
+      BENE_ACCT:   p.accountNo || '',
+      BENE_NAME:   String(p.beneficiaryName || '').toUpperCase(),
+      BENE_IFSC:   beneIfsc,
+      BENE_EMAIL:  '',
+      BENE_ID:     '',
+      // Pipe-delimited Credit Remarks: ano | seller | beneficiary | payment | lots
+      //   11 | ALUMKAL SPICES | VANDANMEDU SPICES TRADING LLP | PAYMENT 1388677.00 Credited | For lots 004,012,082,152
       // Seller name (p.name) and beneficiary/account-holder (p.beneficiaryName)
       // are BOTH shown even when identical, so the column layout is fixed.
       // The lots segment is dropped when the row covers no lots.
-      REMARKS:     [
+      CREDIT_REM:  [
         ano,
         String(p.name || '').toUpperCase(),
         String(p.beneficiaryName || '').toUpperCase(),
         `PAYMENT ${amount.toFixed(2)} Credited`,
         p.lots ? `For lot${p.lots.includes(',') ? 's' : ''} ${p.lots}` : '',
       ].filter(Boolean).join(' | '),
-      CLIENTCODE:  '',
+      DEBIT_REM:   '',
+      UCRN:        '',
     };
   });
 
   // Build the sheet directly (bypass createExcelBuffer's brand-band).
+  // Column order/headers mirror the bank's upload template exactly.
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('BANK_PAYMENT');
   const cols = [
-    { key: 'TRANSACT_A',  header: 'TRANSACT_A',  width: 12 },
-    { key: 'MESSAGETYP',  header: 'MESSAGETYP',  width: 12 },
-    { key: 'DEBITACCOU',  header: 'DEBITACCOU',  width: 18 },
-    { key: 'PAYMENTAMO',  header: 'PAYMENTAMO',  width: 14, numFmt: '#,##0.00' },
-    { key: 'TRANSACT_B',  header: 'TRANSACT_B',  width: 10 },
-    { key: 'VALUEDATE',   header: 'VALUEDATE',   width: 12 },
-    { key: 'BENEFICI_A',  header: 'BENEFICI_A',  width: 22 },
-    { key: 'BENEFIARYN',  header: 'BENEFIARYN',  width: 32 },
-    { key: 'BENEFIARYB',  header: 'BENEFIARYB',  width: 16 },
-    { key: 'BENEFIARYE',  header: 'BENEFIARYE',  width: 28 },
-    { key: 'BENEFICI_B',  header: 'BENEFICI_B',  width: 12 },
-    { key: 'REMARKS',     header: 'REMARKS',     width: 60 },
-    { key: 'CLIENTCODE',  header: 'CLIENTCODE',  width: 14 },
+    { key: 'TRANS_TYPE',  header: 'Transaction Type',                 width: 14 },
+    { key: 'DEBIT_ACCT',  header: 'Debit Account Number',             width: 20 },
+    { key: 'AMOUNT',      header: 'Transaction Amount',               width: 16, numFmt: '#,##0.00' },
+    { key: 'VALUE_DATE',  header: 'Value Date',                       width: 12 },
+    { key: 'BENE_ACCT',   header: 'Beneficiary Account Number',       width: 22 },
+    { key: 'BENE_NAME',   header: 'Beneficiary Name',                 width: 34 },
+    { key: 'BENE_IFSC',   header: 'IFSC Code',                        width: 14 },
+    { key: 'BENE_EMAIL',  header: 'Beneficiary Email ID',             width: 24 },
+    { key: 'BENE_ID',     header: 'Beneficiary ID',                   width: 14 },
+    { key: 'CREDIT_REM',  header: 'Credit Remarks',                   width: 70 },
+    { key: 'DEBIT_REM',   header: 'Debit Remarks',                    width: 16 },
+    { key: 'UCRN',        header: 'Unique Customer Reference Number', width: 28 },
   ];
   ws.columns = cols.map(c => ({ key: c.key, width: c.width }));
   cols.forEach((c, i) => {
@@ -520,24 +534,22 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
 }
 
 // ── Export Type 4b: Bank Payment (Before discount) ───────────
-// Same data shape as bank_payment except `amount` is the pre-discount
-// puramt (raw purchase amount before refund/GST). Per the e-Trade spec
-// the Amount + SendertoRcvrInfo columns are omitted from this variant.
-async function exportBankPaymentBefore(db, auctionId, cfg) {
+// Identical 12-column bank-upload layout as bank_payment, except each row's
+// amount is the pre-discount puramt (raw purchase amount before refund/GST)
+// — useful when paying suppliers before the deduction policy is applied.
+// Transaction Type is still re-derived from that amount + IFSC.
+async function exportBankPaymentBefore(db, auctionId, cfg, _state, opts) {
   const { getBankPaymentData } = require('./calculations');
-  const payments = getBankPaymentData(db, auctionId, cfg, { before: true });
-  const cols = [
-    { header: 'TransactionType', key: 'transactionType', width: 16 },
-    { header: 'BeneIFSCode',     key: 'ifsc',            width: 14 },
-    { header: 'BeneAcctNo',      key: 'accountNo',       width: 20 },
-    { header: 'BeneName',        key: 'beneficiaryName', width: 30 },
-    { header: 'BeneAddLine1',    key: 'address1',        width: 30 },
-    { header: 'BeneAddLine2',    key: 'address2',        width: 20 },
-    { header: 'BeneAddLine3',    key: 'pin',             width: 10 },
-  ];
-  return createExcelBuffer('BankPaymentBefore', cols, payments, {
-    db, title: 'Bank Payment (Before)', metaLines: auctionMeta(db, auctionId),
-  });
+  let payments = getBankPaymentData(db, auctionId, cfg, { before: true });
+  // Optional seller-name filter (same semantics as exportBankPayment) — only
+  // the ticked sellers' rows are written when the UI passes opts.names.
+  if (opts && Array.isArray(opts.names) && opts.names.length) {
+    const wanted = new Set(opts.names.map(n => String(n || '').trim().toUpperCase()));
+    payments = payments.filter(p =>
+      wanted.has(String(p.name || '').trim().toUpperCase())
+    );
+  }
+  return buildBankPaymentSheet(db, auctionId, cfg, payments);
 }
 
 // ── Export Type 5: Pooler-wise Register ───────────────────────

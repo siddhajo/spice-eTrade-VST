@@ -310,6 +310,20 @@ function pickReceiptRenderer(fmt) {
     : { render: renderSellerReceipt,        pageSize: [340, 550], compact: false };
 }
 
+// Page size that GROWS with the lot count so a single seller's receipt
+// never overflows onto extra pages. PDFKit auto-adds a fresh page the
+// moment content passes the page height — and because every cell is drawn
+// at an absolute x/y, an overflow shatters the slip into one-cell junk
+// pages. Sizing the page to the content up front is what prevents that.
+// Caps are generous (a seller rarely has this many lots in one trade) but
+// finite so a bad row count can't request a 100-inch page.
+function receiptPageSize(r, lotCount) {
+  const n = Math.max(1, lotCount || 1);
+  return r.compact
+    ? [180, Math.min(200 + n * 12 + 60, 1200)]
+    : [340, Math.min(200 + n * 18 + 90, 2200)];
+}
+
 // ── LOT SELECT — single helper used by every print endpoint ─────
 // Spice-config has denormalised seller fields on the lots row
 // (lots.name, lots.cr, lots.ppla, lots.ppin, lots.tel) so we don't
@@ -1304,7 +1318,7 @@ function mountMobile(app, deps) {
     if (branch) cfg.branch = branch;
     const r = pickReceiptRenderer(req.query.format);
 
-    const doc = new PDFDocument({ size: r.pageSize, margin: r.compact ? 10 : 20 });
+    const doc = new PDFDocument({ size: receiptPageSize(r, 1), margin: r.compact ? 10 : 20 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="Lot_${lot.lot_no}_Receipt.pdf"`);
     doc.pipe(res);
@@ -1321,12 +1335,18 @@ function mountMobile(app, deps) {
       const key = l.trader_id || ('u_' + (l.trader_name || 'unknown'));
       (groups[key] || (groups[key] = [])).push(l);
     }
-    const doc = new PDFDocument({ size: r.pageSize, margin: r.compact ? 10 : 20 });
+    const groupList = Object.values(groups);
+    const margin = r.compact ? 10 : 20;
+    // Size EACH seller's page to its own lot count — different sellers have
+    // different numbers of lots, so one fixed size would overflow the big
+    // ones. The first page is sized in the constructor; every later seller
+    // gets its own sized addPage().
+    const doc = new PDFDocument({ size: receiptPageSize(r, groupList[0].length), margin });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     doc.pipe(res);
-    Object.values(groups).forEach((group, idx) => {
-      if (idx > 0) doc.addPage();
+    groupList.forEach((group, idx) => {
+      if (idx > 0) doc.addPage({ size: receiptPageSize(r, group.length), margin });
       r.render(doc, group, cfg);
     });
     doc.end();
@@ -1377,10 +1397,7 @@ function mountMobile(app, deps) {
     const fmt = (req.query && req.query.format) || (req.body && req.body.format);
     const r = pickReceiptRenderer(fmt);
     // Auto-grow page for long seller histories
-    const pageSize = r.compact
-      ? [180, Math.min(160 + lots.length * 12 + 60, 700)]
-      : [340, Math.min(200 + lots.length * 18 + 80, 800)];
-    const doc = new PDFDocument({ size: pageSize, margin: r.compact ? 10 : 20 });
+    const doc = new PDFDocument({ size: receiptPageSize(r, lots.length), margin: r.compact ? 10 : 20 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition',
       `inline; filename="Seller_${(lots[0].trader_name || 'Receipt').replace(/[^A-Za-z0-9]+/g,'_')}.pdf"`);
