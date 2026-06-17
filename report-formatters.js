@@ -165,6 +165,9 @@ function getCompanyIdentity(cfg) {
   const address1  = pick('tn_address1', 'address1', 'address');
   const address2  = pick('tn_address2', 'address2', 'tn_branch', 'branch');
   const gstin     = pick('gstin', 'tn_gstin', 'business_gstin');
+  // MSME / Udyam registration — single company-wide field. Printed
+  // beside the company GSTIN on the Sales Invoice.
+  const msme      = pick('msme');
   const pan       = pick('pan', 'tn_pan', 'business_pan')
                   || (gstin && gstin.length >= 12 ? gstin.slice(2, 12) : '');
   const state     = pick('tn_state', 'business_state', 'state').toUpperCase();
@@ -184,7 +187,7 @@ function getCompanyIdentity(cfg) {
   const idLine = isPartnership
     ? { label: 'Partnership', value: partnershipName, isPartnership: true }
     : { label: 'CIN',         value: cin,             isPartnership: false };
-  return { name, shortName, logoCode, address1, address2, gstin, pan, state, stateCode, cin, idLine };
+  return { name, shortName, logoCode, address1, address2, gstin, msme, pan, state, stateCode, cin, idLine };
 }
 
 // Truncate `text` so doc.widthOfString(out) <= maxWidth, appending an ellipsis

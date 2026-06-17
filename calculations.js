@@ -1149,6 +1149,7 @@ module.exports = {
   listAgriSellers,
   getPaymentSummary,
   getBankPaymentData,
+  lotwisePurchaseTds,
   formatLotList,
   getTDSReturnData,
   getSalesJournal,

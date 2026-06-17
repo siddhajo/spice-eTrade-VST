@@ -2955,6 +2955,26 @@ input[type="search"]:focus{
           Download the entire database as a single <code style="background:var(--bg);padding:1px 5px;border-radius:3px">.db</code> file, or restore from one you saved earlier. A backup captures every auction, lot, invoice, payment, debit note, setting and user — bit-for-bit identical to what's running right now.
         </p>
 
+        <!-- ── Auto Backup (moved here from Settings) ──────────── -->
+        <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
+          <div style="font-weight:700;color:var(--text);font-size:14px;margin-bottom:4px">Auto Backup</div>
+          <div style="font-size:12.5px;color:var(--text3);line-height:1.55;max-width:720px">
+            Periodic snapshot of the database into a local <code style="background:var(--bg);padding:1px 4px;border-radius:3px">backups</code> folder. Set the interval and how many backups to keep — older ones are pruned automatically.
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:end;margin-top:14px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);font-weight:600;cursor:pointer;margin:0">
+              <input type="checkbox" id="bk-auto-enabled" style="width:18px;height:18px;margin:0"> Enable automatic backups
+            </label>
+            <div class="fg" style="margin:0;width:160px"><label>Interval (hours)</label>
+              <input type="text" inputmode="numeric" pattern="[0-9]*" id="bk-interval-hours" placeholder="24">
+            </div>
+            <div class="fg" style="margin:0;width:160px"><label>Keep last N backups</label>
+              <input type="text" inputmode="numeric" pattern="[0-9]*" id="bk-keep-count" placeholder="14">
+            </div>
+            <button class="btn btn-g" onclick="saveBackupConfig()" style="height:40px;padding:0 18px;font-weight:600;flex:0 0 auto">Save Auto Backup</button>
+          </div>
+        </div>
+
         <!-- ── Download ───────────────────────────────────────── -->
         <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
@@ -4418,53 +4438,16 @@ input[type="search"]:focus{
         <h2>Lorry Reports
           <span style="font-weight:400;font-size:12px;color:var(--text3)">Auction-floor reports for the day's trade</span>
         </h2>
-        <div class="fg" style="max-width:360px"><label>Select Trade</label>
-          <select id="lorry-auction" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
-        </div>
-
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-top:14px">
-          <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-              <span style="width:32px;height:32px;border-radius:8px;background:var(--spice-saffron-lt);display:inline-flex;align-items:center;justify-content:center;font-size:18px">📜</span>
-              <div>
-                <div style="font-weight:700;color:var(--text);font-size:14px">Lot Slip (Code)</div>
-                <div style="font-size:11px;color:var(--text3)">Per-lot list with bidder code · carbon-copy in PDF</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;margin-top:10px">
-              <button class="btn btn-a" onclick="downloadLorry('lot_slip_code','xlsx')" style="flex:1;padding:7px;font-size:12px">XLSX</button>
-              <button class="btn btn-orange" onclick="downloadLorry('lot_slip_code','pdf')" style="flex:1;padding:7px;font-size:12px">PDF</button>
-            </div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:end;margin-top:4px">
+          <div class="fg" style="margin:0;flex:1;min-width:240px;max-width:360px"><label>Select Trade</label>
+            <select id="lorry-auction" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#fff"></select>
           </div>
-
-          <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-              <span style="width:32px;height:32px;border-radius:8px;background:var(--spice-saffron-lt);display:inline-flex;align-items:center;justify-content:center;font-size:18px">🚚</span>
-              <div>
-                <div style="font-weight:700;color:var(--text);font-size:14px">Truck List</div>
-                <div style="font-size:11px;color:var(--text3)">Buyer-code summary with totals</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;margin-top:10px">
-              <button class="btn btn-a" onclick="downloadLorry('truck_list','xlsx')" style="flex:1;padding:7px;font-size:12px">XLSX</button>
-              <button class="btn btn-orange" onclick="downloadLorry('truck_list','pdf')" style="flex:1;padding:7px;font-size:12px">PDF</button>
-            </div>
-          </div>
-
-          <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-              <span style="width:32px;height:32px;border-radius:8px;background:var(--spice-saffron-lt);display:inline-flex;align-items:center;justify-content:center;font-size:18px">📋</span>
-              <div>
-                <div style="font-weight:700;color:var(--text);font-size:14px">Buyer Lot Lorry</div>
-                <div style="font-size:11px;color:var(--text3)">Inter/Intra-state grouped buyer detail</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;margin-top:10px">
-              <button class="btn btn-a" onclick="downloadLorry('buyer_lot_lorry','xlsx')" style="flex:1;padding:7px;font-size:12px">XLSX</button>
-              <button class="btn btn-orange" onclick="downloadLorry('buyer_lot_lorry','pdf')" style="flex:1;padding:7px;font-size:12px">PDF</button>
-            </div>
+          <div class="fg" style="margin:0;flex:1;min-width:240px;max-width:360px"><label>Report</label>
+            <select id="lorry-report-select" onchange="lorryRenderButtons()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#fff"></select>
           </div>
         </div>
+        <div id="lorry-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px"></div>
+        <div id="lorry-preview" style="margin-top:14px"></div>
 
         <div style="margin-top:14px;padding:10px 12px;background:var(--spice-saffron-lt);border-radius:8px;font-size:12px;color:var(--text2);line-height:1.5">
           <strong>Note:</strong> All three reports pull live data from the selected auction's lots and the buyers master.
@@ -7810,7 +7793,7 @@ function go(tab){
     // Lazy-load the Delete All audit log when Backup opens so the
     // <details> drawer shows fresh data on first expand (loadDeleteLog
     // is idempotent — re-running it just re-renders the table).
-    backup: () => { if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
+    backup: () => { if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
     // Import Old Data has its own History panel; pre-load on tab open
     // so the operator sees recent imports without clicking the button.
     importold: () => { if (typeof impLoadHistory === 'function') impLoadHistory(); },
@@ -13202,7 +13185,12 @@ function getCurrentLogoCode(){
   return window._cachedLogoCode || '';
 }
 
+// Categories that never appear in the Settings screen. The 'backup'
+// (Auto Backup) config now lives on the Backup screen instead, but the
+// keys still exist in company_settings and are edited there.
+const _ALWAYS_HIDE_CATS = ['backup'];
 function isCategoryHiddenByMode(catKey){
+  if (_ALWAYS_HIDE_CATS.includes(catKey)) return true;
   const m = getCurrentBusinessMode();
   if ((_MODE_HIDE_CATS[m] || []).includes(catKey)) return true;
   // Also check state-based hiding (address_tn / address_kl)
@@ -14229,6 +14217,53 @@ async function exportSettings(){const d=await j('/api/company-settings/export');
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='settings.json';a.click()}
 async function importSettings(e){const f=e.target.files[0];if(!f)return;const t=await f.text();const s=JSON.parse(t);
   await j('/api/company-settings/import',{method:'POST',body:JSON.stringify({settings:s})});toast('Imported');loadSettings();e.target.value=''}
+
+// ── Auto Backup config (moved from Settings) ─────────────────
+// The three keys (backup_auto_enabled / backup_interval_hours /
+// backup_keep_count) still live in company_settings under the 'backup'
+// category — that category is just hidden from the Settings screen
+// (see _ALWAYS_HIDE_CATS) and edited here instead. Reads/writes go
+// through the same /api/company-settings endpoint.
+async function loadBackupConfig(){
+  try{
+    const d = await j('/api/company-settings');
+    const rows = (d && d.settings && d.settings.backup) || [];
+    const get = (k) => { const f = rows.find(x => x.key === k); return f ? f.value : ''; };
+    const en  = document.getElementById('bk-auto-enabled');
+    const iv  = document.getElementById('bk-interval-hours');
+    const kc  = document.getElementById('bk-keep-count');
+    if (en) en.checked = String(get('backup_auto_enabled')).toLowerCase() === 'true';
+    if (iv) iv.value = get('backup_interval_hours') || '';
+    if (kc) kc.value = get('backup_keep_count') || '';
+  }catch(e){ console.warn('loadBackupConfig failed:', e); }
+}
+async function saveBackupConfig(){
+  const en = document.getElementById('bk-auto-enabled');
+  const iv = document.getElementById('bk-interval-hours');
+  const kc = document.getElementById('bk-keep-count');
+  // Clamp to the same minimums the server scheduler enforces (interval ≥ 1h,
+  // keep ≥ 1) so a blank/zero entry doesn't disable pruning or hammer the disk.
+  const interval = Math.max(1, parseInt(iv && iv.value, 10) || 24);
+  const keep     = Math.max(1, parseInt(kc && kc.value, 10) || 14);
+  const settings = {
+    backup_auto_enabled: en && en.checked ? 'true' : 'false',
+    backup_interval_hours: String(interval),
+    backup_keep_count: String(keep),
+  };
+  try{
+    await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings})});
+    // Reflect any clamping back into the inputs and keep _sdata (if loaded)
+    // in sync so a later full Settings save doesn't stomp these values.
+    if (iv) iv.value = String(interval);
+    if (kc) kc.value = String(keep);
+    if (typeof updateSdataField === 'function') {
+      updateSdataField('backup_auto_enabled', settings.backup_auto_enabled);
+      updateSdataField('backup_interval_hours', settings.backup_interval_hours);
+      updateSdataField('backup_keep_count', settings.backup_keep_count);
+    }
+    toast('Auto backup settings saved');
+  }catch(e){ showError(e); }
+}
 
 // ── Database backup & restore (admin-only) ───────────────────
 // downloadDbBackup hits a streaming GET endpoint — we open it via a
@@ -16411,9 +16446,63 @@ async function expUpdatePriceGate(){
 
 // ── Lorry Reports ─────────────────────────────────────────
 function loadLorryAuctions(){
-  fillAucSelect('lorry-auction');
+  fillAucSelect('lorry-auction').then(()=>{ renderLorryReportOptions(); });
 }
 const LORRY_LABELS={lot_slip_code:'Lot Slip (Code)',truck_list:'Truck List',buyer_lot_lorry:'Buyer Lot Lorry'};
+// Populate the Lorry report dropdown from LORRY_LABELS, then render the
+// action buttons for the first report. Mirrors the Exports screen pattern.
+function renderLorryReportOptions(){
+  const sel=document.getElementById('lorry-report-select');
+  if(!sel) return;
+  sel.innerHTML=Object.keys(LORRY_LABELS).map(k=>`<option value="${k}">${esc(LORRY_LABELS[k])}</option>`).join('');
+  lorryRenderButtons();
+}
+// Render Preview / Excel / PDF / Print buttons for the selected report.
+// All three lorry reports support every action (XLSX + PDF download,
+// and PDF-based preview/print), so the button set is fixed.
+function lorryRenderButtons(){
+  const host=document.getElementById('lorry-actions');
+  if(!host) return;
+  const b=(cls,label,act)=>`<button class="btn ${cls}" onclick="lorryPanelAction('${act}')" style="min-width:84px">${label}</button>`;
+  host.innerHTML = b('btn-a','Preview','preview')+b('btn-a','Excel','xlsx')+b('btn-a','PDF','pdf')+b('btn-o','Print','print');
+  const pv=document.getElementById('lorry-preview'); if(pv) pv.innerHTML='';
+}
+// Run a Lorry panel action. Excel/PDF download via downloadLorry();
+// Preview renders the report's PDF inline in an <iframe>; Print loads
+// that PDF in a hidden iframe and fires the browser print dialog.
+async function lorryPanelAction(action){
+  const sel=document.getElementById('lorry-report-select');
+  if(!sel) return;
+  const type=sel.value;
+  const aid=document.getElementById('lorry-auction')?.value;
+  if(!aid){alert('Select a trade first');return}
+  if(action==='xlsx'||action==='pdf'){ return downloadLorry(type,action); }
+  const pv=document.getElementById('lorry-preview');
+  const label=LORRY_LABELS[type]||type;
+  await withOverlay(`Preparing ${label}…`, async () => {
+    const r=await fetch(B+`/api/lorry-reports/${type}/${aid}?format=pdf`,{headers:{'Authorization':'Bearer '+T}});
+    if(!r.ok){
+      const e=await r.json().catch(()=>({}));
+      alert(`Could not ${action} ${label}: ${e.error||('HTTP '+r.status)}`);
+      return;
+    }
+    const url=URL.createObjectURL(await r.blob());
+    if(action==='preview'){
+      if(pv) pv.innerHTML=
+        `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+           <span style="font-size:12px;color:var(--text2)">Preview · ${esc(label)}</span>
+           <a href="${url}" target="_blank" rel="noopener" style="font-size:12px;color:var(--green)">Open in new tab ↗</a>
+         </div>
+         <iframe src="${url}" style="width:100%;height:640px;border:1px solid var(--border);border-radius:8px;background:#fff"></iframe>`;
+    } else {
+      const f=document.createElement('iframe');
+      f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+      f.src=url;
+      f.onload=()=>{ try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(_){ window.open(url); } };
+      document.body.appendChild(f);
+    }
+  });
+}
 async function downloadLorry(type,format){
   format=format||'xlsx';
   const aid=document.getElementById('lorry-auction')?.value;

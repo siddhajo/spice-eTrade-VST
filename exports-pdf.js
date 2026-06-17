@@ -948,7 +948,7 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
         params.push(...filterNames);
       }
       let prows = db.all(
-        `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
+        `SELECT name as poolername, cr, lot_no as lot, bags as bag, qty, price, amount,
           pqty, prate, puramt, ${discountCol} as discount, ${gstCol} as gst5, balance as payable
          FROM lots WHERE auction_id = ? AND amount > 0${whereExtra}
          ORDER BY state, name`, params);
@@ -979,22 +979,12 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       }
       // gst5 comes straight from the stored `advance` column (already
       // netted in PAYABLE) — display only. Mirrors exportPaymentSummary.
-      // Per-seller TDS (Section 194Q) from the generated purchase invoice(s),
-      // same source as the Payments tab. Attributed to each seller's FIRST
-      // lot row so the per-pooler subtotal + grand total net it out of
-      // PAYABLE (Payable = PurAmt − Discount − GST 5% − TDS).
-      const tdsMap = {};
-      {
-        const tdsRows = db.all(
-          'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
-          [auctionId]);
-        for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
-      }
-      const seenTds = new Set();
+      // TDS is LOT-WISE: rate × this lot's puramt (GSTIN dealers only, gated
+      // by flag_tds_purchase) — same as the Payments tab. Each row carries its
+      // own TDS; PAYABLE = PurAmt − Discount − GST 5% − TDS.
+      const { lotwisePurchaseTds } = require('./calculations');
       for (const r of prows) {
-        const nameKey = String(r.poolername || '').trim().toUpperCase();
-        const tds = seenTds.has(nameKey) ? 0 : (Number(tdsMap[nameKey]) || 0);
-        seenTds.add(nameKey);
+        const tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
         r.tds = tds;
         r.payable = (Number(r.payable) || 0) - tds;
       }
@@ -1009,23 +999,18 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       const discountCol = (mode === 'auction') ? 'advance' : 'refund';
       const gstCol = (mode === 'auction') ? '0' : 'advance';
       const ppRows = db.all(
-        `SELECT state, name as poolername,
+        `SELECT state, name as poolername, MAX(cr) as cr,
                 SUM(pqty) as pqty, SUM(puramt) as puramt,
                 SUM(${discountCol}) as discount, SUM(${gstCol}) as gst5,
                 SUM(balance) as payable
            FROM lots WHERE auction_id = ? AND amount > 0
           GROUP BY state, name ORDER BY state, name`, [auctionId]);
-      // Per-seller TDS (Section 194Q) — one row per seller here, so subtract
-      // their TDS straight off PAYABLE (matches the Payments tab).
-      const tdsMap = {};
-      {
-        const tdsRows = db.all(
-          'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
-          [auctionId]);
-        for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
-      }
+      // Per-seller TDS — LOT-WISE: rate × the seller's total purchase amount
+      // (GSTIN dealers only, gated by flag_tds_purchase). Subtracted off
+      // PAYABLE, matching the Payments tab.
+      const { lotwisePurchaseTds } = require('./calculations');
       for (const r of ppRows) {
-        r.tds = Number(tdsMap[String(r.poolername || '').trim().toUpperCase()]) || 0;
+        r.tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
         r.payable = (Number(r.payable) || 0) - r.tds;
       }
       return ppRows;

@@ -96,6 +96,8 @@ function effectiveCompany(cfg) {
     phone:   isStateKL ? (cfg.kl_phone || cfg.tn_phone || '') : (cfg.tn_phone || ''),
     email:   isStateKL ? (cfg.kl_email || cfg.tn_email || '') : (cfg.tn_email || ''),
     gstin:   isStateKL ? (cfg.kl_gstin || cfg.tn_gstin || '') : (cfg.tn_gstin || ''),
+    // MSME / Udyam registration — single company-wide field (not per-state).
+    msme:    cfg.msme || '',
   };
 }
 
@@ -1129,6 +1131,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   doc.text(addrLine, textX, ty, { width: textW });
   ty += doc.heightOfString(addrLine, { width: textW });
   if (co.gstin) { doc.text(`GSTIN/UIN: ${co.gstin}`, textX, ty, { width: textW }); ty += 10; }
+  if (co.msme)  { doc.text(`MSME/Udyam: ${co.msme}`, textX, ty, { width: textW }); ty += 10; }
   if (co.stateName) { doc.text(`State Name : ${co.stateName}, Code : ${co.stateCode}`, textX, ty, { width: textW }); ty += 10; }
   if (co.idValue) { doc.text(`${co.idLabel}: ${co.idValue}`, textX, ty, { width: textW }); ty += 10; }
   if (co.fssai) { doc.text(`FSSAI No.: ${co.fssai}`, textX, ty, { width: textW }); ty += 10; }

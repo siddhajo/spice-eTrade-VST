@@ -333,7 +333,7 @@ async function exportPriceListBefore(db, auctionId) {
 // Header on row 1, data from row 2. Bank software auto-ingests this
 // shape — adding a brand band would break the import.
 async function exportBankPayment(db, auctionId, cfg, _state, opts) {
-  const { getBankPaymentData, formatLotList } = require('./calculations');
+  const { getBankPaymentData, formatLotList, lotwisePurchaseTds } = require('./calculations');
   let payments = getBankPaymentData(db, auctionId, cfg);
   // Optional seller-name filter — when the user clicks "Export Bank
   // Payment (Selected)" in the Payments tab, only the ticked sellers'
@@ -398,6 +398,7 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       const sub = db.get(
         `SELECT COALESCE(SUM(l.balance),0) AS payable,
                 COALESCE(SUM(l.puramt), 0) AS puramt,
+                MAX(l.cr) AS cr,
                 GROUP_CONCAT(l.lot_no) AS lot_nos,
                 GROUP_CONCAT(DISTINCT l.bank_id) AS bank_ids,
                 COUNT(*) AS lot_count,
@@ -407,8 +408,11 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
             AND (l.paid IS NULL OR l.paid = '')
             AND UPPER(TRIM(l.name)) = ?${extraWhere}`,
         params
-      ) || { payable: 0, puramt: 0, lot_nos: '' };
-      const rawAmount = Number(sub.payable) || 0;
+      ) || { payable: 0, puramt: 0, cr: '', lot_nos: '' };
+      // Net the same lot-wise TDS on the picked subset so this override keeps
+      // the bank amount = Payable (PurAmt − Discount − GST − TDS), matching the
+      // base getBankPaymentData rows.
+      const rawAmount = (Number(sub.payable) || 0) - lotwisePurchaseTds(sub.puramt, sub.cr, cfg);
       const roundedAmount = cfg.flag_round ? Math.round(rawAmount) : rawAmount;
       const isRTGS = roundedAmount >= 200000;
       // If every picked lot points at the same single bank account, route
@@ -725,19 +729,10 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
-  // Per-seller TDS (Section 194Q) from the generated purchase invoice(s) —
-  // same source the Payments tab uses (getPaymentSummary). Keyed by
-  // normalised name. Attributed to the seller's FIRST lot row below so the
-  // per-pooler subtotal and grand total net it out of Payable, matching the
-  // Payments tab (Payable = PurAmt − Discount − GST 5% − TDS).
-  const tdsMap = {};
-  {
-    const tdsRows = db.all(
-      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
-      [auctionId]
-    );
-    for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
-  }
+  // TDS is computed LOT-WISE per row below (rate × that lot's puramt), same as
+  // the Payments tab now does — see lotwisePurchaseTds. (No per-seller
+  // purchases.tds lump on the first row anymore.)
+  const { lotwisePurchaseTds } = require('./calculations');
   // Optional seller-name filter — "Export Payment XLSX (Selected)"
   // limits the rows to the ticked sellers. We push the filter into the
   // SQL with a `name IN (…)` clause so we don't waste the SELECT on rows
@@ -754,7 +749,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     for (const n of filterNames) params.push(n.toUpperCase());
   }
   let rows = db.all(
-    `SELECT name as poolername, lot_no as lot, bags as bag, qty, price, amount,
+    `SELECT name as poolername, cr, lot_no as lot, bags as bag, qty, price, amount,
       pqty, prate, puramt, ${discountCol} as lot_discount, ${gstCol} as lot_gst, balance as payable
      FROM lots WHERE auction_id = ? AND amount > 0${whereExtra}
      ORDER BY state, name`, params
@@ -799,11 +794,10 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     const lotDisc = Number(r.lot_discount) || 0;
     const firstForSeller = !seenSellers.has(r.poolername);
     const manualDisc = firstForSeller ? (Number(debitMap[r.poolername]) || 0) : 0;
-    // Full seller TDS lands on the first lot row; later rows carry 0 so the
-    // per-seller total isn't double-counted.
-    const tds = firstForSeller
-      ? (Number(tdsMap[String(r.poolername || '').trim().toUpperCase()]) || 0)
-      : 0;
+    // TDS is now LOT-WISE: rate × this lot's puramt (GSTIN dealers only,
+    // gated by flag_tds_purchase). Each row carries its own TDS instead of
+    // the whole seller's lump on the first row.
+    const tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
     seenSellers.add(r.poolername);
     const discount = lotDisc + manualDisc;
     return {
@@ -895,6 +889,7 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
   const rows = db.all(
     `SELECT state,
             name           as poolername,
+            MAX(cr)        as cr,
             SUM(pqty)      as pqty,
             SUM(puramt)    as puramt,
             SUM(${discountCol}) as discount,
@@ -905,20 +900,13 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
       GROUP BY state, name
       ORDER BY state, name`, [auctionId]);
 
-  // Per-seller TDS (Section 194Q) from the generated purchase invoice(s) —
-  // same source the Payments tab uses. Each row here is one seller, so we
-  // subtract their TDS straight off PAYABLE (Payable = PurAmt − Discount −
-  // GST 5% − TDS, matching the Payments tab).
-  const tdsMap = {};
-  {
-    const tdsRows = db.all(
-      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
-      [auctionId]
-    );
-    for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
-  }
+  // Per-seller TDS — LOT-WISE: rate × the seller's total purchase amount (no
+  // ₹50L threshold), GSTIN dealers only, gated by flag_tds_purchase. Same as
+  // the Payments tab. Subtracted straight off PAYABLE (Payable = PurAmt −
+  // Discount − GST 5% − TDS).
+  const { lotwisePurchaseTds } = require('./calculations');
   for (const r of rows) {
-    r.tds = Number(tdsMap[String(r.poolername || '').trim().toUpperCase()]) || 0;
+    r.tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
     r.payable = (Number(r.payable) || 0) - r.tds;
   }
 
