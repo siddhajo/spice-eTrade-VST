@@ -9292,6 +9292,7 @@ async function loadFormulas(){
     },
     {
       label: 'Payable to seller (Balance)',
+      note: 'Per-lot balance — before TDS. Section 194Q TDS is a per-seller figure layered on at the Payment summary level (see below), not stored in this lot Balance.',
       formula: `Payable = PurAmt − Discount − ( CGST + SGST + IGST )`,
     },
   ]);
@@ -9384,8 +9385,14 @@ async function loadFormulas(){
       formula: `GST 5% = Σ ( CGST + SGST + IGST )`,
     },
     {
+      label: 'TDS (column on Payments tab)',
+      note: 'Section 194Q TDS taken from the seller\'s generated purchase invoice(s) for this trade — the exact amount deducted there (₹50 lakh FY threshold already applied). Reads 0 until that purchase invoice is generated. Registered (GSTIN) sellers only; URD/agriculturist farmers have no purchase invoice, so TDS is 0.',
+      formula: `TDS = Σ ( purchases.tds for this seller in this trade )`,
+    },
+    {
       label: 'Payable',
-      formula: `Payable = Total PurAmt − Total Discount − GST 5%`,
+      note: 'TDS is netted here at the summary level (it is NOT inside the per-lot Balance above). The Lots modal and payment-statement PDF spread this TDS across lots in proportion to each lot\'s PurAmt.',
+      formula: `Payable = Total PurAmt − Total Discount − GST 5% − TDS`,
     },
   ]);
 
