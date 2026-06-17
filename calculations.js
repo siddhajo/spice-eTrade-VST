@@ -590,6 +590,21 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
+  // Per-seller TDS (Section 194Q), sourced from the seller's generated
+  // purchase invoice(s) for this trade — purchases.tds is the exact amount
+  // deducted there (the 50-lakh FY threshold is already baked in). Keyed by
+  // name (matches lots.name), summed in case a seller spans >1 purchase row.
+  // 0 until the purchase invoice is generated, which is the normal flow
+  // before paying. Payable is netted by this below so it reads
+  // PurAmt − Discount − GST 5% − TDS.
+  const tdsMap = {};
+  {
+    const tdsRows = db.all(
+      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
+      [auctionId]
+    );
+    for (const t of tdsRows) tdsMap[t.name] = Number(t.tds) || 0;
+  }
   // Merge: total_discount per seller = ONE of two sources (never both):
   //
   //   - When debit notes exist for this seller in this trade → DN total
@@ -655,15 +670,17 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       total_sgst: sgst,
       total_igst: igst,
       total_tax: r2live(cgst + sgst + igst),
+      total_tds: Number(tdsMap[s.name]) || 0,
       // Payable: lots.balance was computed BEFORE DNs existed, using
       // lots.refund as the discount. So:
       //   - When DNs exist and equal lot refunds → balance is correct
       //   - When DNs exist and DIFFER from lot refunds (user edited) →
       //     adjust by the delta so payable reflects the current DN
       //   - When no DNs → balance is already correct
-      total_payable: manualDisc > 0
+      // Then subtract TDS so Payable = PurAmt − Discount − GST 5% − TDS.
+      total_payable: r2live((manualDisc > 0
         ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
-        : (Number(s.total_payable) || 0),
+        : (Number(s.total_payable) || 0)) - (Number(tdsMap[s.name]) || 0)),
       // True when this seller's lots point at more than one bank account
       // (or a mix of tagged + untagged). Drives the "multiple banks" badge
       // on the Payments table so the user knows to export each account's
@@ -775,12 +792,25 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
   const roundAmounts = cfg.flag_round;
+  // Per-seller TDS (194Q) from the generated purchase invoice(s). The NEFT
+  // amount in 'after' mode is netted by this so the bank transfer matches
+  // the Payments-tab Payable (PurAmt − Discount − GST 5% − TDS). 'before'
+  // mode pays the pre-deduction puramt, so TDS is not applied there.
+  const tdsMap = {};
+  {
+    const tdsRows = db.all(
+      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
+      [auctionId]
+    );
+    for (const t of tdsRows) tdsMap[t.name] = Number(t.tds) || 0;
+  }
 
   return payments.map(p => {
     // 'before' uses puramt — pre-discount, useful when paying suppliers
     // before the deduction policy is applied. 'after' (default) uses
-    // payable = puramt − discount − GST.
-    const rawAmount = useBefore ? (p.puramt || 0) : (p.payable || 0);
+    // payable = puramt − discount − GST − TDS.
+    const tds = useBefore ? 0 : (Number(tdsMap[p.name]) || 0);
+    const rawAmount = (useBefore ? (p.puramt || 0) : (p.payable || 0)) - tds;
     const amount = roundAmounts ? round0(rawAmount) : rawAmount;
     const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;
     // Per-lot bank routing. Distinct non-null bank_ids tagged on this

@@ -8270,6 +8270,26 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   lotSql += ' ORDER BY CAST(lot_no AS INTEGER), lot_no';
   const lots = db.all(lotSql, lotParams) || [];
   const trader = db.get('SELECT * FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [sellerName]);
+  // Per-seller TDS (194Q) from the generated purchase invoice(s) for this
+  // trade. TDS is a seller-level figure (not per-lot), so we spread it across
+  // the seller's lots in proportion to each lot's puramt — using the seller's
+  // FULL puramt as the denominator so a partial statement (lotIds subset)
+  // still shows a proportionate share. Payable per lot is then balance − its
+  // TDS share, and the column totals back to the true TDS for a full
+  // statement. 0 until the purchase invoice is generated.
+  const tdsRow = db.get(
+    `SELECT SUM(COALESCE(tds,0)) AS tds FROM purchases
+      WHERE auction_id = ? AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?))`,
+    [auctionId, sellerName]
+  );
+  const sellerTds = tdsRow ? (Number(tdsRow.tds) || 0) : 0;
+  const fullPuramtRow = db.get(
+    `SELECT SUM(COALESCE(puramt,0)) AS p FROM lots
+      WHERE auction_id = ? AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?)) AND amount > 0`,
+    [auctionId, sellerName]
+  );
+  const fullPuramt = fullPuramtRow ? (Number(fullPuramtRow.p) || 0) : 0;
+  const tdsRate = fullPuramt > 0 ? sellerTds / fullPuramt : 0;
   const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
   // fmtDate falls through to the module-level helper which honours
@@ -8286,34 +8306,46 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   y += 10;
 
   doc.font('Helvetica').fontSize(10);
-  doc.text(`Seller: ${sellerName}`, PAGE_L, y); doc.text(`Trade: ${auction.ano}`, PAGE_L + 280, y);
+  // Trade / Date sit right-aligned against the right margin (matching the
+  // table edge below); the left-hand Seller / Phone text is width-capped to
+  // stop short of that block so a long seller name can't overrun it. Single
+  // line + ellipsis is a final guard against an extreme name.
+  const RIGHT_W = 130, RIGHT_X = PAGE_R - RIGHT_W, LEFT_W = RIGHT_X - PAGE_L - 12;
+  doc.text(`Seller: ${sellerName}`, PAGE_L, y, { width: LEFT_W, lineBreak: false, ellipsis: true });
+  doc.text(`Trade: ${auction.ano}`, RIGHT_X, y, { width: RIGHT_W, align: 'right' });
   y += 14;
-  doc.text(`Phone: ${trader && trader.tel ? trader.tel : '-'}`, PAGE_L, y);
-  doc.text(`Date: ${fmtDate(auction.date)}`, PAGE_L + 280, y);
+  doc.text(`Phone: ${trader && trader.tel ? trader.tel : '-'}`, PAGE_L, y, { width: LEFT_W, lineBreak: false, ellipsis: true });
+  doc.text(`Date: ${fmtDate(auction.date)}`, RIGHT_X, y, { width: RIGHT_W, align: 'right' });
   y += 18;
 
   // Payment is the planter/purchase side: Qty/Rate/Amount source from
   // pqty / prate / puramt (NOT auction qty/price/amount) so this matches
   // the Payments screen + the per-seller Lots modal.
+  // Re-laid out to fit a TDS column between GST and Payable; widths still
+  // sum to PAGE_W (535) so the header rule and the right margin line up.
   const cols = [
-    { k: 'lot_no', label: 'Lot#',     x: PAGE_L,        w: 60,  align: 'left' },
-    { k: 'pqty',   label: 'Qty',      x: PAGE_L + 60,   w: 70,  align: 'right', fmt: fmtQty },
-    { k: 'rate',   label: 'Rate',     x: PAGE_L + 130,  w: 60,  align: 'right', fmt: fmtAmt },
-    { k: 'puramt', label: 'Amount',   x: PAGE_L + 190,  w: 80,  align: 'right', fmt: fmtAmt },
-    { k: 'refund', label: 'Discount', x: PAGE_L + 270,  w: 75,  align: 'right', fmt: fmtAmt },
-    { k: 'tax',    label: 'GST',      x: PAGE_L + 345,  w: 70,  align: 'right', fmt: fmtAmt },
-    { k: 'balance',label: 'Payable',  x: PAGE_L + 415,  w: 120, align: 'right', fmt: fmtAmt },
+    { k: 'lot_no', label: 'Lot#',     x: PAGE_L,        w: 50,  align: 'left' },
+    { k: 'pqty',   label: 'Qty',      x: PAGE_L + 50,   w: 62,  align: 'right', fmt: fmtQty },
+    { k: 'rate',   label: 'Rate',     x: PAGE_L + 112,  w: 52,  align: 'right', fmt: fmtAmt },
+    { k: 'puramt', label: 'Amount',   x: PAGE_L + 164,  w: 74,  align: 'right', fmt: fmtAmt },
+    { k: 'refund', label: 'Discount', x: PAGE_L + 238,  w: 64,  align: 'right', fmt: fmtAmt },
+    { k: 'tax',    label: 'GST',      x: PAGE_L + 302,  w: 56,  align: 'right', fmt: fmtAmt },
+    { k: 'tds',    label: 'TDS',      x: PAGE_L + 358,  w: 56,  align: 'right', fmt: fmtAmt },
+    { k: 'payable',label: 'Payable',  x: PAGE_L + 414,  w: 121, align: 'right', fmt: fmtAmt },
   ];
   doc.font('Helvetica-Bold').fontSize(9);
   doc.rect(PAGE_L, y, PAGE_W, 18).fillAndStroke('#f3f4f6', '#999').fillColor('#000');
   for (const c of cols) doc.text(c.label, c.x + 2, y + 5, { width: c.w - 4, align: c.align });
   y += 18;
   doc.font('Helvetica').fontSize(9).fillColor('#000');
-  let tQty=0,tAmt=0,tDisc=0,tTax=0,tPay=0;
+  let tQty=0,tAmt=0,tDisc=0,tTax=0,tTds=0,tPay=0;
   for (const l of lots) {
     const tax = (Number(l.cgst)||0)+(Number(l.sgst)||0)+(Number(l.igst)||0);
-    const row = { ...l, tax };
-    tQty+=Number(l.pqty)||0; tAmt+=Number(l.puramt)||0; tDisc+=Number(l.refund)||0; tTax+=tax; tPay+=Number(l.balance)||0;
+    // Proportional TDS share for this lot; Payable = balance − that share.
+    const lotTds = round2((Number(l.puramt)||0) * tdsRate);
+    const payable = (Number(l.balance)||0) - lotTds;
+    const row = { ...l, tax, tds: lotTds, payable };
+    tQty+=Number(l.pqty)||0; tAmt+=Number(l.puramt)||0; tDisc+=Number(l.refund)||0; tTax+=tax; tTds+=lotTds; tPay+=payable;
     if (y > 770) { doc.addPage(); y = 40; }
     for (const c of cols) {
       const v = c.fmt ? c.fmt(row[c.k]) : String(row[c.k] ?? '');
@@ -8325,11 +8357,12 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   doc.font('Helvetica-Bold').fontSize(10);
   doc.rect(PAGE_L, y, PAGE_W, 20).fillAndStroke('#f3f4f6', '#666').fillColor('#000');
   doc.text('TOTAL', PAGE_L + 2, y + 6);
-  doc.text(fmtQty(tQty), PAGE_L + 62, y + 6, { width: 66, align: 'right' });
-  doc.text(fmtAmt(tAmt), PAGE_L + 192, y + 6, { width: 76, align: 'right' });
-  doc.text(fmtAmt(tDisc),PAGE_L + 272, y + 6, { width: 71, align: 'right' });
-  doc.text(fmtAmt(tTax), PAGE_L + 347, y + 6, { width: 66, align: 'right' });
-  doc.text(fmtAmt(tPay), PAGE_L + 417, y + 6, { width: 116,align: 'right' });
+  // Right-align each total under its column (x..x+w), reusing the cols layout.
+  const totByKey = { pqty: fmtQty(tQty), puramt: fmtAmt(tAmt), refund: fmtAmt(tDisc), tax: fmtAmt(tTax), tds: fmtAmt(tTds), payable: fmtAmt(tPay) };
+  for (const c of cols) {
+    if (totByKey[c.k] == null) continue;
+    doc.text(totByKey[c.k], c.x + 2, y + 6, { width: c.w - 4, align: 'right' });
+  }
   y += 30;
   doc.font('Helvetica').fontSize(9).text(`Generated: ${new Date().toLocaleString('en-IN')}`, PAGE_L, y, { width: PAGE_W, align: 'right' });
   return tPay;
