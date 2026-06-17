@@ -7061,6 +7061,13 @@ app.post('/api/debit-notes/generate', requireInvoiceWrite, (req, res) => {
   }
   let discountAmt = req.body.discount != null ? parseFloat(req.body.discount) : NaN;
   if (!Number.isFinite(discountAmt) || discountAmt <= 0) {
+    // "Discount In Payments" master switch (flag_sample) gates auto-computed
+    // discount. When OFF, don't calculate one — the caller can still pass an
+    // explicit amount to record a manual discount.
+    const discountEnabled = String(cfg.flag_sample || '').toLowerCase() === 'true' || cfg.flag_sample === true;
+    if (!discountEnabled) {
+      return res.status(400).json({ error: 'Discount In Payments is turned off — enable it in Settings → Feature Flags, or pass an explicit discount amount.' });
+    }
     const discountPct  = Number(cfg.discount_pct)  || 0;
     // Days source depends on the seller type — same rule the per-lot
     // refund calc uses ([calculations.js calculateLot]):
@@ -7318,6 +7325,12 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
   // comment in /api/debit-notes/generate — relying on the source
   // purchase's stamped GST as a proxy goes stale across flag toggles.
   const flagDiscGst = String(cfg.flag_disc_gst || '').toLowerCase() === 'true' || cfg.flag_disc_gst === true;
+  // "Discount In Payments" master switch (flag_sample). When OFF, bulk
+  // discount Debit Notes are not generated at all.
+  const flagDiscount = String(cfg.flag_sample || '').toLowerCase() === 'true' || cfg.flag_sample === true;
+  if (!flagDiscount) {
+    return res.status(400).json({ error: 'Discount In Payments is turned off — enable it in Settings → Feature Flags to generate discount debit notes.' });
+  }
   if (discountPct <= 0) {
     return res.status(400).json({ error: 'Discount % not configured in settings' });
   }

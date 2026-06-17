@@ -564,7 +564,7 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
   </div>
   <div class="modal-foot" style="gap:6px">
     <button class="btn btn-sm btn-outline" onclick="_waQueueAct('stop')" style="flex:1">Stop</button>
-    <button class="btn btn-sm" onclick="_waQueueAct('skip')" style="flex:1;background:var(--turmeric,#d9a521)">Skip</button>
+    <button class="btn btn-sm" id="wa-q-skip" onclick="_waQueueAct('skip')" style="flex:1;background:var(--turmeric,#d9a521)">Skip</button>
     <button class="btn btn-sm" id="wa-q-send" onclick="_waQueueAct('send')" style="flex:2;background:#25D366">Send & Next →</button>
   </div>
 </div></div>
@@ -1454,8 +1454,8 @@ async function whatsappLot(id){
 // One message per seller (same grouping as the printed slip). Cloud API
 // auto-advances; manual mode waits for the user to tap "Send & Next" so the
 // share sheet fires from a fresh user gesture each time.
-var _waQueueState=null;
-function _waQueueAct(a){if(_waQueueState&&_waQueueState.resolve)_waQueueState.resolve(a)}
+var _waQueueState=null,_waStop=false;
+function _waQueueAct(a){if(a==='stop')_waStop=true;if(_waQueueState&&_waQueueState.resolve)_waQueueState.resolve(a)}
 // Build queue items (one per seller) from a list of lot rows.
 function _waGroupBySeller(lots){
   const groups={};
@@ -1478,22 +1478,49 @@ function _waGroupBySeller(lots){
 async function _waRunQueue(items){
   if(!items.length){toast('Nothing to send',true);return}
   const useApi=await _waApiAvail();
+  _waStop=false;
   const m=document.getElementById('wa-queue-modal');m.classList.add('show');
-  let sent=0,skipped=0;
+  const sendBtn=document.getElementById('wa-q-send');
+  const skipBtn=document.getElementById('wa-q-skip');
+  // Cloud API mode = fully automatic: hide Send/Skip, leave only Stop so the
+  // operator can abort. Manual (no API) mode keeps the per-message gesture
+  // because the browser only allows the share sheet from a real tap.
+  if(sendBtn)sendBtn.style.display=useApi?'none':'';
+  if(skipBtn)skipBtn.style.display=useApi?'none':'';
+  let sent=0,skipped=0,failed=0;
   for(let i=0;i<items.length;i++){
+    if(_waStop)break;
     const it=items[i];
     document.getElementById('wa-q-count').textContent='('+(i+1)+' of '+items.length+')';
     document.getElementById('wa-q-name').textContent=it.name||'—';
     document.getElementById('wa-q-phone').textContent=it.phone?('+'+_waNorm(it.phone)):'(no phone on file)';
     const pdfRow=document.getElementById('wa-q-pdf');pdfRow.style.display='block';pdfRow.querySelector('span').textContent=it.filename;
-    document.getElementById('wa-q-status').textContent=useApi?'Cloud API — auto-send enabled':'Tap "Send & Next" to open WhatsApp for this seller';
-    const action=await new Promise(res=>{_waQueueState={resolve:res}});
-    if(action==='stop')break;
-    if(action==='skip'){skipped++;continue}
-    try{await _waSendReceipt(it);sent++}catch(e){toast(e.message||'Send failed',true)}
+    if(useApi){
+      // Auto-send via Cloud API — no tap. Skip phone-less sellers (can't route).
+      document.getElementById('wa-q-status').textContent='Sending automatically… '+sent+' sent, '+(items.length-i)+' to go';
+      if(!it.phone){skipped++;continue}
+      try{
+        const blob=it.blob||await _waFetchPdf(it.url);
+        const ok=await _waCloudDoc(_waNorm(it.phone),it.params,blob,it.filename);
+        ok?sent++:failed++;
+      }catch(e){failed++}
+    }else{
+      // Manual mode — wait for the operator's "Send & Next" / Skip tap.
+      document.getElementById('wa-q-status').textContent='Tap "Send & Next" to open WhatsApp for this seller';
+      const action=await new Promise(res=>{_waQueueState={resolve:res}});
+      if(action==='stop')break;
+      if(action==='skip'){skipped++;continue}
+      try{await _waSendReceipt(it);sent++}catch(e){toast(e.message||'Send failed',true)}
+    }
   }
+  // Restore the buttons for the next run.
+  if(sendBtn)sendBtn.style.display='';
+  if(skipBtn)skipBtn.style.display='';
   m.classList.remove('show');
-  toast('WhatsApp done — sent '+sent+', skipped '+skipped,false);
+  let msg=(_waStop?'Stopped — ':'WhatsApp done — ')+sent+' message'+(sent===1?'':'s')+' sent';
+  if(skipped)msg+=', '+skipped+' skipped';
+  if(failed)msg+=', '+failed+' failed';
+  toast(msg,failed>0);
 }
 async function whatsappSelectedMyLots(){
   const ids=Array.from(document.querySelectorAll('.ml-cb:checked')).map(cb=>parseInt(cb.value));

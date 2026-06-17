@@ -1053,6 +1053,14 @@ html.sidebar-collapsed .sidebar .sb-collapse-btn svg{transform:rotate(180deg)}
 .icon-btn.i-del:hover{background:var(--red);color:#fff;border-color:var(--red)}
 .icon-btn.i-pdf{color:var(--green);border-color:var(--green-border)}
 .icon-btn.i-pdf:hover{background:var(--green);color:#fff}
+/* ★ mobile-default star — amber outline; filled gold when this trade is the
+   current mobile default so it's obvious at a glance which one field staff get. */
+.icon-btn.i-star{color:#d9a521;border-color:#e7c66b}
+.icon-btn.i-star:hover{background:#fff7e6}
+.icon-btn.i-star.is-default{color:#d9a521}
+.icon-btn.i-star.is-default svg{fill:#f5b301;stroke:#d9a521}
+/* DEFAULT badge next to the starred trade's number. */
+.trade-default-badge{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:1px 7px;border-radius:10px;background:#fef3c7;color:#92400e;font-size:10.5px;font-weight:700;letter-spacing:.3px;vertical-align:middle}
 .icon-btn.i-view{color:var(--blue);border-color:#bfd5ec}
 .icon-btn.i-view:hover{background:var(--blue);color:#fff}
 .icon-btn.i-revert{color:#B45309;border-color:var(--spice-turmeric)}
@@ -6228,7 +6236,10 @@ const ICONS={
   // Allocations icon — a clipboard with bracketed lot ranges. Used on
   // the Auctions tab row actions to open the per-trade lot allocation
   // modal (Edit + Reassign).
-  alloc:'<svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2" ry="2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>'
+  alloc:'<svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2" ry="2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>',
+  // Star — sets a trade as the mobile app's default (the trade field staff
+  // land on). Filled gold when this trade is the current mobile default.
+  star:'<svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
 };
 function iconBtn(kind,title,onclick){
   // Map icon kinds to permission classes so per-row action buttons are
@@ -10171,7 +10182,14 @@ async function leSaveLot(){
       ...(_le.editingLotId && Number.isFinite(cropReceiptNo) && cropReceiptNo > 0
           ? { crop_receipt_no: cropReceiptNo } : {}),
       moisture: moisture,
-      state: _le.selectedSeller.pstate || getDefaultBusinessState(),
+      // lots.state is the BUSINESS context (TAMIL NADU = ISP / KERALA = ASP),
+      // NOT the seller's state — it drives invoice context, not the address.
+      // It must come from the company business state, never the seller's
+      // pstate: imported sellers can carry a no-space "TAMILNADU" (see
+      // data/config-recover.sql), which on an edit was leaking into this
+      // field and silently changing the lot's state from "TAMIL NADU" to
+      // "TAMILNADU". The seller's own state stays in `pstate` below.
+      state: getDefaultBusinessState(),
       // Pull seller's denormalised fields onto the lot row so existing
       // listings (Lots tab, exports) work without a join.
       name: _le.selectedSeller.name || '',
@@ -15424,26 +15442,56 @@ async function loadAuctions(opts){
 
   renderPager('auctions-pager', _auctionsPager, gotoAuctionsPage, query);
 
+  // Which trade is the mobile app's current default? Drives the ★ fill +
+  // the DEFAULT badge. Fetched alongside the list; a failure just leaves
+  // every star un-filled (non-fatal).
+  let mobileDefaultId = null;
+  try {
+    const at = await j('/api/mobile/active-trade');
+    mobileDefaultId = (at && at.trade && at.trade.id) ? Number(at.trade.id) : null;
+  } catch (_) { mobileDefaultId = null; }
+  _mobileDefaultTradeId = mobileDefaultId; // cache for the toggle's optimistic re-render
+
   const d = rows;
   DataTable.mount('auctions-list', d, {
     noSearch: true,
     emptyState: { icon: 'auctions', title: "No auctions yet", body: "Create your first auction (trade) from the Add Auction button to start entering lots." },
     columns: [
       BulkActions.column('trade'),
-      { key:'ano', label:'Trade No', sort:'text', render:(a)=>`<b>${esc(a.ano)}</b>` },
+      { key:'ano', label:'Trade No', sort:'text', render:(a)=>
+          `<b>${esc(a.ano)}</b>${Number(a.id)===mobileDefaultId ? `<span class="trade-default-badge" title="Field staff on the mobile app land on this trade">★ DEFAULT</span>` : ''}` },
       { key:'date', label:'Date', sort:'date', render:(a)=>fmtD(a.date) },
       { key:'crop_type', label:'Type', sort:'text' },
       { key:'lot_count', label:'Lots', sort:'number', numeric:true, render:(a)=>String(a.lot_count||0) },
-      { key:'_actions', label:'Actions', sortable:false, searchable:false, render:(a)=>
+      { key:'_actions', label:'Actions', sortable:false, searchable:false, render:(a)=>{
           // Embed ano as a single-quoted JS string inside the double-quoted
           // HTML onclick. JSON.stringify here produces double quotes that
           // would terminate the onclick attribute — escape any single quote
           // in ano to keep the JS literal valid.
-          iconBtn('alloc','Manage lot allocations & reassign',`openAllocModal(${a.id},'${String(a.ano||'?').replace(/'/g,"\\'")}')`)
+          const isDef = Number(a.id) === mobileDefaultId;
+          const starTitle = isDef ? 'This is the mobile default trade — click to clear' : 'Set as the mobile default trade';
+          const starBtn = `<button class="icon-btn i-star${isDef ? ' is-default' : ''}" title="${starTitle}" onclick="setMobileDefaultTrade(${a.id}, ${isDef})">${ICONS.star}</button>`;
+          return starBtn
+          + iconBtn('alloc','Manage lot allocations & reassign',`openAllocModal(${a.id},'${String(a.ano||'?').replace(/'/g,"\\'")}')`)
           + iconBtn('edit','Edit auction',`openAuctionEdit(${JSON.stringify(a).replace(/"/g,'&quot;')})`)
-          + iconBtn('del','Delete auction',`delAuction(${a.id})`) }
+          + iconBtn('del','Delete auction',`delAuction(${a.id})`); } }
     ]
   });
+}
+// Current mobile-default trade id (cached from the last loadAuctions fetch).
+let _mobileDefaultTradeId = null;
+// Toggle a trade as the mobile app's default. Clicking the ★ on a trade sets
+// it; clicking the filled ★ on the current default clears it (mobile then
+// falls back to its own dropdown). Independent of the desktop topbar selector.
+async function setMobileDefaultTrade(id, isCurrentlyDefault){
+  try {
+    await j('/api/mobile/active-trade', {
+      method: 'PUT',
+      body: JSON.stringify({ trade_id: isCurrentlyDefault ? null : Number(id) }),
+    });
+    toast(isCurrentlyDefault ? 'Cleared mobile default trade' : 'Set as mobile default trade');
+    loadAuctions();
+  } catch (e) { showError(e); }
 }
 
 function openAuctionAdd(){
@@ -15704,23 +15752,11 @@ function setSharedAuctionId(id, source){
   // used to skip echoing the change back to the originator (avoids change-event loops).
   const v = String(id || '');
   try { sessionStorage.setItem('spice.sharedAucId', v); } catch(_){}
-  // Broadcast to the mobile bridge so field staff on phones see the
-  // same trade the desktop operator just picked. Fire-and-forget —
-  // a 403 (user lacks lot_write) is fine, we just won't sync; a
-  // network failure is fine too, the local state still updated.
-  // Skip when v is empty (a logout clear handled elsewhere).
-  if (v && typeof T !== 'undefined' && T) {
-    try {
-      fetch('/api/mobile/active-trade', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + T,
-        },
-        body: JSON.stringify({ trade_id: Number(v) || null }),
-      }).catch(() => {});
-    } catch (_) {}
-  }
+  // NOTE: the global/topbar trade selector deliberately does NOT push to the
+  // mobile bridge. The mobile app's default trade is set explicitly via the
+  // ★ favourite on the Auctions screen (setMobileDefaultTrade), so a desktop
+  // operator flipping the topbar selector to look at another trade can't yank
+  // field staff onto it mid-entry.
   // Update topbar select unless that's where the change came from
   const topbar = document.getElementById('topbar-trade');
   if (topbar && source !== 'topbar' && topbar.value !== v) topbar.value = v;

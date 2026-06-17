@@ -462,6 +462,13 @@ function buildBankPaymentSheet(db, auctionId, cfg, payments) {
   const ano = a.ano || '';
   const valueDate = fmtUserDate(String(a.date || '').slice(0, 10));
 
+  // Buyer = the trading company itself, shown as the 3rd segment of Credit
+  // Remarks (e.g. "VSTL"). Prefer the Praman nickname (the e-Trade company
+  // code), then Short Name, then Trade Name.
+  const buyerLabel = String(
+    cfg.praman_company || cfg.short_name || cfg.trade_name || ''
+  ).toUpperCase();
+
   const rows = payments.map(p => {
     const amount = Number(p.amount) || 0;
     const beneIfsc = String(p.ifsc || '').toUpperCase();
@@ -485,15 +492,15 @@ function buildBankPaymentSheet(db, auctionId, cfg, payments) {
       BENE_IFSC:   beneIfsc,
       BENE_EMAIL:  '',
       BENE_ID:     '',
-      // Pipe-delimited Credit Remarks: ano | seller | beneficiary | payment | lots
-      //   11 | ALUMKAL SPICES | VANDANMEDU SPICES TRADING LLP | PAYMENT 1388677.00 Credited | For lots 004,012,082,152
-      // Seller name (p.name) and beneficiary/account-holder (p.beneficiaryName)
-      // are BOTH shown even when identical, so the column layout is fixed.
+      // Pipe-delimited Credit Remarks: ano | seller | buyer | payment | lots
+      //   12 | ANN MARIA SPICES | VSTL | PAYMENT 1764625.00 Credited | For lots 002,065,103
+      // 2nd segment is the seller being paid (p.name); 3rd is the buyer — the
+      // trading company itself (buyerLabel), NOT a repeat of the seller.
       // The lots segment is dropped when the row covers no lots.
       CREDIT_REM:  [
         ano,
         String(p.name || '').toUpperCase(),
-        String(p.beneficiaryName || '').toUpperCase(),
+        buyerLabel,
         `PAYMENT ${amount.toFixed(2)} Credited`,
         p.lots ? `For lot${p.lots.includes(',') ? 's' : ''} ${p.lots}` : '',
       ].filter(Boolean).join(' | '),

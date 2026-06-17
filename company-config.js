@@ -142,7 +142,12 @@ const DEFAULTS = [
 
   // ── FEATURE FLAGS ──────────────────────────────────────────
   { key: 'flag_pooling',    value: 'false',          category: 'flags',     label: 'Pooling (Single State)',    type: 'boolean' },
-  { key: 'flag_sample',     value: 'false',          category: 'flags',     label: 'Discount in Invoice',      type: 'boolean' },
+  // Master switch for discount calculation. ON ⇒ the per-lot Discount
+  // (lots.refund) and the auto-computed discount Debit Notes are calculated
+  // and flow into the Payments tab. OFF ⇒ no discount is calculated anywhere
+  // (full PurAmt flows to Payable). Read by calculateLot() and the DN
+  // generators. Label shown in Settings → Feature Flags.
+  { key: 'flag_sample',     value: 'false',          category: 'flags',     label: 'Discount In Payments',     type: 'boolean' },
   { key: 'flag_dispatch',   value: 'true',           category: 'flags',     label: 'Show Dispatch Address',    type: 'boolean' },
   { key: 'flag_ship',       value: 'true',           category: 'flags',     label: 'Show Ship To Address',     type: 'boolean' },
   { key: 'flag_hsn',        value: 'true',           category: 'flags',     label: 'Show HSN Codes',           type: 'boolean' },

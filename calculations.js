@@ -162,7 +162,13 @@ function calculateLot(lot, cfg) {
   // Grade 2 / ungraded lots fall through to the normal discount calc
   // even when the flag is ON.
   const sellerHasGstin = sellerGstState !== '';
-  if (applyRollIn) {
+  // "Discount In Payments" master switch (flag_sample). When OFF, no per-lot
+  // discount is calculated — refund and GST-on-discount stay 0 and the full
+  // PurAmt flows through to Payable. When ON, the e-Trade discount formula
+  // below runs (still skipped for Grade-1 roll-in, which bakes it into P_Rate).
+  const discountEnabled = cfg.flag_sample === true
+    || String(cfg.flag_sample || '').toLowerCase() === 'true';
+  if (applyRollIn || !discountEnabled) {
     result.refund = 0;
   } else {
     const days    = sellerHasGstin
