@@ -239,6 +239,28 @@ function calculateTDS(purchaseAmount, priorPurchases, cfg) {
 }
 
 /**
+ * Lot-wise TDS for the PAYMENTS surfaces (summary / lots modal / statement /
+ * bank export). Deliberately FLAT: `rate × purchase amount`, with NO ₹50-lakh
+ * cumulative threshold — so the figure is just the rate on each lot's amount
+ * (per the user's request to show TDS lot-wise rather than the cumulative
+ * Section 194Q value). This intentionally differs from the purchase INVOICE's
+ * TDS (`calculateTDS`, threshold-based) — the invoice stays on 194Q; only the
+ * payment display/transfer uses this.
+ *
+ * Scoped like 194Q to registered (GSTIN-bearing) dealers only — URD /
+ * agriculturist sellers never attract purchase TDS — and gated by the
+ * `flag_tds_purchase` feature flag. Returns rupees, 2-dp.
+ */
+function lotwisePurchaseTds(purchaseAmount, cr, cfg) {
+  const enabled = cfg.flag_tds_purchase === true
+    || String(cfg.flag_tds_purchase || '').toLowerCase() === 'true';
+  if (!enabled) return 0;
+  if (gstinStateCode(cr) === '') return 0; // GSTIN-registered dealers only
+  const rate = Number(cfg.tds_purchase_rate) || Number(cfg.tcs_tds) || 0.1;
+  return round2((Number(purchaseAmount) || 0) * rate / 100);
+}
+
+/**
  * Calculate TCS under Section 206C(1H) — TCS on Sale of Goods.
  * Threshold logic mirrors TDS-on-purchase: TCS applies to amounts in
  * EXCESS of ₹50 lakh per buyer per FY, then to every subsequent rupee.
@@ -609,21 +631,13 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
-  // Per-seller TDS (Section 194Q), sourced from the seller's generated
-  // purchase invoice(s) for this trade — purchases.tds is the exact amount
-  // deducted there (the 50-lakh FY threshold is already baked in). Keyed by
-  // name (matches lots.name), summed in case a seller spans >1 purchase row.
-  // 0 until the purchase invoice is generated, which is the normal flow
-  // before paying. Payable is netted by this below so it reads
-  // PurAmt − Discount − GST 5% − TDS.
-  const tdsMap = {};
-  {
-    const tdsRows = db.all(
-      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
-      [auctionId]
-    );
-    for (const t of tdsRows) tdsMap[t.name] = Number(t.tds) || 0;
-  }
+  // Per-seller TDS — LOT-WISE: a flat rate on the seller's purchase amount
+  // (no ₹50-lakh cumulative threshold), so it reads as "rate × amount" per
+  // lot rather than the threshold-reduced Section 194Q figure. Computed below
+  // per seller via lotwisePurchaseTds(total_puramt, cr) so it doesn't depend
+  // on whether a purchase invoice was generated. Payable is netted by it so
+  // it reads PurAmt − Discount − GST 5% − TDS. (The purchase INVOICE keeps the
+  // 194Q threshold figure — only the Payments surfaces use this lot-wise one.)
   // Merge: total_discount per seller = ONE of two sources (never both):
   //
   //   - When debit notes exist for this seller in this trade → DN total
@@ -689,7 +703,10 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       total_sgst: sgst,
       total_igst: igst,
       total_tax: r2live(cgst + sgst + igst),
-      total_tds: Number(tdsMap[s.name]) || 0,
+      // Lot-wise TDS = rate × this seller's total purchase amount (flat, no
+      // threshold). Spreading it ∝ puramt in the modal/statement makes each
+      // lot show rate × its own amount.
+      total_tds: lotwisePurchaseTds(s.total_puramt, s.cr, cfg),
       // Payable: lots.balance was computed BEFORE DNs existed, using
       // lots.refund as the discount. So:
       //   - When DNs exist and equal lot refunds → balance is correct
@@ -699,7 +716,7 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       // Then subtract TDS so Payable = PurAmt − Discount − GST 5% − TDS.
       total_payable: r2live((manualDisc > 0
         ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
-        : (Number(s.total_payable) || 0)) - (Number(tdsMap[s.name]) || 0)),
+        : (Number(s.total_payable) || 0)) - lotwisePurchaseTds(s.total_puramt, s.cr, cfg)),
       // True when this seller's lots point at more than one bank account
       // (or a mix of tagged + untagged AND the seller has >1 account on
       // file). Drives the "multiple banks" badge on the Payments table so
@@ -819,24 +836,13 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
   const roundAmounts = cfg.flag_round;
-  // Per-seller TDS (194Q) from the generated purchase invoice(s). The NEFT
-  // amount in 'after' mode is netted by this so the bank transfer matches
-  // the Payments-tab Payable (PurAmt − Discount − GST 5% − TDS). 'before'
-  // mode pays the pre-deduction puramt, so TDS is not applied there.
-  const tdsMap = {};
-  {
-    const tdsRows = db.all(
-      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
-      [auctionId]
-    );
-    for (const t of tdsRows) tdsMap[t.name] = Number(t.tds) || 0;
-  }
 
   return payments.map(p => {
     // 'before' uses puramt — pre-discount, useful when paying suppliers
     // before the deduction policy is applied. 'after' (default) uses
-    // payable = puramt − discount − GST − TDS.
-    const tds = useBefore ? 0 : (Number(tdsMap[p.name]) || 0);
+    // payable = puramt − discount − GST − TDS, netted by the SAME lot-wise
+    // TDS the Payments tab shows so the NEFT amount matches the screen.
+    const tds = useBefore ? 0 : lotwisePurchaseTds(p.puramt, p.cr, cfg);
     const rawAmount = (useBefore ? (p.puramt || 0) : (p.payable || 0)) - tds;
     const amount = roundAmounts ? round0(rawAmount) : rawAmount;
     const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;

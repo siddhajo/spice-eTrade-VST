@@ -2188,6 +2188,66 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 }
 .help-wrap:hover .help-tip{opacity:1}
 
+/* ── Per-screen guide banner (plain-English help for every tab) ─
+   ONE shared banner lives at the top of .content, OUTSIDE the
+   tab-content (#tc-*) divs — so the per-tab loaders that rewrite
+   innerHTML can never wipe it. go() repaints it from SCREEN_GUIDE
+   on every tab change. Collapsed state persists per-tab. */
+.screen-guide{
+  margin:0 0 16px;border:1px solid var(--spice-cardamom);
+  border-left:4px solid var(--spice-cardamom);
+  background:var(--spice-cardamom-lt,#DCFCE7);
+  border-radius:10px;padding:12px 16px;color:var(--spice-text-main)
+}
+.screen-guide-head{
+  display:flex;align-items:center;gap:8px;
+  font-weight:700;font-size:14px;color:var(--spice-cardamom-dk)
+}
+.screen-guide-head .sg-title{flex:1}
+.screen-guide-toggle{
+  border:none;background:transparent;cursor:pointer;font-weight:700;
+  color:var(--spice-cardamom-dk);font-size:12px;font-family:inherit;
+  display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:6px
+}
+.screen-guide-toggle:hover{background:rgba(0,0,0,.06)}
+.screen-guide-body{margin-top:10px;font-size:13.5px;line-height:1.55}
+.screen-guide-body ol{margin:0;padding-left:22px}
+.screen-guide-body li{margin:3px 0}
+.screen-guide-warn{
+  margin-top:10px;padding:8px 12px;border-radius:8px;
+  background:var(--spice-turmeric-lt,#FEF3C7);
+  border:1px solid var(--spice-turmeric,#F59E0B);
+  color:#92400E;font-weight:600;font-size:12.5px
+}
+.screen-guide.collapsed{padding:8px 16px;background:transparent}
+.screen-guide.collapsed .screen-guide-body{display:none}
+body[data-comfort="1"] .screen-guide-body{font-size:15.5px}
+body[data-comfort="1"] .screen-guide-head{font-size:16px}
+
+/* Sticky "you changed a setting → Save to apply it" nudge.
+   Fixed bottom-centre, bright turmeric, won't auto-dismiss — it
+   stays until the change is saved (server then recalculates lots)
+   or the user dismisses it. Solves the recurring "flipped a flag
+   but never recalculated" problem. */
+.save-nudge{
+  display:none;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+  z-index:120;background:var(--spice-turmeric,#F59E0B);color:#fff;
+  padding:12px 16px 12px 18px;border-radius:12px;font-weight:700;font-size:13.5px;
+  box-shadow:0 8px 28px rgba(0,0,0,.28);align-items:center;gap:14px;max-width:92vw
+}
+.save-nudge.show{display:flex}
+.save-nudge .sn-btn{
+  border:none;background:#fff;color:#92400E;font-weight:700;
+  padding:7px 14px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;white-space:nowrap
+}
+.save-nudge .sn-btn:hover{background:#FEF3C7}
+.save-nudge .sn-x{
+  border:none;background:transparent;color:#fff;font-size:18px;line-height:1;
+  cursor:pointer;padding:0 2px;opacity:.85;font-family:inherit
+}
+.save-nudge .sn-x:hover{opacity:1}
+body[data-comfort="1"] .save-nudge{font-size:15px}
+
 /* ── Dark mode ────────────────────────────────────────── */
 body[data-dark="1"]{
   --spice-cream:#0F172A;
@@ -2768,6 +2828,17 @@ input[type="search"]:focus{
 
     <div class="content">
     <div class="toast" id="toast"></div>
+
+    <!-- Per-screen guide banner — repainted by go() from SCREEN_GUIDE.
+         Sits above every tab; loaders can't wipe it (lives outside #tc-*). -->
+    <div id="screen-guide" class="screen-guide" style="display:none"></div>
+
+    <!-- Sticky save reminder — shown when a settings change is pending. -->
+    <div id="save-nudge" class="save-nudge">
+      <span id="save-nudge-msg">You changed a setting — click Save Changes to apply it.</span>
+      <button class="sn-btn" id="save-nudge-action" onclick="saveSettings()">Save Changes</button>
+      <button class="sn-x" title="Dismiss" onclick="hideSaveNudge()">×</button>
+    </div>
 
     <!-- DASHBOARD -->
     <div class="tc active" id="tc-dash"><div class="stats" id="stats"></div></div>
@@ -5914,6 +5985,198 @@ function helpTip(text){
   return `<span class="help-wrap"><span class="help-icon" tabindex="0"></span><span class="help-tip">${esc(text)}</span></span>`;
 }
 
+// ════════════════════════════════════════════════════════════════
+// Per-screen guide — plain-English "what to do on this screen"
+// ════════════════════════════════════════════════════════════════
+// One short, numbered guide per tab, keyed by the data-tab value used
+// by go(). Each entry: { title, steps:[...], warn?: '...' }.
+//   • steps  → numbered list of what to do, top to bottom
+//   • warn   → an amber call-out for the one mistake that's easy to make
+// Rendered into the shared #screen-guide banner by renderScreenGuide(),
+// which go() calls on every tab change. Collapsed state is remembered
+// per tab in localStorage so a screen the user already understands
+// shrinks to a single "How this screen works" line.
+const SCREEN_GUIDE = {
+  dash: { title: 'Dashboard — your day at a glance',
+    steps: ['Shows totals for the selected trade: lots, bags, quantity and value.',
+            'Pick a different trade from the box at the top to switch the figures.',
+            'Use the sidebar on the left to open any screen.'] },
+  insights: { title: 'Insights — deeper trade analytics',
+    steps: ['Compare branches, grades and sellers across your trades.',
+            'Read-only — nothing here changes your data.'] },
+  settings: { title: 'Settings — rates, flags & company details',
+    steps: ['Pick a category on the left (Rates, Flags, Company, Branches…).',
+            'Change the values or switch a flag on/off.',
+            'Click the green “Save Changes” button — this is the important step.'],
+    warn: 'Changing a flag or rate does NOTHING until you press “Save Changes”. After you save, the app automatically recalculates every unlocked lot for you.' },
+  formulas: { title: 'Formulas — how every number is worked out',
+    steps: ['A read-only reference of every calculation the app does.',
+            'The values in {curly braces} come straight from your Settings.',
+            'Use it to cross-check a figure — nothing here can be edited.'] },
+  fixdata: { title: 'Fix Data — gentle corrections without SQL',
+    steps: ['Pick the record type, find the row, and correct the value.',
+            'Save the change. Use this only for genuine data fixes.'],
+    warn: 'Changes here are direct edits to your records. Double-check before saving.' },
+  users: { title: 'Users — who can log in',
+    steps: ['Add a user, set a username and password, and choose their role.',
+            'The role decides which screens and buttons they can use.',
+            'Click Save to apply.'] },
+  backup: { title: 'Backup — keep your data safe',
+    steps: ['Take a backup before big changes or at the end of a trade day.',
+            'Download keeps a copy on this computer.'],
+    warn: 'Restoring a backup replaces current data. Be sure before you confirm.' },
+  traders: { title: 'Sellers — your supplier master',
+    steps: ['Search by name or code to find a seller.',
+            'Add a new seller, or click a row to edit bank and contact details.',
+            'Save when done.'],
+    warn: 'Correct bank details here flow straight into the payment file — check the account number and IFSC.' },
+  buyers: { title: 'Buyers — your customer master',
+    steps: ['Search to find a buyer, or add a new one.',
+            'Click a row to edit GSTIN, address and consignee details.',
+            'Save when done.'] },
+  auctions: { title: 'Trades — create & manage a trade day',
+    steps: ['Create a new trade with its date and crop type.',
+            'Once created, it becomes selectable in the trade box at the top.',
+            'All other screens work on the trade you have selected.'] },
+  lots: { title: 'Lots — review & adjust the lots in a trade',
+    steps: ['Pick the trade at the top, then review its lots.',
+            'Edit grade, price, buyer or quantity on a row if needed.',
+            'The amount recalculates as you change quantity or price.'],
+    warn: 'If you change the company state, or set grades/buyers in bulk, the app recalculates those lots automatically and shows a confirmation. If numbers ever look stale, re-open the trade.' },
+  plmap: { title: 'Price List Mapping — match an uploaded price list',
+    steps: ['Upload the price-list file.',
+            'Map its columns to lots, then apply.'] },
+  pricecheck: { title: 'Price Check — verify prices against a list',
+    steps: ['Upload the reference price file.',
+            'Review the flagged differences before applying.'] },
+  lotentry: { title: 'Lot Entry — enter lots from the trade floor',
+    steps: ['Select the trade and branch.',
+            'Type each lot: seller, bags, quantity, price — amount fills in for you.',
+            'The entry saves as you go; print receipts from the toolbar.'],
+    warn: 'Pick the correct branch before you start — it is stamped on every lot you enter.' },
+  invoices: { title: 'Sales Invoices — generate GST invoices',
+    steps: ['Pick the trade, then generate the sales invoices.',
+            'Open any invoice to view or download the PDF.'],
+    warn: 'Invoices use your current Settings (GST %, company state, bank). If you just changed those, save Settings first so the figures are right.' },
+  purchases: { title: 'Purchases — purchase vouchers',
+    steps: ['Pick the trade to see its purchase entries.',
+            'Open a row to view or print the purchase document.'] },
+  bills: { title: 'Bills of Supply — non-GST bills',
+    steps: ['Pick the trade and generate the bills of supply.',
+            'Open any bill to view or download.'] },
+  debit: { title: 'Debit Notes',
+    steps: ['Pick the trade and create the debit note(s).',
+            'Open a note to view or download the PDF.'] },
+  payments: { title: 'Payments — what each seller is paid',
+    steps: ['Pick the trade to see the payment summary per seller.',
+            'Check the figures, then export the bank payment file.'],
+    warn: 'Payment figures come from the lots and your Settings. If you changed a rate or flag, save Settings (it recalculates) before exporting.' },
+  reports: { title: 'Reports Hub — trade summaries',
+    steps: ['Pick a trade, then open a report (summary, branch comparison…).',
+            'Use the branch filter to narrow the figures.',
+            'Click the PDF button to print or save a report.'] },
+  exports: { title: 'Exports — data files for other systems',
+    steps: ['Pick the trade, choose the export you need (DBF, etc.).',
+            'Download the file.'] },
+  lorry: { title: 'Lorry — dispatch & transport',
+    steps: ['Pick the trade to view its lorry/dispatch details.',
+            'Generate the document you need.'] },
+  tds: { title: 'TDS Returns',
+    steps: ['Pick the period and review the TDS/TCS figures.',
+            'Export the return when the figures are correct.'] },
+  journals: { title: 'Journals — accounting entries',
+    steps: ['Pick the trade to see its journal entries.',
+            'Review before exporting to Tally.'] },
+  registers: { title: 'Registers — statutory registers',
+    steps: ['Pick the trade/period to view the register.',
+            'Export or print as needed.'] },
+  tally: { title: 'To Tally — export vouchers as XML',
+    steps: ['Pick the trade — sales, purchases and notes are bundled.',
+            'Download the Tally XML and import it in Tally.'],
+    warn: 'Export only after the trade’s figures are final. If you changed Settings, save first so the vouchers carry the right numbers.' },
+  importold: { title: 'Import Old Data — bring in past records',
+    steps: ['Upload the old data file.',
+            'Review the preview, then confirm the import.',
+            'The History panel below lists recent imports.'],
+    warn: 'Importing adds records to your live data. Take a backup first.' },
+};
+
+// Repaint the shared #screen-guide banner for the given tab. Called by
+// go() on every tab change. Hides the banner for any tab with no entry.
+function renderScreenGuide(tab){
+  const host = document.getElementById('screen-guide');
+  if (!host) return;
+  const g = SCREEN_GUIDE[tab];
+  if (!g) { host.style.display = 'none'; host.innerHTML = ''; return; }
+  // Per-tab collapsed memory — a screen the user already gets stays shrunk.
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('guideCollapsed:' + tab) === '1'; } catch(_){}
+  host.className = 'screen-guide' + (collapsed ? ' collapsed' : '');
+  host.style.display = '';
+  const steps = (g.steps || []).map(s => `<li>${esc(s)}</li>`).join('');
+  const warn = g.warn ? `<div class="screen-guide-warn">⚠ ${esc(g.warn)}</div>` : '';
+  host.innerHTML =
+    `<div class="screen-guide-head">` +
+      `<span>❔</span><span class="sg-title">${esc(g.title)}</span>` +
+      `<button class="screen-guide-toggle" onclick="toggleScreenGuide('${tab}')">` +
+        `${collapsed ? 'Show ▾' : 'Hide ▴'}</button>` +
+    `</div>` +
+    `<div class="screen-guide-body"><ol>${steps}</ol>${warn}</div>`;
+}
+
+// Collapse/expand the current screen's guide and remember the choice.
+function toggleScreenGuide(tab){
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('guideCollapsed:' + tab) === '1'; } catch(_){}
+  const next = !collapsed;
+  try { localStorage.setItem('guideCollapsed:' + tab, next ? '1' : '0'); } catch(_){}
+  renderScreenGuide(tab);
+}
+
+// ── "You changed a setting → Save to apply it" nudge ───────────────
+// Active reminder for the recurring problem of toggling a flag/rate and
+// forgetting to Save (which is what triggers the server-side recalc).
+let _settingsDirty = false;
+function showSaveNudge(msg){
+  const bar = document.getElementById('save-nudge');
+  if (!bar) return;
+  if (msg) { const m = document.getElementById('save-nudge-msg'); if (m) m.textContent = msg; }
+  bar.classList.add('show');
+}
+function hideSaveNudge(){
+  const bar = document.getElementById('save-nudge');
+  if (bar) bar.classList.remove('show');
+}
+// Mark Settings dirty + show the nudge with a message tailored to whether
+// the open category actually drives lot calculations.
+function markSettingsDirty(){
+  _settingsDirty = true;
+  const calcCats = ['flags', 'rates', 'mode'];
+  const isCalc = (typeof _activeCat !== 'undefined') && calcCats.includes(_activeCat);
+  showSaveNudge(isCalc
+    ? 'You changed a calculation setting — click Save Changes so your lots recalculate.'
+    : 'You changed a setting — click Save Changes to apply it.');
+}
+// Delegated, one-time wiring: any input/change inside the Settings panel
+// flips the dirty flag and surfaces the nudge. saveSettings() clears it.
+(function wireSettingsNudge(){
+  const attach = () => {
+    const root = document.getElementById('settings-root');
+    if (root && !root._nudgeBound) {
+      root._nudgeBound = true;
+      root.addEventListener('input',  markSettingsDirty);
+      root.addEventListener('change', markSettingsDirty);
+    }
+    // Paint the guide for whatever tab is active on first load (the static
+    // Dashboard, normally) since go() isn't called for the initial screen.
+    const active = document.querySelector('.side-item.active');
+    const tab = (active && active.dataset.tab) || 'dash';
+    if (typeof renderScreenGuide === 'function') { try { renderScreenGuide(tab); } catch(_){} }
+  };
+  if (document.readyState !== 'loading') attach();
+  else document.addEventListener('DOMContentLoaded', attach);
+})();
+
 // ── Dark mode ──────────────────────────────────────────
 function toggleDark(){
   const cur = document.body.getAttribute('data-dark') === '1';
@@ -7530,6 +7793,8 @@ function go(tab){
   document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
   document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
   const el=document.getElementById('tc-'+tab);if(el)el.classList.add('active');
+  // Paint the plain-English guide banner for this screen.
+  if (typeof renderScreenGuide === 'function') { try { renderScreenGuide(tab); } catch(_){} }
   // Refresh the topbar badge on every tab change. This is belt-and-
   // suspenders defense against race conditions where the badge didn't
   // get its display flipped during the initial load — if `_sdata` is
@@ -13909,6 +14174,10 @@ async function saveSettings(){
 
   const _saveResp = await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings:s})});
   _companyDirty = false;
+  // Change is now persisted (server recalculates affected lots) — clear the
+  // "you changed a setting, save to apply" reminder.
+  _settingsDirty = false;
+  if (typeof hideSaveNudge === 'function') hideSaveNudge();
 
   // Refresh _sdata from the server so any tabs not currently rendered
   // pick up their latest values. If this fails, we still have the
