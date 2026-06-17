@@ -45,24 +45,9 @@ const PDFDocument = require('pdfkit');
 // /public/logo-ispl.png. PDFKit's doc.image accepts both Buffer and
 // path forms, so call sites pass the result through verbatim.
 const { getLogoSource: _glsMb } = require('./logo-paths');
+const { maskField } = require('./mask-fields');
 function getLogoPath() {
   return _glsMb('ispl', ['logo-ispl.png', 'logo_kj.png']);
-}
-
-// Mask an account number for the receipt according to admin-set policy.
-// Mirrors the PWA's privacy switch verbatim.
-function maskAcctForReceipt(acctnum, maskType) {
-  if (!acctnum || !maskType || maskType === 'none') return acctnum;
-  const a = String(acctnum);
-  if (maskType === 'show_last4' || maskType === 'show_last4_star') {
-    if (a.length <= 4) return a;
-    return '*'.repeat(a.length - 4) + a.slice(-4);
-  }
-  if (maskType === 'show_first4_last4') {
-    if (a.length <= 8) return a;
-    return a.slice(0, 4) + '*'.repeat(a.length - 8) + a.slice(-4);
-  }
-  return acctnum;
 }
 
 // Pull the receipt-relevant settings from spice-config's company_settings.
@@ -80,7 +65,11 @@ function getReceiptConfig(db) {
   return {
     appTitle:     get('trade_name', 'Spice Auction'),
     showUser:     getBool('show_username', false),
-    acctMask:     get('acct_mask', 'none'),
+    // Per-field masking policy (Settings → Display). Applied to the
+    // seller's account no. and IFSC printed on the receipt slip.
+    maskAcct:     get('mask_acct', 'none'),
+    maskIfsc:     get('mask_ifsc', 'none'),
+    maskPhone:    get('mask_phone', 'none'),
     showMoisture: getBool('show_moisture', false),
     sampleWeight: parseFloat(get('sample_weight', '0')) || 0,
     labels:       {},  // spice-config doesn't customize labels; defaults fine
@@ -147,13 +136,14 @@ function renderSellerReceipt(doc, sellerLots, cfg) {
   addReceiptHeader(doc, cfg.appTitle, headerBranch, dateFmt, lot.ano);
 
   const lw = 70;
-  const maskedAcct = maskAcctForReceipt(lot.acctnum, cfg.acctMask);
+  const maskedAcct = maskField(lot.acctnum, cfg.maskAcct);
+  const maskedIfsc = maskField(lot.ifsc, cfg.maskIfsc);
   const sellerFields = [
     [lb('seller', 'Seller'), lot.trader_name],
     [lb('place',  'Place'),  [lot.ppla, lot.pin].filter(Boolean).join(', ')],
     [lb('gstin',  'GSTIN'),  lot.cr],
     [lb('acct_no','A/C No'), maskedAcct || '--NIL--'],
-    [lb('ifsc',   'IFSC'),   lot.ifsc || '--NIL--'],
+    [lb('ifsc',   'IFSC'),   maskedIfsc || '--NIL--'],
   ];
   doc.fontSize(9);
   sellerFields.forEach(([label, value]) => {
@@ -231,12 +221,13 @@ function renderSellerReceiptCompact(doc, sellerLots, cfg) {
   addReceiptHeaderCompact(doc, cfg.appTitle, headerBranch, dateFmt, lot.ano);
 
   const lw = 32;
-  const maskedAcct = maskAcctForReceipt(lot.acctnum, cfg.acctMask);
+  const maskedAcct = maskField(lot.acctnum, cfg.maskAcct);
+  const maskedIfsc = maskField(lot.ifsc, cfg.maskIfsc);
   const sellerFields = [
     [lb('seller','Seller'), lot.trader_name],
     [lb('place', 'Place'),  [lot.ppla, lot.pin].filter(Boolean).join(', ')],
     [lb('acct_no','A/C'),   maskedAcct || '--NIL--'],
-    [lb('ifsc',  'IFSC'),   lot.ifsc || '--NIL--'],
+    [lb('ifsc',  'IFSC'),   maskedIfsc || '--NIL--'],
   ];
   doc.fontSize(7);
   sellerFields.forEach(([label, value]) => {
@@ -616,7 +607,14 @@ function mountMobile(app, deps) {
       pageLimit:       20,
       showUsername:    false,
       tradeTileTitle:  'Active Trade',
-      acctMask:        'none',
+      // Per-field masking policy (Settings → Display) — surfaced to the
+      // PWA so its on-screen bank/seller displays mask identically to the
+      // desktop UI and the generated receipt PDFs. `acctMask` retained as
+      // a back-compat alias of maskAcct for any cached client build.
+      maskAcct:        get('mask_acct', 'none'),
+      maskIfsc:        get('mask_ifsc', 'none'),
+      maskPhone:       get('mask_phone', 'none'),
+      acctMask:        get('mask_acct', 'none'),
       labels:          {},
     });
   });

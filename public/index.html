@@ -7118,6 +7118,9 @@ async function applyFeatureFlags() {
   if (cfg && cfg.date_format) {
     window._dateFmt = String(cfg.date_format).toUpperCase();
   }
+  // Sensitive-field masking policy (Settings → Display) — cache so list
+  // and detail renderers mask consistently with the receipt PDFs.
+  refreshMaskCfg(cfg);
 }
 
 // Public branding (no auth) — drives the login + topbar from settings.
@@ -9883,7 +9886,7 @@ async function leSearchSeller(q){
             ? `<span style="color:#0d7c5f;font-weight:600">${esc(t.cr)}</span>`
             : '<span style="color:var(--text3);font-style:italic">no GSTIN</span>';
           const loc = [t.ppla, t.pin].filter(Boolean).join(', ');
-          const meta = [crLabel, esc(t.tel || '')].filter(Boolean).join(' · ');
+          const meta = [crLabel, esc(maskPhone(t.tel || ''))].filter(Boolean).join(' · ');
           const badge = isMulti
             ? '<span style="font-size:10px;background:#FEF3C7;color:#92400E;padding:1px 6px;border-radius:8px;margin-left:6px;font-weight:700">MULTI-GSTIN</span>'
             : '';
@@ -9918,7 +9921,7 @@ function lePickSeller(t){
   _le.selectedSeller = t;
   document.getElementById('le-seller-name').textContent = t.name || '';
   const loc = [t.ppla, t.pin, t.pstate].filter(Boolean).join(', ');
-  const meta = [t.cr, t.tel, t.pan].filter(Boolean).join(' · ');
+  const meta = [t.cr, maskPhone(t.tel), t.pan].filter(Boolean).join(' · ');
   document.getElementById('le-seller-meta').textContent = [loc, meta].filter(Boolean).join('  ·  ');
   document.getElementById('le-seller-card').style.display = 'block';
   document.getElementById('le-seller-search-wrap').style.display = 'none';
@@ -9960,7 +9963,7 @@ function leRenderBankPicker(t){
   const defaultBank = banks.find(b => b.is_default) || banks[0];
   _le.selectedBankId = defaultBank ? defaultBank.id : null;
   sel.innerHTML = banks.map(b => {
-    const labelParts = [b.acctnum];
+    const labelParts = [maskAcct(b.acctnum)];
     if (b.bank_name) labelParts.push(b.bank_name);
     if (b.is_default) labelParts.push('★ default');
     return `<option value="${b.id}" ${b.id === _le.selectedBankId ? 'selected' : ''}>${esc(labelParts.join(' · '))}</option>`;
@@ -10460,7 +10463,7 @@ async function leSaveNewSeller(){
     if (e && e.status === 409 && e.body && e.body.duplicate) {
       const ex = e.body.existing || {};
       showErr((e.body.error || 'Duplicate seller')
-        + ` — existing: ${ex.name || '(unnamed)'} (PAN ${ex.pan || '—'}, phone ${ex.tel || '—'}). Cancel and pick that seller from the list.`);
+        + ` — existing: ${ex.name || '(unnamed)'} (PAN ${ex.pan || '—'}, phone ${maskPhone(ex.tel) || '—'}). Cancel and pick that seller from the list.`);
     } else {
       showErr(e.message || 'Failed to add seller');
     }
@@ -11970,7 +11973,7 @@ function leCsSearchSeller(q){
         // PAN trails phone in the meta line so the operator can verify
         // they're picking the right seller when two traders share a
         // common short name (a recurring dad complaint on big masters).
-        const meta = [t.cr, t.tel, t.pan].filter(Boolean).join(' · ');
+        const meta = [t.cr, maskPhone(t.tel), t.pan].filter(Boolean).join(' · ');
         return `<div data-idx="${i}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background=''">
           <div style="font-weight:600;color:var(--text)">${esc(t.name||'')}</div>
           <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(loc)}${meta?' — '+esc(meta):''}</div>
@@ -11992,7 +11995,7 @@ function leCsPickSeller(t){
   document.getElementById('le-cs-search').value = t.name || '';
   document.getElementById('le-cs-picked-name').textContent = t.name || '(unnamed)';
   const meta = [t.ppla, t.pin, t.pstate].filter(Boolean).join(', ');
-  const meta2 = [t.cr, t.tel, t.pan].filter(Boolean).join(' · ');
+  const meta2 = [t.cr, maskPhone(t.tel), t.pan].filter(Boolean).join(' · ');
   document.getElementById('le-cs-picked-meta').textContent = [meta, meta2].filter(Boolean).join('  ·  ');
   document.getElementById('le-cs-picked').style.display = 'block';
   document.getElementById('le-cs-save').disabled = false;
@@ -12708,7 +12711,7 @@ function leBuildDetailedHtml(p) {
     const ti = (g.trader_id != null ? traderInfo[g.trader_id] : null) || {};
     const bank = ti.defaultBank || {};
     const acctMasked = bank.acctnum ? maskAcct(bank.acctnum) : '';
-    const ifsc = bank.ifsc || '';
+    const ifsc = bank.ifsc ? maskIfsc(bank.ifsc) : '';
     const place = [g.ppla, g.ppin].filter(Boolean).join(', ');
     const cr = g.cr || '';
     const lotRows = g.lots.map(l => {
@@ -12797,11 +12800,34 @@ function leBuildDetailedHtml(p) {
 </style></head><body>${sections}</body></html>`;
 }
 
-function maskAcct(acct) {
-  const s = String(acct || '');
-  if (s.length <= 4) return s;
-  return '*'.repeat(s.length - 4) + s.slice(-4);
+// ── Sensitive-field masking ─────────────────────────────────────
+// Mirrors mask-fields.js (server) verbatim so on-screen displays and the
+// receipt PDFs mask identically. Modes: none|last4|last6|first4|first6.
+// Policy comes from Settings → Display and is cached in _maskCfg, refreshed
+// whenever /api/company-settings/flat is fetched. Default 'none' → no change.
+let _maskCfg = { acct: 'last4', ifsc: 'none', phone: 'none' };  // defaults match company-config seed
+function refreshMaskCfg(cfg) {
+  if (!cfg) return;
+  _maskCfg = {
+    acct:  cfg.mask_acct  || 'none',
+    ifsc:  cfg.mask_ifsc  || 'none',
+    phone: cfg.mask_phone || 'none',
+  };
 }
+function maskField(value, mode) {
+  const s = value == null ? '' : String(value);
+  if (!s || !mode || mode === 'none') return s;
+  const show = (mode === 'last4' || mode === 'first4') ? 4
+             : (mode === 'last6' || mode === 'first6') ? 6 : 0;
+  if (!show || s.length <= show) return s;
+  const stars = '*'.repeat(s.length - show);
+  return (mode === 'last4' || mode === 'last6')
+    ? stars + s.slice(-show)
+    : s.slice(0, show) + stars;
+}
+function maskAcct(v)  { return maskField(v, _maskCfg.acct); }
+function maskIfsc(v)  { return maskField(v, _maskCfg.ifsc); }
+function maskPhone(v) { return maskField(v, _maskCfg.phone); }
 
 // Press Enter in the lot-form fields to save (skip from textareas/selects).
 // Listener attached at module level so dynamically-rendered inputs still
@@ -13511,6 +13537,9 @@ const FIELD_HELP = {
   business_mode:   'e-Trade: grade-based deduction + discount workflow. e-Auction: commission + handling + sample refund workflow.',
   business_state:  'Tamil Nadu uses the TN office details (address, GSTIN, bank). Kerala uses the KL details. Invoices adapt automatically.',
   tcs_tds:         'TDS / TCS percentage applied on eligible invoices for tax compliance.',
+  mask_acct:       'Hide part of seller/buyer bank account numbers on receipts and on-screen lists/panels. e.g. "Show last 4" prints ********1234. The bank payment file, DBF, Tally and WhatsApp targets always keep the real number.',
+  mask_ifsc:       'Hide part of IFSC codes on receipts and on-screen displays. Functional exports (bank payment file, DBF, Tally) keep the real IFSC.',
+  mask_phone:      'Hide part of seller/buyer phone numbers on screen. WhatsApp send still uses the real number; functional exports keep it too.',
 };
 function fld(f){
   // Logo Code: plain textbox in this e-Trade-only build (was an ISP/ASP
@@ -13536,15 +13565,30 @@ function fld(f){
   // hard-code the option list per key here. Cheap escape hatch — far
   // simpler than threading an `options` column through the existing
   // settings pipeline.
+  // Each entry is a list of either plain strings (value === label) or
+  // [value, label] pairs when the stored token differs from the friendly
+  // label shown in the dropdown (the masking modes use this).
+  const MASK_OPTS = [
+    ['none',   'Show full (no masking)'],
+    ['last4',  'Show last 4 digits'],
+    ['last6',  'Show last 6 digits'],
+    ['first4', 'Show first 4 digits'],
+    ['first6', 'Show first 6 digits'],
+  ];
   const FIELD_OPTIONS = {
     date_format: ['DD/MM/YYYY', 'DD-MM-YYYY', 'YYYY-MM-DD'],
+    mask_acct:  MASK_OPTS,
+    mask_ifsc:  MASK_OPTS,
+    mask_phone: MASK_OPTS,
   };
   if (FIELD_OPTIONS[f.key]) {
     const tip = FIELD_HELP[f.key] ? helpTip(FIELD_HELP[f.key]) : '';
     const cur = String(f.value || '');
-    const opts = FIELD_OPTIONS[f.key].map(o =>
-      `<option value="${esc(o)}"${o === cur ? ' selected' : ''}>${esc(o)}</option>`
-    ).join('');
+    const opts = FIELD_OPTIONS[f.key].map(o => {
+      const v = Array.isArray(o) ? o[0] : o;
+      const l = Array.isArray(o) ? o[1] : o;
+      return `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+    }).join('');
     return `<div class="fg"><label>${esc(f.label)}${tip}</label><select data-key="${f.key}">${opts}</select></div>`;
   }
   const t = f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : 'text';
@@ -13863,7 +13907,7 @@ async function saveSettings(){
   // the badge silently failing to update has been a recurring complaint.
   if (s.logo) window._cachedLogoCode = String(s.logo).trim();
 
-  await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings:s})});
+  const _saveResp = await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings:s})});
   _companyDirty = false;
 
   // Refresh _sdata from the server so any tabs not currently rendered
@@ -13899,7 +13943,18 @@ async function saveSettings(){
       loadStats();
     }
   } catch (_) {}
-  toast('Settings saved');
+  // When a calc-affecting setting (e.g. "Discount includes GST", deductions,
+  // discount %/days) changed, the server re-stamps every unlocked lot so the
+  // per-lot GST/discount/payable columns stay in sync with the new setting.
+  const _recalc = Number(_saveResp && _saveResp.recalculated) || 0;
+  if (_recalc > 0) {
+    toast(`Settings saved — ${_recalc} lot${_recalc === 1 ? '' : 's'} recalculated`);
+    // Refresh any open transactional view so the new numbers show at once.
+    try { if (typeof loadPayments === 'function' && document.getElementById('tc-payments')?.classList.contains('active')) loadPayments(); } catch (_) {}
+    try { if (typeof loadLots === 'function' && document.getElementById('tc-lots')?.classList.contains('active')) loadLots(); } catch (_) {}
+  } else {
+    toast('Settings saved');
+  }
 }
 async function exportSettings(){const d=await j('/api/company-settings/export');const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='settings.json';a.click()}
@@ -14227,9 +14282,11 @@ async function searchTraders(q, opts){
           if (!banks.length) return '<span style="color:var(--text3)">—</span>';
           // One pill per bank with IFSC + last-4 of account number
           return banks.map(b => {
-            const last4 = b.acctnum ? String(b.acctnum).slice(-4) : '';
-            const display = `${esc(b.ifsc||'')}${last4?' ··'+last4:''}`;
-            const tooltip = [b.bank_name, b.ifsc, b.acctnum, b.holder_name].filter(Boolean).join(' · ');
+            // Quick account hint = last 4 chars of the masked account, so it
+            // honours the mask policy (none → real last4; first-N → '····').
+            const last4 = b.acctnum ? maskAcct(String(b.acctnum)).slice(-4) : '';
+            const display = `${esc(maskIfsc(b.ifsc||''))}${last4?' ··'+esc(last4):''}`;
+            const tooltip = [b.bank_name, maskIfsc(b.ifsc), maskAcct(b.acctnum), b.holder_name].filter(Boolean).join(' · ');
             return `<span title="${esc(tooltip)}" style="display:inline-block;padding:2px 8px;margin:1px 2px 1px 0;background:var(--green-bg);color:var(--green);border-radius:8px;font-size:11px;font-weight:600">${display}</span>`;
           }).join('');
         } },
@@ -14247,7 +14304,7 @@ function viewTraderDetails(t){
   let html='';
   html+=section('Identity',[kv('Name',t.name),kv('PAN',t.pan),kv('Aadhar',t.aadhar)]);
   html+=section('Registration',[kv('CR / GSTIN',t.cr)]);
-  html+=section('Contact',[kv('Phone',t.tel)]);
+  html+=section('Contact',[kv('Phone',maskPhone(t.tel))]);
   html+=section('Address',[kv('Address',t.padd),kv('Place',t.ppla),kv('PIN',t.pin),kv('State',t.pstate),kv('State Code',t.pst_code)]);
   // Banking: show ALL bank accounts from trader_banks (or fall back to the
   // legacy trader.ifsc/acctnum for older records).
@@ -14257,7 +14314,7 @@ function viewTraderDetails(t){
   if (banks.length) {
     const bankRows = banks.map((b, i) => {
       const label = banks.length > 1 ? `Bank ${i+1}` : 'Bank';
-      const parts = [b.bank_name, b.ifsc, b.acctnum, b.holder_name].filter(Boolean).join(' · ');
+      const parts = [b.bank_name, maskIfsc(b.ifsc), maskAcct(b.acctnum), b.holder_name].filter(Boolean).join(' · ');
       return `<tr><td style="padding:6px 10px;color:var(--text2);font-size:12px;width:40%">${label}</td><td style="padding:6px 10px;font-size:13px">${esc(parts)||'<span style="color:var(--text3)">—</span>'}</td></tr>`;
     }).join('');
     html+=`<div style="margin-bottom:16px"><h3 style="font-size:13px;color:var(--green);margin:0 0 6px 0;padding-bottom:4px;border-bottom:1.5px solid var(--green-border)">Banking (${banks.length} account${banks.length>1?'s':''})</h3><table style="width:100%">${bankRows}</table></div>`;
@@ -14442,7 +14499,7 @@ async function saveTrader(){
     if (r.status === 409 && d && d.duplicate) {
       const ex = d.existing || {};
       alert((d.error || 'Duplicate seller.')
-        + `\n\nExisting row:\n  • ${ex.name || '(unnamed)'}\n  • PAN: ${ex.pan || '—'}\n  • CR: ${ex.cr || '—'}\n  • Phone: ${ex.tel || '—'}`
+        + `\n\nExisting row:\n  • ${ex.name || '(unnamed)'}\n  • PAN: ${ex.pan || '—'}\n  • CR: ${ex.cr || '—'}\n  • Phone: ${maskPhone(ex.tel) || '—'}`
         + '\n\nEdit the existing seller instead.');
       return;
     }
@@ -15306,7 +15363,7 @@ function viewBuyerDetails(b){
   let html='';
   html+=section('Identity',[kv('Buyer Code',b.buyer),kv('Code (short alias)',b.code),kv('Trade Name',b.buyer1),kv('PAN',b.pan)]);
   html+=section('Registration',[kv('GSTIN',b.gstin),kv('TI',b.ti),kv('Sale Type',saleMap[b.sale]||b.sale)]);
-  html+=section('Contact',[kv('Phone',b.tel)]);
+  html+=section('Contact',[kv('Phone',maskPhone(b.tel))]);
   html+=section('Billing Address',[kv('Address',fullAddress),kv('Place',b.pla),kv('PIN',b.pin),kv('State',b.state),kv('State Code',b.st_code)]);
   html+=section('Consignee (Ship-to)',[kv('Name',b.cbuyer1),kv('GSTIN',b.cgstin),kv('Address',consigneeAddress),kv('Place',b.cpla),kv('PIN',b.cpin),kv('State',b.cstate),kv('State Code',b.cst_code)]);
   document.getElementById('buyer-view-body').innerHTML=html||'<p style="color:var(--text3);text-align:center;padding:20px">No details available</p>';
@@ -19081,7 +19138,7 @@ function _payUndoLastBatch(aid) {
 // "Print Payment for Selected" calls the lot-filtered PDF endpoint
 // so the printed statement only covers the chosen lots — remaining
 // lots stay in the Payments summary and can be settled later.
-const _payLotsState = { aid: 0, seller: '', lots: [], bankLabels: {}, defaultBankId: null, tdsRate: 0 };
+const _payLotsState = { aid: 0, seller: '', lots: [], bankLabels: {}, defaultBankId: null, gstRate: 0, tdsRate: 0 };
 // Seller-name → payments rollup row (incl. total_tds), refreshed each time
 // the Payments table renders. Lets the Lots modal allocate the seller's TDS.
 let _paySummaryByName = {};
@@ -19122,14 +19179,18 @@ async function openPayLotsModal(auctionId, sellerName) {
       return String(a.lot_no || '').localeCompare(String(b.lot_no || ''));
     });
     _payLotsState.lots = filtered;
-    // TDS is a seller-level figure (from the purchase invoice). Spread it
-    // across lots in proportion to puramt so the column sums to the true TDS
-    // and each lot's Payable = balance − its share. Rate uses the displayed
-    // lots' total puramt as the denominator.
+    // GST and TDS are seller-level figures from the Payments summary
+    // (getPaymentSummary) — GST is computed LIVE from the discount (the
+    // per-lot cgst/sgst/igst stamps are often 0/stale, which is why the
+    // modal showed 0 while the main list showed a value). Spread both across
+    // the lots in proportion to puramt so each column SUMS to the seller's
+    // main-list figure. TDS additionally nets each lot's Payable.
     {
       const sumRow = _paySummaryByName[_payLotsState.seller] || null;
+      const sellerGst = sumRow ? (Number(sumRow.total_tax) || 0) : 0;
       const sellerTds = sumRow ? (Number(sumRow.total_tds) || 0) : 0;
       const sumPuramt = filtered.reduce((a, l) => a + (Number(l.puramt) || 0), 0);
+      _payLotsState.gstRate = sumPuramt > 0 ? sellerGst / sumPuramt : 0;
       _payLotsState.tdsRate = sumPuramt > 0 ? sellerTds / sumPuramt : 0;
     }
     // Build a bank_id → account label map so each lot row can show which
@@ -19152,7 +19213,7 @@ async function openPayLotsModal(auctionId, sellerName) {
         for (const b of banks) {
           // Account No · Bank Name · IFSC — the three details the operator
           // needs to confirm where the payment lands.
-          const parts = [b.acctnum, b.bank_name, b.ifsc].filter(Boolean);
+          const parts = [maskAcct(b.acctnum), b.bank_name, maskIfsc(b.ifsc)].filter(Boolean);
           _payLotsState.bankLabels[b.id] = parts.join(' · ') + (b.is_default ? ' ★' : '');
         }
       } catch (_) { /* non-fatal — lots fall back to "—" label */ }
@@ -19185,7 +19246,8 @@ function _renderPayLotsTable() {
     ? new Set(exportedLotsRaw.map(String))
     : (exportedAll ? null : new Set());
   const rows = _payLotsState.lots.map(l => {
-    const tax = (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
+    // GST allocated from the seller's live total (not the stale per-lot stamp).
+    const tax = (Number(l.puramt)||0) * (_payLotsState.gstRate||0);
     const lotTds = (Number(l.puramt)||0) * (_payLotsState.tdsRate||0);
     const lotPayable = (Number(l.balance)||0) - lotTds;
     const lotKey = String(l.lot_no || '');
@@ -19271,7 +19333,7 @@ function updatePayLotsTotals() {
     qty     += Number(l.pqty)    || 0;
     amt     += Number(l.puramt)  || 0;
     disc    += Number(l.refund)  || 0;
-    tax     += (Number(l.cgst)||0) + (Number(l.sgst)||0) + (Number(l.igst)||0);
+    tax     += (Number(l.puramt)||0) * (_payLotsState.gstRate||0);
     const lotTds = (Number(l.puramt)||0) * (_payLotsState.tdsRate||0);
     tds     += lotTds;
     payable += (Number(l.balance) || 0) - lotTds;

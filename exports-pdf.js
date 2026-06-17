@@ -624,6 +624,7 @@ const COLS = {
     { header: 'PURAMT',     key: 'puramt',      width: 14 },
     { header: 'DISCOUNT',   key: 'discount',    width: 10 },
     { header: 'GST 5%',     key: 'gst5',        width: 10 },
+    { header: 'TDS',        key: 'tds',         width: 10 },
     { header: 'PAYABLE',    key: 'payable',     width: 14 },
   ],
   // Party-wise payment summary — one aggregated row per pooler, grouped
@@ -635,6 +636,7 @@ const COLS = {
     { header: 'PURAMOUNT', key: 'puramt',  width: 16 },
     { header: 'DISCOUNT',  key: 'discount',width: 13 },
     { header: 'GST 5%',    key: 'gst5',    width: 11 },
+    { header: 'TDS',       key: 'tds',     width: 11 },
     { header: 'PAYABLE',   key: 'payable', width: 16 },
   ],
   tally_purchase: [
@@ -712,8 +714,8 @@ const TOTAL_KEYS = {
   collection:      ['bag', 'qty'],
   dealer_list:     ['lots', 'bags', 'qty'],
   sales_taxes:     ['bag', 'qty', 'cardamom_cost', 'gunny_cost', 'cgst', 'sgst', 'igst', 'tcs', 'transport', 'insurance', 'total'],
-  payment:         ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'],
-  payment_partywise: ['pqty', 'puramt', 'discount', 'gst5', 'payable'],
+  payment:         ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'],
+  payment_partywise: ['pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'],
   tally_purchase:  ['bag', 'qty', 'amount', 'cgst', 'sgst', 'igst', 'discount', 'bilamt'],
   tds_return:      ['assess_value', 'tds'],
   purchase_register: ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'],
@@ -782,14 +784,14 @@ const ROW_PREPROCESS = {
   payment: {
     serialKey: '_sn',
     groupByKey: 'poolername',
-    subtotalKeys: ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'],
+    subtotalKeys: ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'],
     subtotalLabelKey: 'poolername',
   },
   // Party-wise — group by state, subtotal each state. No serial column;
   // the subtotal label lands in the POOLER NAME column ("KERALA TOTAL").
   payment_partywise: {
     groupByKey: 'state',
-    subtotalKeys: ['pqty', 'puramt', 'discount', 'gst5', 'payable'],
+    subtotalKeys: ['pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'],
     subtotalLabelKey: 'poolername',
   },
 };
@@ -977,6 +979,25 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       }
       // gst5 comes straight from the stored `advance` column (already
       // netted in PAYABLE) — display only. Mirrors exportPaymentSummary.
+      // Per-seller TDS (Section 194Q) from the generated purchase invoice(s),
+      // same source as the Payments tab. Attributed to each seller's FIRST
+      // lot row so the per-pooler subtotal + grand total net it out of
+      // PAYABLE (Payable = PurAmt − Discount − GST 5% − TDS).
+      const tdsMap = {};
+      {
+        const tdsRows = db.all(
+          'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
+          [auctionId]);
+        for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
+      }
+      const seenTds = new Set();
+      for (const r of prows) {
+        const nameKey = String(r.poolername || '').trim().toUpperCase();
+        const tds = seenTds.has(nameKey) ? 0 : (Number(tdsMap[nameKey]) || 0);
+        seenTds.add(nameKey);
+        r.tds = tds;
+        r.payable = (Number(r.payable) || 0) - tds;
+      }
       return prows;
     }
 
@@ -987,13 +1008,27 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       const mode = (cfg && cfg.business_mode || 'e-Trade').toLowerCase();
       const discountCol = (mode === 'auction') ? 'advance' : 'refund';
       const gstCol = (mode === 'auction') ? '0' : 'advance';
-      return db.all(
+      const ppRows = db.all(
         `SELECT state, name as poolername,
                 SUM(pqty) as pqty, SUM(puramt) as puramt,
                 SUM(${discountCol}) as discount, SUM(${gstCol}) as gst5,
                 SUM(balance) as payable
            FROM lots WHERE auction_id = ? AND amount > 0
           GROUP BY state, name ORDER BY state, name`, [auctionId]);
+      // Per-seller TDS (Section 194Q) — one row per seller here, so subtract
+      // their TDS straight off PAYABLE (matches the Payments tab).
+      const tdsMap = {};
+      {
+        const tdsRows = db.all(
+          'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
+          [auctionId]);
+        for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
+      }
+      for (const r of ppRows) {
+        r.tds = Number(tdsMap[String(r.poolername || '').trim().toUpperCase()]) || 0;
+        r.payable = (Number(r.payable) || 0) - r.tds;
+      }
+      return ppRows;
     }
 
     case 'tally_purchase': {

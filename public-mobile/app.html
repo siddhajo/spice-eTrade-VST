@@ -622,6 +622,7 @@ async function refreshConfig(){
     var r=await fetch(B+'/api/config');var d=await r.json();
     var changed=false;
     var oldLitre=cfgDefaultLitre;
+    applyMaskCfg(d);
     if(d.sampleWeight!=cfgSampleWeight){cfgSampleWeight=d.sampleWeight||0;changed=true}
     if(d.gunnyWeight!=cfgGunnyWeight){cfgGunnyWeight=d.gunnyWeight||0;changed=true}
     if(d.showMoisture!=cfgShowMoisture){cfgShowMoisture=d.showMoisture||false;changed=true}
@@ -652,6 +653,23 @@ function doLogout(){fetch(B+'/api/auth/logout',{method:'POST',headers:ah()}).cat
 async function tryAutoLogin(){if(!token){loadTitle();return}try{const r=await fetch(B+'/api/auth/me',{headers:ah()});if(r.ok){const d=await r.json();user=d.user.username;userBranch=d.user.branch||'';userRole=d.user.role||'user';goSession()}else{token='';localStorage.removeItem('sa_token');loadTitle()}}catch(e){loadTitle()}}
 var cfgSampleWeight=0,cfgShowMoisture=false,cfgGunnyWeight=0,cfgShowExtraFields=false;
 var cfgLabels={lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'};
+// Sensitive-field masking policy (Settings → Display), fetched from
+// /api/config. Mirrors mask-fields.js (server) so the PWA's bank/seller
+// displays mask identically to the desktop UI and receipt PDFs.
+// Modes: none|last4|last6|first4|first6. Default 'none' → no change.
+var cfgMaskAcct='last4',cfgMaskIfsc='none',cfgMaskPhone='none';// defaults match company-config seed
+function maskField(value,mode){
+  var s=value==null?'':String(value);
+  if(!s||!mode||mode==='none')return s;
+  var show=(mode==='last4'||mode==='first4')?4:((mode==='last6'||mode==='first6')?6:0);
+  if(!show||s.length<=show)return s;
+  var stars=new Array(s.length-show+1).join('*');
+  return (mode==='last4'||mode==='last6')?stars+s.slice(-show):s.slice(0,show)+stars;
+}
+function maskAcct(v){return maskField(v,cfgMaskAcct)}
+function maskIfsc(v){return maskField(v,cfgMaskIfsc)}
+function maskPhone(v){return maskField(v,cfgMaskPhone)}
+function applyMaskCfg(d){if(!d)return;cfgMaskAcct=d.maskAcct||'none';cfgMaskIfsc=d.maskIfsc||'none';cfgMaskPhone=d.maskPhone||'none'}
 // Show or hide the extra-fields rows — both the Weight w/ Gunny +
 // total Gunny Weight row (above Net Wt) and the Crop Receipt + Reserved
 // Price row (below) — and flip Net Wt's read-only state to match.
@@ -712,9 +730,9 @@ function applyLabels(){
   var map={'elb-seller':L.seller||'Seller','elb-grade':L.grade,'elb-bags':L.bags,'elb-litre':L.litre_wt,'elb-net':L.net_wt,'elb-sample':L.sample_wt,'elb-gross':L.gross_wt,'elb-moisture':L.moisture};
   Object.keys(map).forEach(function(id){var el=document.getElementById(id);if(el)el.textContent=map[id]});
 }
-async function loadTitle(){try{const r=await fetch(B+'/api/config');const d=await r.json();setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();loadAppLogo()}catch(e){}}
+async function loadTitle(){try{const r=await fetch(B+'/api/config');const d=await r.json();applyMaskCfg(d);setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();loadAppLogo()}catch(e){}}
 
-async function goSession(){document.getElementById('ss-user').textContent=user;const lb=localStorage.getItem('sa_branch');try{const r=await fetch(B+'/api/config');const d=await r.json();setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();var brSel=document.getElementById('ss-branch');if(userRole!=='admin'&&userBranch){brSel.innerHTML='<option value="'+userBranch+'">'+userBranch+'</option>';brSel.disabled=true}else{brSel.disabled=false;brSel.innerHTML=(d.branches||[]).map(b=>'<option value="'+b.value+'"'+(b.value===(userBranch||lb)?' selected':'')+'>'+b.value+'</option>').join('')}}catch(e){}
+async function goSession(){document.getElementById('ss-user').textContent=user;const lb=localStorage.getItem('sa_branch');try{const r=await fetch(B+'/api/config');const d=await r.json();applyMaskCfg(d);setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();var brSel=document.getElementById('ss-branch');if(userRole!=='admin'&&userBranch){brSel.innerHTML='<option value="'+userBranch+'">'+userBranch+'</option>';brSel.disabled=true}else{brSel.disabled=false;brSel.innerHTML=(d.branches||[]).map(b=>'<option value="'+b.value+'"'+(b.value===(userBranch||lb)?' selected':'')+'>'+b.value+'</option>').join('')}}catch(e){}
 await loadAvailableTrades();
 show('s-session')}
 
@@ -1012,7 +1030,7 @@ function searchTrader(q){clearTimeout(stm);const el=document.getElementById('le-
 // Try online first, fall back to cache
 var ts=[];
 try{const r=await fetch(B+'/api/traders?search='+encodeURIComponent(q),{headers:ah()});const d=await r.json();ts=Array.isArray(d)?d:(d.traders||[]);ts.forEach(cacheTrader)}catch(e){ts=searchTraderCache(q)}
-const qu=q.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');let html=ts.map((t,i)=>{const h=(t.name||'').replace(new RegExp('('+qu+')','gi'),'<mark>$1</mark>');const loc=[t.ppla,t.pin].filter(Boolean).join(', ');const info=[t.cr,t.tel].filter(Boolean).join(' | ');return'<div class="si" data-idx="'+i+'"><div class="sn">'+h+'</div><div class="sd">'+loc+(info?' — '+info:'')+'</div></div>'}).join('');const isPhone=/^\d{4,}$/.test(q.trim());if(!ts.length){html+='<div class="si add-new" onclick="openSellerModal(\''+(isPhone?'':q.toUpperCase().replace(/'/g,"\\'"))+'\',\''+(isPhone?q.trim():'')+'\')">&#43; Add new seller'+(isPhone?'':' &quot;'+q.toUpperCase()+'&quot;')+'</div>'}else if(!isPhone){html+='<div class="si add-new" onclick="openSellerModal(\''+q.toUpperCase().replace(/'/g,"\\'")+'\',\'\')">&#43; Add new seller &quot;'+q.toUpperCase()+'&quot;</div>'}el.innerHTML=html;el.style.display='block';el._traders=ts;el.querySelectorAll('.si:not(.add-new)').forEach(item=>{item.onclick=function(){pickTrader(el._traders[parseInt(this.dataset.idx)])}})},200)}
+const qu=q.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');let html=ts.map((t,i)=>{const h=(t.name||'').replace(new RegExp('('+qu+')','gi'),'<mark>$1</mark>');const loc=[t.ppla,t.pin].filter(Boolean).join(', ');const info=[t.cr,maskPhone(t.tel)].filter(Boolean).join(' | ');return'<div class="si" data-idx="'+i+'"><div class="sn">'+h+'</div><div class="sd">'+loc+(info?' — '+info:'')+'</div></div>'}).join('');const isPhone=/^\d{4,}$/.test(q.trim());if(!ts.length){html+='<div class="si add-new" onclick="openSellerModal(\''+(isPhone?'':q.toUpperCase().replace(/'/g,"\\'"))+'\',\''+(isPhone?q.trim():'')+'\')">&#43; Add new seller'+(isPhone?'':' &quot;'+q.toUpperCase()+'&quot;')+'</div>'}else if(!isPhone){html+='<div class="si add-new" onclick="openSellerModal(\''+q.toUpperCase().replace(/'/g,"\\'")+'\',\'\')">&#43; Add new seller &quot;'+q.toUpperCase()+'&quot;</div>'}el.innerHTML=html;el.style.display='block';el._traders=ts;el.querySelectorAll('.si:not(.add-new)').forEach(item=>{item.onclick=function(){pickTrader(el._traders[parseInt(this.dataset.idx)])}})},200)}
 
 function pickTrader(t){selT=t;document.getElementById('le-res').style.display='none';document.getElementById('le-sw').style.display='none';
 var loc=[t.ppla,t.pin].filter(Boolean).join(', ');
@@ -1129,7 +1147,7 @@ async function saveNewSeller(){
       if(r.status===409 && d && d.duplicate){
         var ex=d.existing||{};
         var existingLine = 'Existing: '+(ex.name||'(unnamed)')+
-          ' · PAN '+(ex.pan||'—')+' · phone '+(ex.tel||'—');
+          ' · PAN '+(ex.pan||'—')+' · phone '+(maskPhone(ex.tel)||'—');
         er.innerHTML='<div class="eb"><b>'+(d.error||'Duplicate seller')+'</b>'+
           '<br><span style="opacity:.85">'+existingLine+'</span>'+
           '<br>Cancel and pick that seller from the search list.</div>';
@@ -1577,7 +1595,7 @@ function openEdit(id,lotNo,s,g,bags,litre,qty,traderId,bankId){
 function closeEdit(){document.getElementById('edit-modal').classList.remove('show');editId=null;editTraderId=null}
 function editSellerMode(){document.getElementById('ed-seller-card').style.display='none';document.getElementById('ed-seller-search').style.display='block';document.getElementById('ed-seller-input').value='';document.getElementById('ed-seller-input').focus()}
 let edStm;
-function searchEditSeller(q){clearTimeout(edStm);var el=document.getElementById('ed-seller-res');if(q.length<2){el.style.display='none';return}edStm=setTimeout(async function(){try{var r=await fetch(B+'/api/traders?search='+encodeURIComponent(q),{headers:ah()});var d=await r.json();var ts=Array.isArray(d)?d:(d.traders||[]);var qu=q.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');el.innerHTML=ts.map(function(t,i){var h=(t.name||'').replace(new RegExp('('+qu+')','gi'),'<mark>$1</mark>');var loc=[t.ppla,t.pin].filter(Boolean).join(', ');var info=[t.cr,t.tel].filter(Boolean).join(' | ');return'<div class="si" data-idx="'+i+'"><div class="sn">'+h+'</div><div class="sd">'+loc+(info?' — '+info:'')+'</div></div>'}).join('')||'<div style="padding:10px;color:var(--text3);font-size:12px">No sellers found</div>';el.style.display='block';el._traders=ts;el.querySelectorAll('.si').forEach(function(item){item.onclick=function(){pickEditSeller(el._traders[parseInt(this.dataset.idx)])}})}catch(e){}},200)}
+function searchEditSeller(q){clearTimeout(edStm);var el=document.getElementById('ed-seller-res');if(q.length<2){el.style.display='none';return}edStm=setTimeout(async function(){try{var r=await fetch(B+'/api/traders?search='+encodeURIComponent(q),{headers:ah()});var d=await r.json();var ts=Array.isArray(d)?d:(d.traders||[]);var qu=q.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');el.innerHTML=ts.map(function(t,i){var h=(t.name||'').replace(new RegExp('('+qu+')','gi'),'<mark>$1</mark>');var loc=[t.ppla,t.pin].filter(Boolean).join(', ');var info=[t.cr,maskPhone(t.tel)].filter(Boolean).join(' | ');return'<div class="si" data-idx="'+i+'"><div class="sn">'+h+'</div><div class="sd">'+loc+(info?' — '+info:'')+'</div></div>'}).join('')||'<div style="padding:10px;color:var(--text3);font-size:12px">No sellers found</div>';el.style.display='block';el._traders=ts;el.querySelectorAll('.si').forEach(function(item){item.onclick=function(){pickEditSeller(el._traders[parseInt(this.dataset.idx)])}})}catch(e){}},200)}
 function pickEditSeller(t){editTraderId=t.id;editLotBankId=null;document.getElementById('ed-seller-name').textContent=t.name;document.getElementById('ed-seller-card').style.display='flex';document.getElementById('ed-seller-search').style.display='none';document.getElementById('ed-seller-res').style.display='none';var cr=(t.cr||'').trim();var grade='1';if(cr.length>5&&!cr.toUpperCase().startsWith('CR.'))grade='2';document.getElementById('ed-grade').value=grade;loadEditBanks(t.id)}
 
 async function loadEditBanks(traderId){
@@ -1599,7 +1617,7 @@ function renderEditBankList(){
     var label=b.label?' ('+b.label+')':'';
     var opt=document.createElement('option');
     opt.value=b.id;
-    opt.textContent=b.acctnum+label;
+    opt.textContent=maskAcct(b.acctnum)+label;
     if(editLotBankId?b.id==editLotBankId:b.is_default)opt.selected=true;
     sel.appendChild(opt);
   });
@@ -1609,7 +1627,7 @@ function renderEditBankList(){
 function onEditBankSelect(sel){
   var info=document.getElementById('ed-bank-info');
   var b=editBanks.find(function(x){return x.id==sel.value});
-  info.textContent=b?'IFSC: '+(b.ifsc||'—'):'';
+  info.textContent=b?'IFSC: '+(maskIfsc(b.ifsc)||'—'):'';
 }
 
 function editSelectedEditBank(){
@@ -1803,7 +1821,7 @@ function renderBankList() {
     var label = b.label ? ' (' + b.label + ')' : '';
     var opt = document.createElement('option');
     opt.value = b.id;
-    opt.textContent = b.acctnum + label;
+    opt.textContent = maskAcct(b.acctnum) + label;
     if (b.is_default) opt.selected = true;
     sel.appendChild(opt);
   });
@@ -1814,7 +1832,7 @@ function onBankSelect(sel) {
   var info = document.getElementById('le-bank-info');
   var b = sellerBanks.find(function(x) { return x.id == sel.value; });
   if (b) {
-    var parts = ['IFSC: ' + (b.ifsc || '—')];
+    var parts = ['IFSC: ' + (maskIfsc(b.ifsc) || '—')];
     if (b.holder_name) parts.push('Holder: ' + b.holder_name);
     info.textContent = parts.join(' | ');
   } else { info.textContent = ''; }
@@ -1944,10 +1962,11 @@ function maskPII(val, show) { show = show || 4; if (!val || val.length <= show) 
 
 function showBankPop(e, name, acct, ifsc, tel, cr) {
   var pop = document.getElementById('user-bank-pop');
-  // Always show full details on screen — masking only applies to printed receipts.
-  var da = acct || '—';
-  var di = ifsc || '—';
-  var dt = tel || '—';
+  // Displayed values honour the Settings → Display masking policy. The
+  // "Call" link still uses the real number so tapping it dials correctly.
+  var da = maskAcct(acct) || '—';
+  var di = maskIfsc(ifsc) || '—';
+  var dt = maskPhone(tel) || '—';
   var dc = cr || '—';
   var telLink = tel ? '<a href="tel:' + tel + '" style="color:var(--green);text-decoration:none;font-weight:700">📞 Call</a>' : '';
   pop.innerHTML = '<div style="font-weight:700;font-size:13px;margin-bottom:6px">' + name + '<button onclick="this.parentElement.parentElement.style.display=\'none\'" style="float:right;background:none;border:none;font-size:14px;cursor:pointer;color:var(--text3)">&times;</button></div>'

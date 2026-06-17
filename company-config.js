@@ -216,6 +216,24 @@ const DEFAULTS = [
   // affects how dates are rendered. Tally XML keeps its own YYYYMMDD
   // format because Tally itself requires it (machine-to-machine).
   { key: 'date_format',     value: 'DD/MM/YYYY',     category: 'display',   label: 'Date format',              type: 'select', options: ['DD/MM/YYYY','DD-MM-YYYY','YYYY-MM-DD'] },
+  // ── SENSITIVE-FIELD MASKING (Display) ──────────────────────
+  // Mask bank account no., IFSC code and phone number wherever they're
+  // shown to people other than the operator — customer-facing receipt
+  // PDFs and on-screen lists/detail panels. Each field has its own
+  // policy. Modes: none / last4 / last6 / first4 / first6
+  // (e.g. last4 → ********1234, first4 → 1234********). Functional
+  // outputs — the bank payment file, payment advice PDF, DBF, Tally XML
+  // and WhatsApp send targets — are NEVER masked (they need real values).
+  //
+  // mask_acct defaults to 'last4' because both lot-receipt renderers
+  // (desktop HTML + the WhatsApp PDF) ALREADY masked the seller account
+  // to last-4 unconditionally before this setting existed; defaulting to
+  // 'none' would have silently exposed full account numbers on upgrade.
+  // IFSC and phone were never masked, so they default to 'none' (no
+  // change on upgrade) — the operator opts in.
+  { key: 'mask_acct',       value: 'last4',          category: 'display',   label: 'Mask Bank Account No.',    type: 'select', options: ['none','last4','last6','first4','first6'] },
+  { key: 'mask_ifsc',       value: 'none',           category: 'display',   label: 'Mask IFSC Code',           type: 'select', options: ['none','last4','last6','first4','first6'] },
+  { key: 'mask_phone',      value: 'none',           category: 'display',   label: 'Mask Phone Number',        type: 'select', options: ['none','last4','last6','first4','first6'] },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
@@ -380,7 +398,7 @@ const CATEGORIES = {
   bank:       { order: 8, title: 'Bank Details',          icon: '🏦' },
   season:     { order: 9, title: 'Season / Financial Year', icon: '📅' },
   invoice:    { order: 10, title: 'Invoice Settings',     icon: '📄' },
-  display:    { order: 10.5, title: 'Display',            icon: '🖼', description: 'Visual / formatting preferences. The date format is applied across UI tables, PDFs and Excel exports — storage in the database is always ISO (YYYY-MM-DD).' },
+  display:    { order: 10.5, title: 'Display',            icon: '🖼', description: 'Visual / formatting preferences. The date format is applied across UI tables, PDFs and Excel exports — storage in the database is always ISO (YYYY-MM-DD). Masking hides bank account no., IFSC and phone on receipts and on-screen lists/panels (pick how many digits stay visible); the bank payment file, DBF, Tally and WhatsApp targets always keep the real numbers.' },
   flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
   lot_entry:  { order: 11.5, title: 'Lot Entry Defaults',   icon: '📝', description: 'Defaults applied when field staff enter lots from the Lot Entry tab. Sample weight is auto-filled into each new lot; moisture column shows when enabled; edit timeout limits how long after creation a non-admin user can edit their own lots.' },
   integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },
@@ -448,7 +466,28 @@ function initCompanySettings(db) {
     // discount-inclusive" variant is unused. Drop the orphan row so
     // it stops appearing in Settings → Rates.
     'deduction2_inclusive',
+    // Superseded by per-field mask_acct / mask_ifsc / mask_phone (Display).
+    // Value migrated to mask_acct just below the REMOVED_KEYS sweep runs.
+    'acct_mask',
   ];
+  // Sensitive-field masking superseded the single legacy `acct_mask`
+  // switch (which only masked the seller account on mobile receipts and
+  // used a different token set). Carry any user value over to the new
+  // per-field `mask_acct` BEFORE the REMOVED_KEYS sweep drops acct_mask,
+  // mapping the old tokens onto the new ones. Only migrate when the new
+  // key is still at its 'none' default so we never stomp a fresh choice.
+  try {
+    const oldRow = db.prepare("SELECT value FROM company_settings WHERE key = 'acct_mask'").get();
+    const newRow = db.prepare("SELECT value FROM company_settings WHERE key = 'mask_acct'").get();
+    if (oldRow && newRow && (newRow.value === 'none' || !newRow.value)) {
+      const map = { show_last4: 'last4', show_last4_star: 'last4', show_first4_last4: 'last4', none: 'none' };
+      const mapped = map[oldRow.value];
+      if (mapped && mapped !== 'none') {
+        db.prepare("UPDATE company_settings SET value = ? WHERE key = 'mask_acct'").run(mapped);
+      }
+    }
+  } catch (e) {}
+
   const drop = db.prepare('DELETE FROM company_settings WHERE key = ?');
   for (const k of REMOVED_KEYS) drop.run(k);
 

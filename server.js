@@ -1215,13 +1215,62 @@ app.delete('/api/me/sessions/:tokenSuffix', requireView, (req, res) => {
 app.get('/api/company-settings', requireViewOrLotEntry, (req, res) => {
   res.json({ categories: CATEGORIES, settings: getAllSettings(getDb()) });
 });
+// Settings whose value feeds calculateLot — i.e. changing any of them makes
+// every already-calculated lot's stamped planter columns (prate/puramt/refund/
+// cgst/sgst/igst/advance/balance) stale. The classic symptom: turning on
+// "Discount includes GST" (flag_disc_gst) AFTER lots were calculated left the
+// per-lot GST stamps at 0 while the Payments tab computed GST live, so the two
+// disagreed. Re-running the calc on a settings change keeps the stamps honest.
+const CALC_AFFECTING_SETTINGS = [
+  'flag_disc_gst', 'discount_gst', 'gst_service',
+  'flag_sample', 'discount_pct', 'discount_days', 'dealer_days',
+  'deduction1', 'deduction2', 'deduction1_inclusive', 'flag_discount_in_prate',
+  'refund', 'business_state',
+];
+// Re-run calculateLot over every UNLOCKED, calculable lot (all auctions) so
+// the stamped columns reflect the current settings. Same row set + UPDATE the
+// manual "Calculate All" uses; locked (finalised) lots are left untouched.
+function recalcUnlockedLots(db, cfg) {
+  const lots = db.all(
+    `SELECT * FROM lots
+       WHERE locked_at IS NULL
+         AND ( amount > 0
+               OR (qty > 0 AND price > 0)
+               OR puramt > 0 OR prate > 0
+               OR cgst > 0 OR sgst > 0 OR igst > 0 )`
+  );
+  let n = 0;
+  for (const lot of lots) {
+    const c = calculateLot(lot, cfg);
+    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
+      [c.amount,c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
+    n++;
+  }
+  return n;
+}
+
 app.put('/api/company-settings', requireSettingsWrite, (req, res) => {
-  const count = updateSettings(getDb(), req.body.settings || {});
+  const db = getDb();
+  const incoming = req.body.settings || {};
+  // Snapshot the calc-affecting settings BEFORE the write so we can tell
+  // whether a recalc is actually needed (avoid re-stamping every lot on an
+  // unrelated change like a phone number or theme).
+  const before = getSettingsFlat(db);
+  const count = updateSettings(db, incoming);
   // Drop the cached date-format whenever settings change so fmtDate
   // picks up the new value on the next call instead of serving the
   // stale one for the rest of the process lifetime.
   invalidateDateFormatCache();
-  res.json({ success: true, updated: count });
+  const after = getSettingsFlat(db);
+  const calcChanged = CALC_AFFECTING_SETTINGS.some(
+    k => String(before[k] ?? '') !== String(after[k] ?? '')
+  );
+  let recalculated = 0;
+  if (calcChanged) {
+    try { recalculated = recalcUnlockedLots(db, after); }
+    catch (e) { console.error('[settings recalc] failed:', e && (e.stack || e.message || e)); }
+  }
+  res.json({ success: true, updated: count, recalculated });
 });
 app.get('/api/company-settings/flat', requireViewOrLotEntry, (req, res) => res.json(getSettingsFlat(getDb())));
 
@@ -8296,25 +8345,28 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   lotSql += ' ORDER BY CAST(lot_no AS INTEGER), lot_no';
   const lots = db.all(lotSql, lotParams) || [];
   const trader = db.get('SELECT * FROM traders WHERE LOWER(name) = LOWER(?) LIMIT 1', [sellerName]);
-  // Per-seller TDS (194Q) from the generated purchase invoice(s) for this
-  // trade. TDS is a seller-level figure (not per-lot), so we spread it across
-  // the seller's lots in proportion to each lot's puramt — using the seller's
-  // FULL puramt as the denominator so a partial statement (lotIds subset)
-  // still shows a proportionate share. Payable per lot is then balance − its
-  // TDS share, and the column totals back to the true TDS for a full
-  // statement. 0 until the purchase invoice is generated.
-  const tdsRow = db.get(
-    `SELECT SUM(COALESCE(tds,0)) AS tds FROM purchases
-      WHERE auction_id = ? AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?))`,
-    [auctionId, sellerName]
-  );
-  const sellerTds = tdsRow ? (Number(tdsRow.tds) || 0) : 0;
+  // GST and TDS are seller-level figures — pull them from the SAME source as
+  // the Payments main list (getPaymentSummary) so the statement matches it
+  // exactly: GST is computed LIVE from the discount (the per-lot cgst/sgst/igst
+  // stamps are often 0/stale, which made the statement show GST 0 while the
+  // list showed a value); TDS comes from the seller's purchase invoice(s).
+  // Both are seller-level, so we spread them across the seller's lots in
+  // proportion to puramt — using the seller's FULL puramt as the denominator
+  // so a partial statement (lotIds subset) shows a proportionate share, and
+  // the columns total back to the seller's main-list figures.
+  let sellerGst = 0, sellerTds = 0;
+  try {
+    const ps = getPaymentSummary(db, auctionId, null, cfg);
+    const psRow = (ps || []).find(r => String(r.name || '').trim().toLowerCase() === String(sellerName || '').trim().toLowerCase());
+    if (psRow) { sellerGst = Number(psRow.total_tax) || 0; sellerTds = Number(psRow.total_tds) || 0; }
+  } catch (_) { /* non-fatal — columns just read 0 */ }
   const fullPuramtRow = db.get(
     `SELECT SUM(COALESCE(puramt,0)) AS p FROM lots
       WHERE auction_id = ? AND TRIM(LOWER(COALESCE(name,''))) = TRIM(LOWER(?)) AND amount > 0`,
     [auctionId, sellerName]
   );
   const fullPuramt = fullPuramtRow ? (Number(fullPuramtRow.p) || 0) : 0;
+  const gstRate = fullPuramt > 0 ? sellerGst / fullPuramt : 0;
   const tdsRate = fullPuramt > 0 ? sellerTds / fullPuramt : 0;
   const fmtAmt = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
@@ -8366,8 +8418,9 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   doc.font('Helvetica').fontSize(9).fillColor('#000');
   let tQty=0,tAmt=0,tDisc=0,tTax=0,tTds=0,tPay=0;
   for (const l of lots) {
-    const tax = (Number(l.cgst)||0)+(Number(l.sgst)||0)+(Number(l.igst)||0);
-    // Proportional TDS share for this lot; Payable = balance − that share.
+    // GST + TDS allocated from the seller's live totals (not the stale per-lot
+    // stamps); Payable = balance − the lot's TDS share.
+    const tax = round2((Number(l.puramt)||0) * gstRate);
     const lotTds = round2((Number(l.puramt)||0) * tdsRate);
     const payable = (Number(l.balance)||0) - lotTds;
     const row = { ...l, tax, tds: lotTds, payable };
@@ -9634,6 +9687,15 @@ app.post('/api/lot-receipt/pdf', requireViewOrLotEntry, async (req, res) => {
     if (!Array.isArray(payload.groups) || !payload.groups.length) {
       return res.status(400).json({ error: 'No lots to render' });
     }
+    // Sensitive-field masking is decided server-side from company_settings
+    // so a tampered/old client can't bypass it. The renderer masks the
+    // seller account no. + IFSC in the slip's meta block accordingly.
+    const _mCfg = getSettingsFlat(getDb());
+    payload.maskCfg = {
+      acct: _mCfg.mask_acct || 'none',
+      ifsc: _mCfg.mask_ifsc || 'none',
+      phone: _mCfg.mask_phone || 'none',
+    };
     const pdf = await generateLotReceiptPDF(payload);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="LotReceipt.pdf"');

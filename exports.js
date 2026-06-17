@@ -725,6 +725,19 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
+  // Per-seller TDS (Section 194Q) from the generated purchase invoice(s) —
+  // same source the Payments tab uses (getPaymentSummary). Keyed by
+  // normalised name. Attributed to the seller's FIRST lot row below so the
+  // per-pooler subtotal and grand total net it out of Payable, matching the
+  // Payments tab (Payable = PurAmt − Discount − GST 5% − TDS).
+  const tdsMap = {};
+  {
+    const tdsRows = db.all(
+      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
+      [auctionId]
+    );
+    for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
+  }
   // Optional seller-name filter — "Export Payment XLSX (Selected)"
   // limits the rows to the ticked sellers. We push the filter into the
   // SQL with a `name IN (…)` clause so we don't waste the SELECT on rows
@@ -784,8 +797,12 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
   const seenSellers = new Set();
   const enrichedFlat = rows.map(r => {
     const lotDisc = Number(r.lot_discount) || 0;
-    const manualDisc = (!seenSellers.has(r.poolername))
-      ? (Number(debitMap[r.poolername]) || 0)
+    const firstForSeller = !seenSellers.has(r.poolername);
+    const manualDisc = firstForSeller ? (Number(debitMap[r.poolername]) || 0) : 0;
+    // Full seller TDS lands on the first lot row; later rows carry 0 so the
+    // per-seller total isn't double-counted.
+    const tds = firstForSeller
+      ? (Number(tdsMap[String(r.poolername || '').trim().toUpperCase()]) || 0)
       : 0;
     seenSellers.add(r.poolername);
     const discount = lotDisc + manualDisc;
@@ -796,14 +813,15 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
       // netted inside `balance`/PAYABLE, so we only DISPLAY it here and
       // never subtract it again.
       gst5: Number(r.lot_gst) || 0,
-      payable: (Number(r.payable) || 0) - manualDisc,
+      tds,
+      payable: (Number(r.payable) || 0) - manualDisc - tds,
     };
   });
 
   // Interleave per-pooler subtotal rows after each name group — mirrors
   // the PDF's groupByKey:'poolername' subtotalKeys behaviour. Rows are
   // already sorted by (state, name) so a single linear pass groups them.
-  const SUB_KEYS = ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'payable'];
+  const SUB_KEYS = ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'];
   const enriched = [];
   let curName = null;
   let acc = null;
@@ -832,6 +850,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     { header: 'PRATE', key: 'prate', width: 10 }, { header: 'PURAMT', key: 'puramt', width: 14 },
     { header: 'DISCOUNT', key: 'discount', width: 14 },
     { header: 'GST 5%', key: 'gst5', width: 12 },
+    { header: 'TDS', key: 'tds', width: 12 },
     { header: 'PAYABLE', key: 'payable', width: 14 },
   ];
   // Footer totals — sum every numeric column. The earlier export had no
@@ -851,6 +870,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
       puramt:  sum('puramt'),
       discount:sum('discount'),
       gst5:    sum('gst5'),
+      tds:     sum('tds'),
       payable: sum('payable'),
     },
   };
@@ -885,9 +905,26 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
       GROUP BY state, name
       ORDER BY state, name`, [auctionId]);
 
+  // Per-seller TDS (Section 194Q) from the generated purchase invoice(s) —
+  // same source the Payments tab uses. Each row here is one seller, so we
+  // subtract their TDS straight off PAYABLE (Payable = PurAmt − Discount −
+  // GST 5% − TDS, matching the Payments tab).
+  const tdsMap = {};
+  {
+    const tdsRows = db.all(
+      'SELECT name, SUM(COALESCE(tds,0)) AS tds FROM purchases WHERE auction_id = ? GROUP BY name',
+      [auctionId]
+    );
+    for (const t of tdsRows) tdsMap[String(t.name || '').trim().toUpperCase()] = Number(t.tds) || 0;
+  }
+  for (const r of rows) {
+    r.tds = Number(tdsMap[String(r.poolername || '').trim().toUpperCase()]) || 0;
+    r.payable = (Number(r.payable) || 0) - r.tds;
+  }
+
   // Interleave a per-state header row and a per-state subtotal row,
   // matching the reference layout (STATE … parties … STATE TOTAL).
-  const SUB_KEYS = ['pqty', 'puramt', 'discount', 'gst5', 'payable'];
+  const SUB_KEYS = ['pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'];
   const out = [];
   let curState = null;
   let acc = null;
@@ -917,6 +954,7 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
     { header: 'PURAMOUNT', key: 'puramt',  width: 16, numFmt: '#,##0.00' },
     { header: 'DISCOUNT',  key: 'discount',width: 14, numFmt: '#,##0.00' },
     { header: 'GST 5%',    key: 'gst5',    width: 12, numFmt: '#,##0.00' },
+    { header: 'TDS',       key: 'tds',     width: 12, numFmt: '#,##0.00' },
     { header: 'PAYABLE',   key: 'payable', width: 16, numFmt: '#,##0.00' },
   ];
   const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
@@ -924,7 +962,7 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
     label: 'TOTAL',
     values: {
       pqty: sum('pqty'), puramt: sum('puramt'), discount: sum('discount'),
-      gst5: sum('gst5'), payable: sum('payable'),
+      gst5: sum('gst5'), tds: sum('tds'), payable: sum('payable'),
     },
   };
   return createExcelBuffer('PaymentPartywise', cols, out, {

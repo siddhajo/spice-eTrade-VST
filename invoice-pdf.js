@@ -7,6 +7,8 @@ const PDFDocument = require('pdfkit');
 const { amountToWords } = require('./amount-words');
 // Honours user's Settings → Display → Date format choice.
 const { fmtDate: fmtUserDate, todayLocalISO } = require('./date-format');
+// Sensitive-field masking for the seller bank block on lot receipts.
+const { maskField } = require('./mask-fields');
 // Defensive resolution — uses the real getCompanyIdentity from
 // report-formatters.js when available, falls through to a shared inline
 // fallback otherwise. Fixes "getCompanyIdentity is not a function" when
@@ -682,13 +684,16 @@ function generateCropReceiptPDF(lot, cfg) {
 // One section (page) per trader group — same grouping/order as print.
 // Pure renderer: every value comes from the payload; the only thing
 // resolved here is the logo file (same source the crop receipt uses).
-function _maskAcct(acct) {
-  const s = String(acct || '');
-  if (s.length <= 4) return s;
-  return '*'.repeat(s.length - 4) + s.slice(-4);
-}
 function generateLotReceiptPDF(payload) {
   const format = (payload && payload.format === 'compact') ? 'compact' : 'detailed';
+  // Per-field masking policy (Settings → Display), injected by the server
+  // route from company_settings. Applied to the seller account no. + IFSC
+  // in the detailed slip's meta block. Defaults to 'none' (full value).
+  const maskCfg = (payload && payload.maskCfg) || {};
+  // Account defaults to last4 (prior unconditional behaviour) if a caller
+  // omits maskCfg; the server route always supplies the real policy.
+  const maskAcctMode = maskCfg.acct || 'last4';
+  const maskIfscMode = maskCfg.ifsc || 'none';
   const co = (payload && payload.co) || {};
   const groups = (payload && Array.isArray(payload.groups)) ? payload.groups : [];
   const traderInfo = (payload && payload.traderInfo) || {};
@@ -803,8 +808,8 @@ function generateLotReceiptPDF(payload) {
   function drawDetailed(doc, g, w, x0) {
     const ti = (g.trader_id != null ? traderInfo[g.trader_id] : null) || {};
     const bank = (ti && ti.defaultBank) || {};
-    const acctMasked = bank.acctnum ? _maskAcct(bank.acctnum) : '';
-    const ifsc = bank.ifsc || '';
+    const acctMasked = bank.acctnum ? maskField(bank.acctnum, maskAcctMode) : '';
+    const ifsc = bank.ifsc ? maskField(bank.ifsc, maskIfscMode) : '';
     const place = [g.ppla, g.ppin].filter(Boolean).join(', ');
     const cr = g.cr || '';
     let y = 12;
