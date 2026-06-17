@@ -2956,10 +2956,15 @@ input[type="search"]:focus{
         </p>
 
         <!-- ── Auto Backup (moved here from Settings) ──────────── -->
-        <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
-          <div style="font-weight:700;color:var(--text);font-size:14px;margin-bottom:4px">Auto Backup</div>
-          <div style="font-size:12.5px;color:var(--text3);line-height:1.55;max-width:720px">
-            Periodic snapshot of the database into a local <code style="background:var(--bg);padding:1px 4px;border-radius:3px">backups</code> folder. Set the interval and how many backups to keep — older ones are pruned automatically.
+        <!-- Highlighted panel: saffron accent border + tinted background +
+             left accent bar so the auto-backup config stands out from the
+             plain Download/Restore panels below it. -->
+        <div style="padding:18px 18px 18px 22px;border:1.5px solid var(--spice-saffron);border-left:5px solid var(--spice-saffron);border-radius:12px;background:var(--spice-saffron-lt);margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+          <div style="font-weight:700;color:var(--text);font-size:14px;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+            <span style="font-size:16px;line-height:1">⏱️</span><span>Auto Backup</span>
+          </div>
+          <div style="font-size:12.5px;color:var(--text2);line-height:1.55;max-width:720px">
+            Periodic snapshot of the database into a local <code style="background:#fff;padding:1px 4px;border-radius:3px">backups</code> folder. Set the interval and how many backups to keep — older ones are pruned automatically.
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:end;margin-top:14px">
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);font-weight:600;cursor:pointer;margin:0">

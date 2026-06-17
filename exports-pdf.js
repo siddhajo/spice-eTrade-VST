@@ -371,7 +371,11 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
   // shrinks if the value overflows, since wrapping a number across lines
   // (e.g. "10,71,225." / "00") looks broken. Non-numeric cells word-wrap.
   function measureRow(row) {
-    doc.font('Helvetica').fontSize(7.5);
+    // Measure with the SAME font the row is drawn in. Subtotal rows draw in
+    // Helvetica-Bold (wider) — measuring them in regular under-counts the
+    // width, so a long label like "GREEN LEAF TRADING COMPANY TOTAL" wrapped
+    // to fewer lines than it actually needs and the bold text overlapped.
+    doc.font(row._isSubtotal ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5);
     const LINE_H = 10;
     const PAD_TOP = 3, PAD_BOT = 3;
     const MIN_ROW = 14;
