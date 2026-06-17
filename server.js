@@ -4400,10 +4400,23 @@ app.post('/api/lots', requireLotWrite, (req, res) => {
     cropReceiptNo = ((maxRow && maxRow.m) || 0) + 1;
   }
 
-  // Per-lot bank account (FK trader_banks.id). Optional — null when the
-  // seller has no banks or the operator didn't pick one (export then uses
-  // the seller's default account).
-  const bankId = (l.bank_id != null && l.bank_id !== '') ? (Number(l.bank_id) || null) : null;
+  // Per-lot bank account (FK trader_banks.id). When the operator picked an
+  // account, honour it. Otherwise ALWAYS default to the seller's default
+  // account (is_default=1, else first row) so lots never land untagged —
+  // an untagged lot alongside tagged ones used to (falsely) trip the
+  // "multiple banks" badge on the Payments tab. Stays null only when the
+  // seller has no banks on file at all.
+  let bankId = (l.bank_id != null && l.bank_id !== '') ? (Number(l.bank_id) || null) : null;
+  if (bankId == null && l.trader_id) {
+    try {
+      const defBank = db.get(
+        `SELECT id FROM trader_banks WHERE trader_id = ?
+          ORDER BY is_default DESC, id ASC LIMIT 1`,
+        [l.trader_id]
+      );
+      if (defBank && defBank.id != null) bankId = Number(defBank.id) || null;
+    } catch (_) { /* trader_banks may not exist on partial migrations */ }
+  }
   const ins = db.run(`INSERT INTO lots (auction_id,lot_no,crop,grade,crpt,branch,state,trader_id,name,padd,ppla,ppin,pstate,pst_code,cr,pan,tel,aadhar,bags,litre,qty,gross_wt,sample_wt,weight_with_gunny,moisture,crop_receipt_no,reserved_price,bank_id,user_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [auctionId,lotNoStr,l.crop||'',l.grade||'',l.crpt||'',branch,l.state||'TAMIL NADU',l.trader_id||null,l.name||'',l.padd||'',l.ppla||'',l.ppin||'',l.pstate||'',l.pst_code||'',l.cr||'',l.pan||'',l.tel||'',l.aadhar||'',l.bags||0,l.litre||'',l.qty||0,l.gross_wt||0,l.sample_wt||0,Number(l.weight_with_gunny)||0,l.moisture||'',cropReceiptNo,Number(l.reserved_price)||0,bankId,l.user_id||'']);

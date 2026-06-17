@@ -575,12 +575,25 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     COUNT(*) as lot_count,
     GROUP_CONCAT(DISTINCT l.bank_id) AS bank_ids,
     COUNT(l.bank_id) AS bank_lot_count,
+    MAX(l.trader_id) AS trader_id,
     MAX(l.state) AS state
     FROM lots l WHERE l.auction_id = ? AND l.amount > 0`;
   const params = [auctionId];
   if (state) { query += ' AND l.state = ?'; params.push(state); }
   query += ' GROUP BY l.name ORDER BY MAX(l.state), l.name';
   const sellers = db.all(query, params);
+
+  // How many bank accounts each seller (trader) maintains. Drives the
+  // "multiple banks" badge: a mix of tagged + untagged lots is only
+  // ambiguous when the seller actually has >1 account on file — with a
+  // single account the untagged lots can only route to that same account.
+  const bankCountByTraderId = {};
+  try {
+    const counts = db.all(
+      'SELECT trader_id, COUNT(*) AS n FROM trader_banks GROUP BY trader_id'
+    );
+    for (const c of counts) bankCountByTraderId[c.trader_id] = Number(c.n) || 0;
+  } catch (_) { /* trader_banks may not exist on partial migrations */ }
 
   // Fetch this auction's identifier (ano) so we can match debit_notes.
   // Debit notes are keyed by ano + seller name (no FK to auctions.id),
@@ -688,15 +701,19 @@ function getPaymentSummary(db, auctionId, state, cfg) {
         ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
         : (Number(s.total_payable) || 0)) - (Number(tdsMap[s.name]) || 0)),
       // True when this seller's lots point at more than one bank account
-      // (or a mix of tagged + untagged). Drives the "multiple banks" badge
-      // on the Payments table so the user knows to export each account's
-      // lots separately via the lot picker.
+      // (or a mix of tagged + untagged AND the seller has >1 account on
+      // file). Drives the "multiple banks" badge on the Payments table so
+      // the user knows to export each account's lots separately via the lot
+      // picker. A mix of tagged + untagged lots is NOT ambiguous when the
+      // seller has a single bank account — the untagged lots can only route
+      // to that one account — so it's suppressed there (fix A).
       multipleBanks: (() => {
         const ids = String(s.bank_ids || '').split(',')
           .map(x => x.trim()).filter(x => x !== '' && x !== 'null');
         const untagged = Number(s.lot_count || 0) > Number(s.bank_lot_count || 0);
         const distinct = new Set(ids).size;
-        return distinct > 1 || (distinct >= 1 && untagged);
+        const bankCount = Number(bankCountByTraderId[s.trader_id]) || 0;
+        return distinct > 1 || (distinct >= 1 && untagged && bankCount > 1);
       })(),
     };
   });
@@ -783,6 +800,9 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
   // Also index every bank row by its own id so per-lot bank_id routing can
   // resolve the exact account a seller's lots were tagged with.
   const bankById = {};
+  // Count of accounts per trader — a mix of tagged + untagged lots only
+  // flags multipleBanks when the seller has >1 account on file (fix A).
+  const bankCountByTraderId = {};
   try {
     const banks = db.all(`
       SELECT trader_id, ifsc, acctnum, holder_name, bank_name, is_default, id
@@ -793,6 +813,7 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
       // First row per trader_id wins (already sorted by is_default DESC).
       if (bankByTraderId[b.trader_id] == null) bankByTraderId[b.trader_id] = b;
       bankById[b.id] = b;
+      bankCountByTraderId[b.trader_id] = (bankCountByTraderId[b.trader_id] || 0) + 1;
     }
   } catch (_) { /* trader_banks may not exist on partial migrations */ }
 
@@ -831,8 +852,9 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     // to export each account's lots separately via the lot picker.
     const lotBank = (distinctBankIds.length === 1 && !hasUntagged)
       ? bankById[distinctBankIds[0]] : null;
+    const bankCount = (p.trader_id != null && bankCountByTraderId[p.trader_id]) || 0;
     const multipleBanks = distinctBankIds.length > 1
-      || (distinctBankIds.length >= 1 && hasUntagged);
+      || (distinctBankIds.length >= 1 && hasUntagged && bankCount > 1);
     const ifsc      = (lotBank && lotBank.ifsc)        || (tb && tb.ifsc)        || p.t_ifsc    || '';
     const acctnum   = (lotBank && lotBank.acctnum)     || (tb && tb.acctnum)     || p.t_acctnum || '';
     const holderNm  = (lotBank && lotBank.holder_name) || (tb && tb.holder_name) || p.t_holder  || p.name;

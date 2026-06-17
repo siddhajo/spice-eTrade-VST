@@ -10182,13 +10182,12 @@ async function leSaveLot(){
       ...(_le.editingLotId && Number.isFinite(cropReceiptNo) && cropReceiptNo > 0
           ? { crop_receipt_no: cropReceiptNo } : {}),
       moisture: moisture,
-      // lots.state is the BUSINESS context (TAMIL NADU = ISP / KERALA = ASP),
-      // NOT the seller's state — it drives invoice context, not the address.
-      // It must come from the company business state, never the seller's
-      // pstate: imported sellers can carry a no-space "TAMILNADU" (see
-      // data/config-recover.sql), which on an edit was leaking into this
-      // field and silently changing the lot's state from "TAMIL NADU" to
-      // "TAMILNADU". The seller's own state stays in `pstate` below.
+      // lots.state = the company's operating state (a stable per-install
+      // stamp), NOT the seller's address state. Sourcing it from the
+      // seller's pstate was a bug: imported sellers can carry a no-space
+      // "TAMILNADU" (see data/config-recover.sql), so editing a lot silently
+      // rewrote its state from "TAMIL NADU" to "TAMILNADU". Use the configured
+      // business state so create and edit agree. Seller state stays in `pstate`.
       state: getDefaultBusinessState(),
       // Pull seller's denormalised fields onto the lot row so existing
       // listings (Lots tab, exports) work without a join.
@@ -18432,22 +18431,33 @@ function _ensureWaQueueModal() {
       </div>
       <div class="actions">
         <button class="btn" onclick="_waQueueAct('stop')" style="background:#eee">Stop</button>
-        <button class="btn" onclick="_waQueueAct('skip')" style="background:var(--spice-turmeric);color:#fff">Skip</button>
+        <button class="btn" id="wa-q-skip" onclick="_waQueueAct('skip')" style="background:var(--spice-turmeric);color:#fff">Skip</button>
         <button class="btn" id="wa-q-send" onclick="_waQueueAct('send')" style="background:#25D366;color:#fff">Send & Next →</button>
       </div>
     </div>`;
   document.body.appendChild(m);
   return m;
 }
-let _waQueueState = null;
-function _waQueueAct(action) { if (_waQueueState && _waQueueState.resolve) _waQueueState.resolve(action); }
+let _waQueueState = null, _waStop = false;
+function _waQueueAct(action) { if (action === 'stop') _waStop = true; if (_waQueueState && _waQueueState.resolve) _waQueueState.resolve(action); }
 async function _runWaQueue(items, opts) {
   // items: [{name, phone, message, blob?, filename?}]
   const useApi = await _waCloudApiAvailable();
+  _waStop = false;
   const m = _ensureWaQueueModal();
   showModal('wa-queue-modal');
-  let sent=0, skipped=0;
+  // Cloud API mode = fully automatic: one click on the parent button fires
+  // EVERY selected seller's message back-to-back, no per-seller "Send & Next".
+  // Hide Send/Skip and leave only Stop so the operator can abort. Manual mode
+  // (no Cloud API) keeps the per-seller tap because the browser only opens
+  // WhatsApp Web / the share sheet from a real user gesture.
+  const sendBtn = document.getElementById('wa-q-send');
+  const skipBtn = document.getElementById('wa-q-skip');
+  if (sendBtn) sendBtn.style.display = useApi ? 'none' : '';
+  if (skipBtn) skipBtn.style.display = useApi ? 'none' : '';
+  let sent=0, skipped=0, failed=0;
   for (let i = 0; i < items.length; i++) {
+    if (_waStop) break;
     const it = items[i];
     document.getElementById('wa-q-count').textContent = `(${i+1} of ${items.length})`;
     document.getElementById('wa-q-name').textContent = it.name || '—';
@@ -18456,38 +18466,38 @@ async function _runWaQueue(items, opts) {
     const pdfRow = document.getElementById('wa-q-pdf');
     if (it.filename) { pdfRow.style.display='block'; pdfRow.querySelector('span').textContent = it.filename; }
     else pdfRow.style.display = 'none';
-    document.getElementById('wa-q-status').textContent = useApi ? 'Cloud API mode — auto-send enabled' : 'Manual mode — opens WhatsApp Web; click Send inside WhatsApp, then come back and hit "Send & Next"';
 
-    // Wait for user to click an action button (in manual mode we ALSO
-    // open the WhatsApp tab on first click via the Send button — so the
-    // user lands inside WhatsApp ready to hit Send).
-    const action = await new Promise(res => { _waQueueState = { resolve: res }; });
-    if (action === 'stop') break;
-    if (action === 'skip') { skipped++; continue; }
-
-    // action === 'send'
     if (useApi) {
-      // Document items go through the upload-then-send pipeline so the
-      // PDF actually transmits; text-only items use the text endpoint.
-      // Either branch falls back to the manual flow on Cloud API
-      // failure (501 / 502) so the user can still finish the send.
-      let ok;
+      // Auto-send via the Cloud API — no wait for a button click. Phone-less
+      // sellers can't be routed by Meta, so skip them.
+      document.getElementById('wa-q-status').textContent = `Sending automatically… ${sent} sent, ${items.length - i} to go`;
+      if (!it.phone) { skipped++; continue; }
       const params = it.params || [it.name || '', it.message || '', ''];
-      if (it.blob) {
-        ok = await _waCloudSendDocument(_normalizePhoneForWa(it.phone), params, it.blob, it.filename);
-      } else {
-        ok = await _waCloudSendText(it.phone, params);
-      }
-      if (!ok) { it.blob ? await _waOpenDocument(it) : _waOpenText(it.phone, it.message); }
-      sent++;
+      try {
+        const ok = it.blob
+          ? await _waCloudSendDocument(_normalizePhoneForWa(it.phone), params, it.blob, it.filename)
+          : await _waCloudSendText(it.phone, params);
+        ok ? sent++ : failed++;
+      } catch (_) { failed++; }
     } else {
+      // Manual mode — wait for the operator's Send & Next / Skip tap.
+      document.getElementById('wa-q-status').textContent = 'Manual mode — opens WhatsApp Web; click Send inside WhatsApp, then come back and hit "Send & Next"';
+      const action = await new Promise(res => { _waQueueState = { resolve: res }; });
+      if (action === 'stop') break;
+      if (action === 'skip') { skipped++; continue; }
       if (it.blob) await _waOpenDocument(it);
       else _waOpenText(it.phone, it.message);
       sent++;
     }
   }
+  // Restore buttons for the next run.
+  if (sendBtn) sendBtn.style.display = '';
+  if (skipBtn) skipBtn.style.display = '';
   hideModal('wa-queue-modal');
-  toast(`WhatsApp queue done — sent ${sent}, skipped ${skipped}`);
+  let msg = (_waStop ? 'Stopped — ' : 'WhatsApp done — ') + sent + ' message' + (sent === 1 ? '' : 's') + ' sent';
+  if (skipped) msg += `, ${skipped} skipped`;
+  if (failed) msg += `, ${failed} failed`;
+  toast(msg);
 }
 let _waApiCheck = null;
 async function _waCloudApiAvailable() {
