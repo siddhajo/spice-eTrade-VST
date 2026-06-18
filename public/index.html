@@ -4215,11 +4215,11 @@ input[type="search"]:focus{
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="togglePayMenu('pay-menu-all',event)" title="Export the whole trade (every seller, all lots)">📤 Export All ▾</button>
             <div class="pay-menu-list">
               <div class="pay-menu-head">Whole trade · every seller</div>
-              <button class="pay-menu-item" onclick="closePayMenus();exportType('bank_payment')" title="Bulk RTGS/NEFT file for bank portal upload">📤 Bank Payment file</button>
-              <button class="pay-menu-item" onclick="closePayMenus();exportType('voucher_payment')" title="Payment voucher (Particulars / Customer / Amount / A-c / IFSC / TDS)">🧾 Payment Voucher</button>
+              <button class="pay-menu-item" onclick="closePayMenus();exportAllBankPayment()" title="Bulk RTGS/NEFT file for bank portal upload — marks every seller as bank-exported">📤 Bank Payment file</button>
+              <button class="pay-menu-item" onclick="closePayMenus();exportAllVoucher()" title="Payment voucher for every seller — marks every seller as voucher-exported">🧾 Payment Voucher</button>
               <div class="pay-menu-sep"></div>
-              <button class="pay-menu-item" onclick="closePayMenus();exportType('payment')" title="Per-lot detailed payment breakdown (Excel)">📊 Payment XLSX</button>
-              <button class="pay-menu-item" onclick="closePayMenus();exportType('payment','pdf')" title="Per-lot detailed payment breakdown (PDF)">📄 Payment PDF</button>
+              <button class="pay-menu-item" onclick="closePayMenus();exportAllPaymentXlsx()" title="Per-lot detailed payment breakdown (Excel)">📊 Payment XLSX</button>
+              <button class="pay-menu-item" onclick="closePayMenus();exportAllPaymentPdf()" title="Per-lot detailed payment breakdown (PDF)">📄 Payment PDF</button>
             </div>
           </div>
 
@@ -21130,8 +21130,9 @@ async function exportType(type,format,aidOverride){format=format||'xlsx';
   // auction id without first having to seed #exp-auction. Falls
   // through to the normal Reports/Payments selectors otherwise.
   const aid=aidOverride||document.getElementById('exp-auction')?.value||document.getElementById('pay-auction')?.value;
-  if(!aid){alert('Select an auction first');return}
+  if(!aid){alert('Select an auction first');return false}
   const label = (EXP_LABELS[type]||type);
+  let ok = false;   // returned so callers (e.g. Payments Export All) can mark on success
   await withOverlay(`Exporting ${label} (${format.toUpperCase()})…`, async () => {
     // CSV exports ignore format query param — server picks ext from EXPORT_TYPES.
     // Keep format in URL for consistency but download filename uses actual ext.
@@ -21150,7 +21151,47 @@ async function exportType(type,format,aidOverride){format=format||'xlsx';
     const cd=r.headers.get('Content-Disposition')||'';
     const fm=/filename="?([^";]+)"?/i.exec(cd); if(fm) filename=fm[1];
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+    ok = true;
   });
+  return ok;
+}
+// ── Payments "Export All" (whole-trade) wrappers ─────────────────
+// The Payments tab's Export-All menu runs a whole-trade export AND marks every
+// seller as exported for that category, so the Paid / To-be-paid filter (and
+// the per-seller badges) reflect the export. A seller is "Paid" only once BOTH
+// bank payment and voucher are out — same rule as Export Selected and the
+// block badge. Undo Last Export rolls a whole-trade mark back.
+function _payMarkAllExported(aid, cat){
+  if (!aid) return;
+  const names = Object.keys(_paySummaryByName || {});
+  if (!names.length) return;
+  const exportsMap = {};
+  for (const n of names) exportsMap[n] = '*';   // whole trade → every lot exported
+  _payMarkExported(aid, exportsMap, cat);
+}
+// Resolve the Payments tab's own auction and pass it explicitly as the export
+// aidOverride, so we never pick up a stale Reports-tab (#exp-auction) value —
+// and so the export and the mark always target the same trade.
+function _payCurrentAid(){ return Number(document.getElementById('pay-auction')?.value || 0); }
+async function exportAllBankPayment(){
+  const aid = _payCurrentAid();
+  const ok = await exportType('bank_payment', 'xlsx', aid);
+  if (ok){ _payMarkAllExported(aid, 'bank'); toast('Bank Payment exported — all sellers marked.'); loadPayments(); }
+}
+async function exportAllVoucher(){
+  const aid = _payCurrentAid();
+  const ok = await exportType('voucher_payment', 'xlsx', aid);
+  if (ok){ _payMarkAllExported(aid, 'voucher'); toast('Voucher exported — all sellers marked.'); loadPayments(); }
+}
+async function exportAllPaymentXlsx(){
+  const aid = _payCurrentAid();
+  const ok = await exportType('payment', 'xlsx', aid);
+  if (ok){ _payMarkAllExported(aid, 'payment'); loadPayments(); }
+}
+async function exportAllPaymentPdf(){
+  const aid = _payCurrentAid();
+  const ok = await exportType('payment', 'pdf', aid);
+  if (ok){ _payMarkAllExported(aid, 'payment'); loadPayments(); }
 }
 
 // ── TDS ───────────────────────────────────────────────────
