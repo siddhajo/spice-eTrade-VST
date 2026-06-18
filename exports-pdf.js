@@ -18,6 +18,7 @@ const auctionReports = require('./auction-reports');
 const {
   fmtMoney, fmtQty, fmtPrice,
   getCompanyHeader, drawCompanyHeader,
+  xlsxNumFmtForHeader,
 } = require('./report-formatters');
 
 // Manually truncate `text` to fit `maxWidth` using doc.widthOfString. PDFKit
@@ -170,9 +171,14 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
   const HEAD_H = 16;
   let y;
 
+  // A column is numeric (→ right-aligned) iff the shared Excel detector
+  // recognises its header as a number column. Delegating keeps PDF alignment
+  // in lockstep with the XLSX number-format policy, so every numeric column
+  // (VALUE, COMMISSION, REFUND, KILOS, SL.NO, INV.AMOUNT, …) right-aligns in
+  // both outputs instead of the PDF falling back to left for headers that
+  // weren't in a hand-maintained list.
   function isNumericCol(col) {
-    const h = (col.header || '').toUpperCase();
-    return /^(QTY|BAG|BAGS|PRICE|RATE|AMOUNT|PQTY|PRATE|PURAMT|PURCHAMT|CGST|SGST|IGST|TCS|TOTAL|DISCOUNT|PAYABLE|ADVANCE|BALANCE|LITRE|LOTS|TDS|ASSESS_VALUE|COST|NET|GUNNY|TRANSPORT|INSURANCE|CARDAMOM|CARDAMOM_COST|GUNNY_COST|ROUND|BILAMT|COM)$/.test(h);
+    return xlsxNumFmtForHeader(col.header) !== null;
   }
 
   function fmtCell(val, col) {
@@ -204,15 +210,29 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
   // text columns look jammed (e.g. PRICE 2163 right-edge sitting next to CODE
   // RSH left-edge). Without borders the table edges look ragged.
   let pageTableTop = null;
+  // Y-bands of full-width section-banner rows on the current page. Column
+  // verticals skip these so a party header (e.g. "ANKIT SPICES — GSTIN…")
+  // reads as one clean banner instead of being chopped into cells. Reset
+  // per page in drawHeader.
+  let sectionBands = [];
 
   // Draw verticals through the data-row region only (header + rows), without
   // closing the outer border. Caller must still draw the outer border later.
   function drawDataVerticals() {
     if (pageTableTop === null) return;
     const top = pageTableTop, bottom = y;
+    const bands = sectionBands.slice().sort((a, b) => a.top - b.top);
     for (let ci = 0; ci < colWidths.length - 1; ci++) {
       const vx = colX[ci] + colWidths[ci];
-      doc.moveTo(vx, top).lineTo(vx, bottom).lineWidth(0.3).strokeColor('#888').stroke();
+      // Draw in segments, skipping section-banner bands.
+      let segTop = top;
+      for (const band of bands) {
+        if (band.bottom <= top || band.top >= bottom) continue;
+        const bTop = Math.max(top, band.top), bBot = Math.min(bottom, band.bottom);
+        if (bTop > segTop) doc.moveTo(vx, segTop).lineTo(vx, bTop).lineWidth(0.3).strokeColor('#888').stroke();
+        segTop = bBot;
+      }
+      if (segTop < bottom) doc.moveTo(vx, segTop).lineTo(vx, bottom).lineWidth(0.3).strokeColor('#888').stroke();
     }
   }
 
@@ -265,6 +285,7 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
     const headH = headerLines * HEAD_LINE_H + HEAD_PAD * 2;
 
     pageTableTop = y;  // remember where this page's column-strip starts
+    sectionBands = []; // section banners are per-page; reset on each header
     doc.rect(m, y, usableW, headH).fillAndStroke('#E8E4DD', '#999');
     // Vertical dividers between header cells — without these the header
     // strip looks like one big banner instead of distinct columns,
@@ -302,6 +323,18 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
   }
 
   function drawRow(row, i, rowH, wrapped) {
+    if (row._isSection) {
+      // Full-width party banner (name + GSTIN). Verticals skip this band.
+      sectionBands.push({ top: y, bottom: y + rowH });
+      doc.rect(m, y, usableW, rowH).fillAndStroke('#E8E4DD', '#999');
+      const label = (row.label || '') + (row.gstin ? `      GSTIN: ${row.gstin}` : '');
+      doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5)
+         .text(label, m + 5, y + 4.5, { width: usableW - 10, align: 'left', lineBreak: false });
+      // Bottom rule so the banner is clearly separated from its rows.
+      doc.moveTo(m, y + rowH).lineTo(m + usableW, y + rowH).lineWidth(0.3).strokeColor('#999').stroke();
+      y += rowH;
+      return;
+    }
     if (row._isSubtotal) {
       // Subtotal row — full-width yellow strip styled like the grand total.
       doc.rect(m, y, usableW, rowH).fillAndStroke('#FFF3CD', '#E0B020');
@@ -371,6 +404,9 @@ function renderTablePdf({ title, subtitle, columns, rows, totals, layout, compan
   // shrinks if the value overflows, since wrapping a number across lines
   // (e.g. "10,71,225." / "00") looks broken. Non-numeric cells word-wrap.
   function measureRow(row) {
+    if (row._isSection) {
+      return { rowH: 17, wrapped: columns.map(() => ['']) };
+    }
     // Measure with the SAME font the row is drawn in. Subtotal rows draw in
     // Helvetica-Bold (wider) — measuring them in regular under-counts the
     // width, so a long label like "GREEN LEAF TRADING COMPANY TOTAL" wrapped
@@ -473,6 +509,32 @@ function sumKeys(rows, keys) {
 
 // ── Column defs — must match exports.js columns exactly ─────
 const COLS = {
+  // Per-party "individual" registers (cross-auction). Rendered via
+  // renderIndividualRegisterPdf, not the generic getRowsForType path.
+  pooler_individual: [
+    { header: 'TNO',   key: 'tno',   width: 8  },
+    { header: 'DATE',  key: 'date',  width: 14 },
+    { header: 'LOT',   key: 'lot',   width: 8  },
+    { header: 'QTY',   key: 'qty',   width: 14 },
+    { header: 'RATE',  key: 'rate',  width: 12 },
+    { header: 'VALUE', key: 'value', width: 18 },
+  ],
+  seller_individual: [
+    { header: 'DATE',    key: 'date',    width: 14 },
+    { header: 'ANO',     key: 'ano',     width: 8  },
+    { header: 'INVO',    key: 'invo',    width: 8  },
+    { header: 'QTY',     key: 'qty',     width: 14 },
+    { header: 'INVOICE', key: 'invoice', width: 18 },
+  ],
+  merchant_individual: [
+    { header: 'DATE',    key: 'date',    width: 14 },
+    { header: 'TNO',     key: 'tno',     width: 8  },
+    { header: 'INVO',    key: 'invo',    width: 8  },
+    { header: 'RECP',    key: 'recp',    width: 8  },
+    { header: 'QTY',     key: 'qty',     width: 14 },
+    { header: 'INVOICE', key: 'invoice', width: 18 },
+    { header: 'RECEIPT', key: 'receipt', width: 16 },
+  ],
   lot_slip: [
     { header: 'STATE', key: 'state', width: 12 },
     { header: 'LOT', key: 'lot', width: 8 },
@@ -727,6 +789,9 @@ const TOTAL_KEYS = {
 };
 
 const TITLES = {
+  pooler_individual:   'Pooler Register',
+  seller_individual:   'Sellers Individual',
+  merchant_individual: 'Merchants Individual',
   lot_slip:        'Lot Slip',
   lot_slip_after:  'Lot Slip (After Trade)',
   lot_buyer:       'Lot Buyer',
@@ -983,12 +1048,13 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       }
       // gst5 comes straight from the stored `advance` column (already
       // netted in PAYABLE) — display only. Mirrors exportPaymentSummary.
-      // TDS is LOT-WISE: rate × this lot's puramt (GSTIN dealers only, gated
-      // by flag_tds_purchase) — same as the Payments tab. Each row carries its
-      // own TDS; PAYABLE = PurAmt − Discount − GST 5% − TDS.
-      const { lotwisePurchaseTds } = require('./calculations');
+      // TDS comes from the seller's stamped purchase invoice (Section 194Q),
+      // spread across this lot ∝ its puramt — same as the Payments tab. Each
+      // row carries its own TDS share; PAYABLE = PurAmt − Discount − GST 5% − TDS.
+      const { paymentTdsContext } = require('./calculations');
+      const tdsCtx = paymentTdsContext(db, auctionId);
       for (const r of prows) {
-        const tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
+        const tds = tdsCtx.share(r.poolername, r.puramt);
         r.tds = tds;
         r.payable = (Number(r.payable) || 0) - tds;
       }
@@ -1009,12 +1075,13 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
                 SUM(balance) as payable
            FROM lots WHERE auction_id = ? AND amount > 0
           GROUP BY state, name ORDER BY state, name`, [auctionId]);
-      // Per-seller TDS — LOT-WISE: rate × the seller's total purchase amount
-      // (GSTIN dealers only, gated by flag_tds_purchase). Subtracted off
-      // PAYABLE, matching the Payments tab.
-      const { lotwisePurchaseTds } = require('./calculations');
+      // Per-seller TDS — the stamped Section 194Q purchase-invoice TDS for this
+      // trade (0 until the invoice is generated / below threshold). Subtracted
+      // off PAYABLE, matching the Payments tab.
+      const { paymentTdsContext } = require('./calculations');
+      const tdsCtx = paymentTdsContext(db, auctionId);
       for (const r of ppRows) {
-        r.tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
+        r.tds = tdsCtx.share(r.poolername, r.puramt);
         r.payable = (Number(r.payable) || 0) - r.tds;
       }
       return ppRows;
@@ -1060,7 +1127,71 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
   }
 }
 
+// Summary-row builders for the per-party registers — mirror the XLSX
+// INDIVIDUAL_REG_DEFS so PDF and XLSX show the same TOTAL / Sold / Not Sold /
+// Closing Balance lines. Each returns rows flagged `_isSubtotal` so the
+// generic renderer styles them as yellow strips.
+const INDIVIDUAL_PDF_SUMMARY = {
+  pooler_individual: (s) => ([
+    { _isSubtotal: true, tno: 'Total',    qty: s.qty,        value: s.value },
+    { _isSubtotal: true, tno: 'Sold',     qty: s.soldQty,    value: s.soldValue },
+    { _isSubtotal: true, tno: 'Not Sold', qty: s.notSoldQty },
+  ]),
+  seller_individual: (s) => ([
+    { _isSubtotal: true, date: 'Total',           qty: s.qty, invoice: s.invoice },
+    { _isSubtotal: true, date: 'Closing Balance', invoice: s.closing },
+  ]),
+  merchant_individual: (s) => ([
+    { _isSubtotal: true, date: 'Total',           qty: s.qty, invoice: s.invoice, receipt: s.receipt },
+    { _isSubtotal: true, date: 'Closing Balance', invoice: s.closing },
+  ]),
+};
+const INDIVIDUAL_PDF_GRANDKEYS = {
+  pooler_individual: { keys: ['qty', 'value'], label: 'tno' },
+  seller_individual: { keys: ['qty', 'invoice'], label: 'date' },
+  merchant_individual: { keys: ['qty', 'invoice', 'receipt'], label: 'date' },
+};
+
+async function renderIndividualRegisterPdf(db, type, extra) {
+  const { getPoolerRegister, getSellerRegister, getMerchantRegister } = require('./calculations');
+  const opts = { from: extra.from || null, to: extra.to || null, party: extra.party || null };
+  const data = type === 'seller_individual' ? getSellerRegister(db, opts)
+             : type === 'merchant_individual' ? getMerchantRegister(db, opts)
+             : getPoolerRegister(db, opts);
+  const summaryFn = INDIVIDUAL_PDF_SUMMARY[type];
+  // Flatten parties into one row list: section banner → rows → summary lines.
+  const rows = [];
+  data.parties.forEach((p) => {
+    rows.push({ _isSection: true, label: p.name, gstin: p.gstin });
+    p.rows.forEach(r => rows.push(r));
+    summaryFn(p.summary).forEach(r => rows.push(r));
+  });
+  // Grand total strip across every party.
+  const gk = INDIVIDUAL_PDF_GRANDKEYS[type];
+  let totals = null;
+  if (data.parties.length) {
+    totals = {};
+    gk.keys.forEach(k => {
+      totals[k] = data.parties.reduce((s, p) => s + (Number(p.summary[k]) || 0), 0);
+    });
+    totals[gk.label] = 'GRAND TOTAL';
+  }
+  const subtitle = (opts.from && opts.to) ? `Period: ${opts.from} to ${opts.to}` : 'All dates';
+  return renderTablePdf({
+    title: TITLES[type] || type,
+    subtitle,
+    columns: COLS[type],
+    rows,
+    totals,
+    layout: PDF_LAYOUT[type],
+    companyHeader: getCompanyHeader(db),
+  });
+}
+
 async function exportPdf(db, type, auctionId, cfg, extra = {}) {
+  if (type === 'pooler_individual' || type === 'seller_individual' || type === 'merchant_individual') {
+    return renderIndividualRegisterPdf(db, type, extra);
+  }
   // Specialized renderers — these don't use the generic table layout.
   // lot_slip + lot_slip_after + lot_buyer + lot_name all share the
   // carbon-copy two-up layout (twoUpSlipPdf in auction-reports.js) so

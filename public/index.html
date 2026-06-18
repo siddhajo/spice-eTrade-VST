@@ -4202,12 +4202,14 @@ input[type="search"]:focus{
             <button id="pay-bulk-bank-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportBankPaymentSelected()" title="Export the bank RTGS/NEFT file containing ONLY the ticked sellers (and only their picked lots, if any)">📤 Bank Payment ← <span id="pay-bulk-bank-export-cnt">0</span> sellers</button>
             <button id="pay-bulk-xlsx-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentXlsxSelected()" title="Export the per-lot Payment XLSX containing ONLY the ticked sellers (and only their picked lots, if any)">📊 Payment XLSX ← <span id="pay-bulk-xlsx-export-cnt">0</span> sellers</button>
             <button id="pay-bulk-pdf-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentPdfSelected()" title="Export the per-lot Payment PDF containing ONLY the ticked sellers (and only their picked lots, if any)">📄 Payment PDF ← <span id="pay-bulk-pdf-export-cnt">0</span> sellers</button>
+            <button id="pay-bulk-voucher-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportVoucherPaymentSelected()" title="Export the payment voucher (Particulars / Customer / Amount / A-c / IFSC / TDS) containing ONLY the ticked sellers (and only their picked lots, if any)">🧾 Voucher ← <span id="pay-bulk-voucher-export-cnt">0</span> sellers</button>
           </div>
 
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('bank_payment')" title="Export bulk RTGS/NEFT file for bank portal upload">📤 Export Bank Payment</button>
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment')" title="Per-lot detailed payment breakdown">📊 Export Payment XLSX</button>
             <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment','pdf')" title="Per-lot detailed payment breakdown (PDF)">📄 Export Payment PDF</button>
+            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('voucher_payment')" title="Payment voucher for ALL sellers (Particulars / Customer / Amount / A-c / IFSC / TDS)">🧾 Export Voucher</button>
             <!-- Toolbar batch undo. Hidden when no batches exist for the
                  current auction; otherwise shows "↶ Undo Last Export (N)"
                  where N is the number of batches still on the stack. -->
@@ -4882,13 +4884,19 @@ input[type="search"]:focus{
             <select id="reg-type" onchange="onRegTypeChange()">
               <option value="purchase">Purchase (lot-wise)</option>
               <option value="sales">Sales (invoice-wise)</option>
+              <option value="pooler">Pooler Register (per pooler)</option>
+              <option value="seller">Sellers Individual (per seller)</option>
+              <option value="merchant">Merchants Individual (per merchant)</option>
             </select>
           </div>
-          <div class="fg" style="margin:0;min-width:220px"><label>Trade</label>
+          <div class="fg" style="margin:0;min-width:220px" id="reg-auction-wrap"><label>Trade</label>
             <select id="reg-auction" style="width:100%;padding:6px"></select>
           </div>
-          <div class="fg" style="margin:0"><label>From</label><input type="date" id="reg-from"></div>
-          <div class="fg" style="margin:0"><label>To</label><input type="date" id="reg-to"></div>
+          <div class="fg" style="margin:0"><label>From</label><input type="date" id="reg-from" onchange="if(isIndividualReg(document.getElementById('reg-type').value))populateRegParties()"></div>
+          <div class="fg" style="margin:0"><label>To</label><input type="date" id="reg-to" onchange="if(isIndividualReg(document.getElementById('reg-type').value))populateRegParties()"></div>
+          <div class="fg" style="margin:0;min-width:220px;display:none" id="reg-party-wrap"><label>Party</label>
+            <select id="reg-party" style="width:100%;padding:6px"><option value="">— All parties —</option></select>
+          </div>
           <div class="fg" style="margin:0;display:none" id="reg-sale-wrap"><label>Sale Type</label>
             <select id="reg-sale"><option value="">All</option><option value="L">Local (L)</option><option value="I">Inter-state (I)</option><option value="E">Export (E)</option><option value="W">Withdrawn (W)</option><option value="N">N/A (N)</option></select>
           </div>
@@ -13055,7 +13063,7 @@ function leBuildDetailedHtml(p) {
 
 // ── Sensitive-field masking ─────────────────────────────────────
 // Mirrors mask-fields.js (server) verbatim so on-screen displays and the
-// receipt PDFs mask identically. Modes: none|last4|last6|first4|first6.
+// receipt PDFs mask identically. Modes: none|last4|last6|first4|first6|first2last2|full.
 // Policy comes from Settings → Display and is cached in _maskCfg, refreshed
 // whenever /api/company-settings/flat is fetched. Default 'none' → no change.
 let _maskCfg = { acct: 'last4', ifsc: 'none', phone: 'none' };  // defaults match company-config seed
@@ -13070,6 +13078,11 @@ function refreshMaskCfg(cfg) {
 function maskField(value, mode) {
   const s = value == null ? '' : String(value);
   if (!s || !mode || mode === 'none') return s;
+  if (mode === 'full') return '*'.repeat(s.length);
+  if (mode === 'first2last2') {
+    if (s.length <= 4) return s; // nothing left to hide between first/last 2
+    return s.slice(0, 2) + '*'.repeat(s.length - 4) + s.slice(-2);
+  }
   const show = (mode === 'last4' || mode === 'first4') ? 4
              : (mode === 'last6' || mode === 'first6') ? 6 : 0;
   if (!show || s.length <= show) return s;
@@ -13832,12 +13845,19 @@ function fld(f){
     ['last6',  'Show last 6 digits'],
     ['first4', 'Show first 4 digits'],
     ['first6', 'Show first 6 digits'],
+    ['full',   'Hide all (full mask)'],
+  ];
+  // Phone adds a first-2-and-last-2 option (e.g. 98******10) on top of the shared set.
+  const PHONE_MASK_OPTS = [
+    ...MASK_OPTS.slice(0, MASK_OPTS.length - 1),
+    ['first2last2', 'Show first 2 and last 2 digits'],
+    MASK_OPTS[MASK_OPTS.length - 1],
   ];
   const FIELD_OPTIONS = {
     date_format: ['DD/MM/YYYY', 'DD-MM-YYYY', 'YYYY-MM-DD'],
     mask_acct:  MASK_OPTS,
     mask_ifsc:  MASK_OPTS,
-    mask_phone: MASK_OPTS,
+    mask_phone: PHONE_MASK_OPTS,
   };
   if (FIELD_OPTIONS[f.key]) {
     const tip = FIELD_HELP[f.key] ? helpTip(FIELD_HELP[f.key]) : '';
@@ -19165,6 +19185,13 @@ async function exportPaymentPdfSelected() {
   if (!names.length) { alert('Tick one or more sellers first'); return; }
   await _payDownloadSelected('payment', 'pdf', aid, names);
 }
+async function exportVoucherPaymentSelected() {
+  const aid = Number(document.getElementById('pay-auction')?.value || 0);
+  const names = _collectSelectedPaymentNames();
+  if (!aid) { alert('Select an auction first'); return; }
+  if (!names.length) { alert('Tick one or more sellers first'); return; }
+  await _payDownloadSelected('voucher_payment', 'xlsx', aid, names);
+}
 async function _payDownloadSelected(type, format, aid, names) {
   const label = (typeof EXP_LABELS === 'object' && EXP_LABELS[type]) || type;
   // Pull per-seller state. Two independent maps go into the body:
@@ -19846,6 +19873,7 @@ function updatePaymentBulkButtons() {
   _bulkBtnSetVisible(document.getElementById('pay-bulk-bank-export'), checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-xlsx-export'), checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-pdf-export'), checked > 0);
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-voucher-export'), checked > 0);
   // Live-update the seller count inside each Selected button label so
   // the operator can see at a glance how many sellers the next click
   // will export. Helps catch "wait, I forgot to tick one" before firing.
@@ -19855,6 +19883,8 @@ function updatePaymentBulkButtons() {
   if (xcnt) xcnt.textContent = String(checked);
   const pcnt = document.getElementById('pay-bulk-pdf-export-cnt');
   if (pcnt) pcnt.textContent = String(checked);
+  const vcnt = document.getElementById('pay-bulk-voucher-export-cnt');
+  if (vcnt) vcnt.textContent = String(checked);
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');
@@ -20840,14 +20870,14 @@ window.addEventListener('resize', () => {
 // ── Exports ───────────────────────────────────────────────
 const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',
   lot_buyer:'Lot Buyer',lot_name:'Lot Name',lot_payment:'Lot Payment Summary',
-  praman_csv:'e-Trade CSV (Praman)',price_list_before:'Price List (Before)',price_list:'Price List',bank_payment_before:'Bank Payment (Before)',bank_payment:'Bank Payment (RTGS/NEFT)',
+  praman_csv:'e-Trade CSV (Praman)',price_list_before:'Price List (Before)',price_list:'Price List',bank_payment_before:'Bank Payment (Before)',bank_payment:'Bank Payment (RTGS/NEFT)',voucher_payment:'Voucher Payment',
   pooler_register:'Pooler Register',full_file:'Full File',collection:'Collection',trade_report:'Trade Report',dealer_list:'Dealer List',
   payment:'Payment Summary',payment_partywise:'Payment Summary - Party wise'};
 // Export types that only support a specific format (no XLSX/PDF choice).
 // e.g., Praman is a CSV-only upload format for the Praman auction platform.
 const EXP_CSV_ONLY = new Set(['praman_csv']);
 // Full File has too many columns to fit any printable PDF page — only XLSX.
-const EXP_XLSX_ONLY = new Set(['full_file']);
+const EXP_XLSX_ONLY = new Set(['full_file', 'voucher_payment']);
 // Reports that capture the pre-trade lot state. Rendered into the
 // "Pre-trade Exports" collapsible section above the main Export Center
 // AND surfaced as quick-download buttons inside the Price Import
@@ -22373,10 +22403,38 @@ async function loadRegisterDefault(){
   if (t && !t.value) t.value = today;
   onRegTypeChange();
 }
+// The three per-party "individual" registers (Pooler / Sellers / Merchants)
+// are date-range + optional-party, not trade-scoped.
+const REG_INDIVIDUAL = { pooler:1, seller:1, merchant:1 };
+function isIndividualReg(type){ return !!REG_INDIVIDUAL[type]; }
 function onRegTypeChange(){
   const type = document.getElementById('reg-type').value;
+  const indiv = isIndividualReg(type);
   const saleWrap = document.getElementById('reg-sale-wrap');
+  const auctionWrap = document.getElementById('reg-auction-wrap');
+  const partyWrap = document.getElementById('reg-party-wrap');
   if (saleWrap) saleWrap.style.display = (type === 'sales') ? '' : 'none';
+  if (auctionWrap) auctionWrap.style.display = indiv ? 'none' : '';
+  if (partyWrap) partyWrap.style.display = indiv ? '' : 'none';
+  if (indiv) populateRegParties();
+}
+// Fill the Party dropdown for the active individual register + date range.
+async function populateRegParties(){
+  const type = document.getElementById('reg-type').value;
+  if (!isIndividualReg(type)) return;
+  const sel = document.getElementById('reg-party');
+  if (!sel) return;
+  const keep = sel.value;
+  const from = document.getElementById('reg-from').value;
+  const to = document.getElementById('reg-to').value;
+  const p = new URLSearchParams({ kind: type });
+  if (from && to) { p.set('from', from); p.set('to', to); }
+  let names = [];
+  try { names = await j('/api/registers/individual-parties?' + p.toString()); }
+  catch(e){ names = []; }
+  sel.innerHTML = '<option value="">— All parties —</option>' +
+    (names||[]).map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if (keep && (names||[]).includes(keep)) sel.value = keep;
 }
 // Build the trade/date/sale query params shared by load + export.
 function regParams(){
@@ -22399,6 +22457,33 @@ const fmtNumWithDecimals = (decimals) => (v) => {
   return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 };
 function regColumns(type){
+  if (type === 'pooler') return [
+    { key:'party', label:'Pooler', sort:'text' },
+    { key:'tno', label:'TNo', sort:'text' },
+    { key:'date', label:'Date', sort:'text' },
+    { key:'lot', label:'Lot', sort:'text' },
+    { key:'qty', label:'Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+    { key:'rate', label:'Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    { key:'value', label:'Value', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+  ];
+  if (type === 'seller') return [
+    { key:'party', label:'Seller', sort:'text' },
+    { key:'date', label:'Date', sort:'text' },
+    { key:'ano', label:'ANO', sort:'text' },
+    { key:'invo', label:'Invo', sort:'number', numeric:true, fmt:fmtNumWithDecimals(0) },
+    { key:'qty', label:'Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+    { key:'invoice', label:'Invoice', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+  ];
+  if (type === 'merchant') return [
+    { key:'party', label:'Merchant', sort:'text' },
+    { key:'date', label:'Date', sort:'text' },
+    { key:'tno', label:'TNo', sort:'text' },
+    { key:'invo', label:'Invo', sort:'text' },
+    { key:'recp', label:'Recp', sort:'text' },
+    { key:'qty', label:'Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+    { key:'invoice', label:'Invoice', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    { key:'receipt', label:'Receipt', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+  ];
   if (type === 'sales') return [
     { key:'state', label:'State', sort:'text' },
     { key:'tno', label:'TNO', sort:'text' },
@@ -22439,8 +22524,35 @@ function regColumns(type){
     { key:'payable', label:'Payable', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
   ];
 }
+// Build query params for the individual (per-party) registers.
+function indivRegParams(){
+  const type = document.getElementById('reg-type').value;
+  const from = document.getElementById('reg-from').value;
+  const to = document.getElementById('reg-to').value;
+  const party = document.getElementById('reg-party') ? document.getElementById('reg-party').value : '';
+  const p = new URLSearchParams({ kind: type });
+  if (from && to) { p.set('from', from); p.set('to', to); }
+  if (party) p.set('party', party);
+  return p;
+}
 async function loadRegister(){
   const type = document.getElementById('reg-type').value;
+  if (isIndividualReg(type)) {
+    let data = null;
+    try { data = await j('/api/registers/individual?' + indivRegParams().toString()); }
+    catch(e){ toast('Load failed: ' + (e.message || e)); return; }
+    // Flatten the per-party structure into a preview table (one row per
+    // record, prefixed with the party name).
+    const rows = [];
+    (data && data.parties || []).forEach(p => {
+      (p.rows || []).forEach(r => rows.push(Object.assign({ party: p.name }, r)));
+    });
+    DataTable.mount('reg-body', rows, {
+      columns: regColumns(type),
+      emptyState: { icon:'document', title:'No records', body:'No register entries for this selection.' }
+    });
+    return;
+  }
   const ep = (type === 'sales') ? 'sales' : 'purchase';
   const url = `/api/registers/${ep}?` + regParams().toString();
   let d = [];
@@ -22453,10 +22565,17 @@ async function loadRegister(){
 }
 async function exportRegister(format){
   const type = document.getElementById('reg-type').value;
-  const ep = (type === 'sales') ? 'sales-register' : 'purchase-register';
-  const p = regParams();
+  let ep, p, base;
+  if (isIndividualReg(type)) {
+    ep = 'individual-register';
+    p = indivRegParams();
+    base = { pooler:'PoolerRegister', seller:'SellerRegister', merchant:'MerchantRegister' }[type];
+  } else {
+    ep = (type === 'sales') ? 'sales-register' : 'purchase-register';
+    p = regParams();
+    base = (type === 'sales') ? 'SalesRegister' : 'PurchaseRegister';
+  }
   if (format) p.set('format', format);
-  const base = (type === 'sales') ? 'SalesRegister' : 'PurchaseRegister';
   const name = base + '.' + (format === 'pdf' ? 'pdf' : 'xlsx');
   await withOverlay(`Exporting ${base} (${(format||'xlsx').toUpperCase()})…`, async () => {
     const r = await fetch(B + `/api/exports/${ep}?` + p.toString(), { headers:{'Authorization':'Bearer '+T} });

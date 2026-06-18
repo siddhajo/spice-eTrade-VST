@@ -8189,6 +8189,66 @@ app.get('/api/exports/sales-register', requireExport, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Per-party "Individual" registers (cross-auction, date-range) ──
+// Pooler / Seller / Merchant party statements. Scoped by a From/To date
+// range and an OPTIONAL single party (empty = every party, one section
+// per party in the export).
+const INDIVIDUAL_REG_KINDS = { pooler: 1, seller: 1, merchant: 1 };
+function individualRegOpts(req) {
+  return {
+    from: req.query.from || null,
+    to: req.query.to || null,
+    party: req.query.party || null,
+  };
+}
+
+app.get('/api/registers/individual', requireView, (req, res) => {
+  try {
+    const kind = String(req.query.kind || '').toLowerCase();
+    if (!INDIVIDUAL_REG_KINDS[kind]) return res.status(400).json({ error: 'Unknown register kind' });
+    const db = getDb();
+    const { getPoolerRegister, getSellerRegister, getMerchantRegister } = require('./calculations');
+    const fn = kind === 'seller' ? getSellerRegister
+             : kind === 'merchant' ? getMerchantRegister : getPoolerRegister;
+    res.json(fn(db, individualRegOpts(req)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/registers/individual-parties', requireView, (req, res) => {
+  try {
+    const db = getDb();
+    const { listRegisterParties } = require('./calculations');
+    res.json(listRegisterParties(db, {
+      kind: String(req.query.kind || '').toLowerCase(),
+      from: req.query.from || null, to: req.query.to || null,
+    }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/exports/individual-register', requireExport, async (req, res) => {
+  try {
+    const kind = String(req.query.kind || '').toLowerCase();
+    if (!INDIVIDUAL_REG_KINDS[kind]) return res.status(400).json({ error: 'Unknown register kind' });
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const opts = individualRegOpts(req);
+    const format = String(req.query.format || 'xlsx').toLowerCase();
+    const fileBase = { pooler: 'PoolerRegister', seller: 'SellerRegister', merchant: 'MerchantRegister' }[kind];
+    if (format === 'pdf') {
+      const pdfType = { pooler: 'pooler_individual', seller: 'seller_individual', merchant: 'merchant_individual' }[kind];
+      const buffer = await exportAnyPdf(db, pdfType, null, cfg, opts);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.pdf"`);
+      return res.send(buffer);
+    }
+    const { exportIndividualRegister } = require('./exports');
+    const buffer = await exportIndividualRegister(db, kind, opts);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ══════════════════════════════════════════════════════════════
 // INVOICE PREVIEW (PREINVO.PRG) — dry-run, no save
 // ══════════════════════════════════════════════════════════════

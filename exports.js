@@ -333,8 +333,21 @@ async function exportPriceListBefore(db, auctionId) {
 // Header on row 1, data from row 2. Bank software auto-ingests this
 // shape — adding a brand band would break the import.
 async function exportBankPayment(db, auctionId, cfg, _state, opts) {
-  const { getBankPaymentData, formatLotList, lotwisePurchaseTds } = require('./calculations');
+  const payments = resolveBankPayments(db, auctionId, cfg, opts);
+  return buildBankPaymentSheet(db, auctionId, cfg, payments);
+}
+
+// Shared payment-row resolver for the Bank Payment AND Voucher Payment
+// exports. Pulls getBankPaymentData(), then applies the Payments-tab
+// "Export Selected" filters (seller-name filter + per-seller lot picks +
+// already-exported exclusions) and returns the final `payments` array.
+// Both exporters feed the result into their own sheet builder.
+function resolveBankPayments(db, auctionId, cfg, opts) {
+  const { getBankPaymentData, formatLotList, paymentTdsContext } = require('./calculations');
   let payments = getBankPaymentData(db, auctionId, cfg);
+  // Same stamped-purchase-TDS source the Payments tab + base bank rows use, so
+  // a lot-picked subset nets the proportionate share of the invoice TDS.
+  const tdsCtx = paymentTdsContext(db, auctionId);
   // Optional seller-name filter — when the user clicks "Export Bank
   // Payment (Selected)" in the Payments tab, only the ticked sellers'
   // rows should appear in the bank upload file. Match against `p.name`
@@ -409,10 +422,11 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
             AND UPPER(TRIM(l.name)) = ?${extraWhere}`,
         params
       ) || { payable: 0, puramt: 0, cr: '', lot_nos: '' };
-      // Net the same lot-wise TDS on the picked subset so this override keeps
-      // the bank amount = Payable (PurAmt − Discount − GST − TDS), matching the
-      // base getBankPaymentData rows.
-      const rawAmount = (Number(sub.payable) || 0) - lotwisePurchaseTds(sub.puramt, sub.cr, cfg);
+      // Net the same purchase-invoice TDS (proportionate to the picked subset's
+      // puramt) so this override keeps the bank amount = Payable (PurAmt −
+      // Discount − GST − TDS), matching the base getBankPaymentData rows.
+      const tdsShare = tdsCtx.share(sellerName, sub.puramt);
+      const rawAmount = (Number(sub.payable) || 0) - tdsShare;
       const roundedAmount = cfg.flag_round ? Math.round(rawAmount) : rawAmount;
       const isRTGS = roundedAmount >= 200000;
       // If every picked lot points at the same single bank account, route
@@ -427,6 +441,9 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
       payments[idx] = {
         ...payments[idx],
         amount: roundedAmount,
+        // Keep the per-row TDS proportionate to the picked subset so the
+        // Voucher Payment TDS column matches this row's recomputed amount.
+        tds: tdsShare,
         transactionType: isRTGS ? 'RTGS' : 'NEFT',
         // Re-derive the covered-lots list from the same picked/excluded
         // subset so REMARKS lists exactly the lots this row pays for.
@@ -445,7 +462,7 @@ async function exportBankPayment(db, auctionId, cfg, _state, opts) {
     payments = payments.filter(p => Number(p.amount) > 0);
   }
 
-  return buildBankPaymentSheet(db, auctionId, cfg, payments);
+  return payments;
 }
 
 // Shared sheet builder for both Bank Payment variants (after-discount and
@@ -541,6 +558,157 @@ function buildBankPaymentSheet(db, auctionId, cfg, payments) {
   head.font = { bold: true };
   // Data rows from row 2.
   rows.forEach(r => ws.addRow(r));
+  return wb.xlsx.writeBuffer();
+}
+
+// ── Export Type 4c: Voucher Payment ──────────────────────────
+// A compact 6-column payment voucher (a different bank's bulk-transfer
+// template than the 12-column RTGS sheet). Shares the same row source as
+// Bank Payment — so the Payments-tab "Export Selected" seller/lot filters
+// apply identically — but renders the simpler voucher layout:
+//
+//   Row 1 (band): <Bank name>  <Bank account no>            Dt: DD-MM-YYYY
+//   Row 2       : (spacer)
+//   Row 3 (green): Particulars | Customer Name | Amount | Account Number | IFSC | TDS
+//   Row 4+      : one row per seller
+//
+// Amount is the net Payable already wired (puramt − discount − GST − TDS);
+// the TDS column shows the deducted TDS for reference.
+async function exportVoucherPayment(db, auctionId, cfg, _state, opts) {
+  const payments = resolveBankPayments(db, auctionId, cfg, opts);
+  return buildVoucherSheet(db, auctionId, cfg, payments);
+}
+
+function buildVoucherSheet(db, auctionId, cfg, payments) {
+  // Sender-side context (state-aware), same source the 12-column bank sheet
+  // uses for the debit account — Kerala vs TN picks the company's bank.
+  const isKL = String(cfg.business_state || cfg.state || '').toUpperCase().includes('KERALA');
+  const senderName = (isKL ? cfg.bank_kl_name : cfg.bank_tn_name) || cfg.bank_tn_name || cfg.bank_kl_name || '';
+  const senderAcct = (isKL ? cfg.bank_kl_acct : cfg.bank_tn_acct) || cfg.bank_tn_acct || cfg.bank_kl_acct || '';
+  // Sender IFSC's 4-char bank prefix — used to split each row into
+  // IFT (same bank) vs NEFT/RTGS (other bank), exactly like the 12-column
+  // bank sheet's Transaction Type column.
+  const senderIfsc = (isKL ? cfg.bank_kl_ifsc : cfg.bank_tn_ifsc) || cfg.bank_tn_ifsc || cfg.bank_kl_ifsc || '';
+  const senderBankPrefix = String(senderIfsc).slice(0, 4).toUpperCase();
+
+  // Auction context: ano (Particulars prefix) + value date (DD-MM-YYYY band).
+  const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
+  const ano = a.ano || '';
+  const valueDate = fmtUserDate(String(a.date || '').slice(0, 10));
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('VOUCHER_PAYMENT');
+  ws.columns = [
+    { key: 'particulars', width: 38 },
+    { key: 'customer',    width: 34 },
+    { key: 'amount',      width: 16 },
+    { key: 'acct',        width: 22 },
+    { key: 'ifsc',        width: 16 },
+    { key: 'tds',         width: 14 },
+  ];
+  ws.getColumn(3).numFmt = '#,##0.00';
+  ws.getColumn(6).numFmt = '#,##0.00';
+
+  const thin = { style: 'thin', color: { argb: 'FF000000' } };
+  const boxAll = (row) => { for (let c = 1; c <= 6; c++) row.getCell(c).border = { top: thin, bottom: thin, left: thin, right: thin }; };
+
+  // Row 1 — header band: company bank name, debit account, value date.
+  const band = ws.getRow(1);
+  band.getCell(1).value = senderName;
+  band.getCell(2).value = senderAcct;
+  band.getCell(5).value = valueDate ? `Dt: ${valueDate}` : '';
+  band.font = { bold: true };
+  boxAll(band);
+
+  // Row 2 — spacer (left blank, matching the template).
+
+  // Row 3 — green column header.
+  const head = ws.getRow(3);
+  const headers = ['Particulars', 'Customer Name', 'Amount', 'Account Number', 'IFSC', 'TDS'];
+  headers.forEach((h, i) => {
+    const cell = head.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF93C47D' } };
+    cell.border = { top: thin, bottom: thin, left: thin, right: thin };
+  });
+
+  // Data rows from row 4. Tally running totals + per-transaction-type
+  // splits (IFT/NEFT/RTGS) for the summary blocks below the table.
+  let rowIdx = 4;
+  let totAmount = 0, totTds = 0;
+  const byType = { IFT: { amt: 0, cnt: 0 }, NEFT: { amt: 0, cnt: 0 }, RTGS: { amt: 0, cnt: 0 } };
+  for (const p of payments) {
+    const lots = p.lots || '';
+    // Particulars = auction/trade ref + the lots this payment covers.
+    const particulars = `${ano}${lots ? ` / lot${lots.includes(',') ? 's' : ''} ${lots}` : ''}`.trim();
+    const amount = Number(p.amount) || 0;
+    const rawTds = Number(p.tds) || 0;
+    const tdsVal = cfg.flag_round ? Math.round(rawTds) : rawTds;
+    // Transaction type, same rule as the bank sheet: same bank → IFT,
+    // else ≥₹2L → RTGS, else NEFT.
+    const benePrefix = String(p.ifsc || '').toUpperCase().slice(0, 4);
+    const sameBank = senderBankPrefix && benePrefix === senderBankPrefix;
+    const txType = sameBank ? 'IFT' : (amount >= 200000 ? 'RTGS' : 'NEFT');
+    const row = ws.getRow(rowIdx++);
+    row.getCell(1).value = particulars;
+    row.getCell(2).value = String(p.beneficiaryName || p.name || '').toUpperCase();
+    row.getCell(3).value = amount;
+    // Account number kept as text so long numbers don't render in scientific
+    // notation / lose leading zeros on import.
+    row.getCell(4).value = String(p.accountNo || '');
+    row.getCell(5).value = String(p.ifsc || '').toUpperCase();
+    row.getCell(6).value = tdsVal;
+    boxAll(row);
+    totAmount += amount;
+    totTds += tdsVal;
+    byType[txType].amt += amount;
+    byType[txType].cnt += 1;
+  }
+
+  // Total row — sum of Amount (col 3) and TDS (col 6), boxed like the table.
+  const totalRow = ws.getRow(rowIdx++);
+  totalRow.getCell(1).value = 'Total';
+  totalRow.getCell(3).value = totAmount;
+  totalRow.getCell(6).value = totTds;
+  totalRow.font = { bold: true };
+  boxAll(totalRow);
+
+  // Spacer row, then the signature row (Prepared / Checked / Approved), each
+  // label paired with the blank cell to its right for the actual sign-off.
+  rowIdx++;
+  const sigRow = ws.getRow(rowIdx++);
+  sigRow.getCell(1).value = 'Prepared By';
+  sigRow.getCell(3).value = 'Checked By';
+  sigRow.getCell(5).value = 'Approved By';
+  sigRow.font = { bold: true };
+  boxAll(sigRow);
+
+  // Two spacer rows, then the IFT / NEFT / RTGS breakdown: label (col 2,
+  // right-aligned) | amount (col 3) | count (col 4), capped with a TOTAL.
+  rowIdx += 2;
+  const totalCount = byType.IFT.cnt + byType.NEFT.cnt + byType.RTGS.cnt;
+  const sumRow = (label, amt, cnt) => {
+    const r = ws.getRow(rowIdx++);
+    const lblCell = r.getCell(2);
+    lblCell.value = label;
+    lblCell.font = { bold: true };
+    lblCell.alignment = { horizontal: 'right' };
+    const amtCell = r.getCell(3);
+    amtCell.value = amt;
+    amtCell.font = { bold: true };
+    const cntCell = r.getCell(4);
+    cntCell.value = cnt;
+    cntCell.font = { bold: true };
+    cntCell.alignment = { horizontal: 'right' };
+  };
+  sumRow('IFT',  byType.IFT.amt,  byType.IFT.cnt);
+  sumRow('NEFT', byType.NEFT.amt, byType.NEFT.cnt);
+  sumRow('RTGS', byType.RTGS.amt, byType.RTGS.cnt);
+  rowIdx++;
+  sumRow('TOTAL', totAmount, totalCount);
+
   return wb.xlsx.writeBuffer();
 }
 
@@ -729,10 +897,11 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
-  // TDS is computed LOT-WISE per row below (rate × that lot's puramt), same as
-  // the Payments tab now does — see lotwisePurchaseTds. (No per-seller
-  // purchases.tds lump on the first row anymore.)
-  const { lotwisePurchaseTds } = require('./calculations');
+  // TDS comes from the seller's stamped purchase invoice (Section 194Q),
+  // spread per row ∝ that lot's puramt — same as the Payments tab. 0 until the
+  // invoice is generated / below the ₹50-lakh threshold.
+  const { paymentTdsContext } = require('./calculations');
+  const tdsCtx = paymentTdsContext(db, auctionId);
   // Optional seller-name filter — "Export Payment XLSX (Selected)"
   // limits the rows to the ticked sellers. We push the filter into the
   // SQL with a `name IN (…)` clause so we don't waste the SELECT on rows
@@ -794,10 +963,9 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
     const lotDisc = Number(r.lot_discount) || 0;
     const firstForSeller = !seenSellers.has(r.poolername);
     const manualDisc = firstForSeller ? (Number(debitMap[r.poolername]) || 0) : 0;
-    // TDS is now LOT-WISE: rate × this lot's puramt (GSTIN dealers only,
-    // gated by flag_tds_purchase). Each row carries its own TDS instead of
-    // the whole seller's lump on the first row.
-    const tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
+    // Each row carries its share of the seller's stamped purchase-invoice TDS,
+    // spread ∝ this lot's puramt.
+    const tds = tdsCtx.share(r.poolername, r.puramt);
     seenSellers.add(r.poolername);
     const discount = lotDisc + manualDisc;
     return {
@@ -900,13 +1068,14 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
       GROUP BY state, name
       ORDER BY state, name`, [auctionId]);
 
-  // Per-seller TDS — LOT-WISE: rate × the seller's total purchase amount (no
-  // ₹50L threshold), GSTIN dealers only, gated by flag_tds_purchase. Same as
-  // the Payments tab. Subtracted straight off PAYABLE (Payable = PurAmt −
+  // Per-seller TDS — the stamped Section 194Q purchase-invoice TDS for this
+  // trade (0 until the invoice is generated / below threshold). Same as the
+  // Payments tab. Subtracted straight off PAYABLE (Payable = PurAmt −
   // Discount − GST 5% − TDS).
-  const { lotwisePurchaseTds } = require('./calculations');
+  const { paymentTdsContext } = require('./calculations');
+  const tdsCtx = paymentTdsContext(db, auctionId);
   for (const r of rows) {
-    r.tds = lotwisePurchaseTds(r.puramt, r.cr, cfg);
+    r.tds = tdsCtx.share(r.poolername, r.puramt);
     r.payable = (Number(r.payable) || 0) - r.tds;
   }
 
@@ -1158,6 +1327,92 @@ async function exportSalesRegister(db, opts = {}) {
   });
 }
 
+// ── Export: Per-party "Individual" Registers (cross-auction) ───────
+// Pooler / Seller / Merchant statements, one section per party. Shares the
+// createExcelBuffer section-grouped mode: each party becomes a banded
+// section (name + GSTIN) followed by its rows, a bold TOTAL subtotal, and a
+// summary line (Sold/Not Sold for poolers, Closing Balance for the others).
+// `labelKey` is the first column the TOTAL/summary labels land in.
+const INDIVIDUAL_REG_DEFS = {
+  pooler: {
+    sheet: 'PoolerRegister', title: 'Pooler Register', labelKey: 'tno',
+    cols: [
+      { header: 'TNO',   key: 'tno',   width: 8  },
+      { header: 'DATE',  key: 'date',  width: 12 },
+      { header: 'LOT',   key: 'lot',   width: 8  },
+      { header: 'QTY',   key: 'qty',   width: 12, numFmt: '#,##0.000' },
+      { header: 'RATE',  key: 'rate',  width: 11, numFmt: '#,##0.00'  },
+      { header: 'VALUE', key: 'value', width: 16, numFmt: '#,##0.00'  },
+    ],
+    summaryRows: (p) => ([
+      { _isSubtotal: true, tno: 'Total',    qty: p.summary.qty,        value: p.summary.value },
+      { _isSubtotal: true, tno: 'Sold',     qty: p.summary.soldQty,    value: p.summary.soldValue },
+      { _isSubtotal: true, tno: 'Not Sold', qty: p.summary.notSoldQty },
+    ]),
+    grandKeys: ['qty', 'value'],
+  },
+  seller: {
+    sheet: 'SellerRegister', title: 'Sellers Individual', labelKey: 'date',
+    cols: [
+      { header: 'DATE',    key: 'date',    width: 12 },
+      { header: 'ANO',     key: 'ano',     width: 8  },
+      { header: 'INVO',    key: 'invo',    width: 8,  numFmt: '#,##0' },
+      { header: 'QTY',     key: 'qty',     width: 12, numFmt: '#,##0.000' },
+      { header: 'INVOICE', key: 'invoice', width: 16, numFmt: '#,##0.00' },
+    ],
+    summaryRows: (p) => ([
+      { _isSubtotal: true, date: 'Total',           qty: p.summary.qty, invoice: p.summary.invoice },
+      { _isSubtotal: true, date: 'Closing Balance', invoice: p.summary.closing },
+    ]),
+    grandKeys: ['qty', 'invoice'],
+  },
+  merchant: {
+    sheet: 'MerchantRegister', title: 'Merchants Individual', labelKey: 'date',
+    cols: [
+      { header: 'DATE',    key: 'date',    width: 12 },
+      { header: 'TNO',     key: 'tno',     width: 8  },
+      { header: 'INVO',    key: 'invo',    width: 8  },
+      { header: 'RECP',    key: 'recp',    width: 8  },
+      { header: 'QTY',     key: 'qty',     width: 12, numFmt: '#,##0.000' },
+      { header: 'INVOICE', key: 'invoice', width: 16, numFmt: '#,##0.00' },
+      { header: 'RECEIPT', key: 'receipt', width: 16, numFmt: '#,##0.00' },
+    ],
+    summaryRows: (p) => ([
+      { _isSubtotal: true, date: 'Total',           qty: p.summary.qty, invoice: p.summary.invoice, receipt: p.summary.receipt },
+      { _isSubtotal: true, date: 'Closing Balance', invoice: p.summary.closing },
+    ]),
+    grandKeys: ['qty', 'invoice', 'receipt'],
+  },
+};
+
+function individualRegisterData(db, kind, opts) {
+  const { getPoolerRegister, getSellerRegister, getMerchantRegister } = require('./calculations');
+  if (kind === 'seller')   return getSellerRegister(db, opts);
+  if (kind === 'merchant') return getMerchantRegister(db, opts);
+  return getPoolerRegister(db, opts);
+}
+
+async function exportIndividualRegister(db, kind, opts = {}) {
+  const def = INDIVIDUAL_REG_DEFS[kind];
+  if (!def) throw new Error(`Unknown individual register kind: ${kind}`);
+  const data = individualRegisterData(db, kind, opts);
+  const sections = data.parties.map(p => ({
+    title: p.name + (p.gstin ? `      GSTIN: ${p.gstin}` : ''),
+    rows: [...p.rows, ...def.summaryRows(p)],
+  }));
+  // Grand total across every party in the file.
+  const gv = {};
+  def.grandKeys.forEach(k => {
+    gv[k] = data.parties.reduce((s, p) => s + (Number(p.summary[k]) || 0), 0);
+  });
+  gv[def.labelKey] = 'GRAND TOTAL';
+  return createExcelBuffer(def.sheet, def.cols, [], {
+    db, title: def.title, metaLines: registerMeta(db, opts),
+    sections, spacerBetween: true,
+    grandTotal: { values: gv },
+  });
+}
+
 // ── Export: Praman CSV (Lot Slip in Praman auction platform format) ──
 // Produces a CSV (NOT xlsx) matching the column layout required by Praman's
 // lot-upload interface. Returns a Buffer of CSV text.
@@ -1384,6 +1639,7 @@ const EXPORT_TYPES = {
   price_list_before:  { fn: exportPriceListBefore,   name: 'PriceListBefore' },
   bank_payment_before:{ fn: exportBankPaymentBefore, name: 'BankPaymentBefore', needsCfg: true },
   bank_payment:       { fn: exportBankPayment,       name: 'BankPayment',       needsCfg: true },
+  voucher_payment:    { fn: exportVoucherPayment,    name: 'VoucherPayment',    needsCfg: true },
   pooler_register:    { fn: exportPoolerRegister,    name: 'PoolerRegister' },
   full_file:          { fn: exportFullFile,          name: 'FullFile' },
   collection:         { fn: exportCollection,        name: 'Collection' },
@@ -1403,9 +1659,10 @@ module.exports = {
   createExcelBuffer,
   exportLotSlip, exportLotSlipAfter, exportLotBuyer, exportLotName, exportLotPayment,
   exportPramanCSV, exportPriceList, exportPriceListBefore,
-  exportBankPayment, exportBankPaymentBefore,
+  exportBankPayment, exportBankPaymentBefore, exportVoucherPayment,
   exportPoolerRegister, exportFullFile, exportCollection, exportTradeReport, exportDealerList,
   exportSalesTaxes, exportPaymentSummary, exportPaymentPartywise, exportTDSReturn, exportTallyPurchase,
   exportSalesJournal, exportPurchaseJournal,
   exportPurchaseRegister, exportSalesRegister,
+  exportIndividualRegister,
 };

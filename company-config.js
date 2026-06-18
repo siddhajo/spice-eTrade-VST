@@ -234,9 +234,9 @@ const DEFAULTS = [
   // 'none' would have silently exposed full account numbers on upgrade.
   // IFSC and phone were never masked, so they default to 'none' (no
   // change on upgrade) — the operator opts in.
-  { key: 'mask_acct',       value: 'last4',          category: 'display',   label: 'Mask Bank Account No.',    type: 'select', options: ['none','last4','last6','first4','first6'] },
-  { key: 'mask_ifsc',       value: 'none',           category: 'display',   label: 'Mask IFSC Code',           type: 'select', options: ['none','last4','last6','first4','first6'] },
-  { key: 'mask_phone',      value: 'none',           category: 'display',   label: 'Mask Phone Number',        type: 'select', options: ['none','last4','last6','first4','first6'] },
+  { key: 'mask_acct',       value: 'last4',          category: 'display',   label: 'Mask Bank Account No.',    type: 'select', options: ['none','last4','last6','first4','first6','full'] },
+  { key: 'mask_ifsc',       value: 'none',           category: 'display',   label: 'Mask IFSC Code',           type: 'select', options: ['none','last4','last6','first4','first6','full'] },
+  { key: 'mask_phone',      value: 'none',           category: 'display',   label: 'Mask Phone Number',        type: 'select', options: ['none','last4','last6','first4','first6','first2last2','full'] },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't

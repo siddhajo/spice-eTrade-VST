@@ -370,8 +370,15 @@ function drawCompanyHeader(doc, header, opts) {
 // kilos → 3 decimals + Indian commas, integer counts stay plain.
 function xlsxNumFmtForHeader(header) {
   const h = String(header || '').toUpperCase();
-  if (h === 'QTY' || h === 'PQTY' || h === 'LITRE' || h === 'KILOS' || h === 'QUANTITY') {
+  if (h === 'QTY' || h === 'PQTY' || h === 'P_QTY' || h === 'LITRE' || h === 'KILOS' || h === 'QUANTITY') {
     return '#,##0.000';   // Excel will format Indian-style with the right locale; pattern is the standard 3-decimal lakh format
+  }
+  // GST-amount columns appear under several header spellings ('GST', 'GST5',
+  // 'GST 5%', 'GST 18%' …). Match any GST-prefixed header up front so they
+  // format + right-align like the rupee columns below (no text header starts
+  // with GST). Mirrors the rate underscore form (P_RATE) handled in the list.
+  if (/^GST\b|^GST\d|^GST\s/.test(h) || h === 'P_RATE') {
+    return '#,##,##0.00';
   }
   if (h === 'BAG' || h === 'BAGS' || h === 'LOTS' || h === 'SL.NO' || h === 'S.NO') {
     return '#,##0';        // integer

@@ -656,11 +656,16 @@ var cfgLabels={lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_w
 // Sensitive-field masking policy (Settings → Display), fetched from
 // /api/config. Mirrors mask-fields.js (server) so the PWA's bank/seller
 // displays mask identically to the desktop UI and receipt PDFs.
-// Modes: none|last4|last6|first4|first6. Default 'none' → no change.
+// Modes: none|last4|last6|first4|first6|first2last2|full. Default 'none' → no change.
 var cfgMaskAcct='last4',cfgMaskIfsc='none',cfgMaskPhone='none';// defaults match company-config seed
 function maskField(value,mode){
   var s=value==null?'':String(value);
   if(!s||!mode||mode==='none')return s;
+  if(mode==='full')return new Array(s.length+1).join('*');
+  if(mode==='first2last2'){
+    if(s.length<=4)return s;
+    return s.slice(0,2)+new Array(s.length-4+1).join('*')+s.slice(-2);
+  }
   var show=(mode==='last4'||mode==='first4')?4:((mode==='last6'||mode==='first6')?6:0);
   if(!show||s.length<=show)return s;
   var stars=new Array(s.length-show+1).join('*');

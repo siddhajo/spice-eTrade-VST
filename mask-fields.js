@@ -8,11 +8,14 @@
  * UI and the generated PDFs mask identically.
  *
  * Modes (per-field, configured in Settings → Display):
- *   none    → value shown in full (default — opt-in security feature)
- *   last4   → all but the last 4 characters replaced with '*'
- *   last6   → all but the last 6 characters replaced with '*'
- *   first4  → all but the first 4 characters replaced with '*'
- *   first6  → all but the first 6 characters replaced with '*'
+ *   none        → value shown in full (default — opt-in security feature)
+ *   last4       → all but the last 4 characters replaced with '*'
+ *   last6       → all but the last 6 characters replaced with '*'
+ *   first4      → all but the first 4 characters replaced with '*'
+ *   first6      → all but the first 6 characters replaced with '*'
+ *   first2last2 → all but the first 2 AND last 2 characters replaced with '*'
+ *                 (phone-oriented: e.g. 98******10)
+ *   full        → every character replaced with '*' (nothing revealed but length)
  *
  * '*' fills the hidden positions and the length is preserved, so the
  * reader can still gauge how long the real number is. A value at or below
@@ -27,6 +30,11 @@
 function maskField(value, mode) {
   const s = value == null ? '' : String(value);
   if (!s || !mode || mode === 'none') return s;
+  if (mode === 'full') return '*'.repeat(s.length);
+  if (mode === 'first2last2') {
+    if (s.length <= 4) return s; // nothing left to hide between first/last 2
+    return s.slice(0, 2) + '*'.repeat(s.length - 4) + s.slice(-2);
+  }
   const show = (mode === 'last4' || mode === 'first4') ? 4
              : (mode === 'last6' || mode === 'first6') ? 6
              : 0;

@@ -239,25 +239,57 @@ function calculateTDS(purchaseAmount, priorPurchases, cfg) {
 }
 
 /**
- * Lot-wise TDS for the PAYMENTS surfaces (summary / lots modal / statement /
- * bank export). Deliberately FLAT: `rate × purchase amount`, with NO ₹50-lakh
- * cumulative threshold — so the figure is just the rate on each lot's amount
- * (per the user's request to show TDS lot-wise rather than the cumulative
- * Section 194Q value). This intentionally differs from the purchase INVOICE's
- * TDS (`calculateTDS`, threshold-based) — the invoice stays on 194Q; only the
- * payment display/transfer uses this.
+ * TDS context for the PAYMENTS surfaces (summary / lots modal / statement /
+ * bank export). The purchase INVOICE is the single source of truth: when a
+ * seller's purchase invoice is generated it stamps the Section 194Q TDS
+ * (threshold-based, ₹50-lakh FY already applied) onto `purchases.tds`. Every
+ * payment surface mirrors that EXACT amount — so TDS is deducted ONLY when the
+ * purchase actually computed it (registered/GSTIN sellers above threshold), and
+ * reads 0 for everyone else (no invoice yet, URD/agriculturist farmers, or
+ * below threshold).
  *
- * Scoped like 194Q to registered (GSTIN-bearing) dealers only — URD /
- * agriculturist sellers never attract purchase TDS — and gated by the
- * `flag_tds_purchase` feature flag. Returns rupees, 2-dp.
+ * `share(name, puramt)` returns the seller's stamped TDS spread across a
+ * (possibly partial) purchase-amount basis, in proportion to the seller's FULL
+ * payable-lot puramt. So paying the whole seller returns the exact invoice TDS,
+ * a lot subset returns a proportionate share, and the per-lot shares total back
+ * to the invoice figure. Returns rupees, 2-dp.
  */
-function lotwisePurchaseTds(purchaseAmount, cr, cfg) {
-  const enabled = cfg.flag_tds_purchase === true
-    || String(cfg.flag_tds_purchase || '').toLowerCase() === 'true';
-  if (!enabled) return 0;
-  if (gstinStateCode(cr) === '') return 0; // GSTIN-registered dealers only
-  const rate = Number(cfg.tds_purchase_rate) || Number(cfg.tcs_tds) || 0.1;
-  return round2((Number(purchaseAmount) || 0) * rate / 100);
+function paymentTdsContext(db, auctionId) {
+  const tdsByName = {};     // seller name (UPPER/trim) → stamped purchase TDS
+  const puramtByName = {};  // seller name → full payable-lot puramt (denominator)
+  try {
+    for (const r of db.all(
+      `SELECT name, COALESCE(SUM(tds),0) AS tds
+         FROM purchases WHERE auction_id = ? GROUP BY name`, [auctionId])) {
+      // Accumulate (+=) rather than assign: the same seller can appear under
+      // more than one casing (a known name-drift data state), which GROUP BY
+      // keeps as separate rows — collapsing them by upper-cased key must SUM,
+      // not overwrite, or one casing would zero out the other's TDS.
+      const key = String(r.name || '').trim().toUpperCase();
+      tdsByName[key] = (tdsByName[key] || 0) + (Number(r.tds) || 0);
+    }
+  } catch (_) { /* purchases table may be absent on partial migrations */ }
+  try {
+    for (const r of db.all(
+      `SELECT name, COALESCE(SUM(puramt),0) AS puramt
+         FROM lots WHERE auction_id = ? AND amount > 0 GROUP BY name`, [auctionId])) {
+      const key = String(r.name || '').trim().toUpperCase();
+      puramtByName[key] = (puramtByName[key] || 0) + (Number(r.puramt) || 0);
+    }
+  } catch (_) { /* lots always present, but stay defensive */ }
+  return {
+    tdsByName,
+    puramtByName,
+    share(name, puramt) {
+      const key = String(name || '').trim().toUpperCase();
+      const tds = tdsByName[key] || 0;
+      if (!(tds > 0)) return 0;
+      const full = puramtByName[key] || 0;
+      if (!(full > 0)) return 0;
+      const frac = Math.min(1, Math.max(0, (Number(puramt) || 0) / full));
+      return round2(tds * frac);
+    },
+  };
 }
 
 /**
@@ -631,13 +663,12 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     );
     for (const d of debits) debitMap[d.name] = Number(d.total) || 0;
   }
-  // Per-seller TDS — LOT-WISE: a flat rate on the seller's purchase amount
-  // (no ₹50-lakh cumulative threshold), so it reads as "rate × amount" per
-  // lot rather than the threshold-reduced Section 194Q figure. Computed below
-  // per seller via lotwisePurchaseTds(total_puramt, cr) so it doesn't depend
-  // on whether a purchase invoice was generated. Payable is netted by it so
-  // it reads PurAmt − Discount − GST 5% − TDS. (The purchase INVOICE keeps the
-  // 194Q threshold figure — only the Payments surfaces use this lot-wise one.)
+  // Per-seller TDS mirrors the stamped purchase-invoice TDS (Section 194Q,
+  // threshold-based) for this trade — computed below via tdsCtx.share(name,
+  // puramt). It is 0 until the seller's purchase invoice is generated (and 0
+  // for sellers below the ₹50-lakh threshold / URD farmers), so Payments
+  // deducts TDS only when the purchase actually did. Payable is netted by it so
+  // it reads PurAmt − Discount − GST 5% − TDS.
   // Merge: total_discount per seller = ONE of two sources (never both):
   //
   //   - When debit notes exist for this seller in this trade → DN total
@@ -673,6 +704,10 @@ function getPaymentSummary(db, auctionId, state, cfg) {
   const companyStateCode = String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33';
   // r2 helper — same Excel-compatible rounding the rest of the calc uses.
   const r2live = (n) => round2(n);
+  // Payment TDS mirrors the stamped purchase-invoice TDS exactly (see
+  // paymentTdsContext): the seller's full TDS when paying the whole seller,
+  // spread ∝ puramt when a state filter narrows the lot set.
+  const tdsCtx = paymentTdsContext(db, auctionId);
 
   return sellers.map(s => {
     const lotDisc = Number(s.lot_discount) || 0;
@@ -703,10 +738,10 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       total_sgst: sgst,
       total_igst: igst,
       total_tax: r2live(cgst + sgst + igst),
-      // Lot-wise TDS = rate × this seller's total purchase amount (flat, no
-      // threshold). Spreading it ∝ puramt in the modal/statement makes each
-      // lot show rate × its own amount.
-      total_tds: lotwisePurchaseTds(s.total_puramt, s.cr, cfg),
+      // TDS = the seller's stamped Section 194Q purchase-invoice TDS for this
+      // trade (0 until that invoice is generated, or below the ₹50-lakh
+      // threshold). Spread ∝ puramt in the modal/statement.
+      total_tds: tdsCtx.share(s.name, s.total_puramt),
       // Payable: lots.balance was computed BEFORE DNs existed, using
       // lots.refund as the discount. So:
       //   - When DNs exist and equal lot refunds → balance is correct
@@ -716,7 +751,7 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       // Then subtract TDS so Payable = PurAmt − Discount − GST 5% − TDS.
       total_payable: r2live((manualDisc > 0
         ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
-        : (Number(s.total_payable) || 0)) - lotwisePurchaseTds(s.total_puramt, s.cr, cfg)),
+        : (Number(s.total_payable) || 0)) - tdsCtx.share(s.name, s.total_puramt)),
       // True when this seller's lots point at more than one bank account
       // (or a mix of tagged + untagged AND the seller has >1 account on
       // file). Drives the "multiple banks" badge on the Payments table so
@@ -836,13 +871,16 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
   const roundAmounts = cfg.flag_round;
+  // Same stamped-purchase-TDS source the Payments tab uses, so the NEFT amount
+  // matches the screen exactly.
+  const tdsCtx = paymentTdsContext(db, auctionId);
 
   return payments.map(p => {
     // 'before' uses puramt — pre-discount, useful when paying suppliers
     // before the deduction policy is applied. 'after' (default) uses
-    // payable = puramt − discount − GST − TDS, netted by the SAME lot-wise
-    // TDS the Payments tab shows so the NEFT amount matches the screen.
-    const tds = useBefore ? 0 : lotwisePurchaseTds(p.puramt, p.cr, cfg);
+    // payable = puramt − discount − GST − TDS, netted by the SAME purchase-
+    // invoice TDS the Payments tab shows so the NEFT amount matches the screen.
+    const tds = useBefore ? 0 : tdsCtx.share(p.name, p.puramt);
     const rawAmount = (useBefore ? (p.puramt || 0) : (p.payable || 0)) - tds;
     const amount = roundAmounts ? round0(rawAmount) : rawAmount;
     const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;
@@ -882,6 +920,10 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
       address2: p.ppla || '',
       pin: p.pin || '',
       amount,
+      // TDS deducted for this seller (the same purchase-invoice TDS share
+      // already netted out of `amount`). Surfaced so the Voucher Payment
+      // sheet can show it in its own column; 0 in 'before' mode.
+      tds,
       lots,
       remarks: `${auction ? auction.ano : ''} ${p.name} PAYMENT ${rawAmount.toFixed(2)} Credited${lots ? ` for lot${lots.includes(',') ? 's' : ''} ${lots}` : ''}`,
       holderName: holderNm,
@@ -1139,6 +1181,127 @@ function getSalesRegister(db, opts = {}) {
   return rows.map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
 }
 
+// ═══════════════════════════════════════════════════════════════
+// PER-PARTY "INDIVIDUAL" REGISTERS (cross-auction, date-range)
+// ───────────────────────────────────────────────────────────────
+// Three party-statement registers that span MULTIPLE trades within a
+// date range (unlike the lot/invoice registers above which are per-trade
+// OR a flat date-range list). Each returns { kind, parties: [...] } where
+// every party carries its own rows + summary totals so the export layer
+// can render one section/page per party (with an optional single-party
+// filter). Rows are returned pre-sorted by party so callers can group in
+// one pass.
+//   • Pooler   — the seller's own lots (lots table). Sold = amount>0.
+//   • Seller   — purchase invoices raised TO the pooler (purchases table),
+//                summarised per trade. INVO = count of invoices in the trade.
+//   • Merchant — sales invoices raised to the buyer (invoices table), one
+//                row per invoice. RECEIPT has no data source yet (no
+//                receipts table) so it renders 0 / blank; closing balance
+//                therefore equals the invoice total.
+function _groupRegister(rows, summaryFn) {
+  const parties = [];
+  let cur = null;
+  for (const r of rows) {
+    const name = r.party || '';
+    if (!cur || cur.name !== name) {
+      cur = { name, gstin: '', rows: [] };
+      parties.push(cur);
+    }
+    if (!cur.gstin && r.gstin) cur.gstin = String(r.gstin).trim();
+    // The party + gstin live on the group, not on each row.
+    const { party, gstin, ...rest } = r;
+    cur.rows.push(rest);
+  }
+  for (const p of parties) p.summary = summaryFn(p.rows);
+  return parties;
+}
+const _num = (v) => Number(v) || 0;
+const _sum = (rows, k) => rows.reduce((s, r) => s + _num(r[k]), 0);
+
+// Pooler Register — one row per lot the pooler put up, across all trades
+// in range. TNo | Date | Lot | Qty | Rate | Value. Withdrawn lots (code
+// 'WD') are excluded; unsold lots (value 0) are listed and counted under
+// "Not Sold".
+function getPoolerRegister(db, opts = {}) {
+  let q = `SELECT a.ano AS tno, a.date AS date, l.lot_no AS lot, l.name AS party,
+      l.cr AS gstin, l.qty AS qty, l.price AS rate, l.amount AS value
+    FROM lots l JOIN auctions a ON a.id = l.auction_id
+    WHERE UPPER(TRIM(COALESCE(l.code,''))) != 'WD'`;
+  const params = [];
+  if (opts.from && opts.to) { q += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+  if (opts.party) { q += ' AND UPPER(TRIM(l.name)) = UPPER(?)'; params.push(String(opts.party).trim()); }
+  q += ' ORDER BY l.name, a.date, a.ano, CAST(l.lot_no AS INTEGER), l.lot_no';
+  const rows = db.all(q, params).map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
+  const parties = _groupRegister(rows, (rs) => {
+    const qty = _sum(rs, 'qty');
+    const value = _sum(rs, 'value');
+    const soldQty = rs.reduce((s, r) => s + (_num(r.value) > 0 ? _num(r.qty) : 0), 0);
+    return { qty, value, soldQty, soldValue: value, notSoldQty: qty - soldQty };
+  });
+  return { kind: 'pooler', parties };
+}
+
+// Seller Register ("SELLERS INDIVIDUAL") — purchase invoices to the pooler,
+// summarised per trade. DATE | ANO | INVO(count) | QTY | INVOICE.
+function getSellerRegister(db, opts = {}) {
+  let q = `SELECT p.name AS party, MAX(p.gstin) AS gstin, p.ano AS ano, p.date AS date,
+      COUNT(*) AS invo, SUM(p.qty) AS qty,
+      SUM(CASE WHEN COALESCE(p.total,0) > 0 THEN p.total ELSE p.amount END) AS invoice
+    FROM purchases p WHERE 1=1`;
+  const params = [];
+  if (opts.from && opts.to) { q += ' AND p.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+  if (opts.party) { q += ' AND UPPER(TRIM(p.name)) = UPPER(?)'; params.push(String(opts.party).trim()); }
+  q += ' GROUP BY p.name, p.ano, p.date ORDER BY p.name, p.date, p.ano';
+  const rows = db.all(q, params).map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
+  const parties = _groupRegister(rows, (rs) => {
+    const invoice = _sum(rs, 'invoice');
+    return { qty: _sum(rs, 'qty'), invoice, closing: invoice };
+  });
+  return { kind: 'seller', parties };
+}
+
+// Merchant Register ("MERCHANTS INDIVIDUAL") — sales invoices to the buyer,
+// one row per invoice. DATE | TNo | INVO | RECP | QTY | INVOICE | RECEIPT.
+function getMerchantRegister(db, opts = {}) {
+  let q = `SELECT i.buyer1 AS party, i.gstin AS gstin, i.ano AS tno, i.date AS date,
+      i.invo AS invo, '' AS recp, i.qty AS qty, i.tot AS invoice, 0 AS receipt
+    FROM invoices i WHERE 1=1`;
+  const params = [];
+  if (opts.from && opts.to) { q += ' AND i.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+  if (opts.party) { q += ' AND UPPER(TRIM(i.buyer1)) = UPPER(?)'; params.push(String(opts.party).trim()); }
+  q += " ORDER BY i.buyer1, i.date, i.ano, CAST(NULLIF(i.invo,'') AS INTEGER), i.invo";
+  const rows = db.all(q, params).map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
+  const parties = _groupRegister(rows, (rs) => {
+    const invoice = _sum(rs, 'invoice');
+    const receipt = _sum(rs, 'receipt');
+    return { qty: _sum(rs, 'qty'), invoice, receipt, closing: invoice - receipt };
+  });
+  return { kind: 'merchant', parties };
+}
+
+// Distinct party names for the picker dropdown, scoped to the same source
+// table + date range as the matching register.
+function listRegisterParties(db, opts = {}) {
+  const kind = String(opts.kind || '').toLowerCase();
+  const params = [];
+  let q;
+  if (kind === 'merchant') {
+    q = `SELECT DISTINCT i.buyer1 AS name FROM invoices i WHERE COALESCE(i.buyer1,'') != ''`;
+    if (opts.from && opts.to) { q += ' AND i.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+    q += ' ORDER BY i.buyer1';
+  } else if (kind === 'seller') {
+    q = `SELECT DISTINCT p.name AS name FROM purchases p WHERE COALESCE(p.name,'') != ''`;
+    if (opts.from && opts.to) { q += ' AND p.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+    q += ' ORDER BY p.name';
+  } else {
+    q = `SELECT DISTINCT l.name AS name FROM lots l JOIN auctions a ON a.id = l.auction_id
+         WHERE COALESCE(l.name,'') != '' AND UPPER(TRIM(COALESCE(l.code,''))) != 'WD'`;
+    if (opts.from && opts.to) { q += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
+    q += ' ORDER BY l.name';
+  }
+  return db.all(q, params).map(r => r.name);
+}
+
 module.exports = {
   calculateLot,
   calculateTDS,
@@ -1149,13 +1312,17 @@ module.exports = {
   listAgriSellers,
   getPaymentSummary,
   getBankPaymentData,
-  lotwisePurchaseTds,
+  paymentTdsContext,
   formatLotList,
   getTDSReturnData,
   getSalesJournal,
   getPurchaseJournal,
   getPurchaseRegister,
   getSalesRegister,
+  getPoolerRegister,
+  getSellerRegister,
+  getMerchantRegister,
+  listRegisterParties,
   gstinStateCode,
   round2,
   round0,
