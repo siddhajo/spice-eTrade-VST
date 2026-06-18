@@ -1984,6 +1984,22 @@ tr.pay-row-exported-partial > td:first-child{box-shadow:inset 4px 0 0 #d97706}
 .pay-exported-badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:700;margin-left:6px;letter-spacing:.2px;cursor:help}
 .pay-exported-full   {background:#7f1d1d;color:#fff}
 .pay-exported-partial{background:#fed7aa;color:#7c2d12;border:1px solid #fdba74}
+/* Per-export-type progress chips next to a seller's name. A seller is only
+   fully "blocked" (rose 🚫 EXPORTED) once BOTH Bank and Voucher are done;
+   until then these chips show which of Bank / Voucher / Report have gone out
+   (green = full, amber = partial count). */
+.pay-cat-badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:700;margin-left:6px;letter-spacing:.2px;cursor:help}
+.pay-cat-done{background:#dcfce7;color:#166534;border:1px solid #86efac}
+.pay-cat-part{background:#fed7aa;color:#7c2d12;border:1px solid #fdba74}
+/* Lightweight dropdown menu used by the Payments toolbar Export buttons so a
+   row of ~8 export buttons collapses into two tidy menus. */
+.pay-menu{position:relative;display:inline-block}
+.pay-menu>.pay-menu-list{display:none;position:absolute;top:calc(100% + 5px);right:0;z-index:60;min-width:240px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.16);padding:6px}
+.pay-menu.open>.pay-menu-list{display:block}
+.pay-menu-head{padding:7px 12px 3px;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--spice-text-hint)}
+.pay-menu-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;border:none;background:none;font-size:13px;font-weight:600;color:var(--spice-text-main);text-align:left;border-radius:7px;cursor:pointer;white-space:nowrap}
+.pay-menu-item:hover{background:var(--spice-cream)}
+.pay-menu-sep{height:1px;background:var(--spice-line);margin:5px 6px}
 /* Per-lot "blocked" marker rendered next to the Lot # in the lot-
    picker modal so the operator can see at a glance which lots have
    already gone out. */
@@ -4176,44 +4192,61 @@ input[type="search"]:focus{
           <!-- Within-trade search across seller name. Filters the
                payments summary client-side because /api/payments
                returns aggregated seller rollups, not raw rows. -->
-          <input type="search" id="pay-search" placeholder="Search seller…" oninput="searchPaymentsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:240px;flex:1;max-width:320px">
+          <input type="search" id="pay-search" placeholder="Search seller…" oninput="searchPaymentsDebounced(this.value)" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background-color:#fff;font-size:13px;min-width:200px;flex:1;max-width:300px">
 
-          <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
-            <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="loadPayments()">↻ Reload</button>
+          <!-- Status filter: a seller is "Paid (exported)" only once BOTH the
+               Bank Payment file AND the Voucher have been exported for them;
+               "To be paid" is everyone not yet fully exported. -->
+          <select id="pay-status-filter" onchange="loadPayments()" title="Show only paid (fully exported) or to-be-paid (not yet exported) sellers" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:170px">
+            <option value="all">All sellers</option>
+            <option value="unpaid">⏳ To be paid</option>
+            <option value="paid">✓ Paid (exported)</option>
+          </select>
+
+          <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="loadPayments()">↻ Reload</button>
+
+          <!-- Push the export controls to the right edge. -->
+          <div style="flex:1 1 auto"></div>
+
+          <!-- Export-all menu: one dropdown for the four whole-trade exports
+               (every seller, all lots). Collapses what used to be four
+               separate always-visible buttons. -->
+          <div class="pay-menu" id="pay-menu-all">
+            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="togglePayMenu('pay-menu-all',event)" title="Export the whole trade (every seller, all lots)">📤 Export All ▾</button>
+            <div class="pay-menu-list">
+              <div class="pay-menu-head">Whole trade · every seller</div>
+              <button class="pay-menu-item" onclick="closePayMenus();exportType('bank_payment')" title="Bulk RTGS/NEFT file for bank portal upload">📤 Bank Payment file</button>
+              <button class="pay-menu-item" onclick="closePayMenus();exportType('voucher_payment')" title="Payment voucher (Particulars / Customer / Amount / A-c / IFSC / TDS)">🧾 Payment Voucher</button>
+              <div class="pay-menu-sep"></div>
+              <button class="pay-menu-item" onclick="closePayMenus();exportType('payment')" title="Per-lot detailed payment breakdown (Excel)">📊 Payment XLSX</button>
+              <button class="pay-menu-item" onclick="closePayMenus();exportType('payment','pdf')" title="Per-lot detailed payment breakdown (PDF)">📄 Payment PDF</button>
+            </div>
           </div>
 
-          <!-- Delete Selected: appears only when at least one row's
-               checkbox is ticked. Acts on the underlying lots — the
-               Payments table is a derived view, so deleting "rows" here
-               actually clears those sellers' lots in the selected trade. -->
-          <button id="pay-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPayments()" title="Delete the lots for the selected sellers in this trade">🗑 Delete Selected <span id="pay-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
+          <!-- Toolbar batch undo. Hidden when no batches exist for the
+               current auction; otherwise shows "↶ Undo Last Export (N)". -->
+          <button id="pay-undo-last" class="btn" style="display:none;height:38px;padding:0 14px;background:#7c2d12;color:#fff;font-weight:600" onclick="undoLastPaymentExport()">↶ Undo Last Export</button>
 
-          <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
-            <button id="pay-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print Selected</button>
-            <button id="pay-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 16px;background:#25D366;color:#fff;font-weight:600" onclick="whatsappSelectedPayments()" title="Send merged payment statements via WhatsApp">📱 WhatsApp Selected</button>
-            <!-- Subset exports — only the ticked sellers. Hidden until
-                 the operator selects at least one row (synced with the
-                 other bulk buttons by updatePaymentBulkButtons). Styled
-                 with a darker outline + cardamom background so they're
-                 unmistakably different from the regular full-export
-                 buttons to the right of the divider — operators were
-                 hitting the full-export button and getting confused by
-                 the "full payable + every seller" output. -->
-            <button id="pay-bulk-bank-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportBankPaymentSelected()" title="Export the bank RTGS/NEFT file containing ONLY the ticked sellers (and only their picked lots, if any)">📤 Bank Payment ← <span id="pay-bulk-bank-export-cnt">0</span> sellers</button>
-            <button id="pay-bulk-xlsx-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentXlsxSelected()" title="Export the per-lot Payment XLSX containing ONLY the ticked sellers (and only their picked lots, if any)">📊 Payment XLSX ← <span id="pay-bulk-xlsx-export-cnt">0</span> sellers</button>
-            <button id="pay-bulk-pdf-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportPaymentPdfSelected()" title="Export the per-lot Payment PDF containing ONLY the ticked sellers (and only their picked lots, if any)">📄 Payment PDF ← <span id="pay-bulk-pdf-export-cnt">0</span> sellers</button>
-            <button id="pay-bulk-voucher-export" class="btn" style="display:none;height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="exportVoucherPaymentSelected()" title="Export the payment voucher (Particulars / Customer / Amount / A-c / IFSC / TDS) containing ONLY the ticked sellers (and only their picked lots, if any)">🧾 Voucher ← <span id="pay-bulk-voucher-export-cnt">0</span> sellers</button>
-          </div>
-
-          <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
-            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('bank_payment')" title="Export bulk RTGS/NEFT file for bank portal upload">📤 Export Bank Payment</button>
-            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment')" title="Per-lot detailed payment breakdown">📊 Export Payment XLSX</button>
-            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('payment','pdf')" title="Per-lot detailed payment breakdown (PDF)">📄 Export Payment PDF</button>
-            <button class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="exportType('voucher_payment')" title="Payment voucher for ALL sellers (Particulars / Customer / Amount / A-c / IFSC / TDS)">🧾 Export Voucher</button>
-            <!-- Toolbar batch undo. Hidden when no batches exist for the
-                 current auction; otherwise shows "↶ Undo Last Export (N)"
-                 where N is the number of batches still on the stack. -->
-            <button id="pay-undo-last" class="btn" style="display:none;height:38px;padding:0 16px;background:#7c2d12;color:#fff;font-weight:600" onclick="undoLastPaymentExport()">↶ Undo Last Export</button>
+          <!-- Contextual selected-row action bar — shown only when ≥1 seller
+               is ticked (toggled by updatePaymentBulkButtons). Groups the
+               selected-subset exports into one menu + the print/whatsapp/
+               delete actions, so nothing clutters the toolbar until needed. -->
+          <div id="pay-bulk-bar" style="display:none;align-items:center;gap:8px;padding-left:10px;border-left:2px solid var(--spice-line)">
+            <span id="pay-sel-chip" style="font-size:12px;font-weight:700;color:var(--spice-cardamom-dk);background:var(--spice-cardamom-lt,#d1fae5);padding:4px 10px;border-radius:20px">0 selected</span>
+            <div class="pay-menu" id="pay-menu-sel">
+              <button class="btn" style="height:38px;padding:0 16px;font-weight:700;background:var(--spice-cardamom-dk);color:#fff;border:2px solid #064e3b" onclick="togglePayMenu('pay-menu-sel',event)" title="Export ONLY the ticked sellers (and only their picked lots, if any)">📤 Export Selected ▾</button>
+              <div class="pay-menu-list">
+                <div class="pay-menu-head">Only ticked sellers</div>
+                <button class="pay-menu-item" onclick="closePayMenus();exportBankPaymentSelected()" title="Bank RTGS/NEFT file for the ticked sellers">📤 Bank Payment</button>
+                <button class="pay-menu-item" onclick="closePayMenus();exportVoucherPaymentSelected()" title="Payment voucher for the ticked sellers">🧾 Voucher</button>
+                <div class="pay-menu-sep"></div>
+                <button class="pay-menu-item" onclick="closePayMenus();exportPaymentXlsxSelected()" title="Per-lot Payment XLSX for the ticked sellers">📊 Payment XLSX</button>
+                <button class="pay-menu-item" onclick="closePayMenus();exportPaymentPdfSelected()" title="Per-lot Payment PDF for the ticked sellers">📄 Payment PDF</button>
+              </div>
+            </div>
+            <button id="pay-bulk-print" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600" onclick="printSelectedPayments()" title="Print payment statements for ticked sellers">🖨 Print</button>
+            <button id="pay-bulk-whatsapp" class="btn feat-whatsapp" style="display:none;height:38px;padding:0 14px;background:#25D366;color:#fff;font-weight:600" onclick="whatsappSelectedPayments()" title="Send merged payment statements via WhatsApp">📱 WhatsApp</button>
+            <button id="pay-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedPayments()" title="Delete the lots for the selected sellers in this trade">🗑 Delete</button>
           </div>
         </div>
 
@@ -9684,6 +9717,35 @@ async function loadFormulas(){
       label: 'Dispatch PIN',
       note: 'The "from" PIN for every route lookup. Falls through this chain until it finds a value.',
       formula: `${pill('Dispatch PIN', num('tally_dispatch_pin','—'))} → ${pill('s_pin', num('s_pin','—'))} → ${pill('KL PIN', num('kl_pin','—'))} → ${pill('TN PIN', num('tn_pin','—'))} → 685553`,
+    },
+  ]);
+
+  // ── Individual registers (per-party statements) ────────────
+  html += card('Individual registers — per-party statements (date range)', [
+    {
+      label: 'Pooler Register — Total / Sold / Not Sold',
+      note: 'One row per lot the pooler put up across every trade in the date range. Withdrawn lots (code "WD") are excluded. A lot counts as Sold once it has a value (Rate × Qty); unpriced lots are Not Sold.',
+      formula: `Total Qty   = Σ ( Lot Qty )<br>
+                Total Value = Σ ( Lot Value )      ${lit('Value = Lot Amount')}<br>
+                Sold Qty    = Σ ( Lot Qty where Value &gt; 0 )<br>
+                Sold Value  = Total Value          ${lit('unsold lots carry 0 value')}<br>
+                Not Sold Qty = Total Qty − Sold Qty`,
+    },
+    {
+      label: 'Sellers Individual — per-trade purchase summary',
+      note: 'Sourced from the purchase invoices raised to the pooler/seller (purchases), grouped by trade. INVO is the number of purchase invoices in that trade. Invoice value uses the invoice grand total, falling back to the taxable amount when no total is stored.',
+      formula: `INVO    = count( purchase invoices in the trade )<br>
+                Qty     = Σ ( purchases.qty )<br>
+                Invoice = Σ ( purchases.total  ${lit('or purchases.amount when total = 0')} )<br>
+                Closing Balance = Σ ( Invoice )`,
+    },
+    {
+      label: 'Merchants Individual — per-invoice sales statement',
+      note: 'One row per sales invoice raised to the buyer (invoices). RECEIPT has no data source yet (no receipts are tracked), so it is 0 and the closing balance equals the total invoiced.',
+      formula: `Total Qty     = Σ ( invoices.qty )<br>
+                Total Invoice = Σ ( invoices.tot )    ${lit('invoice grand total, incl. GST')}<br>
+                Total Receipt = 0                     ${lit('no receipts source')}<br>
+                Closing Balance = Total Invoice − Total Receipt`,
     },
   ]);
 
@@ -19207,13 +19269,18 @@ async function _payDownloadSelected(type, format, aid, names) {
   // Sellers whose every lot has already been exported ('*' sentinel)
   // are dropped from `names` entirely with a clear message — there's
   // nothing left to export for them, only Undo can re-enable.
+  // Exported-state is tracked per category, so skip/continue decisions use
+  // THIS export type's state only — e.g. a seller whose Bank file already
+  // went out is still exportable for the Voucher.
+  const cat = _payCat(type);
   const state = _payLoadState(aid);
+  const catMap = (state.exportedLots && state.exportedLots[cat]) || {};
   const lots = {};
   const excludeLots = {};
   const skippedFully = [];
   const effectiveNames = [];
   for (const n of names) {
-    const exported = state.exportedLots[n];
+    const exported = catMap[n];
     if (exported === '*') { skippedFully.push(n); continue; }
     effectiveNames.push(n);
     const picks = Array.isArray(state.picks[n]) ? state.picks[n] : null;
@@ -19221,14 +19288,14 @@ async function _payDownloadSelected(type, format, aid, names) {
     if (Array.isArray(exported) && exported.length) excludeLots[n] = exported;
   }
   if (!effectiveNames.length) {
-    alert(`All ${names.length} ticked seller${names.length === 1 ? ' has' : 's have'} already been fully exported. Use the ↶ Undo icon on a row (or the toolbar ↶ Undo Last Export) before re-exporting.`);
+    alert(`All ${names.length} ticked seller${names.length === 1 ? ' has' : 's have'} already had their ${label} exported. Use the ↶ Undo icon on a row (or the toolbar ↶ Undo Last Export) before re-exporting.`);
     return;
   }
   if (skippedFully.length) {
-    // Tell the operator we silently dropped fully-exported sellers from
-    // this batch so they aren't surprised when only N of M show up in
-    // the file. The export still proceeds for the rest.
-    toast(`Skipped ${skippedFully.length} fully-exported seller${skippedFully.length === 1 ? '' : 's'}: ${skippedFully.slice(0, 3).join(', ')}${skippedFully.length > 3 ? '…' : ''}`);
+    // Tell the operator we silently dropped sellers already fully exported
+    // for THIS type so they aren't surprised when only N of M show up in the
+    // file. The export still proceeds for the rest.
+    toast(`Skipped ${skippedFully.length} seller${skippedFully.length === 1 ? '' : 's'} already exported for ${label}: ${skippedFully.slice(0, 3).join(', ')}${skippedFully.length > 3 ? '…' : ''}`);
   }
   names = effectiveNames;
   const body = { names, format };
@@ -19284,7 +19351,7 @@ async function _payDownloadSelected(type, format, aid, names) {
       const picksForN = Array.isArray(lots[n]) ? lots[n] : null;
       exportsMap[n] = (picksForN && picksForN.length) ? picksForN.slice() : '*';
     }
-    _payMarkExported(aid, exportsMap);
+    _payMarkExported(aid, exportsMap, cat);
     // Clear the now-consumed lot picks so the modal doesn't re-pre-tick
     // the same lots if the operator opens it again — the saved picks
     // were "next export filter" and we just used them. Sellers without
@@ -19338,45 +19405,72 @@ async function whatsappSelectedPayments() {
 //              Sellers absent from this map (or with an empty array)
 //              export with ALL their lots. Sellers present override
 //              with ONLY the listed lots.
-//   exportedLots : { sellerName: '*' | ['lot_no', ...] }
-//              What has actually been exported per seller. '*' is the
-//              sentinel for "every payable lot was exported in one
-//              shot" (fully exported — row greys out + checkbox is
-//              disabled). An array tracks the specific lots that left
-//              the building when a partial export happened (row stays
-//              tickable + shows a "🚫 X/Y" badge so the operator can
-//              continue paying the remaining lots in a follow-up).
-//   batches  : [{ id, exports: { sellerName: '*' | [...] }, ts }, ...]
-//              History of export batches in chronological order.
-//              The toolbar "↶ Undo Last Export" button pops the most
-//              recent entry off the end.
+//   exportedLots : { bank:{...}, voucher:{...}, payment:{...} }
+//              What has actually been exported, tracked SEPARATELY per
+//              export category so the "fully exported / blocked" badge can
+//              require BOTH bank payment AND voucher. Each category maps
+//              sellerName → '*' | ['lot_no', ...]:  '*' = every payable lot
+//              exported in one shot; an array = the specific lots that left
+//              in a partial export (so the seller can keep paying the rest).
+//              'payment' covers the Payment XLSX/PDF report exports.
+//   batches  : [{ id, cat, exports: { sellerName: '*' | [...] }, ts }, ...]
+//              History of export batches in chronological order, each tagged
+//              with its category (bank|voucher|payment). The toolbar "↶ Undo
+//              Last Export" button pops the most recent entry off the end and
+//              rolls back only that category's claims.
 //
 // All three persist per-auction so a reload (or a tab reopen) shows
 // exactly what was exported / picked before. Switching to a different
 // auction in the picker loads that auction's state in turn.
 const _PAY_STATE_KEY = (aid) => `pay.state.${aid}`;
-const _PAY_EMPTY = () => ({ picks: {}, exportedLots: {}, batches: [] });
+const _PAY_CATS = ['bank', 'voucher', 'payment'];
+// Server export type → tracking category. Bank file and Voucher each gate the
+// "blocked" badge; XLSX/PDF both fold into 'payment' (reports, never blocking).
+function _payCat(type) {
+  return type === 'bank_payment' ? 'bank'
+       : type === 'voucher_payment' ? 'voucher'
+       : 'payment';
+}
+const _PAY_EMPTY = () => ({ picks: {}, exportedLots: { bank: {}, voucher: {}, payment: {} }, batches: [] });
 function _payLoadState(aid) {
   if (!aid) return _PAY_EMPTY();
   try {
     const raw = localStorage.getItem(_PAY_STATE_KEY(aid));
     if (!raw) return _PAY_EMPTY();
     const obj = JSON.parse(raw);
-    // Migrate legacy state (seller-level `exported` array → per-lot
-    // `exportedLots` map with '*' sentinel since the old shape didn't
-    // know which lots had been exported).
-    let exportedLots = (obj && typeof obj.exportedLots === 'object' && obj.exportedLots) ? obj.exportedLots : {};
-    if (Array.isArray(obj && obj.exported)) {
-      for (const n of obj.exported) if (!exportedLots[n]) exportedLots[n] = '*';
+    const el = obj && obj.exportedLots;
+    // Detect the new typed shape (a category key holding a plain object, not
+    // an array — guards against a seller literally named "bank").
+    const isTyped = el && _PAY_CATS.some(k => el[k] && !Array.isArray(el[k]) && typeof el[k] === 'object');
+    let exportedLots = { bank: {}, voucher: {}, payment: {} };
+    let batches;
+    if (isTyped) {
+      for (const k of _PAY_CATS) exportedLots[k] = (el[k] && typeof el[k] === 'object') ? el[k] : {};
+      // Typed-format batches already carry a `cat`; drop any that don't.
+      batches = (Array.isArray(obj.batches) ? obj.batches : [])
+        .filter(b => b && b.cat && b.exports && typeof b.exports === 'object');
+    } else {
+      // Legacy migration: the old flat `exportedLots` (and the even older
+      // `exported: [names]` array) didn't record which export type ran. To
+      // avoid surprising the user by un-blocking already-exported sellers,
+      // seed every legacy mark into BOTH bank and voucher (so a previously
+      // "fully exported" seller stays blocked) plus payment for completeness.
+      const flat = (el && typeof el === 'object' && !Array.isArray(el)) ? el : {};
+      for (const n of Object.keys(flat)) {
+        const v = flat[n];
+        if (v === '*' || (Array.isArray(v) && v.length)) {
+          for (const k of _PAY_CATS) exportedLots[k][n] = Array.isArray(v) ? v.slice() : v;
+        }
+      }
+      if (Array.isArray(obj && obj.exported)) {
+        for (const n of obj.exported) for (const k of _PAY_CATS) if (!exportedLots[k][n]) exportedLots[k][n] = '*';
+      }
+      // Legacy batches can't be split per-category reliably, so reset the
+      // undo stack. The exportedLots above still reflect what's out, so rows
+      // stay correctly blocked; only fine-grained pre-migration undo is lost
+      // (the per-row ↶ still works).
+      batches = [];
     }
-    // Migrate legacy batches: `batch.names: [name]` → `batch.exports: { name: '*' }`.
-    const rawBatches = Array.isArray(obj && obj.batches) ? obj.batches : [];
-    const batches = rawBatches.map(b => {
-      if (b && b.exports && typeof b.exports === 'object') return b;
-      const exp = {};
-      if (Array.isArray(b && b.names)) for (const n of b.names) exp[n] = '*';
-      return { id: (b && b.id) || ('b' + Date.now()), exports: exp, ts: (b && b.ts) || '' };
-    });
     return {
       picks: obj && typeof obj.picks === 'object' && obj.picks ? obj.picks : {},
       exportedLots,
@@ -19403,28 +19497,23 @@ function _paySetLotPicks(aid, sellerName, lotNos) {
   }
   _paySaveState(aid, s);
 }
-// Lots already exported for this seller. Returns:
+// Lots already exported for this seller in one category. Returns:
 //   '*'             — all lots exported in one shot (sentinel)
 //   ['lot_no', ...] — partial: these specific lots have been exported
 //   null            — nothing exported yet
-function _payExportedLotsFor(aid, sellerName) {
+// `cat` defaults to 'bank' — the lot-level partial-payment workflow tracks
+// the bank file (the actual money movement).
+function _payExportedLotsFor(aid, sellerName, cat) {
   const s = _payLoadState(aid);
-  const ex = s.exportedLots[sellerName];
+  const m = (s.exportedLots && s.exportedLots[cat || 'bank']) || {};
+  const ex = m[sellerName];
   if (ex === '*' || (Array.isArray(ex) && ex.length)) return ex;
   return null;
 }
-// Tri-state status used by the Payments-row render. 'full' greys +
-// disables the row; 'partial' keeps the row tickable but shows the
-// "🚫 X/Y" badge so the operator knows more lots can still be paid;
-// 'none' is the default unexported state.
-//
-// totalLots is the seller's payable-lot count from the Payments
-// summary; with it, an array of length === totalLots is promoted to
-// 'full' (every lot WAS exported, the operator just did it via a
-// fully-ticked picks set). When totalLots is unknown we conservatively
-// treat any array as 'partial'.
-function _payExportStatus(aid, sellerName, totalLots) {
-  const ex = _payExportedLotsFor(aid, sellerName);
+// Per-category tri-state status: 'none' | 'partial' | 'full'. An array of
+// length === totalLots is promoted to 'full'; unknown totalLots → 'partial'.
+function _payCatStatus(aid, sellerName, totalLots, cat) {
+  const ex = _payExportedLotsFor(aid, sellerName, cat);
   if (ex == null) return 'none';
   if (ex === '*') return 'full';
   if (Array.isArray(ex)) {
@@ -19433,34 +19522,62 @@ function _payExportStatus(aid, sellerName, totalLots) {
   }
   return 'none';
 }
+// Overall row "block" status driving the rose 🚫 EXPORTED badge, the greyed
+// row, and the disabled checkbox. A seller is fully blocked ONLY when BOTH
+// the bank payment AND the voucher are fully exported. Any other export
+// activity (partial bank/voucher, or a Payment XLSX/PDF report) shows as
+// 'partial' (amber, still tickable). 'none' = nothing exported yet.
+function _payBlockStatus(aid, sellerName, totalLots) {
+  const bank = _payCatStatus(aid, sellerName, totalLots, 'bank');
+  const vou  = _payCatStatus(aid, sellerName, totalLots, 'voucher');
+  if (bank === 'full' && vou === 'full') return 'full';
+  if (bank !== 'none' || vou !== 'none'
+      || _payCatStatus(aid, sellerName, totalLots, 'payment') !== 'none') return 'partial';
+  return 'none';
+}
+// Small progress chip for one export category next to a seller's name.
+function _payCatBadgeHtml(aid, sellerName, totalLots, cat, icon, label) {
+  const st = _payCatStatus(aid, sellerName, totalLots, cat);
+  if (st === 'none') return '';
+  if (st === 'full') {
+    return `<span class="pay-cat-badge pay-cat-done" title="${label} exported in full">${icon} ${label} ✓</span>`;
+  }
+  const ex = _payExportedLotsFor(aid, sellerName, cat);
+  const n = Array.isArray(ex) ? ex.length : 0;
+  const denom = totalLots || n;
+  return `<span class="pay-cat-badge pay-cat-part" title="${label}: ${n} of ${denom} lot${denom === 1 ? '' : 's'} exported — open 📋 to pick the rest">${icon} ${label} ${n}/${denom}</span>`;
+}
 // Record an export. `exportsMap` matches what was sent to the server:
 //   { sellerName: '*' | ['lot_no', ...] }
 // New lots merge into any existing array; a '*' promotion is sticky.
 // The batch is pushed onto the undo stack so a single Undo can roll
 // only this export back.
-function _payMarkExported(aid, exportsMap) {
+function _payMarkExported(aid, exportsMap, cat) {
   const keys = exportsMap && typeof exportsMap === 'object' ? Object.keys(exportsMap) : [];
   if (!keys.length) return null;
+  cat = _PAY_CATS.includes(cat) ? cat : 'bank';
   const s = _payLoadState(aid);
+  const map = s.exportedLots[cat] || (s.exportedLots[cat] = {});
   for (const n of keys) {
     const next = exportsMap[n];
-    const existing = s.exportedLots[n];
+    const existing = map[n];
     if (next === '*') {
-      s.exportedLots[n] = '*';
+      map[n] = '*';
     } else if (Array.isArray(next) && next.length) {
       if (existing === '*') {
-        // Already fully exported; keep '*'.
+        // Already fully exported in this category; keep '*'.
       } else if (Array.isArray(existing)) {
         const union = new Set(existing.map(String));
         for (const v of next) union.add(String(v));
-        s.exportedLots[n] = Array.from(union);
+        map[n] = Array.from(union);
       } else {
-        s.exportedLots[n] = next.map(String);
+        map[n] = next.map(String);
       }
     }
   }
   const batch = {
     id: 'b' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    cat,
     exports: keys.reduce((acc, n) => { acc[n] = exportsMap[n]; return acc; }, {}),
     ts: new Date().toISOString(),
   };
@@ -19468,13 +19585,14 @@ function _payMarkExported(aid, exportsMap) {
   _paySaveState(aid, s);
   return batch;
 }
-// Surgical unmark for one seller — wipes their entry from exportedLots
+// Surgical unmark for one seller — wipes their entry from EVERY category
 // AND strips them from every batch's exports map. Used by the per-row
-// "↶" icon when the operator wants to restore a single seller fully.
+// "↶" icon when the operator wants to restore a single seller fully so
+// every export type can be re-run for them.
 function _payUnmarkExported(aid, sellerName) {
   if (!sellerName) return;
   const s = _payLoadState(aid);
-  delete s.exportedLots[sellerName];
+  for (const k of _PAY_CATS) if (s.exportedLots[k]) delete s.exportedLots[k][sellerName];
   s.batches = s.batches
     .map(b => {
       const ex = Object.assign({}, b.exports || {});
@@ -19484,37 +19602,35 @@ function _payUnmarkExported(aid, sellerName) {
     .filter(b => Object.keys(b.exports || {}).length > 0);
   _paySaveState(aid, s);
 }
-// Pop the most recent batch and roll back exactly what it added. The
-// older batches' claims on the same seller (if any) are honoured so
-// undo-once doesn't accidentally erase older partial exports.
+// Pop the most recent batch and roll back exactly what it added, within its
+// own category. Older same-category batches' claims on the same seller (if
+// any) are honoured so undo-once doesn't erase older partial exports.
 function _payUndoLastBatch(aid) {
   const s = _payLoadState(aid);
   const batch = s.batches.pop();
   if (!batch) { _paySaveState(aid, s); return null; }
+  const cat = _PAY_CATS.includes(batch.cat) ? batch.cat : 'bank';
+  const map = s.exportedLots[cat] || (s.exportedLots[cat] = {});
   for (const sellerName of Object.keys(batch.exports || {})) {
-    const existing = s.exportedLots[sellerName];
-    if (!existing) continue;
-    // What older batches still claim for this seller — used to
-    // reconstruct exportedLots[seller] after subtracting this batch.
+    if (!map[sellerName]) continue;
+    // What older batches of the SAME category still claim for this seller.
     const olderClaims = [];
     for (const b of s.batches) {
+      if ((_PAY_CATS.includes(b.cat) ? b.cat : 'bank') !== cat) continue;
       const v = b.exports && b.exports[sellerName];
       if (v) olderClaims.push(v);
     }
     if (!olderClaims.length) {
-      // No older claim left → fully unmark this seller.
-      delete s.exportedLots[sellerName];
+      delete map[sellerName];
       continue;
     }
-    // Reconstruct from older claims. Any '*' claim wins; otherwise
-    // union all the per-lot arrays.
     if (olderClaims.some(v => v === '*')) {
-      s.exportedLots[sellerName] = '*';
+      map[sellerName] = '*';
     } else {
       const merged = new Set();
       for (const v of olderClaims) if (Array.isArray(v)) for (const lot of v) merged.add(String(lot));
-      if (merged.size) s.exportedLots[sellerName] = Array.from(merged);
-      else delete s.exportedLots[sellerName];
+      if (merged.size) map[sellerName] = Array.from(merged);
+      else delete map[sellerName];
     }
   }
   _paySaveState(aid, s);
@@ -19860,31 +19976,47 @@ function toggleAllPayments(state) {
   updatePaymentBulkButtons();
 }
 
+// ── Payments toolbar dropdown menus ──────────────────────────────
+// Lightweight show/hide for the consolidated "Export All ▾" / "Export
+// Selected ▾" menus so the toolbar isn't a wall of buttons.
+function togglePayMenu(id, ev){
+  if (ev) ev.stopPropagation();
+  const el = document.getElementById(id);
+  if (!el) return;
+  const willOpen = !el.classList.contains('open');
+  closePayMenus();
+  if (willOpen) el.classList.add('open');
+}
+function closePayMenus(){
+  document.querySelectorAll('.pay-menu.open').forEach(m => m.classList.remove('open'));
+}
+// Close any open menu on an outside click (bound once).
+if (!window._payMenuOutsideBound){
+  window._payMenuOutsideBound = true;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.pay-menu')) closePayMenus();
+  });
+}
+
 function updatePaymentBulkButtons() {
   const body = document.getElementById('payments-list');
   if (!body) return;
   const checked = body.querySelectorAll('.pay-select-cb:checked').length;
   const total   = body.querySelectorAll('.pay-select-cb').length;
-  _bulkBtnSetVisible(document.getElementById('pay-bulk-del'),      checked > 0);
-  const cnt = document.getElementById('pay-sel-count');
-  if (cnt) cnt.textContent = checked > 0 ? String(checked) : '';
+  // Contextual selected-row action bar — shown only when ≥1 seller is ticked.
+  // The "Export Selected ▾" menu lives inside it and needs no per-button
+  // toggling; the seller count rides in the chip.
+  const bar = document.getElementById('pay-bulk-bar');
+  if (bar) bar.style.display = checked > 0 ? 'flex' : 'none';
+  if (checked === 0) closePayMenus();
+  const chip = document.getElementById('pay-sel-chip');
+  if (chip) chip.textContent = `${checked} selected`;
+  // Permission/feature-gated buttons keep their CSS classes; _bulkBtnSetVisible
+  // only clears the inline hide so the .needs-delete / .feat-whatsapp rules
+  // still decide whether they actually show for this user.
   _bulkBtnSetVisible(document.getElementById('pay-bulk-print'),    checked > 0);
   _bulkBtnSetVisible(document.getElementById('pay-bulk-whatsapp'), checked > 0);
-  _bulkBtnSetVisible(document.getElementById('pay-bulk-bank-export'), checked > 0);
-  _bulkBtnSetVisible(document.getElementById('pay-bulk-xlsx-export'), checked > 0);
-  _bulkBtnSetVisible(document.getElementById('pay-bulk-pdf-export'), checked > 0);
-  _bulkBtnSetVisible(document.getElementById('pay-bulk-voucher-export'), checked > 0);
-  // Live-update the seller count inside each Selected button label so
-  // the operator can see at a glance how many sellers the next click
-  // will export. Helps catch "wait, I forgot to tick one" before firing.
-  const bcnt = document.getElementById('pay-bulk-bank-export-cnt');
-  if (bcnt) bcnt.textContent = String(checked);
-  const xcnt = document.getElementById('pay-bulk-xlsx-export-cnt');
-  if (xcnt) xcnt.textContent = String(checked);
-  const pcnt = document.getElementById('pay-bulk-pdf-export-cnt');
-  if (pcnt) pcnt.textContent = String(checked);
-  const vcnt = document.getElementById('pay-bulk-voucher-export-cnt');
-  if (vcnt) vcnt.textContent = String(checked);
+  _bulkBtnSetVisible(document.getElementById('pay-bulk-del'),      checked > 0);
   // Sync master checkbox with state — checked when ALL visible are
   // ticked, indeterminate when SOME are.
   const master = document.getElementById('pay-select-all');
@@ -19969,9 +20101,20 @@ async function loadPayments(opts){
     // Within-trade search — /api/payments returns aggregated seller
     // rollups, so the filter is applied client-side on the seller name.
     const searchTerm = (document.getElementById('pay-search')?.value || '').trim().toLowerCase();
-    const arr = searchTerm
+    let arr = searchTerm
       ? allArr.filter(r => String(r.name || '').toLowerCase().includes(searchTerm))
       : allArr;
+    // Status filter — "Paid (exported)" = fully blocked (bank AND voucher
+    // exported); "To be paid" = everyone not yet fully exported. Applied
+    // before KPIs/pagination/chart so they all reflect the filtered set.
+    const statusFilter = document.getElementById('pay-status-filter')?.value || 'all';
+    if (statusFilter !== 'all') {
+      const _aidF = Number(document.getElementById('pay-auction')?.value) || 0;
+      arr = arr.filter(r => {
+        const blocked = _payBlockStatus(_aidF, String(r.name || ''), Number(r.lot_count) || 0) === 'full';
+        return statusFilter === 'paid' ? blocked : !blocked;
+      });
+    }
 
     // Update KPI strip
     const kpiStrip = document.getElementById('pay-kpis');
@@ -20009,7 +20152,7 @@ async function loadPayments(opts){
     // (row greyed + disabled), 'partial' (row tickable, "🚫 X/Y" badge
     // shows remaining lots), or 'none'. Done at row-render time so the
     // shape always matches the freshly-loaded state.
-    const _payStatusOf = (p) => _payExportStatus(_payCurAid, String(p.name || ''), Number(p.lot_count) || 0);
+    const _payStatusOf = (p) => _payBlockStatus(_payCurAid, String(p.name || ''), Number(p.lot_count) || 0);
     const _paySlice = applyClientSidePagination(_paymentsPager, 'payments-pager', gotoPaymentsPage, arr, !!searchTerm);
     DataTable.mount('payments-list', _paySlice, {
       noSearch: true,
@@ -20054,12 +20197,15 @@ async function loadPayments(opts){
             const st = _payStatusOf(p);
             let expBadge = '';
             if (st === 'full') {
-              expBadge = `<span class="pay-exported-badge pay-exported-full" title="Every payable lot has been exported. Use ↶ to undo.">🚫 EXPORTED</span>`;
+              // Fully blocked only when BOTH bank payment and voucher are out.
+              expBadge = `<span class="pay-exported-badge pay-exported-full" title="Bank payment AND voucher both fully exported. Use ↶ to undo.">🚫 EXPORTED</span>`;
             } else if (st === 'partial') {
-              const exLots = _payExportedLotsFor(_payCurAid, sellerName);
-              const n = Array.isArray(exLots) ? exLots.length : 0;
-              const denom = totalLots || (n + ((Array.isArray(picks) && picks.length) ? picks.length : 1));
-              expBadge = `<span class="pay-exported-badge pay-exported-partial" title="${n} of ${denom} lots exported. Open 📋 to pick the remaining lots for the next export.">🚫 ${n}/${denom} EXPORTED</span>`;
+              // Show which export types have gone out so far (and how far),
+              // so the operator can see what still has to happen before the
+              // seller is fully paid/blocked.
+              expBadge = _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'bank',    '🏦', 'Bank')
+                       + _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'voucher', '🧾', 'Voucher')
+                       + _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'payment', '📊', 'Report');
             }
             // Warn when this seller's lots route to more than one bank
             // account. The export still pays a single (default) account, so
