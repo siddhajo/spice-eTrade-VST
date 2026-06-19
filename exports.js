@@ -900,7 +900,7 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
   // TDS comes from the seller's stamped purchase invoice (Section 194Q),
   // spread per row ∝ that lot's puramt — same as the Payments tab. 0 until the
   // invoice is generated / below the ₹50-lakh threshold.
-  const { paymentTdsContext } = require('./calculations');
+  const { paymentTdsContext, distributeRoundedPayable } = require('./calculations');
   const tdsCtx = paymentTdsContext(db, auctionId);
   // Optional seller-name filter — "Export Payment XLSX (Selected)"
   // limits the rows to the ticked sellers. We push the filter into the
@@ -979,6 +979,23 @@ async function exportPaymentSummary(db, auctionId, cfg, _state, opts) {
       payable: (Number(r.payable) || 0) - manualDisc - tds,
     };
   });
+
+  // When invoice rounding is on (cfg.flag_round), round each seller's per-lot
+  // Payable to whole rupees — distributed so the lines sum EXACTLY to that
+  // seller's rounded total (so subtotals + grand total stay whole and foot).
+  // Rows are contiguous per seller (ORDER BY state, name).
+  const roundPay = cfg.flag_round === true || String(cfg.flag_round || '').toLowerCase() === 'true';
+  if (roundPay) {
+    let gi = 0;
+    while (gi < enrichedFlat.length) {
+      let gj = gi;
+      while (gj < enrichedFlat.length && enrichedFlat[gj].poolername === enrichedFlat[gi].poolername) gj++;
+      const grp = enrichedFlat.slice(gi, gj);
+      const rounded = distributeRoundedPayable(grp.map(r => r.payable));
+      for (let k = 0; k < grp.length; k++) grp[k].payable = rounded[k];
+      gi = gj;
+    }
+  }
 
   // Interleave per-pooler subtotal rows after each name group — mirrors
   // the PDF's groupByKey:'poolername' subtotalKeys behaviour. Rows are
@@ -1072,11 +1089,15 @@ async function exportPaymentPartywise(db, auctionId, cfg, _state, opts) {
   // trade (0 until the invoice is generated / below threshold). Same as the
   // Payments tab. Subtracted straight off PAYABLE (Payable = PurAmt −
   // Discount − GST 5% − TDS).
-  const { paymentTdsContext } = require('./calculations');
+  const { paymentTdsContext, round0 } = require('./calculations');
   const tdsCtx = paymentTdsContext(db, auctionId);
+  // Round each seller's Payable to whole rupees when invoice rounding is on
+  // (cfg.flag_round), matching the Payments tab + bank file.
+  const roundPay = cfg.flag_round === true || String(cfg.flag_round || '').toLowerCase() === 'true';
   for (const r of rows) {
     r.tds = tdsCtx.share(r.poolername, r.puramt);
-    r.payable = (Number(r.payable) || 0) - r.tds;
+    const raw = (Number(r.payable) || 0) - r.tds;
+    r.payable = roundPay ? round0(raw) : raw;
   }
 
   // Interleave a per-state header row and a per-state subtotal row,

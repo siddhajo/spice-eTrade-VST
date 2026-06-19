@@ -39,6 +39,32 @@ const round0 = (n) => {
 };
 
 /**
+ * Distribute whole-rupee rounding across a set of payable values so that:
+ *   - every returned value is a whole rupee (integer), and
+ *   - the integers sum EXACTLY to round0(sum of the inputs).
+ * Largest-remainder method: floor everything, then hand the leftover rupees
+ * (target − Σfloor) one-by-one to the values with the biggest fractional
+ * parts. This is how a seller's per-lot Payable lines are rounded so the lines
+ * stay whole AND still add up to the seller's rounded total (no footing gap).
+ * Assumes non-negative payable amounts (the only realistic case here).
+ * Returns a new array (same order/length); [] for empty input.
+ */
+function distributeRoundedPayable(values) {
+  const nums = (values || []).map(v => Number(v) || 0);
+  if (!nums.length) return [];
+  const target = round0(nums.reduce((a, b) => a + b, 0));
+  const out = nums.map(v => Math.floor(v));
+  let leftover = target - out.reduce((a, b) => a + b, 0);
+  if (leftover > 0) {
+    const order = nums
+      .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+      .sort((a, b) => b.frac - a.frac);
+    for (let k = 0; k < order.length && leftover > 0; k++) { out[order[k].i] += 1; leftover--; }
+  }
+  return out;
+}
+
+/**
  * Extract the 2-digit state code from a seller's `cr` field.
  *
  * The `cr` column historically stored "GSTIN.<15-char-gstin>" (where the
@@ -704,6 +730,12 @@ function getPaymentSummary(db, auctionId, state, cfg) {
   const companyStateCode = String(cfg.business_state || '').toUpperCase() === 'KERALA' ? '32' : '33';
   // r2 helper — same Excel-compatible rounding the rest of the calc uses.
   const r2live = (n) => round2(n);
+  // Payable rounding: when invoice rounding is on (cfg.flag_round — the same
+  // flag the bank-payment export uses), the per-seller Payable is rounded to
+  // whole rupees so the Payments tab matches the rounded NEFT/RTGS amount
+  // instead of showing paise. Off → keep 2-dp.
+  const roundPay = cfg.flag_round === true || String(cfg.flag_round || '').toLowerCase() === 'true';
+  const payRound = (n) => roundPay ? round0(n) : r2live(n);
   // Payment TDS mirrors the stamped purchase-invoice TDS exactly (see
   // paymentTdsContext): the seller's full TDS when paying the whole seller,
   // spread ∝ puramt when a state filter narrows the lot set.
@@ -749,7 +781,7 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       //     adjust by the delta so payable reflects the current DN
       //   - When no DNs → balance is already correct
       // Then subtract TDS so Payable = PurAmt − Discount − GST 5% − TDS.
-      total_payable: r2live((manualDisc > 0
+      total_payable: payRound((manualDisc > 0
         ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
         : (Number(s.total_payable) || 0)) - tdsCtx.share(s.name, s.total_puramt)),
       // True when this seller's lots point at more than one bank account
@@ -1331,4 +1363,5 @@ module.exports = {
   gstinStateCode,
   round2,
   round0,
+  distributeRoundedPayable,
 };

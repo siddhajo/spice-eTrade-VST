@@ -19646,7 +19646,23 @@ function _payUndoLastBatch(aid) {
 // "Print Payment for Selected" calls the lot-filtered PDF endpoint
 // so the printed statement only covers the chosen lots — remaining
 // lots stay in the Payments summary and can be settled later.
-const _payLotsState = { aid: 0, seller: '', lots: [], bankLabels: {}, defaultBankId: null, gstRate: 0, tdsRate: 0 };
+const _payLotsState = { aid: 0, seller: '', lots: [], bankLabels: {}, defaultBankId: null, gstRate: 0, tdsRate: 0, round: false };
+// Distribute whole-rupee rounding across payable values so each is an integer
+// and they sum EXACTLY to Math.round(sum) — mirrors calculations.js
+// distributeRoundedPayable. Keeps the modal's per-lot lines whole AND footing
+// to the seller's rounded "Payable now". Assumes non-negative values.
+function _payDistributeRounded(values){
+  const nums = (values||[]).map(v => Number(v)||0);
+  if (!nums.length) return [];
+  const target = Math.round(nums.reduce((a,b)=>a+b,0));
+  const out = nums.map(v => Math.floor(v));
+  let leftover = target - out.reduce((a,b)=>a+b,0);
+  if (leftover > 0) {
+    const order = nums.map((v,i)=>({i, frac: v - Math.floor(v)})).sort((a,b)=>b.frac - a.frac);
+    for (let k=0; k<order.length && leftover>0; k++){ out[order[k].i] += 1; leftover--; }
+  }
+  return out;
+}
 // Seller-name → payments rollup row (incl. total_tds), refreshed each time
 // the Payments table renders. Lets the Lots modal allocate the seller's TDS.
 let _paySummaryByName = {};
@@ -19701,6 +19717,20 @@ async function openPayLotsModal(auctionId, sellerName) {
       _payLotsState.gstRate = sumPuramt > 0 ? sellerGst / sumPuramt : 0;
       _payLotsState.tdsRate = sumPuramt > 0 ? sellerTds / sumPuramt : 0;
     }
+    // Whole-rupee Payable: when invoice rounding is on (cfg.flag_round), round
+    // each lot's Payable — distributed so the lines stay whole AND foot to the
+    // seller's rounded total, matching the Payments tab / statement / exports.
+    try {
+      const _c = await j('/api/company-settings/flat');
+      _payLotsState.round = !!_c && (_c.flag_round === true || String(_c.flag_round || '').toLowerCase() === 'true');
+    } catch (_) { _payLotsState.round = false; }
+    if (_payLotsState.round) {
+      const raws = _payLotsState.lots.map(l => (Number(l.balance) || 0) - (Number(l.puramt) || 0) * (_payLotsState.tdsRate || 0));
+      const rnd = _payDistributeRounded(raws);
+      _payLotsState.lots.forEach((l, i) => { l._payRounded = rnd[i]; });
+    } else {
+      _payLotsState.lots.forEach(l => { l._payRounded = null; });
+    }
     // Build a bank_id → account label map so each lot row can show which
     // account its payment routes to (so the operator can tick one account's
     // lots and Export Selected separately). Banks come from the seller's
@@ -19753,11 +19783,13 @@ function _renderPayLotsTable() {
   const exportedSet = Array.isArray(exportedLotsRaw)
     ? new Set(exportedLotsRaw.map(String))
     : (exportedAll ? null : new Set());
+  const rnd = _payLotsState.round;
   const rows = _payLotsState.lots.map(l => {
     // GST allocated from the seller's live total (not the stale per-lot stamp).
     const tax = (Number(l.puramt)||0) * (_payLotsState.gstRate||0);
     const lotTds = (Number(l.puramt)||0) * (_payLotsState.tdsRate||0);
-    const lotPayable = (Number(l.balance)||0) - lotTds;
+    // Payable: whole-rupee (distributed) when invoice rounding is on, else 2-dp.
+    const lotPayable = rnd ? (Number(l._payRounded)||0) : ((Number(l.balance)||0) - lotTds);
     const lotKey = String(l.lot_no || '');
     const isExported = exportedAll || (exportedSet && exportedSet.has(lotKey));
     // Exported lots are locked: pre-ticked, disabled, and visually
@@ -19790,7 +19822,7 @@ function _renderPayLotsTable() {
       <td style="text-align:right;color:#B45309">${fmtI(Number(l.refund)||0, 2)}</td>
       <td style="text-align:right;color:#0891B2">${fmtI(tax, 2)}</td>
       <td style="text-align:right;color:#9333EA">${fmtI(lotTds, 2)}</td>
-      <td style="text-align:right;font-weight:700;color:var(--spice-cardamom-dk)">${fmtI(lotPayable, 2)}</td>
+      <td style="text-align:right;font-weight:700;color:var(--spice-cardamom-dk)">${fmtI(lotPayable, rnd?0:2)}</td>
     </tr>`;
   }).join('');
   body.innerHTML = `
@@ -19833,6 +19865,7 @@ function updatePayLotsTotals() {
   const selectedIds = new Set(
     Array.from(document.querySelectorAll('.pay-lot-cb:not([disabled]):checked')).map(cb => Number(cb.dataset.id))
   );
+  const rnd = _payLotsState.round;
   let qty = 0, amt = 0, disc = 0, tax = 0, tds = 0, payable = 0;
   for (const l of _payLotsState.lots) {
     if (!selectedIds.has(l.id)) continue;
@@ -19844,7 +19877,9 @@ function updatePayLotsTotals() {
     tax     += (Number(l.puramt)||0) * (_payLotsState.gstRate||0);
     const lotTds = (Number(l.puramt)||0) * (_payLotsState.tdsRate||0);
     tds     += lotTds;
-    payable += (Number(l.balance) || 0) - lotTds;
+    // Sum the SAME per-lot Payable shown in the rows (whole-rupee distributed
+    // when rounding is on) so "Payable now" foots to the displayed lines.
+    payable += rnd ? (Number(l._payRounded)||0) : ((Number(l.balance) || 0) - lotTds);
   }
   const n = selectedIds.size;
   // Denominator = lots that CAN be picked now (excludes already-exported).
@@ -19858,7 +19893,7 @@ function updatePayLotsTotals() {
       <div>Discount: <strong style="color:#B45309">₹${fmtI(disc, 2)}</strong></div>
       <div>GST: <strong style="color:#0891B2">₹${fmtI(tax, 2)}</strong></div>
       <div>TDS: <strong style="color:#9333EA">₹${fmtI(tds, 2)}</strong></div>
-      <div style="margin-left:auto;font-size:14px">Payable now: <strong style="color:var(--spice-cardamom-dk)">₹${fmtI(payable, 2)}</strong></div>
+      <div style="margin-left:auto;font-size:14px">Payable now: <strong style="color:var(--spice-cardamom-dk)">₹${fmtI(payable, rnd?0:2)}</strong></div>
     </div>`;
   // Disable Print when nothing is selected — no point in firing a PDF
   // request that the server would reject as "lot_ids[] required".
@@ -20142,11 +20177,11 @@ async function loadPayments(opts){
         if ($('pay-kpi-sellers'))  $('pay-kpi-sellers').textContent  = arr.length;
         if ($('pay-kpi-qty'))      $('pay-kpi-qty').innerHTML        = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
         if ($('pay-kpi-discount')) $('pay-kpi-discount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalDiscount, 2)}`;
-        if ($('pay-kpi-payable'))  $('pay-kpi-payable').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalPayable, 2)}`;
+        if ($('pay-kpi-payable'))  $('pay-kpi-payable').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalPayable, Number.isInteger(totalPayable)?0:2)}`;
         updateSummaryStats('payments',
           `<strong>${arr.length}</strong> seller${arr.length===1?'':'s'} · `
           + `<strong>${fmtI(totalQty,2)} kg</strong> · `
-          + `<strong>₹${fmtI(totalPayable,2)}</strong> payable`);
+          + `<strong>₹${fmtI(totalPayable, Number.isInteger(totalPayable)?0:2)}</strong> payable`);
       }
     }
 
@@ -20270,7 +20305,9 @@ async function loadPayments(opts){
           fmt:(n)=>fmtI(n,2),
           // Payable as the "answer" — bigger, darker, cardamom.
           // = PurAmt − Discount − GST 5% − TDS (TDS netted server-side).
-          render:(p)=>`<span style="font-weight:700;color:var(--spice-cardamom-dk);font-size:14px">${fmtI(p.total_payable||0,2)}</span>` },
+          // Payable shows whole rupees (no paise) when it's been rounded
+          // server-side (flag_round on); falls back to 2-dp when not rounded.
+          render:(p)=>`<span style="font-weight:700;color:var(--spice-cardamom-dk);font-size:14px">${fmtI(p.total_payable||0, Number.isInteger(Number(p.total_payable))?0:2)}</span>` },
         { key:'_actions', label:'Actions', sortable:false, searchable:false,
           render:(p)=>{
             const aid = Number((document.getElementById('pay-auction')||{}).value)||0;

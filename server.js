@@ -18,7 +18,7 @@ const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
-const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0 } = require('./calculations');
+const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0, distributeRoundedPayable } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateLotReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
 const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
 const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
@@ -8477,12 +8477,19 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
   y += 18;
   doc.font('Helvetica').fontSize(9).fillColor('#000');
   let tQty=0,tAmt=0,tDisc=0,tTax=0,tTds=0,tPay=0;
-  for (const l of lots) {
+  // Payable per lot = balance − the lot's TDS share. When invoice rounding is
+  // on (cfg.flag_round), distribute whole-rupee rounding across the seller's
+  // lots so each line is a whole rupee AND the lines sum exactly to the
+  // seller's rounded Payable (matching the Payments tab + bank file).
+  const roundPay = cfg.flag_round === true || String(cfg.flag_round || '').toLowerCase() === 'true';
+  const rawPayables = lots.map(l => (Number(l.balance)||0) - round2((Number(l.puramt)||0) * tdsRate));
+  const payables = roundPay ? distributeRoundedPayable(rawPayables) : rawPayables.map(round2);
+  lots.forEach((l, i) => {
     // GST + TDS allocated from the seller's live totals (not the stale per-lot
     // stamps); Payable = balance − the lot's TDS share.
     const tax = round2((Number(l.puramt)||0) * gstRate);
     const lotTds = round2((Number(l.puramt)||0) * tdsRate);
-    const payable = (Number(l.balance)||0) - lotTds;
+    const payable = payables[i];
     const row = { ...l, tax, tds: lotTds, payable };
     tQty+=Number(l.pqty)||0; tAmt+=Number(l.puramt)||0; tDisc+=Number(l.refund)||0; tTax+=tax; tTds+=lotTds; tPay+=payable;
     if (y > 770) { doc.addPage(); y = 40; }
@@ -8492,7 +8499,7 @@ function _renderPaymentStatement(doc, db, auctionId, sellerName, cfg, lotIds) {
     }
     y += 14;
     doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).strokeColor('#e5e7eb').lineWidth(0.5).stroke().strokeColor('#000');
-  }
+  });
   doc.font('Helvetica-Bold').fontSize(10);
   doc.rect(PAGE_L, y, PAGE_W, 20).fillAndStroke('#f3f4f6', '#666').fillColor('#000');
   doc.text('TOTAL', PAGE_L + 2, y + 6);

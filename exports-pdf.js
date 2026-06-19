@@ -1051,12 +1051,27 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       // TDS comes from the seller's stamped purchase invoice (Section 194Q),
       // spread across this lot ∝ its puramt — same as the Payments tab. Each
       // row carries its own TDS share; PAYABLE = PurAmt − Discount − GST 5% − TDS.
-      const { paymentTdsContext } = require('./calculations');
+      const { paymentTdsContext, distributeRoundedPayable } = require('./calculations');
       const tdsCtx = paymentTdsContext(db, auctionId);
       for (const r of prows) {
         const tds = tdsCtx.share(r.poolername, r.puramt);
         r.tds = tds;
         r.payable = (Number(r.payable) || 0) - tds;
+      }
+      // When invoice rounding is on, round each seller's per-lot Payable to
+      // whole rupees — distributed so the lines foot to the seller's rounded
+      // total (matching the Payments tab). prows are contiguous per seller.
+      const roundPayL = cfg && (cfg.flag_round === true || String(cfg.flag_round || '').toLowerCase() === 'true');
+      if (roundPayL) {
+        let gi = 0;
+        while (gi < prows.length) {
+          let gj = gi;
+          while (gj < prows.length && prows[gj].poolername === prows[gi].poolername) gj++;
+          const grp = prows.slice(gi, gj);
+          const rounded = distributeRoundedPayable(grp.map(r => r.payable));
+          for (let k = 0; k < grp.length; k++) grp[k].payable = rounded[k];
+          gi = gj;
+        }
       }
       return prows;
     }
@@ -1078,11 +1093,14 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
       // Per-seller TDS — the stamped Section 194Q purchase-invoice TDS for this
       // trade (0 until the invoice is generated / below threshold). Subtracted
       // off PAYABLE, matching the Payments tab.
-      const { paymentTdsContext } = require('./calculations');
+      const { paymentTdsContext, round0 } = require('./calculations');
       const tdsCtx = paymentTdsContext(db, auctionId);
+      // Round each seller's Payable to whole rupees when invoice rounding is on.
+      const roundPayP = cfg && (cfg.flag_round === true || String(cfg.flag_round || '').toLowerCase() === 'true');
       for (const r of ppRows) {
         r.tds = tdsCtx.share(r.poolername, r.puramt);
-        r.payable = (Number(r.payable) || 0) - r.tds;
+        const raw = (Number(r.payable) || 0) - r.tds;
+        r.payable = roundPayP ? round0(raw) : raw;
       }
       return ppRows;
     }

@@ -711,6 +711,29 @@ function generateLotReceiptPDF(payload) {
   const grossOf = (l) => (Number(l.qty) || 0) + (Number(l.sample_wt) || 0);
   const { getLogoSource } = require('./logo-paths');
 
+  // Page geometry — defined here so the height calcs + the text measuring
+  // helper below share it with the draw pass further down.
+  const isCompact = format === 'compact';
+  const pageW = isCompact ? 226 : 200;
+  const margin = 10;
+  const contentW = pageW - margin * 2;
+  // Off-screen doc used ONLY to measure wrapped text — heightOfString needs a
+  // document context but draws nothing into the output. Long names/places are
+  // sized with this so the fixed page height AND the draw cursor reserve the
+  // SAME vertical space; otherwise a long name overlaps the row below it (and
+  // can overflow the fixed-height page, shattering one-slip-per-trader paging).
+  const _measure = new PDFDocument({ size: [pageW, 200], margin });
+  const wrapLines = (text, width, font, fontSize) => {
+    text = String(text || '');
+    if (!text) return 1;
+    try {
+      _measure.font(font).fontSize(fontSize);
+      const single = _measure.heightOfString('Mg', { width: 1e6 });
+      const total  = _measure.heightOfString(text, { width });
+      return Math.max(1, Math.round(total / single));
+    } catch (_) { return 1; }
+  };
+
   // ── Compact 80mm thermal slip ──
   function compactHeight(g) {
     const rows = g.lots.length;
@@ -719,7 +742,8 @@ function generateLotReceiptPDF(payload) {
     let h = 12 + 18;                         // pad + nickname
     if (g.branch) h += 12;
     if (co.gstin) h += 12;
-    h += 8 + 14;                             // planter
+    // Name row — grows when a long name wraps to extra lines.
+    h += 8 + 14 + (wrapLines('Name: ' + (g.name || '—'), contentW - 4, 'Helvetica-Bold', 10) - 1) * 12;
     h += 12;                                 // meta
     h += 10 + 14;                            // table header
     h += rows * 13;
@@ -739,9 +763,12 @@ function generateLotReceiptPDF(payload) {
     if (g.branch) { doc.fontSize(9).text(String(g.branch).toUpperCase(), cx, y, { width: cw, align: 'center' }); y += 12; }
     if (co.gstin) { doc.fontSize(9).text('GSTIN: ' + co.gstin, cx, y, { width: cw, align: 'center' }); y += 12; }
     y += 8;
-    doc.fontSize(10).text('Name: ', cx + 2, y, { continued: true }).font('Helvetica-Bold').text(g.name || '—');
+    // Name — wraps within the slip and reserves the wrapped height so a long
+    // name never overlaps the Trade/Date line below.
+    doc.fontSize(10).font('Helvetica').text('Name: ', cx + 2, y, { continued: true })
+       .font('Helvetica-Bold').text(g.name || '—', { width: cw - 4 });
     doc.font('Helvetica');
-    y += 14;
+    y += 14 + (wrapLines('Name: ' + (g.name || '—'), cw - 4, 'Helvetica-Bold', 10) - 1) * 12;
     doc.fontSize(9).text(`Trade: ${ano}    Date: ${dateStr}`, cx + 2, y, { width: cw - 2 });
     y += 12 + 10;
     // Table header
@@ -786,20 +813,21 @@ function generateLotReceiptPDF(payload) {
   }
 
   // ── Detailed ~60mm slip ──
-  function detailedMetaRows(g, ti) {
-    const bank = (ti && ti.defaultBank) || {};
-    let n = 3; // Name, Place, CR always present as rows
-    if (bank.acctnum) n += 1;
-    if (bank.ifsc) n += 1;
-    return n;
-  }
   function detailedHeight(g) {
     const ti = (g.trader_id != null ? traderInfo[g.trader_id] : null) || {};
+    const bank = (ti && ti.defaultBank) || {};
+    const place = [g.ppla, g.ppin].filter(Boolean).join(', ');
     let h = 12 + 30;                         // pad + brand (title+branch)
     if (co.gstin) h += 12;
     h += 8 + 14;                             // dateline
     h += 8;                                  // hr
-    h += detailedMetaRows(g, ti) * 13;
+    // Meta rows. Name + Place are free text and can wrap to several lines on
+    // long values, so measure them; the rest are short fixed-format fields.
+    h += wrapLines(g.name || '', contentW - 54, 'Helvetica', 8.5) * 13;  // Name
+    h += wrapLines(place,        contentW - 54, 'Helvetica', 8.5) * 13;  // Place
+    h += 13;                                 // CR
+    if (bank.acctnum) h += 13;               // A/C No
+    if (bank.ifsc) h += 13;                  // IFSC
     h += 8 + 14;                             // lot header
     h += g.lots.length * 14;
     h += 16;                                 // summary
@@ -848,9 +876,12 @@ function generateLotReceiptPDF(payload) {
     y += 8;
     // Meta table
     const metaRow = (lbl, val, mono) => {
+      const vFont = mono ? 'Courier' : 'Helvetica';
       doc.font('Helvetica-Bold').fontSize(8.5).text(lbl, cx + 2, y, { width: 48 });
-      doc.font(mono ? 'Courier' : 'Helvetica').fontSize(8.5).text(String(val || ''), cx + 52, y, { width: cw - 54 });
-      y += 13;
+      doc.font(vFont).fontSize(8.5).text(String(val || ''), cx + 52, y, { width: cw - 54 });
+      // Advance by the value's wrapped height (≥1 line) so a long Name/Place
+      // pushes the next row down instead of overlapping it.
+      y += wrapLines(String(val || ''), cw - 54, vFont, 8.5) * 13;
     };
     metaRow('Name', g.name || '');
     metaRow('Place', place);
@@ -891,10 +922,6 @@ function generateLotReceiptPDF(payload) {
     doc.font('Helvetica-Bold').fontSize(9).text('** THANK YOU **', cx, y, { width: cw, align: 'center' });
   }
 
-  const isCompact = format === 'compact';
-  const pageW = isCompact ? 226 : 200;
-  const margin = 10;
-  const contentW = pageW - margin * 2;
   const heightFn = isCompact ? compactHeight : detailedHeight;
   const drawFn = isCompact ? drawCompact : drawDetailed;
 
