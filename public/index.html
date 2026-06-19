@@ -4197,10 +4197,12 @@ input[type="search"]:focus{
           <!-- Status filter: a seller is "Paid (exported)" only once BOTH the
                Bank Payment file AND the Voucher have been exported for them;
                "To be paid" is everyone not yet fully exported. -->
-          <select id="pay-status-filter" onchange="loadPayments()" title="Show only paid (fully exported) or to-be-paid (not yet exported) sellers" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:170px">
+          <select id="pay-status-filter" onchange="loadPayments()" title="Filter sellers by export status — paid (bank + voucher), to-be-paid, or by an individual export type" style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;font-weight:500;min-width:190px">
             <option value="all">All sellers</option>
             <option value="unpaid">⏳ To be paid</option>
-            <option value="paid">✓ Paid (exported)</option>
+            <option value="paid">✓ Paid (bank + voucher)</option>
+            <option value="bank">📤 Bank payment exported</option>
+            <option value="voucher">🧾 Voucher payment exported</option>
           </select>
 
           <button class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="loadPayments()">↻ Reload</button>
@@ -20104,15 +20106,24 @@ async function loadPayments(opts){
     let arr = searchTerm
       ? allArr.filter(r => String(r.name || '').toLowerCase().includes(searchTerm))
       : allArr;
-    // Status filter — "Paid (exported)" = fully blocked (bank AND voucher
-    // exported); "To be paid" = everyone not yet fully exported. Applied
-    // before KPIs/pagination/chart so they all reflect the filtered set.
+    // Status filter, applied before KPIs/pagination/chart so they all reflect
+    // the filtered set:
+    //   paid    — fully blocked (bank AND voucher exported)
+    //   unpaid  — everyone not yet fully paid
+    //   bank    — bank payment fully exported (regardless of voucher)
+    //   voucher — voucher fully exported (regardless of bank)
     const statusFilter = document.getElementById('pay-status-filter')?.value || 'all';
     if (statusFilter !== 'all') {
       const _aidF = Number(document.getElementById('pay-auction')?.value) || 0;
       arr = arr.filter(r => {
-        const blocked = _payBlockStatus(_aidF, String(r.name || ''), Number(r.lot_count) || 0) === 'full';
-        return statusFilter === 'paid' ? blocked : !blocked;
+        const nm = String(r.name || ''), lc = Number(r.lot_count) || 0;
+        switch (statusFilter) {
+          case 'paid':    return _payBlockStatus(_aidF, nm, lc) === 'full';
+          case 'unpaid':  return _payBlockStatus(_aidF, nm, lc) !== 'full';
+          case 'bank':    return _payCatStatus(_aidF, nm, lc, 'bank') === 'full';
+          case 'voucher': return _payCatStatus(_aidF, nm, lc, 'voucher') === 'full';
+          default:        return true;
+        }
       });
     }
 
