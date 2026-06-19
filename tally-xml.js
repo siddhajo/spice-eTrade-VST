@@ -265,21 +265,16 @@ function generSalesIspXML(rows, cfg, opts = {}) {
   const company       = opts.companyName || cfgGet(cfg, 'tally_company_name', cfgGet(cfg, 'short_name', ''));
   const season        = opts.season || cfgGet(cfg, 'tally_season', cfgGet(cfg, 'season_code', '2026-27'));
   const separator     = opts.separator || cfgGet(cfg, 'tally_separator', '/');
-  // Voucher prefix priority for <VOUCHERNUMBER>:
-  //   1. tally_inv_prefix setting (e.g. 'VSTK') — explicit, season-stable
-  //   2. cfg.logo (live Logo Code) — back-compat for installs that
-  //      historically used the Logo Code as the prefix
-  //   3. derived short name from company identity
-  //   4. 'INV' — generic last-resort label so we never emit blank
-  //      prefixes. NO fallback to any company-specific code.
-  // Trailing '/' appended only if the code doesn't already end with one
-  // or '-'. The slash is necessary because <VOUCHERNUMBER> is rendered
-  // as `${invPrefix}${separator}${seasonNum}` and a missing slash
-  // produces invalid voucher numbers in Tally.
+  // Voucher prefix for <VOUCHERNUMBER> is driven SOLELY by the "Voucher
+  // Prefix" setting (tally_inv_prefix). When the user clears it, NO prefix is
+  // emitted — the voucher number becomes just `${taxNm}/${season}`. There is
+  // deliberately NO fallback to the Logo Code or any company-specific code.
+  // When set, a trailing '/' is appended unless it already ends with '/' or
+  // '-', because <VOUCHERNUMBER> is rendered as `${invPrefix}${taxNm}/...`.
   const _tallyPrefix = String(cfgGet(cfg, 'tally_inv_prefix', '')).trim();
-  const _logoCode    = String(cfgGet(cfg, 'logo', '')).trim();
-  const _activePrefix = _tallyPrefix || _logoCode || _getCompanyIdentity(cfg).shortName || 'INV';
-  const invPrefix = /[/\-]$/.test(_activePrefix) ? _activePrefix : (_activePrefix + '/');
+  const invPrefix = _tallyPrefix
+    ? (/[/\-]$/.test(_tallyPrefix) ? _tallyPrefix : (_tallyPrefix + '/'))
+    : '';
   const ainvPrefix    = cfgGet(cfg, 'tally_ainv_prefix', '');  // optional auxiliary prefix; empty = none
   const detailed      = cfgBool(cfg, 'tally_detailed', true);
   const dispatchEnabled = cfgBool(cfg, 'tally_dispatch_from', true);
@@ -2107,11 +2102,12 @@ function generURDPurchaseXML(rows, cfg, opts = {}) {
   // amazing/ainvPrefix kept as locals so dead sister branches below still
   // parse; `amazing` is force-disabled in this e-Trade-only build.
   const amazing   = false;
-  // Voucher prefix from Logo Code (single source of truth) — falls
-  // through to identity.shortName so we don't leak a hardcoded literal.
-  const _urdLogoCode = String(cfgGet(cfg, 'logo', '')).trim()
-                    || _getCompanyIdentity(cfg).shortName || 'INV';
-  const invPrefix = /[/\-]$/.test(_urdLogoCode) ? _urdLogoCode : (_urdLogoCode + '/');
+  // Voucher prefix is driven SOLELY by the "Voucher Prefix" setting
+  // (tally_inv_prefix); cleared → no prefix at all. No Logo Code fallback.
+  const _urdPrefix = String(cfgGet(cfg, 'tally_inv_prefix', '')).trim();
+  const invPrefix = _urdPrefix
+    ? (/[/\-]$/.test(_urdPrefix) ? _urdPrefix : (_urdPrefix + '/'))
+    : '';
   const ainvPrefix= cfgGet(cfg, 'tally_ainv_prefix', '');
   const sStateName= cfgGet(cfg, 'tally_urd_state', 'Kerala');
 

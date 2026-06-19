@@ -1144,16 +1144,12 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const r1W = rightW / 3;
   let ry = topY;
 
-  // Invoice prefix derives from the live Logo Code (cfg.logo) so the
-  // Invoice prefix priority — Invoice Settings (`inv_prefix`) wins, since
-  // that's the field labeled "Invoice Prefix" in the Invoice settings tab
-  // and is the value the user explicitly maintains for this purpose.
-  // Falls back to Logo Code (`logo`) only when `inv_prefix` is unset, then
-  // to the user's short_name / trade_name first word. NO hardcoded
-  // literal — a fresh install with no Invoice Prefix configured renders
-  // a prefix-less identifier rather than leaking any legacy literal.
-  const _idShort = (cfg.short_name || String(cfg.trade_name || '').split(/\s+/)[0] || '').toUpperCase();
-  const primaryPrefix = String(cfg.inv_prefix || cfg.logo || _idShort || '').trim();
+  // Invoice prefix is driven SOLELY by the "Invoice Prefix" setting
+  // (`inv_prefix`) from the Invoice settings tab. When the user clears it, NO
+  // prefix is emitted — the invoice number renders prefix-less (e.g.
+  // "L-9/26-27"). There is deliberately NO fallback to the Logo Code or the
+  // company short name.
+  const primaryPrefix = String(cfg.inv_prefix || '').trim();
   const otherPrefix   = primaryPrefix; // dead — kept for the few downstream sites that still read it
   const primaryCfg    = { ...cfg, inv_prefix: primaryPrefix };
   // Intra-company invoices always use the "I" segment irrespective of
