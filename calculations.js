@@ -1127,6 +1127,11 @@ function getPurchaseJournal(db, auctionId, type) {
  * balance (GST already netted) — see [[payment-field-semantics]]. In
  * auction mode `advance` is the discount, so GST5 → 0.
  *
+ * Withdrawn lots (code = 'WD') ARE included even though withdrawal zeroes
+ * their price/amount, so the register accounts for every lot in the trade —
+ * they appear with their real BAG/QTY but zero money columns (the only
+ * zero-AMOUNT rows here, since unsold lots with no code stay excluded).
+ *
  * Scope: a specific trade (opts.auctionId) OR a date range across trades
  * (opts.from/opts.to over the auction date). Trade wins when both given.
  */
@@ -1140,7 +1145,7 @@ function getPurchaseRegister(db, opts = {}) {
       l.pqty AS pqty, l.prate AS prate, l.puramt AS puramt,
       l.${discountCol} AS discount, l.${gstCol} AS gst5, l.balance AS payable
     FROM lots l JOIN auctions a ON a.id = l.auction_id
-    WHERE l.amount > 0`;
+    WHERE (l.amount > 0 OR UPPER(TRIM(COALESCE(l.code,''))) = 'WD')`;
   const params = [];
   if (opts.auctionId) { q += ' AND l.auction_id = ?'; params.push(opts.auctionId); }
   else if (opts.from && opts.to) { q += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
