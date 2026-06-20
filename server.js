@@ -3269,6 +3269,53 @@ app.post('/api/auctions', requireAuctionWrite, (req, res) => {
   const created = db.get('SELECT id FROM auctions WHERE ano = ? AND date = ? ORDER BY id DESC LIMIT 1', [ano, d]);
   res.json({ success: true, id: created ? created.id : null });
 });
+// Re-sync the denormalized trade-number (`ano`) copies after a trade is
+// renumbered. The dependent rows carry `ano` as a denormalized copy of the
+// trade number set at creation time; editing a trade's `ano` left them stale,
+// which orphaned a trade's purchases / invoices / bills / debit notes under
+// the OLD number. The visible symptom was "Generate Debit Notes" reporting
+// "no eligible purchases" because the lookup is by the new `ano`.
+//
+// purchases / invoices / bills are bridged by the STABLE auction_id. debit_notes
+// have no auction_id, so they're bridged via the OLD ano still stamped on this
+// trade's purchases, scoped by dealer name so a different trade that happens to
+// share the old number isn't touched. Idempotent — safe on every save.
+function _resyncTradeAno(db, auctionId, currentAno) {
+  const aid = Number(auctionId);
+  const cur = String(currentAno == null ? '' : currentAno).trim();
+  if (!aid || cur === '') return;
+  try {
+    // Old numbers still stamped on this trade's id-linked rows (pre-heal).
+    const oldAnos = new Set();
+    for (const tbl of ['purchases', 'invoices', 'bills']) {
+      try {
+        for (const r of db.all(
+          `SELECT DISTINCT ano FROM ${tbl} WHERE auction_id = ? AND ano IS NOT NULL AND TRIM(ano) <> '' AND ano <> ?`,
+          [aid, cur])) oldAnos.add(String(r.ano));
+      } catch (_) { /* table/column may be absent on a partial migration */ }
+    }
+    if (oldAnos.size) {
+      // Dealer names on this trade — scopes the debit_notes bridge.
+      const names = [];
+      try {
+        for (const r of db.all('SELECT DISTINCT name FROM purchases WHERE auction_id = ?', [aid])) {
+          if (r.name != null && String(r.name).trim() !== '') names.push(String(r.name));
+        }
+      } catch (_) {}
+      if (names.length) {
+        const ph = names.map(() => '?').join(',');
+        for (const old of oldAnos) {
+          try { db.run(`UPDATE debit_notes SET ano = ? WHERE ano = ? AND name IN (${ph})`, [cur, old, ...names]); } catch (_) {}
+        }
+      }
+    }
+    // Re-sync the id-linked tables to the current trade number.
+    for (const tbl of ['purchases', 'invoices', 'bills']) {
+      try { db.run(`UPDATE ${tbl} SET ano = ? WHERE auction_id = ?`, [cur, aid]); } catch (_) {}
+    }
+  } catch (e) { console.warn('[resync trade ano]', e.message); }
+}
+
 app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
   const { ano, date, crop_type, state } = req.body;
   const db = getDb();
@@ -3276,6 +3323,10 @@ app.put('/api/auctions/:id', requireAuctionWrite, (req, res) => {
   const defaultState = getSetting(db, 'business_state')    || 'TAMIL NADU';
   db.run('UPDATE auctions SET ano=?, date=?, crop_type=?, state=? WHERE id=?',
     [ano, normalizeDate(date), crop_type||defaultCrop, state||defaultState, req.params.id]);
+  // Cascade the (possibly changed) trade number to dependent rows so a rename
+  // never orphans this trade's purchases / debit notes. Also heals any trade
+  // already desynced by a rename made before this cascade existed.
+  _resyncTradeAno(db, req.params.id, ano);
   res.json({ success: true });
 });
 app.delete('/api/auctions/:id', requireDelete, (req, res) => {
@@ -7321,6 +7372,14 @@ app.post('/api/debit-notes/generate-bulk', requireInvoiceWrite, (req, res) => {
     if (!ano) return res.status(400).json({ error: 'Purchase row has no trade number' });
   }
 
+  // Heal any trade-rename ano desync up-front so the purchase/DN lookups below
+  // (all keyed by ano) see this trade's rows even if it was renumbered after
+  // the purchases were created. Bridged by the stable auction_id.
+  {
+    const _ra = db.get('SELECT id FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [ano]);
+    if (_ra) _resyncTradeAno(db, _ra.id, ano);
+  }
+
   // Price-check gate — only when the feature is enabled.
   // Tri-state: hard 412 only when the auction was never verified. After
   // a first pass, edits drop it to 'stale' (soft warning, allowed).
@@ -7579,17 +7638,23 @@ app.get('/api/debit-notes/eligible-purchases/:auctionId', requireView, (req, res
   // Anti-join: purchases in this trade where no DN exists for the same
   // (ano, dealer name) pair. The dealer name is the natural key here —
   // matches the idempotency rule used by /generate-bulk.
+  //
+  // Match purchases by the STABLE auction_id as well as `ano`, so a trade that
+  // was renumbered after its purchases were created (leaving purchases.ano
+  // stale) still surfaces them here instead of showing "no eligible purchases".
+  // The anti-join stays on p.ano so a purchase and its own DN (which share the
+  // same — possibly stale — number) still match correctly.
   const rows = db.all(
     `SELECT p.id, p.invo, p.name, p.amount, p.cgst, p.sgst, p.igst, p.total, p.date, p.state
        FROM purchases p
-      WHERE p.ano = ?
+      WHERE (p.auction_id = ? OR p.ano = ?)
         AND p.amount > 0
         AND NOT EXISTS (
           SELECT 1 FROM debit_notes dn
            WHERE dn.ano = p.ano AND dn.name = p.name
         )
       ORDER BY p.id`,
-    [ano]
+    [Number(req.params.auctionId), ano]
   );
   res.json(rows);
 });
