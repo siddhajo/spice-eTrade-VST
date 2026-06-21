@@ -2378,6 +2378,19 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 }
 .dt-loadmore button:hover{background:#D1FAE5;border-color:var(--spice-saffron-dk)}
 
+/* Page-based pager (opt-in via DataTable paginate:true) */
+.dt-pager{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  margin-top:10px;flex-wrap:wrap;font-size:12.5px;color:var(--text2)}
+.dt-pager-ctrls{display:flex;align-items:center;gap:10px}
+.dt-pager-pos{font-weight:600;color:var(--spice-text-main)}
+.dt-pager button{
+  padding:6px 14px;background:var(--spice-saffron-lt);border:1px solid var(--spice-saffron);
+  border-radius:8px;font-size:12px;font-weight:600;color:var(--spice-saffron-dk);
+  cursor:pointer;font-family:inherit;transition:all .15s
+}
+.dt-pager button:hover:not(:disabled){background:#D1FAE5;border-color:var(--spice-saffron-dk)}
+.dt-pager button:disabled{opacity:.45;cursor:default}
+
 /* Undo any legacy overflow styles on the tab-content wrapper so
    we don't get a double scrollbar (one outer, one from .dt-scroll). */
 .tc > div[style*="overflow-x"]{overflow:visible !important;max-height:none !important}
@@ -6708,7 +6721,31 @@ const DataTable = (function(){
     if (!table) return;
 
     const filtered = applyFilters(s);
-    const visible = filtered.slice(0, s.visible);
+    // Two paging modes:
+    //   • default      → "Load More" appends PAGE_SIZE rows (s.visible grows).
+    //   • paginate:true → page-based Prev/Next, one page (s.pageSize) at a time.
+    const pageSize = s.pageSize || PAGE_SIZE;
+    let visible, pagerHTML = '';
+    if (s.paginate) {
+      const total = filtered.length;
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      if (s.page >= pages) s.page = pages - 1;
+      if (!s.page || s.page < 0) s.page = 0;
+      const start = s.page * pageSize;
+      visible = filtered.slice(start, start + pageSize);
+      const from = total ? start + 1 : 0;
+      const to = Math.min(start + pageSize, total);
+      pagerHTML = `<div class="dt-pager">
+        <span class="dt-pager-info">Showing ${from}–${to} of ${total}</span>
+        <span class="dt-pager-ctrls">
+          <button onclick="DataTable._page('${tbodyId}',-1)" ${s.page<=0?'disabled':''}>‹ Prev</button>
+          <span class="dt-pager-pos">Page ${s.page+1} of ${pages}</span>
+          <button onclick="DataTable._page('${tbodyId}',1)" ${s.page>=pages-1?'disabled':''}>Next ›</button>
+        </span>
+      </div>`;
+    } else {
+      visible = filtered.slice(0, s.visible);
+    }
 
     // Header row with click-to-sort indicators
     const headCells = s.cols.map(c => {
@@ -6796,7 +6833,7 @@ const DataTable = (function(){
         <span class="dt-count">${filtered.length} row${filtered.length===1?'':'s'}${s.data.length!==filtered.length?` (of ${s.data.length})`:''}</span>
       </div>`;
 
-    const loadMore = visible.length < filtered.length
+    const loadMore = (!s.paginate && visible.length < filtered.length)
       ? `<div class="dt-loadmore"><button onclick="DataTable._loadMore('${tbodyId}')">Load ${Math.min(PAGE_SIZE, filtered.length-visible.length)} more (${visible.length} of ${filtered.length} shown)</button></div>`
       : '';
 
@@ -6832,9 +6869,10 @@ const DataTable = (function(){
       scroll.appendChild(table);
     }
     // Refresh toolbar + load-more
-    wrap.querySelectorAll(':scope > .dt-toolbar, :scope > .dt-loadmore').forEach(el => el.remove());
+    wrap.querySelectorAll(':scope > .dt-toolbar, :scope > .dt-loadmore, :scope > .dt-pager').forEach(el => el.remove());
     wrap.insertAdjacentHTML('afterbegin', toolbar);
     if (loadMore) wrap.insertAdjacentHTML('beforeend', loadMore);
+    if (pagerHTML) wrap.insertAdjacentHTML('beforeend', pagerHTML);
   }
 
   return {
@@ -6853,7 +6891,12 @@ const DataTable = (function(){
         // the visible-vs-total summary.
         noSearch: !!config.noSearch,
         emptyState: config.emptyState,
-        summaryRows: config.summaryRows
+        summaryRows: config.summaryRows,
+        // Opt-in page-based pager (Prev / Next) instead of the Load-More
+        // button. `pageSize` overrides the default 100 rows per page.
+        paginate: !!config.paginate,
+        pageSize: config.pageSize || PAGE_SIZE,
+        page: 0
       };
       render(tbodyId);
     },
@@ -6862,11 +6905,17 @@ const DataTable = (function(){
       if (!s.sort || s.sort.col !== colKey) s.sort = { col: colKey, dir: 'asc' };
       else if (s.sort.dir === 'asc')         s.sort = { col: colKey, dir: 'desc' };
       else                                    s.sort = null;
+      s.page = 0;
+      render(tbodyId);
+    },
+    _page(tbodyId, delta){
+      const s = state[tbodyId]; if (!s) return;
+      s.page = (s.page || 0) + delta;   // clamped in render()
       render(tbodyId);
     },
     _search(tbodyId, q){
       const s = state[tbodyId]; if (!s) return;
-      s.search = q; s.visible = PAGE_SIZE;
+      s.search = q; s.visible = PAGE_SIZE; s.page = 0;
       render(tbodyId);
       // Restore focus to the search input (innerHTML replacement loses it)
       const el = document.querySelector(`#${tbodyId}`)?.closest('.dt-wrap')?.querySelector('.dt-search');
@@ -6874,7 +6923,7 @@ const DataTable = (function(){
     },
     _clear(tbodyId){
       const s = state[tbodyId]; if (!s) return;
-      s.search = ''; s.visible = PAGE_SIZE;
+      s.search = ''; s.visible = PAGE_SIZE; s.page = 0;
       render(tbodyId);
       const el = document.querySelector(`#${tbodyId}`)?.closest('.dt-wrap')?.querySelector('.dt-search');
       if (el) el.focus();
@@ -22631,6 +22680,7 @@ async function loadJournal(){
   if (headEl) headEl.innerHTML = '';
   DataTable.mount('jr-body', Array.isArray(d) ? d : [], {
     columns: cols,
+    paginate: true,
     emptyState: { icon:'document', title:'No records', body:'No journal entries for this trade.' }
   });
 }
@@ -22831,6 +22881,7 @@ async function loadRegister(){
     DataTable.mount('reg-body', rows, {
       columns: regColumns(type),
       summaryRows: type === 'pooler' ? poolerSummaryRows : undefined,
+      paginate: true,
       emptyState: { icon:'document', title:'No records', body:'No register entries for this selection.' }
     });
     return;
@@ -22842,6 +22893,7 @@ async function loadRegister(){
   catch(e){ toast('Load failed: ' + (e.message || e)); return; }
   DataTable.mount('reg-body', Array.isArray(d) ? d : [], {
     columns: regColumns(type),
+    paginate: true,
     emptyState: { icon:'document', title:'No records', body:'No register entries for this selection.' }
   });
 }
