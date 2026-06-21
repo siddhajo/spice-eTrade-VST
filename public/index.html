@@ -2390,6 +2390,9 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 }
 .dt-pager button:hover:not(:disabled){background:#D1FAE5;border-color:var(--spice-saffron-dk)}
 .dt-pager button:disabled{opacity:.45;cursor:default}
+.dt-pager-size{padding:6px 8px;border:1px solid var(--spice-saffron);border-radius:8px;
+  font-size:12px;font-weight:600;color:var(--spice-saffron-dk);background:var(--spice-saffron-lt);
+  cursor:pointer;font-family:inherit}
 
 /* Undo any legacy overflow styles on the tab-content wrapper so
    we don't get a double scrollbar (one outer, one from .dt-scroll). */
@@ -6593,7 +6596,8 @@ function iconBtn(kind,title,onclick){
 // filter row, and <tfoot>.
 
 const DataTable = (function(){
-  const PAGE_SIZE = 100;       // rows shown per load
+  const PAGE_SIZE = 100;       // rows shown per load / default page size
+  const PAGE_SIZE_OPTS = [10, 20, 50, 100, 200];  // pager size dropdown
   const state = {}; // keyed by tbodyId: { data, cols, sort, search, visible }
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -6735,9 +6739,12 @@ const DataTable = (function(){
       visible = filtered.slice(start, start + pageSize);
       const from = total ? start + 1 : 0;
       const to = Math.min(start + pageSize, total);
+      const sizeOpts = PAGE_SIZE_OPTS
+        .map(n => `<option value="${n}"${n===pageSize?' selected':''}>${n}/page</option>`).join('');
       pagerHTML = `<div class="dt-pager">
         <span class="dt-pager-info">Showing ${from}–${to} of ${total}</span>
         <span class="dt-pager-ctrls">
+          <select class="dt-pager-size" onchange="DataTable._pageSize('${tbodyId}',this.value)">${sizeOpts}</select>
           <button onclick="DataTable._page('${tbodyId}',-1)" ${s.page<=0?'disabled':''}>‹ Prev</button>
           <span class="dt-pager-pos">Page ${s.page+1} of ${pages}</span>
           <button onclick="DataTable._page('${tbodyId}',1)" ${s.page>=pages-1?'disabled':''}>Next ›</button>
@@ -6746,6 +6753,9 @@ const DataTable = (function(){
     } else {
       visible = filtered.slice(0, s.visible);
     }
+    // Footer totals + summary rows reflect the records currently SHOWN when
+    // paginated (per-page subtotal), or the whole filtered set otherwise.
+    const totalsRows = s.paginate ? visible : filtered;
 
     // Header row with click-to-sort indicators
     const headCells = s.cols.map(c => {
@@ -6774,7 +6784,8 @@ const DataTable = (function(){
       return `<tr${rc ? ` class="${rc}"` : ''}>${cells}</tr>`;
     }).join('');
 
-    // Totals footer — sum numeric columns across ALL filtered rows (not just visible ones)
+    // Totals footer — sums numeric columns over `totalsRows`: the current page
+    // when paginated (per-page subtotal), else all filtered rows.
     // Per-column overrides:
     //   c.noTotal      → render an empty cell (no sum, no count)
     //   c.totalKind    → 'count'  → show row count (e.g. "27 lots") instead of sum
@@ -6782,7 +6793,7 @@ const DataTable = (function(){
     const totals = s.cols.map(c => {
       if (c.noTotal) return '<td></td>';
       if (c.totalKind === 'count') {
-        const n = filtered.length;
+        const n = totalsRows.length;
         let label;
         if (typeof c.totalLabel === 'function') label = c.totalLabel(n);
         else if (typeof c.totalLabel === 'string') label = c.totalLabel;
@@ -6790,7 +6801,7 @@ const DataTable = (function(){
         return `<td><strong>${label}</strong></td>`;
       }
       if (!c.numeric) return '<td></td>';
-      const sum = filtered.reduce((a,r) => a + (Number(getValue(r,c))||0), 0);
+      const sum = totalsRows.reduce((a,r) => a + (Number(getValue(r,c))||0), 0);
       const fmt = c.fmt ? c.fmt(sum) : sum.toLocaleString('en-IN',{maximumFractionDigits:2});
       return `<td class="num"><strong>${fmt}</strong></td>`;
     }).join('');
@@ -6802,7 +6813,7 @@ const DataTable = (function(){
     // rows that sit directly beneath the (sticky) totals row.
     let extraFoot = '';
     if (typeof s.summaryRows === 'function') {
-      const defs = s.summaryRows(filtered) || [];
+      const defs = s.summaryRows(totalsRows) || [];
       extraFoot = defs.map(def => {
         const tds = s.cols.map((c, ci) => {
           if (ci === 0) return `<td><strong>${esc(def.label||'')}</strong></td>`;
@@ -6895,7 +6906,8 @@ const DataTable = (function(){
         // Opt-in page-based pager (Prev / Next) instead of the Load-More
         // button. `pageSize` overrides the default 100 rows per page.
         paginate: !!config.paginate,
-        pageSize: config.pageSize || PAGE_SIZE,
+        // Preserve a user-chosen page size across reloads of the same table.
+        pageSize: (state[tbodyId] && state[tbodyId].pageSize) || config.pageSize || PAGE_SIZE,
         page: 0
       };
       render(tbodyId);
@@ -6911,6 +6923,12 @@ const DataTable = (function(){
     _page(tbodyId, delta){
       const s = state[tbodyId]; if (!s) return;
       s.page = (s.page || 0) + delta;   // clamped in render()
+      render(tbodyId);
+    },
+    _pageSize(tbodyId, size){
+      const s = state[tbodyId]; if (!s) return;
+      s.pageSize = Number(size) || PAGE_SIZE;
+      s.page = 0;                        // back to first page on size change
       render(tbodyId);
     },
     _search(tbodyId, q){
