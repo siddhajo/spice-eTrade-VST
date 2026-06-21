@@ -9725,13 +9725,12 @@ async function loadFormulas(){
   // ── Individual registers (per-party statements) ────────────
   html += card('Individual registers — per-party statements (date range)', [
     {
-      label: 'Pooler Register — Total / Sold / Not Sold',
-      note: 'One row per lot the pooler put up across every trade in the date range. Withdrawn lots (code "WD") are excluded. A lot counts as Sold once it has a value (Rate × Qty); unpriced lots are Not Sold.',
+      label: 'Pooler Register — Total / Sold / Withdrawn',
+      note: 'One row per lot the pooler put up across every trade in the date range, including withdrawn lots (code "WD") so the register reconciles the full lot list. Columns carry the purchase side too: P_Qty, P_Rate, PurAmt. A lot counts as Sold once it has a value (Rate × Qty) and is not withdrawn; WD lots count under Withdrawn.',
       formula: `Total Qty   = Σ ( Lot Qty )<br>
                 Total Value = Σ ( Lot Value )      ${lit('Value = Lot Amount')}<br>
-                Sold Qty    = Σ ( Lot Qty where Value &gt; 0 )<br>
-                Sold Value  = Total Value          ${lit('unsold lots carry 0 value')}<br>
-                Not Sold Qty = Total Qty − Sold Qty`,
+                Sold Qty / Value     = Σ ( lots not WD with Value &gt; 0 )<br>
+                Withdrawn Qty / Value = Σ ( lots with code WD )`,
     },
     {
       label: 'Sellers Individual — per-trade purchase summary',
@@ -19822,7 +19821,7 @@ function _renderPayLotsTable() {
       <td style="text-align:right;color:#B45309">${fmtI(Number(l.refund)||0, 2)}</td>
       <td style="text-align:right;color:#0891B2">${fmtI(tax, 2)}</td>
       <td style="text-align:right;color:#9333EA">${fmtI(lotTds, 2)}</td>
-      <td style="text-align:right;font-weight:700;color:var(--spice-cardamom-dk)">${fmtI(lotPayable, rnd?0:2)}</td>
+      <td style="text-align:right;font-weight:700;color:var(--spice-cardamom-dk)">${fmtI(lotPayable, 2)}</td>
     </tr>`;
   }).join('');
   body.innerHTML = `
@@ -19893,7 +19892,7 @@ function updatePayLotsTotals() {
       <div>Discount: <strong style="color:#B45309">₹${fmtI(disc, 2)}</strong></div>
       <div>GST: <strong style="color:#0891B2">₹${fmtI(tax, 2)}</strong></div>
       <div>TDS: <strong style="color:#9333EA">₹${fmtI(tds, 2)}</strong></div>
-      <div style="margin-left:auto;font-size:14px">Payable now: <strong style="color:var(--spice-cardamom-dk)">₹${fmtI(payable, rnd?0:2)}</strong></div>
+      <div style="margin-left:auto;font-size:14px">Payable now: <strong style="color:var(--spice-cardamom-dk)">₹${fmtI(payable, 2)}</strong></div>
     </div>`;
   // Disable Print when nothing is selected — no point in firing a PDF
   // request that the server would reject as "lot_ids[] required".
@@ -20177,11 +20176,11 @@ async function loadPayments(opts){
         if ($('pay-kpi-sellers'))  $('pay-kpi-sellers').textContent  = arr.length;
         if ($('pay-kpi-qty'))      $('pay-kpi-qty').innerHTML        = `${fmtI(totalQty, 2)}<span class="kpi-unit">kg</span>`;
         if ($('pay-kpi-discount')) $('pay-kpi-discount').innerHTML   = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalDiscount, 2)}`;
-        if ($('pay-kpi-payable'))  $('pay-kpi-payable').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalPayable, Number.isInteger(totalPayable)?0:2)}`;
+        if ($('pay-kpi-payable'))  $('pay-kpi-payable').innerHTML    = `<span class="kpi-unit" style="margin-right:4px">₹</span>${fmtI(totalPayable, 2)}`;
         updateSummaryStats('payments',
           `<strong>${arr.length}</strong> seller${arr.length===1?'':'s'} · `
           + `<strong>${fmtI(totalQty,2)} kg</strong> · `
-          + `<strong>₹${fmtI(totalPayable, Number.isInteger(totalPayable)?0:2)}</strong> payable`);
+          + `<strong>₹${fmtI(totalPayable, 2)}</strong> payable`);
       }
     }
 
@@ -20305,9 +20304,10 @@ async function loadPayments(opts){
           fmt:(n)=>fmtI(n,2),
           // Payable as the "answer" — bigger, darker, cardamom.
           // = PurAmt − Discount − GST 5% − TDS (TDS netted server-side).
-          // Payable shows whole rupees (no paise) when it's been rounded
-          // server-side (flag_round on); falls back to 2-dp when not rounded.
-          render:(p)=>`<span style="font-weight:700;color:var(--spice-cardamom-dk);font-size:14px">${fmtI(p.total_payable||0, Number.isInteger(Number(p.total_payable))?0:2)}</span>` },
+          // Payable is rounded to whole rupees server-side (when flag_round is
+          // on) but always DISPLAYED with 2 decimals (e.g. 12,346.00), matching
+          // the payment summary.
+          render:(p)=>`<span style="font-weight:700;color:var(--spice-cardamom-dk);font-size:14px">${fmtI(p.total_payable||0, 2)}</span>` },
         { key:'_actions', label:'Actions', sortable:false, searchable:false,
           render:(p)=>{
             const aid = Number((document.getElementById('pay-auction')||{}).value)||0;
@@ -22700,6 +22700,9 @@ function regColumns(type){
     { key:'qty', label:'Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
     { key:'rate', label:'Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
     { key:'value', label:'Value', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    { key:'pqty', label:'P_Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
+    { key:'prate', label:'P_Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    { key:'puramt', label:'PurAmt', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
   ];
   if (type === 'seller') return [
     { key:'party', label:'Seller', sort:'text' },

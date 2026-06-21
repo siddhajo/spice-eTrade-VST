@@ -512,12 +512,15 @@ const COLS = {
   // Per-party "individual" registers (cross-auction). Rendered via
   // renderIndividualRegisterPdf, not the generic getRowsForType path.
   pooler_individual: [
-    { header: 'TNO',   key: 'tno',   width: 8  },
-    { header: 'DATE',  key: 'date',  width: 14 },
-    { header: 'LOT',   key: 'lot',   width: 8  },
-    { header: 'QTY',   key: 'qty',   width: 14 },
-    { header: 'RATE',  key: 'rate',  width: 12 },
-    { header: 'VALUE', key: 'value', width: 18 },
+    { header: 'TNO',    key: 'tno',    width: 8  },
+    { header: 'DATE',   key: 'date',   width: 14 },
+    { header: 'LOT',    key: 'lot',    width: 8  },
+    { header: 'QTY',    key: 'qty',    width: 14 },
+    { header: 'RATE',   key: 'rate',   width: 12 },
+    { header: 'VALUE',  key: 'value',  width: 18 },
+    { header: 'P_QTY',  key: 'pqty',   width: 14 },
+    { header: 'P_RATE', key: 'prate',  width: 12 },
+    { header: 'PURAMT', key: 'puramt', width: 18 },
   ],
   seller_individual: [
     { header: 'DATE',    key: 'date',    width: 14 },
@@ -1151,9 +1154,9 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
 // generic renderer styles them as yellow strips.
 const INDIVIDUAL_PDF_SUMMARY = {
   pooler_individual: (s) => ([
-    { _isSubtotal: true, tno: 'Total',    qty: s.qty,        value: s.value },
-    { _isSubtotal: true, tno: 'Sold',     qty: s.soldQty,    value: s.soldValue },
-    { _isSubtotal: true, tno: 'Not Sold', qty: s.notSoldQty },
+    { _isSubtotal: true, tno: 'Total',     qty: s.qty,     value: s.value, pqty: s.pqty, puramt: s.puramt },
+    { _isSubtotal: true, tno: 'Sold',      qty: s.soldQty, value: s.soldValue },
+    { _isSubtotal: true, tno: 'Withdrawn', qty: s.wdQty,   value: s.wdValue },
   ]),
   seller_individual: (s) => ([
     { _isSubtotal: true, date: 'Total',           qty: s.qty, invoice: s.invoice },
@@ -1165,7 +1168,7 @@ const INDIVIDUAL_PDF_SUMMARY = {
   ]),
 };
 const INDIVIDUAL_PDF_GRANDKEYS = {
-  pooler_individual: { keys: ['qty', 'value'], label: 'tno' },
+  pooler_individual: { keys: ['qty', 'value', 'pqty', 'puramt'], label: 'tno' },
   seller_individual: { keys: ['qty', 'invoice'], label: 'date' },
   merchant_individual: { keys: ['qty', 'invoice', 'receipt'], label: 'date' },
 };

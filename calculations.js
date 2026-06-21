@@ -1256,24 +1256,34 @@ const _num = (v) => Number(v) || 0;
 const _sum = (rows, k) => rows.reduce((s, r) => s + _num(r[k]), 0);
 
 // Pooler Register — one row per lot the pooler put up, across all trades
-// in range. TNo | Date | Lot | Qty | Rate | Value. Withdrawn lots (code
-// 'WD') are excluded; unsold lots (value 0) are listed and counted under
-// "Not Sold".
+// in range. TNo | Date | Lot | Qty | Rate | Value | P_Qty | P_Rate | PurAmt.
+// Withdrawn lots (code 'WD') ARE included so the register reconciles the
+// full lot list; the summary breaks the totals into Sold vs Withdrawn.
 function getPoolerRegister(db, opts = {}) {
   let q = `SELECT a.ano AS tno, a.date AS date, l.lot_no AS lot, l.name AS party,
-      l.cr AS gstin, l.qty AS qty, l.price AS rate, l.amount AS value
+      l.cr AS gstin, l.qty AS qty, l.price AS rate, l.amount AS value,
+      l.pqty AS pqty, l.prate AS prate, l.puramt AS puramt,
+      UPPER(TRIM(COALESCE(l.code,''))) AS code
     FROM lots l JOIN auctions a ON a.id = l.auction_id
-    WHERE UPPER(TRIM(COALESCE(l.code,''))) != 'WD'`;
+    WHERE 1=1`;
   const params = [];
   if (opts.from && opts.to) { q += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
   if (opts.party) { q += ' AND UPPER(TRIM(l.name)) = UPPER(?)'; params.push(String(opts.party).trim()); }
   q += ' ORDER BY l.name, a.date, a.ano, CAST(l.lot_no AS INTEGER), l.lot_no';
   const rows = db.all(q, params).map(r => ({ ...r, date: _ddmmyyyy(r.date) }));
   const parties = _groupRegister(rows, (rs) => {
+    const isWd = (r) => String(r.code || '').trim().toUpperCase() === 'WD';
     const qty = _sum(rs, 'qty');
     const value = _sum(rs, 'value');
-    const soldQty = rs.reduce((s, r) => s + (_num(r.value) > 0 ? _num(r.qty) : 0), 0);
-    return { qty, value, soldQty, soldValue: value, notSoldQty: qty - soldQty };
+    const pqty = _sum(rs, 'pqty');
+    const puramt = _sum(rs, 'puramt');
+    const sold = rs.filter(r => !isWd(r) && _num(r.value) > 0);
+    const wd = rs.filter(isWd);
+    const soldQty = sold.reduce((s, r) => s + _num(r.qty), 0);
+    const soldValue = sold.reduce((s, r) => s + _num(r.value), 0);
+    const wdQty = wd.reduce((s, r) => s + _num(r.qty), 0);
+    const wdValue = wd.reduce((s, r) => s + _num(r.value), 0);
+    return { qty, value, pqty, puramt, soldQty, soldValue, wdQty, wdValue };
   });
   return { kind: 'pooler', parties };
 }
@@ -1332,7 +1342,7 @@ function listRegisterParties(db, opts = {}) {
     q += ' ORDER BY p.name';
   } else {
     q = `SELECT DISTINCT l.name AS name FROM lots l JOIN auctions a ON a.id = l.auction_id
-         WHERE COALESCE(l.name,'') != '' AND UPPER(TRIM(COALESCE(l.code,''))) != 'WD'`;
+         WHERE COALESCE(l.name,'') != ''`;
     if (opts.from && opts.to) { q += ' AND a.date BETWEEN ? AND ?'; params.push(opts.from, opts.to); }
     q += ' ORDER BY l.name';
   }
