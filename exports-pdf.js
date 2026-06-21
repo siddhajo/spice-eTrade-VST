@@ -828,6 +828,9 @@ const PDF_LAYOUT = {
   // 18 / 17 wide registers — portrait can't fit them.
   purchase_register: 'landscape',
   sales_register: 'landscape',
+  // Pooler register grew to 9 columns (Qty/Rate/Value + P_Qty/P_Rate/PurAmt);
+  // portrait squeezes the money columns until values truncate. Go landscape.
+  pooler_individual: 'landscape',
 };
 
 // Per-type row preprocessing: add a serial-number column, optionally group

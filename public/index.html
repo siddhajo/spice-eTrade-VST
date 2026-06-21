@@ -2360,6 +2360,15 @@ body[data-dark="1"] .dt-scroll tbody tr:hover{background:#334155}
 }
 .dt-foot td strong{color:#B45309}  /* amber-dark for the sum numbers */
 
+/* Extra summary rows (Sold / Withdrawn) beneath the totals row. Non-sticky so
+   they don't stack on top of the sticky totals row; highlighted to stand out. */
+.dt-foot tr.dt-foot-extra td{
+  position:static;z-index:auto;box-shadow:none;
+  background:#FFF3CD;border-top:1px solid var(--spice-turmeric);
+  padding:10px 12px;font-size:13px;font-weight:700;color:var(--spice-text-main)
+}
+.dt-foot tr.dt-foot-extra td strong{color:#B45309}
+
 /* Load more */
 .dt-loadmore{margin-top:10px;text-align:center}
 .dt-loadmore button{
@@ -6749,6 +6758,27 @@ const DataTable = (function(){
       return `<td class="num"><strong>${fmt}</strong></td>`;
     }).join('');
 
+    // Extra summary rows below the totals footer (e.g. Sold / Withdrawn on the
+    // Pooler Register). Caller supplies `summaryRows: (filteredRows) => [{label,
+    // values}]`; label lands in the first column, each `values[colKey]` is
+    // formatted with that column's fmt. Rendered as highlighted, non-sticky
+    // rows that sit directly beneath the (sticky) totals row.
+    let extraFoot = '';
+    if (typeof s.summaryRows === 'function') {
+      const defs = s.summaryRows(filtered) || [];
+      extraFoot = defs.map(def => {
+        const tds = s.cols.map((c, ci) => {
+          if (ci === 0) return `<td><strong>${esc(def.label||'')}</strong></td>`;
+          const vals = def.values || {};
+          if (!(c.key in vals)) return '<td></td>';
+          const v = vals[c.key];
+          const fmt = c.fmt ? c.fmt(v) : Number(v).toLocaleString('en-IN',{maximumFractionDigits:2});
+          return `<td class="num"><strong>${fmt}</strong></td>`;
+        }).join('');
+        return `<tr class="dt-foot-extra">${tds}</tr>`;
+      }).join('');
+    }
+
     // Toolbar: optional search box + clear (x) + row count.
     // When `noSearch` is set (per-tab pages that already have a more
     // capable cross-page search above the table), the search input is
@@ -6785,7 +6815,7 @@ const DataTable = (function(){
     const newInner = `
       <thead class="dt-head"><tr>${headCells}</tr></thead>
       <tbody id="${tbodyId}">${bodyRows || emptyRow}</tbody>
-      <tfoot class="dt-foot"><tr>${totals}</tr></tfoot>
+      <tfoot class="dt-foot"><tr>${totals}</tr>${extraFoot}</tfoot>
     `;
     table.innerHTML = newInner;
 
@@ -6822,7 +6852,8 @@ const DataTable = (function(){
         // The row-count badge still renders so callers don't lose
         // the visible-vs-total summary.
         noSearch: !!config.noSearch,
-        emptyState: config.emptyState
+        emptyState: config.emptyState,
+        summaryRows: config.summaryRows
       };
       render(tbodyId);
     },
@@ -22691,17 +22722,29 @@ const fmtNumWithDecimals = (decimals) => (v) => {
   if (decimals === 0) return Math.round(n).toLocaleString('en-IN');
   return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 };
+// Sold / Withdrawn breakdown rendered beneath the Pooler Register totals row.
+// Sold = lots not withdrawn with a value; Withdrawn = lots with code "WD".
+function poolerSummaryRows(rows){
+  const isWd = (r) => String(r.code || '').trim().toUpperCase() === 'WD';
+  const sum = (arr, k) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const sold = rows.filter(r => !isWd(r) && (Number(r.value) || 0) > 0);
+  const wd = rows.filter(isWd);
+  return [
+    { label:'Sold',      values:{ qty:sum(sold,'qty'), value:sum(sold,'value') } },
+    { label:'Withdrawn', values:{ qty:sum(wd,'qty'),   value:sum(wd,'value')   } },
+  ];
+}
 function regColumns(type){
   if (type === 'pooler') return [
-    { key:'party', label:'Pooler', sort:'text' },
+    { key:'party', label:'Pooler', sort:'text', totalKind:'count', totalLabel:'Total' },
     { key:'tno', label:'TNo', sort:'text' },
     { key:'date', label:'Date', sort:'text' },
     { key:'lot', label:'Lot', sort:'text' },
     { key:'qty', label:'Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
-    { key:'rate', label:'Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    { key:'rate', label:'Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2), noTotal:true },
     { key:'value', label:'Value', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
     { key:'pqty', label:'P_Qty', sort:'number', numeric:true, fmt:fmtNumWithDecimals(3) },
-    { key:'prate', label:'P_Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
+    { key:'prate', label:'P_Rate', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2), noTotal:true },
     { key:'puramt', label:'PurAmt', sort:'number', numeric:true, fmt:fmtNumWithDecimals(2) },
   ];
   if (type === 'seller') return [
@@ -22787,6 +22830,7 @@ async function loadRegister(){
     });
     DataTable.mount('reg-body', rows, {
       columns: regColumns(type),
+      summaryRows: type === 'pooler' ? poolerSummaryRows : undefined,
       emptyState: { icon:'document', title:'No records', body:'No register entries for this selection.' }
     });
     return;
