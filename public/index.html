@@ -4764,73 +4764,43 @@ input[type="search"]:focus{
         </div>
         </div><!-- /tally-sec-single-ledger -->
 
-        <!-- Single Party Voucher picker -->
+        <!-- Single Voucher picker — toggle between By Party and By Invoice -->
         <div class="tally-section" id="tally-sec-single-voucher">
         <h3 class="tally-section-head" onclick="toggleTallySection('tally-sec-single-voucher')">
           <span class="tally-section-chev">▼</span>
-          <span>🎫 Single Party Voucher</span>
+          <span>🎫 Single Voucher</span>
         </h3>
         <div class="tally-section-body">
         <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Generate a voucher XML for just one party. Useful when you missed an entry or need a single voucher re-imported. Each party gets a download button per applicable voucher type — Sales for buyers, RD or URD Purchase for traders.</div>
+          <div class="tally-viewbar" style="margin-bottom:8px">
+            <button type="button" class="btn-sm is-active" id="tally-sv-mode-party" onclick="setTallySvMode('party')">🎫 By Party</button>
+            <button type="button" class="btn-sm" id="tally-sv-mode-invoice" onclick="setTallySvMode('invoice')">🧾 By Invoice</button>
+            <span class="tally-viewbar-hint" id="tally-sv-hint">One voucher per party — combines all that party's lots into a single voucher.</span>
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <div style="flex:2;min-width:220px"><label style="font-size:11px;color:var(--text2);font-weight:600">Search</label>
-              <div class="tally-search" id="tally-pv-search-wrap">
+              <div class="tally-search" id="tally-sv-search-wrap">
                 <span class="tally-search-icon">🔍</span>
-                <input type="search" id="tally-pv-search" placeholder="Type to filter by name, GSTIN, or place…" oninput="onTallySearchInput('tally-pv-search', renderTallyPartyVoucherList)">
-                <button type="button" class="tally-search-clear" onclick="clearTallySearch('tally-pv-search', renderTallyPartyVoucherList)" title="Clear">✕</button>
+                <input type="search" id="tally-sv-search" placeholder="Type to filter by name, GSTIN, or place…" oninput="onTallySearchInput('tally-sv-search', renderTallySingleVoucher)">
+                <button type="button" class="tally-search-clear" onclick="clearTallySearch('tally-sv-search', renderTallySingleVoucher)" title="Clear">✕</button>
               </div>
             </div>
             <div style="flex:1;min-width:160px"><label style="font-size:11px;color:var(--text2);font-weight:600">Filter by kind</label>
-              <select id="tally-pv-kind" onchange="renderTallyPartyVoucherList()" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+              <select id="tally-sv-kind" onchange="renderTallySingleVoucher()" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:6px;font-size:13px">
                 <option value="">All kinds</option>
                 <option value="sales" data-tally-co="isp">Sales (buyer)</option>
                 <option value="rd_purchase" data-tally-co="asp">RD Purchase (dealer)</option>
                 <option value="urd_purchase" data-tally-co="asp">URD Purchase (agriculturist)</option>
               </select>
             </div>
-            <button class="btn btn-a" onclick="loadTallyParties()" style="padding:7px 14px;font-size:12px">Refresh List</button>
+            <button class="btn btn-a" onclick="loadTallySingleVoucher()" style="padding:7px 14px;font-size:12px">Refresh List</button>
           </div>
-          <div id="tally-pv-list" style="margin-top:10px;max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
-            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh List</strong> to load parties.</div>
+          <div id="tally-sv-list" style="margin-top:10px;max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
+            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh List</strong> to load.</div>
           </div>
         </div>
         </div>
         </div><!-- /tally-sec-single-voucher -->
-
-        <!-- Single Invoice Voucher picker -->
-        <div class="tally-section" id="tally-sec-single-invoice">
-        <h3 class="tally-section-head" onclick="toggleTallySection('tally-sec-single-invoice')">
-          <span class="tally-section-chev">▼</span>
-          <span>🧾 Single Invoice Voucher</span>
-        </h3>
-        <div class="tally-section-body">
-        <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Generate a voucher XML for just one invoice (by invoice / voucher number) — handy when a single Sale or Purchase voucher needs re-importing without the whole trade. Each row downloads exactly that one voucher.</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <div style="flex:2;min-width:220px"><label style="font-size:11px;color:var(--text2);font-weight:600">Search</label>
-              <div class="tally-search" id="tally-iv-search-wrap">
-                <span class="tally-search-icon">🔍</span>
-                <input type="search" id="tally-iv-search" placeholder="Type to filter by invoice no or party…" oninput="onTallySearchInput('tally-iv-search', renderTallyInvoiceVoucherList)">
-                <button type="button" class="tally-search-clear" onclick="clearTallySearch('tally-iv-search', renderTallyInvoiceVoucherList)" title="Clear">✕</button>
-              </div>
-            </div>
-            <div style="flex:1;min-width:160px"><label style="font-size:11px;color:var(--text2);font-weight:600">Filter by kind</label>
-              <select id="tally-iv-kind" onchange="renderTallyInvoiceVoucherList()" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-                <option value="">All kinds</option>
-                <option value="sales" data-tally-co="isp">Sales (buyer)</option>
-                <option value="rd_purchase" data-tally-co="asp">RD Purchase (dealer)</option>
-                <option value="urd_purchase" data-tally-co="asp">URD Purchase (agriculturist)</option>
-              </select>
-            </div>
-            <button class="btn btn-a" onclick="loadTallyVouchers()" style="padding:7px 14px;font-size:12px">Refresh List</button>
-          </div>
-          <div id="tally-iv-list" style="margin-top:10px;max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
-            <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Pick an auction and click <strong>Refresh List</strong> to load invoices.</div>
-          </div>
-        </div>
-        </div>
-        </div><!-- /tally-sec-single-invoice -->
 
         <div class="tally-section" id="tally-sec-vouchers">
         <h3 class="tally-section-head" onclick="toggleTallySection('tally-sec-vouchers')">
@@ -13479,8 +13449,8 @@ function applyTallyCompanyVisibility(){
   if (typeof renderTallyPartyList === 'function') {
     try { renderTallyPartyList(); } catch (_) {}
   }
-  if (typeof renderTallyPartyVoucherList === 'function') {
-    try { renderTallyPartyVoucherList(); } catch (_) {}
+  if (typeof renderTallySingleVoucher === 'function') {
+    try { renderTallySingleVoucher(); } catch (_) {}
   }
 }
 
@@ -22129,16 +22099,14 @@ function loadTallyAuctions(){
       TALLY_TYPES.forEach(t=>{
         const el=document.getElementById('tally-preview-'+t);if(el)el.textContent='';
       });
-      // also clear the party + invoice voucher lists
+      // also clear the party ledger + single voucher lists
       _tallyParties=null;
       _tallyVouchers=null;
-      const resetMsg='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Auction changed — click <strong>Refresh List</strong> to reload parties.</div>';
+      const resetMsg='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Auction changed — click <strong>Refresh List</strong> to reload.</div>';
       const list=document.getElementById('tally-party-list');
       if(list)list.innerHTML=resetMsg;
-      const pvList=document.getElementById('tally-pv-list');
-      if(pvList)pvList.innerHTML=resetMsg;
-      const ivList=document.getElementById('tally-iv-list');
-      if(ivList)ivList.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Auction changed — click <strong>Refresh List</strong> to reload invoices.</div>';
+      const svList=document.getElementById('tally-sv-list');
+      if(svList)svList.innerHTML=resetMsg;
     });
     sel.dataset.tallyBound='1';
   }
@@ -22228,28 +22196,20 @@ async function loadTallyParties(){
   const aid=document.getElementById('tally-auction')?.value;
   if(!aid){alert('Select an auction first');return}
   const list=document.getElementById('tally-party-list');
-  const pvList=document.getElementById('tally-pv-list');
-  const loadingHtml='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Loading parties…</div>';
-  if(list)list.innerHTML=loadingHtml;
-  if(pvList)pvList.innerHTML=loadingHtml;
+  if(list)list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Loading parties…</div>';
   try{
     const r=await fetch(B+`/api/tally/parties/${aid}`,{headers:{'Authorization':'Bearer '+T}});
     if(!r.ok){
       let msg='Failed to load parties';
       try{const e=await r.json();if(e.error)msg=e.error}catch(x){}
-      const errHtml=`<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">${esc(msg)}</div>`;
-      if(list)list.innerHTML=errHtml;
-      if(pvList)pvList.innerHTML=errHtml;
+      if(list)list.innerHTML=`<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">${esc(msg)}</div>`;
       return;
     }
     const data=await r.json();
     _tallyParties=data.parties||[];
     renderTallyPartyList();
-    renderTallyPartyVoucherList();
   }catch(e){
-    const errHtml=`<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">Error: ${esc(e.message)}</div>`;
-    if(list)list.innerHTML=errHtml;
-    if(pvList)pvList.innerHTML=errHtml;
+    if(list)list.innerHTML=`<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">Error: ${esc(e.message)}</div>`;
   }
 }
 function renderTallyPartyList(){
@@ -22379,14 +22339,14 @@ const TALLY_PV_TYPES_BY_KIND={
   ],
 };
 function renderTallyPartyVoucherList(){
-  const list=document.getElementById('tally-pv-list');
+  const list=document.getElementById('tally-sv-list');
   if(!list)return;
   if(!_tallyParties){
     list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Click <strong>Refresh List</strong> to load parties.</div>';
     return;
   }
-  const q=(document.getElementById('tally-pv-search')?.value||'').toLowerCase().trim();
-  const kindFilter=document.getElementById('tally-pv-kind')?.value||'';
+  const q=(document.getElementById('tally-sv-search')?.value||'').toLowerCase().trim();
+  const kindFilter=document.getElementById('tally-sv-kind')?.value||'';
   const filtered=_tallyParties.filter(p=>{
     if(kindFilter&&p.kind!==kindFilter)return false;
     if(q){
@@ -22455,40 +22415,68 @@ async function tallyDownloadPartyVoucher(type,partyName){
   });
 }
 
-// ── Single Invoice Voucher list ──────────────────────────────────
-// Lists every individual invoice/voucher in the auction (Sales, RD & URD
-// Purchase), each with a Download button that emits XML for just that one
-// voucher via /api/tally/invoice-voucher/<type>/<auctionId>?ref=...
+// ── Single Voucher picker — By Party / By Invoice ────────────────
+// One combined section. "By Party" lists parties (each party's lots roll
+// up into one voucher); "By Invoice" lists each invoice/voucher number
+// individually. Refresh List loads BOTH datasets so the toggle is instant.
 let _tallyVouchers=null;
-async function loadTallyVouchers(){
+let _tallySvMode='party';
+const _TALLY_SV_HINT={
+  party:"One voucher per party — combines all that party's lots into a single voucher.",
+  invoice:"One voucher per invoice number — downloads exactly that single voucher.",
+};
+const _TALLY_SV_PLACEHOLDER={
+  party:'Type to filter by name, GSTIN, or place…',
+  invoice:'Type to filter by invoice no or party…',
+};
+function setTallySvMode(mode){
+  _tallySvMode=(mode==='invoice')?'invoice':'party';
+  const pb=document.getElementById('tally-sv-mode-party');
+  const ib=document.getElementById('tally-sv-mode-invoice');
+  if(pb)pb.classList.toggle('is-active',_tallySvMode==='party');
+  if(ib)ib.classList.toggle('is-active',_tallySvMode==='invoice');
+  const hint=document.getElementById('tally-sv-hint');
+  if(hint)hint.textContent=_TALLY_SV_HINT[_tallySvMode];
+  const inp=document.getElementById('tally-sv-search');
+  if(inp)inp.placeholder=_TALLY_SV_PLACEHOLDER[_tallySvMode];
+  renderTallySingleVoucher();
+}
+function renderTallySingleVoucher(){
+  if(_tallySvMode==='invoice')renderTallyInvoiceVoucherList();
+  else renderTallyPartyVoucherList();
+}
+async function loadTallySingleVoucher(){
   const aid=document.getElementById('tally-auction')?.value;
   if(!aid){alert('Select an auction first');return}
-  const list=document.getElementById('tally-iv-list');
-  if(list)list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Loading invoices…</div>';
+  const list=document.getElementById('tally-sv-list');
+  if(list)list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Loading…</div>';
   try{
-    const r=await fetch(B+`/api/tally/vouchers/${aid}`,{headers:{'Authorization':'Bearer '+T}});
-    if(!r.ok){
-      let msg='Failed to load invoices';
-      try{const e=await r.json();if(e.error)msg=e.error}catch(x){}
+    const [pr,vr]=await Promise.all([
+      fetch(B+`/api/tally/parties/${aid}`,{headers:{'Authorization':'Bearer '+T}}),
+      fetch(B+`/api/tally/vouchers/${aid}`,{headers:{'Authorization':'Bearer '+T}}),
+    ]);
+    if(!pr.ok&&!vr.ok){
+      let msg='Failed to load';
+      try{const e=await pr.json();if(e.error)msg=e.error}catch(x){}
       if(list)list.innerHTML=`<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">${esc(msg)}</div>`;
       return;
     }
-    const data=await r.json();
-    _tallyVouchers=data.vouchers||[];
-    renderTallyInvoiceVoucherList();
+    _tallyParties=pr.ok?((await pr.json()).parties||[]):[];
+    _tallyVouchers=vr.ok?((await vr.json()).vouchers||[]):[];
+    renderTallySingleVoucher();
   }catch(e){
     if(list)list.innerHTML=`<div style="padding:14px;color:#C62828;font-size:12px;text-align:center">Error: ${esc(e.message)}</div>`;
   }
 }
 function renderTallyInvoiceVoucherList(){
-  const list=document.getElementById('tally-iv-list');
+  const list=document.getElementById('tally-sv-list');
   if(!list)return;
   if(!_tallyVouchers){
     list.innerHTML='<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Click <strong>Refresh List</strong> to load invoices.</div>';
     return;
   }
-  const q=(document.getElementById('tally-iv-search')?.value||'').toLowerCase().trim();
-  const kindFilter=document.getElementById('tally-iv-kind')?.value||'';
+  const q=(document.getElementById('tally-sv-search')?.value||'').toLowerCase().trim();
+  const kindFilter=document.getElementById('tally-sv-kind')?.value||'';
   const filtered=_tallyVouchers.filter(v=>{
     if(kindFilter&&v.kind!==kindFilter)return false;
     if(q){
