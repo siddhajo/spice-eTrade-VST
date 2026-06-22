@@ -3950,6 +3950,10 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
 
     const db = getDb();
     const mode = req.body.mode || 'full'; // 'full' = new lots, 'price' = update price/buyer only
+    // Dry-run preview (price mode only): run the full match/validate loop but
+    // write nothing — return the per-lot old→new diff so the operator can
+    // review before committing. No auctions are created and no lots updated.
+    const dryRun = (mode === 'price') && (String(req.body.dryRun || '') === '1' || String(req.body.dryRun || '') === 'true');
 
     const mapCol = (row, ...names) => {
       for (const n of names) { if (row[n] !== undefined) return String(row[n]).trim(); }
@@ -3975,13 +3979,14 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
       const key = `${ano}|${dateStr}`;
       if (auctionCache.has(key)) return auctionCache.get(key);
       let auc = db.get('SELECT * FROM auctions WHERE ano = ? AND date = ?', [ano, dateStr]);
-      if (!auc) {
+      if (!auc && !dryRun) {
+        // Preview never creates auctions — only the real import does.
         db.run('INSERT INTO auctions (ano, date, crop_type, state) VALUES (?,?,?,?)',
           [ano, dateStr || new Date().toISOString().slice(0, 10), cropType, state]);
         auc = db.get('SELECT * FROM auctions WHERE ano = ? AND date = ? ORDER BY id DESC LIMIT 1', [ano, dateStr]);
       }
-      auctionCache.set(key, auc);
-      return auc;
+      auctionCache.set(key, auc || null);
+      return auc || null;
     };
 
     // Pre-validate: if no form override AND no ANO column anywhere, bail early with a clear message
@@ -3992,6 +3997,7 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
 
     let imported = 0, updated = 0, skipped = 0;
     const skipReasons = []; // [{row, lot, reason}]
+    const changes = [];     // dry-run only: [{row, ano, date, lot, fields:[{field, old, new, changed}]}]
     const auctionStats = new Map(); // key = "ano|date" → count
 
     // Helper: check if row is completely empty (all values blank/undefined)
@@ -4017,13 +4023,17 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
         const rowDate = overrideDate || normalizeDate(rawDate);
         if (!rowAno) { skipped++; skipReasons.push({row: rowNum, lot: '', reason: 'Missing ANO/TRADE_NO for this row'}); continue; }
         const auc = resolveAuction(rowAno, rowDate);
+        // In dry-run the auction may not exist (preview never creates one) —
+        // such rows can't match a lot, so report them as skipped.
+        if (!auc) { skipped++; skipReasons.push({row: rowNum, lot: '', reason: `Trade ${rowAno}${rowDate ? ' / ' + rowDate : ''} not found — price import updates lots in an existing trade`}); continue; }
         const auctionId = auc.id;
-        
+
         const lotNo = mapCol(row, 'LOT', 'LOT_NO', 'LOTNO');
         if (!lotNo) { skipped++; skipReasons.push({row: rowNum, lot: '', reason: 'Missing LOT / LOT_NO column value'}); continue; }
-        
-        // (price mode continues below in original code)
-        const existing = db.get('SELECT id FROM lots WHERE auction_id = ? AND lot_no = ?', [auctionId, lotNo]);
+
+        // (price mode continues below in original code) — pull current values
+        // too so a dry-run can show the old→new diff per field.
+        const existing = db.get('SELECT id, price, qty, bags, code, buyer, buyer1, sale, amount FROM lots WHERE auction_id = ? AND lot_no = ?', [auctionId, lotNo]);
         if (!existing) { skipped++; skipReasons.push({row: rowNum, lot: lotNo, reason: `Lot ${lotNo} does not exist in Trade ${rowAno} (price-update requires existing lot)`}); continue; }
 
         try {
@@ -4081,9 +4091,27 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
 
           if (!sets.length) { skipped++; skipReasons.push({row: rowNum, lot: lotNo, reason: 'Row has no updatable fields (price/qty/bag/code/buyer/sale)'}); continue; }
 
-          vals.push(existing.id);
-          db.run(`UPDATE lots SET ${sets.join(', ')} WHERE id=?`, vals);
-          updated++;
+          if (dryRun) {
+            // Reconstruct field→newValue from the parallel sets/vals arrays
+            // (each set is 'col=?') and diff against the lot's current values.
+            const newVals = {};
+            sets.forEach((s, idx) => { newVals[s.replace('=?', '')] = vals[idx]; });
+            const order = ['price', 'amount', 'qty', 'bags', 'code', 'buyer', 'buyer1', 'sale'];
+            const fieldsOut = [];
+            for (const col of order) {
+              if (!(col in newVals)) continue;
+              const oldV = existing[col];
+              const newV = newVals[col];
+              const changed = String(oldV == null ? '' : oldV) !== String(newV == null ? '' : newV);
+              fieldsOut.push({ field: col, old: oldV == null ? '' : oldV, new: newV, changed });
+            }
+            changes.push({ row: rowNum, ano: rowAno, date: rowDate, lot: lotNo, fields: fieldsOut });
+            updated++;
+          } else {
+            vals.push(existing.id);
+            db.run(`UPDATE lots SET ${sets.join(', ')} WHERE id=?`, vals);
+            updated++;
+          }
           const key = `${rowAno}|${rowDate}`;
           auctionStats.set(key, (auctionStats.get(key) || 0) + 1);
         } catch (e) {
@@ -4242,11 +4270,13 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), asy
     fs.unlink(req.file.path, () => {});
     res.json({
       success: true,
+      dryRun,
       imported, updated, skipped, total: rows.length,
       auctionCount: auctionBreakdown.length,
       auctionBreakdown,
       autoAllocCreated,
-      skipReasons
+      skipReasons,
+      changes
     });
   } catch (e) {
     if (req.file) fs.unlink(req.file.path, () => {});

@@ -5563,7 +5563,7 @@ input[type="search"]:focus{
 </div></div>
 
 <!-- ═══ PRICE IMPORT (post-auction) ═══════════════════════ -->
-<div class="modal-bg" id="price-import-modal"><div class="modal">
+<div class="modal-bg" id="price-import-modal"><div class="modal" style="max-width:840px">
   <h2>Price Import — Post-Auction Data</h2>
 
   <!-- "Before trade" snapshot reminder. Importing prices rewrites the
@@ -5602,14 +5602,21 @@ input[type="search"]:focus{
     <span style="color:var(--spice-text-mute)">Extra columns are ignored. Amount is auto-computed as QTY × PRICE if not provided.</span>
   </div>
   <div class="sgrid">
-    <div class="fg"><label>Trade No — override (blank = read TNO from each row)</label><input id="pi-ano" placeholder="Leave blank for multi-auction files"></div>
-    <div class="fg"><label>Date — override (blank = read from each row)</label><input type="date" id="pi-date"></div>
+    <div class="fg"><label>Trade No — override (blank = read TNO from each row)</label><input id="pi-ano" placeholder="Leave blank for multi-auction files" oninput="piResetPreview()"></div>
+    <div class="fg"><label>Date — override (blank = read from each row)</label><input type="date" id="pi-date" onchange="piResetPreview()"></div>
   </div>
   <div class="fg" style="margin-top:10px"><label>Select File (.xls or .xlsx)</label>
-    <input type="file" id="pi-file" accept=".xls,.xlsx" style="padding:6px">
+    <input type="file" id="pi-file" accept=".xls,.xlsx" style="padding:6px" onchange="piResetPreview()">
   </div>
+
+  <!-- Dry-run preview: shows the per-lot old→new changes WITHOUT committing,
+       so the operator can review before the (irreversible) import. Filled by
+       renderPricePreview(); hidden until "Preview Changes" is clicked. -->
+  <div id="pi-preview" style="display:none;margin-top:12px"></div>
+
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('price-import-modal')">Cancel</button>
+    <button class="btn btn-a" id="pi-preview-btn" onclick="doPricePreview()">👁 Preview Changes</button>
     <button class="btn btn-g" id="pi-submit" onclick="doPriceImport()" disabled>Import Prices</button>
   </div>
 </div></div>
@@ -16180,8 +16187,15 @@ function openPriceImport(){
   if(ack) ack.checked=false;
   const submit=document.getElementById('pi-submit');
   if(submit) submit.disabled=true;
+  piResetPreview();
   piPopulatePretrade();
   showModal('price-import-modal');
+}
+// Clear the dry-run preview pane. Called on open and whenever the file or a
+// Trade/Date override changes (which would invalidate a stale preview).
+function piResetPreview(){
+  const host=document.getElementById('pi-preview');
+  if(host){ host.style.display='none'; host.innerHTML=''; }
 }
 // Fill the reminder banner's report dropdown from the same pre-trade
 // snapshot list the Exports tab uses (EXP_PRETRADE), preserving the
@@ -16236,6 +16250,92 @@ async function piQuickExport(type, format){
   await exportType(type, fmt, aid);
 }
 
+// Dry-run preview — POSTs the file with dryRun=1 so the server runs the full
+// match/validate loop but writes nothing, then renders the per-lot old→new
+// diff. Lets the operator sanity-check before the irreversible real import.
+async function doPricePreview(){
+  const fileInput=document.getElementById('pi-file');
+  const file=fileInput.files[0];
+  const host=document.getElementById('pi-preview');
+  if(!file){alert('Please select a file first');return}
+  const btn=document.getElementById('pi-preview-btn');
+  if(btn){btn.disabled=true;btn.textContent='Previewing…';}
+  if(host){host.style.display='block';host.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">Reading file…</div>';}
+  try{
+    const fd=new FormData();
+    fd.append('file',file);
+    fd.append('mode','price');
+    fd.append('dryRun','1');
+    const ano=document.getElementById('pi-ano').value.trim();
+    const dt=document.getElementById('pi-date').value;
+    if(ano)fd.append('ano',ano);
+    if(dt)fd.append('date',dt);
+    const r=await fetch(B+'/api/auctions/import',{method:'POST',headers:{'Authorization':'Bearer '+T},body:fd});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'Preview failed');
+    renderPricePreview(d);
+  }catch(err){
+    if(host)host.innerHTML=`<div style="padding:10px;color:#c00;font-size:12px">Preview failed: ${esc(err.message)}</div>`;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='👁 Preview Changes';}
+  }
+}
+// Render the dry-run result: a counts summary, a per-lot change table (old→new,
+// changed values highlighted), and a collapsible list of skipped/warning rows.
+function renderPricePreview(d){
+  const host=document.getElementById('pi-preview');
+  if(!host)return;
+  const changes=d.changes||[];
+  const FIELDS=[['code','Code'],['price','Price'],['qty','Qty'],['bags','Bag'],['buyer','Buyer'],['sale','Sale']];
+  const fmt=(v)=>{
+    if(v==null||String(v).trim()==='')return '';
+    const s=String(v).trim();
+    return /^-?\d*\.?\d+$/.test(s) ? Number(s).toLocaleString('en-IN') : esc(s);
+  };
+  let html=`<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:12.5px">
+    <span><strong style="color:var(--green)">${d.updated||0}</strong> lot(s) will update</span>
+    <span><strong>${d.total||0}</strong> row(s) read</span>
+    <span><strong style="color:#c80">${d.skipped||0}</strong> skipped</span>
+    <span style="color:var(--text3)">across ${d.auctionCount||0} trade(s)</span>
+  </div>`;
+  if(changes.length){
+    html+=`<div style="max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:6px"><table style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead><tr style="background:var(--bg)">
+        <th style="text-align:left;padding:5px 7px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)">Trade</th>
+        <th style="text-align:left;padding:5px 7px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)">Lot</th>`;
+    FIELDS.forEach(([,lab])=>{ html+=`<th style="text-align:left;padding:5px 7px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)">${lab}</th>`; });
+    html+=`</tr></thead><tbody>`;
+    changes.forEach(c=>{
+      const byField={}; (c.fields||[]).forEach(f=>byField[f.field]=f);
+      html+=`<tr><td style="padding:3px 7px;border-bottom:1px solid var(--spice-line)">${esc(String(c.ano||''))}</td><td style="padding:3px 7px;border-bottom:1px solid var(--spice-line);font-weight:600">${esc(String(c.lot||''))}</td>`;
+      FIELDS.forEach(([k])=>{
+        const f=byField[k];
+        let cell='';
+        if(f){
+          if(f.changed){
+            cell=`<span style="color:var(--text3)">${fmt(f.old)||'—'}</span> <span style="color:var(--green);font-weight:600">→ ${fmt(f.new)||'—'}</span>`;
+          }else{
+            cell=`<span style="color:var(--text3)">${fmt(f.new)}</span>`;
+          }
+        }
+        html+=`<td style="padding:3px 7px;border-bottom:1px solid var(--spice-line);white-space:nowrap">${cell}</td>`;
+      });
+      html+=`</tr>`;
+    });
+    html+=`</tbody></table></div>`;
+  }else{
+    html+=`<div style="padding:8px;color:#c80;font-size:12px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px">No lots would be updated. Check the Trade/Date override and that lots already exist for this trade.</div>`;
+  }
+  const sk=d.skipReasons||[];
+  if(sk.length){
+    html+=`<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:600;font-size:12px;color:#c80">${sk.length} skipped / warning row(s)</summary><div style="max-height:150px;overflow:auto;margin-top:4px;font-size:11.5px;border:1px solid var(--spice-line);border-radius:6px;padding:4px 8px">`;
+    sk.slice(0,200).forEach(s=>{ html+=`<div style="padding:2px 0;border-bottom:1px solid var(--spice-line)">Row ${esc(String(s.row))}${s.lot?` (lot ${esc(String(s.lot))})`:''}: ${esc(String(s.reason))}</div>`; });
+    if(sk.length>200)html+=`<div style="padding:2px 0;color:var(--text3)">…and ${sk.length-200} more</div>`;
+    html+=`</div></details>`;
+  }
+  host.style.display='block';
+  host.innerHTML=html;
+}
 async function doPriceImport(){
   const fileInput=document.getElementById('pi-file');
   const file=fileInput.files[0];
