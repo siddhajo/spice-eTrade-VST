@@ -9768,6 +9768,105 @@ app.get('/api/tally/party-voucher/:type/:auctionId', requireExport, (req, res) =
   }
 });
 
+// ── Single-invoice voucher ─────────────────────────────────────────
+// Like the single-party voucher, but keyed to ONE invoice/voucher number
+// rather than a whole party (a party may have several invoices). Covers
+// the three invoice-bearing voucher types; debit notes are per-supplier
+// aggregates with no per-invoice identity, so they're excluded.
+//
+// `ref` is a stable per-voucher key derived from the invoice number (and
+// sale-type letter for sales, where L/I/E reuse the same number sequence).
+// The list endpoint emits these refs; the download endpoint re-runs the
+// builder and filters to the matching row(s).
+const _stripPurchaseSuffix = (n) => String(n || '').replace(/\s*-\s*PURCHASE$/i, '').trim();
+const SINGLE_INVOICE_VOUCHERS = {
+  sales_isp: {
+    kind:  'sales',
+    ref:   (r) => `${String(r.sale || '').trim().toUpperCase()}#${String(r.invo || '').trim()}`,
+    num:   (r) => (r.sale ? `${String(r.sale).trim()}-` : '') + String(r.invo || '').trim(),
+    party: (r) => r.partyName || r.buyer || '',
+    total: (r) => Number(r.totalRounded != null ? r.totalRounded : r.total) || 0,
+  },
+  rd_purchase: {
+    kind:  'rd_purchase',
+    ref:   (r) => `RD#${String(r.voucherNum || '').trim()}`,
+    num:   (r) => String(r.voucherNum || '').trim(),
+    party: (r) => _stripPurchaseSuffix(r.name),
+    total: (r) => Number(r.totalRounded != null ? r.totalRounded : r.total) || 0,
+  },
+  urd_purchase: {
+    kind:  'urd_purchase',
+    ref:   (r) => `URD#${String(r.voucherNum || '').trim()}`,
+    num:   (r) => String(r.voucherNum || '').trim(),
+    party: (r) => _stripPurchaseSuffix(r.name),
+    total: (r) => Number(r.totalRounded != null ? r.totalRounded : r.total) || 0,
+  },
+};
+
+// List individual vouchers (one per invoice) for the picker.
+app.get('/api/tally/vouchers/:auctionId', requireExport, (req, res) => {
+  const { auctionId } = req.params;
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const vouchers = [];
+    for (const [type, vdef] of Object.entries(SINGLE_INVOICE_VOUCHERS)) {
+      const def = TALLY_EXPORTS[type];
+      let rows = [];
+      try { rows = def.builder(db, auctionId, cfg) || []; } catch (e) { rows = []; }
+      for (const r of rows) {
+        vouchers.push({
+          type, kind: vdef.kind,
+          ref: vdef.ref(r), num: vdef.num(r),
+          party: vdef.party(r), total: vdef.total(r),
+        });
+      }
+    }
+    const byKind = vouchers.reduce((acc, v) => { acc[v.kind] = (acc[v.kind] || 0) + 1; return acc; }, {});
+    res.json({ auctionId, total: vouchers.length, byKind, vouchers });
+  } catch (e) {
+    console.error('tally vouchers error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Single-invoice voucher XML — emits exactly the voucher(s) matching ?ref=.
+app.get('/api/tally/invoice-voucher/:type/:auctionId', requireExport, (req, res) => {
+  const { type, auctionId } = req.params;
+  const ref = req.query.ref;
+  if (!ref) return res.status(400).json({ error: 'Missing ?ref=<voucher ref>' });
+  const vdef = SINGLE_INVOICE_VOUCHERS[type];
+  const def = TALLY_EXPORTS[type];
+  if (!vdef || !def) {
+    return res.status(400).json({
+      error: 'Unsupported voucher type for single-invoice export',
+      supported: Object.keys(SINGLE_INVOICE_VOUCHERS),
+    });
+  }
+  try {
+    const db = getDb();
+    const cfg = getSettingsFlat(db);
+    const allRows = def.builder(db, auctionId, cfg) || [];
+    const want = String(ref).trim();
+    const rows = allRows.filter((r) => vdef.ref(r) === want);
+    if (rows.length === 0) {
+      return res.status(404).json({
+        error: `No ${def.label} matching "${ref}" in auction ${auctionId}`,
+        availableRefs: allRows.map(vdef.ref).slice(0, 30),
+      });
+    }
+    const xml = def.generator(rows, cfg, { companyName: resolveTallyCompanyName(cfg, def.company) });
+    const safe = want.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+    const filename = `${def.name}_Invoice_${safe}_${anoForFile(db, auctionId)}.xml`;
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(xml);
+  } catch (e) {
+    console.error('tally invoice-voucher error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // XML download endpoint — the main thing.
 // Lorry / vehicle no on sales vouchers comes straight from invoices.lorry_no
 // (set via the Sales tab's "Set Lorry No" bulk action). The Tally row
