@@ -5564,7 +5564,7 @@ input[type="search"]:focus{
 
 <!-- ═══ PRICE IMPORT (post-auction) ═══════════════════════ -->
 <div class="modal-bg" id="price-import-modal"><div class="modal" style="max-width:840px">
-  <h2>Price Import — Post-Auction Data</h2>
+  <h2>Price Import — Post-Trade Data</h2>
 
   <!-- "Before trade" snapshot reminder. Importing prices rewrites the
        lots table with the auctioneer's data; the reports listed
@@ -10744,7 +10744,25 @@ async function leEditLot(lotId){
   document.getElementById('le-bags').value   = lot.bags ?? '';
   document.getElementById('le-litre').value  = lot.litre ?? '';
   document.getElementById('le-qty').value    = lot.qty ?? '';
-  document.getElementById('le-sample').value = lot.sample_wt ?? (_le.sampleWeight ? _le.sampleWeight.toFixed(3) : '0.000');
+  // Sample Wt: prefer the lot's stored value, but fall back to the
+  // configured default when the stored value is 0/absent (imported lots
+  // carry sample_wt=0). `??` alone kept the stored 0, so an imported lot
+  // showed 0 on edit instead of the default. Mirrors the PWA edit form.
+  const _smp = (lot.sample_wt != null && Number(lot.sample_wt) > 0)
+    ? Number(lot.sample_wt)
+    : (Number(_le.sampleWeight) || 0);
+  document.getElementById('le-sample').value = _smp > 0 ? _smp.toFixed(3) : '0.000';
+  // Gunny Weight (kg) = default gunny weight × bags. It's a read-only
+  // derived display that's never stored per-lot, so it MUST be recomputed
+  // on edit — otherwise it kept the stale value from the previous form
+  // state and showed 0. Mirrors the PWA edit form (le-gunny-wt seeding).
+  const gunnyWtEl = document.getElementById('le-gunny-wt');
+  if (gunnyWtEl) {
+    const g = Number(_le.gunnyWeight) || 0;
+    const eb = parseInt(lot.bags, 10) || 0;
+    const tot = g * eb;
+    gunnyWtEl.value = tot > 0 ? tot.toFixed(3) : '0.000';
+  }
   const moistureEl = document.getElementById('le-moisture');
   if (moistureEl) moistureEl.value = lot.moisture || '';
   // Populate extra fields. Always loaded (even when toggle is off) so an
