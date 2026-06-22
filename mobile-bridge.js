@@ -777,6 +777,16 @@ function mountMobile(app, deps) {
       params.push(`%${seller}%`);
     }
 
+    // Hide booked lots (a sale amount has landed — amount > 0). These are
+    // finalised via price-import and aren't part of the field-entry flow,
+    // so they must not appear in the mobile "My Lots" list or its counters,
+    // nor in the entry-screen totals. Applied to BOTH the stats aggregate
+    // and the row query below (both interpolate ${where}). Server-side on
+    // purpose: it holds even for a cached PWA client that predates the
+    // client-side filter. `unbooked` only ever shows; never pass it from a
+    // caller that legitimately needs booked rows (none on mobile today).
+    where += ' AND COALESCE(l.amount, 0) = 0';
+
     const stats = db.get(
       `SELECT COUNT(*) AS lot_count,
               COALESCE(SUM(l.qty), 0)  AS total_qty,

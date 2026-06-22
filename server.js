@@ -3757,9 +3757,20 @@ app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) 
     [auctionId]
   );
   // lot_no → { branch, seller, booked } — O(1) lookup while building the grid.
+  // Key by a PADDING-NORMALISED form (prefix + numeric value), NOT the raw
+  // stored lot_no. The grid below generates lot numbers via buildLotNo()
+  // padded to the allocation's width (e.g. "005"), but a lot may be stored
+  // unpadded ("5") or with different padding. A raw-string key then missed
+  // the match, so a booked/entered lot showed up as a FREE, selectable chip
+  // in the "Select Lot" grid. isLotInRange (used for the count) already
+  // compares numerically, so this aligns the per-tile flags with the count.
+  const lotKey = (lotNo) => {
+    const p = parseLotNo(lotNo);
+    return p ? p.prefix + ':' + p.num : String(lotNo).trim().toUpperCase();
+  };
   const lotInfo = {};
   for (const l of lots) {
-    lotInfo[l.lot_no] = {
+    lotInfo[lotKey(l.lot_no)] = {
       branch: l.branch || '',
       seller: l.name   || '',
       booked: Number(l.amount) > 0,
@@ -3780,7 +3791,7 @@ app.get('/api/auctions/:id/allocation-stats', requireViewOrLotEntry, (req, res) 
     if (s && e) {
       for (let n = s.num; n <= e.num; n++) {
         const lotNo = buildLotNo(s.prefix, n, s.padLen);
-        const info = lotInfo[lotNo];
+        const info = lotInfo[lotKey(lotNo)];
         // State machine:
         //   booked    — present in lots table AND has a sale amount
         //               (a real bid landed on this lot — can't reassign)
