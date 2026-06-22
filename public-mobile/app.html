@@ -887,19 +887,21 @@ function renderLotGrid(){
   myBranch.ranges.forEach(function(rng){
     if(rng.lots){
       rng.lots.forEach(function(l){
-        // Booked lots (a buyer's bid has landed — amount>0) are finalised and
-        // can't be entered against, so hide them entirely. The grid then shows
-        // only free lots (clickable) + allocated ones (greyed, your own
-        // in-progress entries that aren't sold yet).
-        if(l.booked)return;
+        // Entry grid shows ONLY free slots — used lots (already entered) and
+        // booked lots (a sale has landed, amount>0) are both hidden so the
+        // operator sees just the lot numbers still available to enter. `used`
+        // is true for both states, so this single skip covers both. The
+        // My Lots overview grid (renderAllocBars) still shows used vs
+        // available for at-a-glance allocation status.
+        if(l.used||l.booked)return;
+        availableLots.push(l.lot);
         var cls='lot-chip';
-        if(l.used)cls+=' used';
-        else{availableLots.push(l.lot);if(selectedLots.indexOf(l.lot)>=0)cls+=' selected'}
-        html+='<span class="'+cls+'" data-lot="'+l.lot+'" '+(l.used?'':'onclick="toggleLotChip(this)"')+'>'+l.lot+'</span>';
+        if(selectedLots.indexOf(l.lot)>=0)cls+=' selected';
+        html+='<span class="'+cls+'" data-lot="'+l.lot+'" onclick="toggleLotChip(this)">'+l.lot+'</span>';
       });
     }
   });
-  grid.innerHTML=html||'<span style="font-size:10px;color:var(--text3)">No lots</span>';
+  grid.innerHTML=html||'<span style="font-size:10px;color:var(--text3)">✓ All allocated lots entered — no free slots left</span>';
   updateLotSelection();
 }
 
