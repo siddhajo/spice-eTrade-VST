@@ -16478,40 +16478,33 @@ async function openLotValidate(aid){
 function renderLotValidate(d){
   const sub=document.getElementById('lv-subtitle');
   sub.innerHTML='Trade '+esc(String(d.ano||''))+(d.date?(' · '+fmtD(d.date)):'')+' — '+(d.totals?d.totals.lots:0)+' lot(s) entered'
-    +'<span style="display:block;margin-top:2px;color:var(--spice-text-mute);font-size:11px">Tip: click a <b>seller name</b> to see all their lots, or a <b>lot number</b> to jump to it — both open the Lots tab where you can view or edit.</span>';
+    +'<span style="display:block;margin-top:2px;color:var(--spice-text-mute);font-size:11px">Tip: click any record below to open it in the Lots tab to view or edit.</span>';
   const rc=d.reconciliation||{};
   const errs=d.errors||[], warns=d.warnings||[];
-  // Group the affected lots BY SELLER so dad reads "seller → its lots"
-  // instead of one long list that repeats the seller name on every lot.
-  // Each seller is one line: bold name + lot count, then its lot numbers,
-  // sorted by name and then by numeric lot for easy scanning.
-  const lotsBySeller=(lots)=>{
-    if(!lots||!lots.length) return '';
-    const map=new Map();
-    lots.forEach(l=>{
-      const nm=String(l.name||'(no name)').trim()||'(no name)';
-      if(!map.has(nm)) map.set(nm,[]);
-      map.get(nm).push(String(l.lot_no));
-    });
-    const lotNum=(s)=>{const m=String(s).match(/\d+/);return m?parseInt(m[0],10):0;};
-    const linkStyle='color:var(--spice-cardamom-dk,#0d7c5f);text-decoration:underline;cursor:pointer';
-    const sellers=Array.from(map.entries()).sort((a,b)=>a[0].localeCompare(b[0]));
-    return '<div style="margin-top:6px;display:flex;flex-direction:column;gap:5px">'+
-      sellers.map(([nm,nos])=>{
-        nos.sort((a,b)=>lotNum(a)-lotNum(b));
-        // Seller name → opens the Lots tab filtered to that seller (all
-        // their lots, each editable). Each lot number → jumps to that lot.
-        const isNamed = nm && nm !== '(no name)';
-        const nameHtml = isNamed
-          ? '<a href="#" onclick="lvViewSeller(\''+encodeURIComponent(nm)+'\');return false" style="font-weight:700;'+linkStyle+'">'+esc(nm)+'</a>'
-          : '<span style="font-weight:700;color:var(--spice-text)">'+esc(nm)+'</span>';
-        const lotsHtml = nos.map(n=>'<a href="#" onclick="lvViewLot(\''+encodeURIComponent(n)+'\');return false" style="'+linkStyle+'">#'+esc(n)+'</a>').join(', ');
-        return '<div style="font-size:11.5px;line-height:1.6;padding:4px 8px;background:rgba(255,255,255,.55);border-radius:5px">'+
-          nameHtml+
-          '<span style="color:var(--spice-text-mute)"> — '+nos.length+' lot'+(nos.length>1?'s':'')+'</span>'+
-          '<div style="margin-top:1px">'+lotsHtml+'</div>'+
-        '</div>';
-      }).join('')+'</div>';
+  const lotNum=(s)=>{const m=String(s).match(/\d+/);return m?parseInt(m[0],10):0;};
+  // One card per FLAGGED lot, styled like a Lot Entry "Recent entries"
+  // row: Lot · Seller · Branch · Bags · Qty, with a red (error) or amber
+  // (warning) background and the issue title(s) as badges. A lot that
+  // trips several checks shows once with all its badges. Click → opens
+  // that lot in the Lots tab to view / edit.
+  const lotRow=(e)=>{
+    const l=e.lot;
+    const isErr=e.severity==='error';
+    const bg=isErr?'#FEE2E2':'#FEF3C7';
+    const bd=isErr?'#DC2626':'#F59E0B';
+    const lotColor=isErr?'#7F1D1D':'#7C2D12';
+    const badges=e.titles.map(t=>'<span style="display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;margin:2px 4px 0 0;background:'+(t.severity==='error'?'#DC2626':'#F59E0B')+';color:#fff">'+esc(t.title)+'</span>').join('');
+    const meta=[esc(l.branch||''),(l.bags!=null?esc(String(l.bags))+' bags':''),(Number(l.qty||0).toFixed(3)+' kg')].filter(Boolean).join(' · ');
+    return '<div onclick="lvViewLot(\''+encodeURIComponent(l.lot_no)+'\')" title="Click to view / edit in Lots" '+
+      'style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:6px;background:'+bg+';border:1px solid '+bd+';border-radius:8px;cursor:pointer">'+
+      '<div style="font-family:monospace;font-weight:800;color:'+lotColor+';min-width:48px;text-align:center">#'+esc(String(l.lot_no))+'</div>'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-weight:700;color:var(--spice-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(l.name||'(no seller)')+'</div>'+
+        '<div style="font-size:11px;color:var(--spice-text-mute)">'+meta+'</div>'+
+        '<div>'+badges+'</div>'+
+      '</div>'+
+      '<div style="color:'+lotColor+';font-size:18px;font-weight:700">›</div>'+
+    '</div>';
   };
   let h='';
   // Reconciliation summary — the "tally"
@@ -16526,22 +16519,32 @@ function renderLotValidate(d){
   if(rc.excludedLots>0){
     h+='<div style="font-size:11.5px;color:#7C2D12;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:8px 10px;margin-bottom:14px">'+rc.excludedLots+' lot(s) belong to sellers with no GSTIN and will NOT appear in the Dealer List (this is the count gap to expect).</div>';
   }
-  // Errors — block import
-  if(errs.length){
-    h+='<div style="font-weight:700;color:#7F1D1D;font-size:13px;margin:4px 0 6px">🚫 Errors — must fix before import ('+errs.length+')</div>';
-    errs.forEach(e=>{
-      h+='<div style="background:#FEE2E2;border:1px solid #DC2626;border-radius:8px;padding:8px 10px;margin-bottom:8px"><div style="font-weight:700;color:#7F1D1D;font-size:12.5px">'+esc(e.message||e.type)+'</div>'+lotsBySeller(e.lots)+'</div>';
+  // Aggregate one entry per flagged lot, collecting all its issue titles.
+  // Severity = 'error' if any blocking issue, else 'warn'.
+  const lotMap=new Map();
+  const addIssue=(lots,title,severity)=>{
+    (lots||[]).forEach(l=>{
+      let e=lotMap.get(l.id);
+      if(!e){ e={lot:l,titles:[],severity:'warn'}; lotMap.set(l.id,e); }
+      e.titles.push({title,severity});
+      if(severity==='error') e.severity='error';
     });
-  }
-  // Warnings — acknowledge
-  if(warns.length){
-    h+='<div style="font-weight:700;color:#7C2D12;font-size:13px;margin:10px 0 6px">⚠ Warnings — acknowledge to proceed ('+warns.length+')</div>';
-    warns.forEach(w=>{
-      const sellerCount=new Set((w.lots||[]).map(l=>String(l.name||'(no name)').trim()||'(no name)')).size;
-      h+='<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:8px 10px;margin-bottom:8px"><div style="font-weight:700;color:#7C2D12;font-size:12.5px">'+esc(w.label||w.type)+' — '+w.count+' lot(s) across '+sellerCount+' seller(s)</div>'+lotsBySeller(w.lots)+'</div>';
-    });
-  }
-  if(!errs.length && !warns.length){
+  };
+  errs.forEach(er=>addIssue(er.lots, er.title||er.type, 'error'));
+  warns.forEach(w=>addIssue(w.lots, w.title||w.type, 'warn'));
+  // Errors first, then by lot number.
+  const rows=Array.from(lotMap.values()).sort((a,b)=>{
+    if(a.severity!==b.severity) return a.severity==='error'?-1:1;
+    return lotNum(a.lot.lot_no)-lotNum(b.lot.lot_no);
+  });
+  const errLots=rows.filter(r=>r.severity==='error').length;
+  if(rows.length){
+    h+='<div style="font-weight:700;font-size:13px;margin:4px 0 8px;color:'+(errLots?'#7F1D1D':'#7C2D12')+'">'
+      +(errLots?'🚫':'⚠')+' Records needing attention ('+rows.length+')'
+      +(errLots?' — '+errLots+' must fix before import':' — acknowledge to proceed')
+      +'</div>';
+    h+='<div style="max-height:48vh;overflow-y:auto;padding-right:2px">'+rows.map(lotRow).join('')+'</div>';
+  }else{
     h+='<div style="background:#DCFCE7;border:1px solid #16A34A;border-radius:8px;padding:12px 14px;font-weight:700;color:#166534;font-size:13px">✓ No issues found — all lots tally and every seller has full details.</div>';
   }
   document.getElementById('lv-body').innerHTML=h;

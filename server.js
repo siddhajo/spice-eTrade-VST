@@ -3204,8 +3204,8 @@ const hasValidGstin = (cr) => cleanGstin(cr).length === 15;
 //   warnings — acknowledge to proceed (missing GSTIN / bank / PAN / phone)
 function validateAuctionLots(db, auctionId) {
   const lots = db.all(
-    `SELECT id, lot_no, trader_id, bank_id, name, cr, pan, tel,
-            COALESCE(bags,0) AS bags, COALESCE(qty,0) AS qty
+    `SELECT id, lot_no, trader_id, bank_id, name, cr, pan, tel, branch,
+            litre, COALESCE(bags,0) AS bags, COALESCE(qty,0) AS qty
        FROM lots WHERE auction_id = ?`,
     [auctionId]
   );
@@ -3215,6 +3215,14 @@ function validateAuctionLots(db, auctionId) {
   const tradersWithBank = new Set(
     db.all(`SELECT DISTINCT trader_id FROM trader_banks`).map(r => r.trader_id)
   );
+
+  // Display projection — the fields the UI shows for each flagged lot,
+  // matching the Lot Entry "Recent entries" row (Lot / Seller / Branch /
+  // Bags / Litre / Qty). Used for every error/warning lot list.
+  const disp = (l) => ({
+    id: l.id, lot_no: l.lot_no, name: l.name || '', branch: l.branch || '',
+    bags: l.bags, litre: l.litre || '', qty: l.qty,
+  });
 
   const errors = [];
   const warnings = [];
@@ -3231,8 +3239,9 @@ function validateAuctionLots(db, auctionId) {
     if (group.length > 1) {
       errors.push({
         type: 'duplicate_lot',
+        title: 'Duplicate lot',
         message: `Lot #${group[0].lot_no} entered ${group.length} times`,
-        lots: group.map(l => ({ id: l.id, lot_no: l.lot_no, name: l.name || '' })),
+        lots: group.map(disp),
       });
     }
   }
@@ -3242,25 +3251,26 @@ function validateAuctionLots(db, auctionId) {
   if (noSeller.length) {
     errors.push({
       type: 'no_seller',
+      title: 'No seller',
       message: `${noSeller.length} lot(s) have no seller linked`,
-      lots: noSeller.map(l => ({ id: l.id, lot_no: l.lot_no, name: l.name || '' })),
+      lots: noSeller.map(disp),
     });
   }
 
   // ── Warnings — missing seller details (acknowledge to proceed) ──
-  const pushWarn = (type, label, predicate) => {
+  const pushWarn = (type, title, label, predicate) => {
     const hit = lots.filter(predicate);
     if (hit.length) {
       warnings.push({
-        type, label, count: hit.length,
-        lots: hit.map(l => ({ id: l.id, lot_no: l.lot_no, name: l.name || '' })),
+        type, title, label, count: hit.length,
+        lots: hit.map(disp),
       });
     }
   };
-  pushWarn('no_gstin', 'Seller has no GSTIN (excluded from Dealer List)', l => !hasValidGstin(l.cr));
-  pushWarn('no_bank',  'Seller has no bank account on file',             l => l.trader_id && !tradersWithBank.has(l.trader_id));
-  pushWarn('no_pan',   'Seller has no PAN',                              l => !String(l.pan || '').trim());
-  pushWarn('no_phone', 'Seller has no phone number',                    l => !String(l.tel || '').trim());
+  pushWarn('no_gstin', 'No GSTIN',       'Seller has no GSTIN (excluded from Dealer List)', l => !hasValidGstin(l.cr));
+  pushWarn('no_bank',  'No bank account', 'Seller has no bank account on file',             l => l.trader_id && !tradersWithBank.has(l.trader_id));
+  pushWarn('no_pan',   'No PAN',          'Seller has no PAN',                              l => !String(l.pan || '').trim());
+  pushWarn('no_phone', 'No phone',        'Seller has no phone number',                     l => !String(l.tel || '').trim());
 
   // ── Reconciliation (the "tally") ──────────────────────────────
   const totalLots = lots.length;
