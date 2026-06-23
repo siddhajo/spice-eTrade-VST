@@ -291,7 +291,15 @@ async function initDb() {
     -- gate distinguish "never checked" (hard 412) from "checked then
     -- edited" (soft warning, allow). Once an auction has been verified
     -- at least once, subsequent lot edits don't re-block transactions.
-    price_check_first_passed_at TEXT DEFAULT ''
+    price_check_first_passed_at TEXT DEFAULT '',
+    -- Stamped by /api/auctions/:id/validate-lots/confirm when the
+    -- operator has validated the ENTERED lots (no duplicate lot numbers,
+    -- every lot has a seller) AND acknowledged any warnings (sellers
+    -- missing GSTIN / bank / PAN / phone). Acts as the green-light gate
+    -- for PRICE IMPORT (auctions/import mode='price'). Auto-cleared by any
+    -- endpoint that inserts/edits/deletes a lot, so re-validation is
+    -- required after every change. Gated by the flag_lot_validation flag.
+    lots_validated_at TEXT DEFAULT ''
   )`);
 
   // ── GENERATION OVERRIDES ──────────────────────────────────────
@@ -660,6 +668,9 @@ async function initDb() {
     // Without this, every previously-verified auction would re-enter the
     // 'never' state on upgrade and force a one-off re-verify.
     "UPDATE auctions SET price_check_first_passed_at = price_checked_at WHERE price_checked_at IS NOT NULL AND price_checked_at != '' AND (price_check_first_passed_at IS NULL OR price_check_first_passed_at = '')",
+    // Lot-validation gate timestamp — see auctions CREATE TABLE for
+    // semantics. Existing DBs need the ALTER; ignored on fresh installs.
+    "ALTER TABLE auctions ADD COLUMN lots_validated_at TEXT DEFAULT ''",
     'ALTER TABLE purchases ADD COLUMN auction_id INTEGER',
     'ALTER TABLE invoices ADD COLUMN auction_id INTEGER',
     'ALTER TABLE bills ADD COLUMN auction_id INTEGER',

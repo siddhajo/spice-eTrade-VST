@@ -210,6 +210,14 @@ const DEFAULTS = [
   // no-op (writes still happen). Default OFF so existing installs are
   // unaffected on upgrade.
   { key: 'flag_price_check',       value: 'false',          category: 'flags',     label: 'Price Check + transaction gate',  type: 'boolean' },
+  // Lot-validation gate: when ON, an operator must run "Validate Entered
+  // Lots" on a trade (resolve duplicate lots / lots with no seller, and
+  // acknowledge sellers missing GSTIN/bank/PAN/phone) BEFORE price import
+  // is allowed. Catches the "lots don't tally between Lots screen and
+  // Dealer List" class of error (a no-GSTIN seller drops out of the
+  // Dealer List). Default ON for this install. When OFF the validate
+  // button still works as a report, but import is never blocked.
+  { key: 'flag_lot_validation',    value: 'true',           category: 'flags',     label: 'Validate lots before price import', type: 'boolean' },
   // Date format used for display across UI tables, PDFs and Excel
   // exports. Three options:
   //   DD/MM/YYYY  → 18/05/2026 (Indian/UK default, current behaviour)

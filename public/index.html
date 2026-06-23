@@ -1108,6 +1108,9 @@ body[data-biz-asp="0"] .asp-only{display:none !important}
    tab content, gate banners, and Apply UI are hidden, AND pcRefreshGate
    skips every button-disable (so .needs-price-check stays enabled). */
 body:not([data-feat-price-check="1"]) .feat-price-check{display:none !important}
+/* flag_lot_validation — hide the "Validate Lots" toolbar button (and any
+   other .feat-lot-validation element) when the flag is off. */
+body:not([data-feat-lot-validation="1"]) .feat-lot-validation{display:none !important}
 .icon-btn.i-print{color:var(--spice-saffron);border-color:var(--spice-saffron)}
 .icon-btn.i-print:hover{background:var(--spice-saffron);color:#fff}
 
@@ -3518,6 +3521,7 @@ input[type="search"]:focus{
                  List (Before) sheet before re-importing it here. Behind
                  the flag_price_list_mapping feature toggle. -->
             <button class="btn btn-o feat-price-list-mapping" style="height:38px;padding:0 16px;font-weight:600" onclick="go('plmap')" title="Fill the CODE column on a Price List sheet from TRADE NAME">🗺 Price List Mapping</button>
+            <button id="lot-validate-btn" class="needs-lot-write btn btn-o feat-lot-validation" style="height:38px;padding:0 16px;font-weight:600" onclick="openLotValidate()" title="Check the entered lots tally — no duplicate lots, no sellers missing details — before price import">✅ Validate Lots</button>
             <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openPriceImport()">📥 Price Import</button>
           </div>
         </div>
@@ -5610,9 +5614,43 @@ input[type="search"]:focus{
   <div class="fg" style="margin-top:10px"><label>Select File (.xls or .xlsx)</label>
     <input type="file" id="pi-file" accept=".xls,.xlsx" style="padding:6px">
   </div>
+  <!-- Lot-validation gate banner (flag_lot_validation). Rendered by
+       piRefreshValidationGate() when the picked trade hasn't passed
+       "Validate Entered Lots" yet. Hidden when the flag is off or the
+       trade is already validated. -->
+  <div id="pi-validate-gate" class="feat-lot-validation" style="display:none;background:#FEE2E2;border:1px solid #DC2626;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+    <div style="font-weight:700;color:#7F1D1D;font-size:13px;margin-bottom:4px">🚫 Validate entered lots first</div>
+    <div style="font-size:12px;color:#7F1D1D;margin-bottom:8px;line-height:1.45" id="pi-validate-gate-msg">
+      This trade's entered lots haven't been validated. Run validation and resolve any issues before importing prices.
+    </div>
+    <button class="btn btn-o" type="button" onclick="hideModal('price-import-modal');openLotValidate()" style="padding:6px 14px;font-size:12px;font-weight:700">✅ Validate Lots →</button>
+  </div>
+
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('price-import-modal')">Cancel</button>
     <button class="btn btn-g" id="pi-submit" onclick="doPriceImport()" disabled>Import Prices</button>
+  </div>
+</div></div>
+
+<!-- ═══ VALIDATE ENTERED LOTS ═══════════════════════════════ -->
+<!-- Pre-price-import safety net (flag_lot_validation). Shows a
+     reconciliation of entered lots, hard errors (duplicate lots, lots
+     with no seller) that block import, and acknowledge-able warnings
+     (sellers missing GSTIN / bank / PAN / phone). Confirming stamps the
+     gate that doPriceImport() checks. -->
+<div class="modal-bg" id="lot-validate-modal"><div class="modal" style="max-width:760px">
+  <h2>Validate Entered Lots</h2>
+  <div id="lv-subtitle" style="font-size:12px;color:var(--spice-text-mute);margin-bottom:12px"></div>
+  <div id="lv-body" style="min-height:80px">
+    <div style="padding:24px;text-align:center;color:var(--spice-text-mute)">Loading…</div>
+  </div>
+  <label id="lv-ack-wrap" style="display:none;align-items:center;gap:8px;font-size:12.5px;color:#7C2D12;margin-top:14px;cursor:pointer;font-weight:600">
+    <input type="checkbox" id="lv-ack" onchange="lvAckChanged()">
+    <span id="lv-ack-label">I confirm the lots above are intentional</span>
+  </label>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('lot-validate-modal')">Close</button>
+    <button class="btn btn-g" id="lv-confirm" onclick="confirmLotValidate()" disabled>Mark Validated</button>
   </div>
 </div></div>
 
@@ -7510,6 +7548,12 @@ async function applyFeatureFlags() {
   const pcOn = cfg && (cfg.flag_price_check === true
     || String(cfg.flag_price_check || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-price-check', pcOn ? '1' : '0');
+  // flag_lot_validation — when ON the "Validate Lots" button shows in the
+  // Lots toolbar and price import is blocked until the trade's entered
+  // lots are validated. When OFF the button is hidden and import never
+  // blocks (server-side gate is also a no-op).
+  const lvOn = featOn('flag_lot_validation');
+  document.body.setAttribute('data-feat-lot-validation', lvOn ? '1' : '0');
   // Date format: cached on window for fmtD() to pick up. Honours
   // Settings → Display → Date format. Defaults DD/MM/YYYY when the
   // setting isn't present (legacy installs or pre-fetch first paint).
@@ -16195,6 +16239,9 @@ async function importAuction(){
 // state — the ack checkbox starts unchecked and the Import button
 // starts disabled every time, so the operator can't muscle-memory
 // through the warning by clicking submit before reading it.
+// Tracks the lot-validation gate for the trade picked in the topbar.
+// true = gate clean OR feature off (import allowed); false = blocked.
+let _piGateClean = true;
 function openPriceImport(){
   const ack=document.getElementById('pi-ack');
   if(ack) ack.checked=false;
@@ -16202,6 +16249,43 @@ function openPriceImport(){
   if(submit) submit.disabled=true;
   piPopulatePretrade();
   showModal('price-import-modal');
+  piRefreshValidationGate();
+}
+// Check the lot-validation gate for the topbar trade and reflect it in
+// the modal: show the red gate banner + keep Import disabled until the
+// trade is validated. No-op (allows import) when the flag is off.
+async function piRefreshValidationGate(){
+  const gate=document.getElementById('pi-validate-gate');
+  const msg=document.getElementById('pi-validate-gate-msg');
+  _piGateClean=true;
+  if(gate) gate.style.display='none';
+  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+  if(!aid) return;
+  try{
+    const d=await j('/api/auctions/'+aid+'/validate-lots');
+    // state: 'off' (flag off) | 'never' (not validated) | 'clean'
+    if(d.state==='off'||d.state==='clean'){ _piGateClean=true; }
+    else {
+      _piGateClean=false;
+      if(gate) gate.style.display='block';
+      if(msg){
+        const errs=(d.errors||[]).length, warns=(d.warnings||[]).length;
+        msg.textContent = errs>0
+          ? `This trade has ${errs} error(s) that must be fixed before import.`
+          : (warns>0
+              ? `This trade has ${warns} warning(s) to acknowledge before import.`
+              : `This trade's entered lots haven't been validated yet.`);
+      }
+    }
+  }catch(e){ /* leave gate permissive on a probe failure — server still enforces */ }
+  piAckChanged();
+}
+function piAckChanged(){
+  const ack=document.getElementById('pi-ack');
+  const submit=document.getElementById('pi-submit');
+  // Import is allowed only when snapshots are acknowledged AND the
+  // lot-validation gate is clean (or the feature is off).
+  if(submit) submit.disabled=!(ack && ack.checked && _piGateClean);
 }
 // Fill the reminder banner's report dropdown from the same pre-trade
 // snapshot list the Exports tab uses (EXP_PRETRADE), preserving the
@@ -16282,11 +16366,6 @@ async function piPretradeAction(action){
     }
   });
 }
-function piAckChanged(){
-  const ack=document.getElementById('pi-ack');
-  const submit=document.getElementById('pi-submit');
-  if(submit) submit.disabled=!(ack && ack.checked);
-}
 // Quick-download for the five "before trade" snapshot reports surfaced
 // inside the Price Import reminder banner. Uses the topbar's shared
 // trade pick (set by any tab's trade selector via setSharedAuctionId)
@@ -16320,9 +16399,22 @@ async function doPriceImport(){
     const dt=document.getElementById('pi-date').value;
     if(ano)fd.append('ano',ano);
     if(dt)fd.append('date',dt);
+    // Send the topbar trade so the lot-validation gate checks the SAME
+    // auction the operator validated (server falls back to ano/date).
+    const sharedAid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+    if(sharedAid)fd.append('auction_id',sharedAid);
     const r=await fetch(B+'/api/auctions/import',{method:'POST',headers:{'Authorization':'Bearer '+T},body:fd});
     const d=await r.json();
-    if(!r.ok)throw new Error(d.error||'Import failed');
+    if(!r.ok){
+      // Lot-validation gate (412) — guide the operator to validate first.
+      if(r.status===412 && d.gate==='lot_validation'){
+        btn.disabled=false;btn.textContent='Import Prices';
+        _piGateClean=false; piRefreshValidationGate();
+        alert((d.detail||d.error||'Validate entered lots first')+'');
+        return;
+      }
+      throw new Error(d.error||'Import failed');
+    }
 
     hideModal('price-import-modal');
     fileInput.value='';
@@ -16349,6 +16441,121 @@ async function doPriceImport(){
     alert('Price import failed: '+err.message);
   }finally{
     btn.disabled=false;btn.textContent='Import Prices';
+  }
+}
+
+// ── Validate Entered Lots ─────────────────────────────────
+// Pre-price-import safety net. Opens against the topbar trade, fetches
+// the reconciliation report, and renders errors (block) + warnings
+// (acknowledge). Confirming stamps the gate doPriceImport() checks.
+let _lvData=null;
+async function openLotValidate(){
+  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+  if(!aid){ alert('Pick a trade in the topbar first.'); return; }
+  _lvData=null;
+  document.getElementById('lv-subtitle').textContent='';
+  document.getElementById('lv-body').innerHTML='<div style="padding:24px;text-align:center;color:var(--spice-text-mute)">Loading…</div>';
+  document.getElementById('lv-ack-wrap').style.display='none';
+  document.getElementById('lv-ack').checked=false;
+  document.getElementById('lv-confirm').disabled=true;
+  showModal('lot-validate-modal');
+  try{
+    const d=await j('/api/auctions/'+aid+'/validate-lots');
+    _lvData=d;
+    renderLotValidate(d);
+  }catch(e){
+    document.getElementById('lv-body').innerHTML='<div style="padding:16px;color:#b91c1c">Could not load validation: '+esc(e.message||'error')+'</div>';
+  }
+}
+function renderLotValidate(d){
+  const sub=document.getElementById('lv-subtitle');
+  sub.textContent='Trade '+(d.ano||'')+(d.date?(' · '+fmtD(d.date)):'')+' — '+(d.totals?d.totals.lots:0)+' lot(s) entered';
+  const rc=d.reconciliation||{};
+  const errs=d.errors||[], warns=d.warnings||[];
+  const lotChips=(lots)=>{
+    if(!lots||!lots.length) return '';
+    const max=40;
+    const shown=lots.slice(0,max).map(l=>'#'+esc(String(l.lot_no))+(l.name?(' '+esc(l.name)):'')).join(', ');
+    return '<div style="font-size:11px;color:var(--spice-text-mute);margin-top:4px;line-height:1.5">'+shown+(lots.length>max?(' …and '+(lots.length-max)+' more'):'')+'</div>';
+  };
+  let h='';
+  // Reconciliation summary — the "tally"
+  h+='<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
+  const stat=(label,val,color)=>'<div style="flex:1;min-width:110px;background:var(--spice-cardamom-lt);border:1px solid #C5E3D2;border-radius:8px;padding:8px 10px"><div style="font-size:10px;font-weight:700;color:var(--spice-text-mute);text-transform:uppercase;letter-spacing:.4px">'+label+'</div><div style="font-size:18px;font-weight:800;color:'+(color||'var(--spice-cardamom-dk)')+'">'+val+'</div></div>';
+  h+=stat('Total lots',rc.totalLots!=null?rc.totalLots:(d.totals?d.totals.lots:0));
+  h+=stat('In Dealer List',rc.dealerListLots!=null?rc.dealerListLots:'—');
+  h+=stat('Excluded (no GSTIN)',rc.excludedLots!=null?rc.excludedLots:'—', rc.excludedLots>0?'#b45309':undefined);
+  h+=stat('Total bags',d.totals?d.totals.bags:0);
+  h+=stat('Total qty',d.totals?(Number(d.totals.qty).toFixed(3)):0);
+  h+='</div>';
+  if(rc.excludedLots>0){
+    h+='<div style="font-size:11.5px;color:#7C2D12;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:8px 10px;margin-bottom:14px">'+rc.excludedLots+' lot(s) belong to sellers with no GSTIN and will NOT appear in the Dealer List (this is the count gap to expect).</div>';
+  }
+  // Errors — block import
+  if(errs.length){
+    h+='<div style="font-weight:700;color:#7F1D1D;font-size:13px;margin:4px 0 6px">🚫 Errors — must fix before import ('+errs.length+')</div>';
+    errs.forEach(e=>{
+      h+='<div style="background:#FEE2E2;border:1px solid #DC2626;border-radius:8px;padding:8px 10px;margin-bottom:8px"><div style="font-weight:700;color:#7F1D1D;font-size:12.5px">'+esc(e.message||e.type)+'</div>'+lotChips(e.lots)+'</div>';
+    });
+  }
+  // Warnings — acknowledge
+  if(warns.length){
+    h+='<div style="font-weight:700;color:#7C2D12;font-size:13px;margin:10px 0 6px">⚠ Warnings — acknowledge to proceed ('+warns.length+')</div>';
+    warns.forEach(w=>{
+      h+='<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:8px 10px;margin-bottom:8px"><div style="font-weight:700;color:#7C2D12;font-size:12.5px">'+esc(w.label||w.type)+' — '+w.count+' lot(s)</div>'+lotChips(w.lots)+'</div>';
+    });
+  }
+  if(!errs.length && !warns.length){
+    h+='<div style="background:#DCFCE7;border:1px solid #16A34A;border-radius:8px;padding:12px 14px;font-weight:700;color:#166534;font-size:13px">✓ No issues found — all lots tally and every seller has full details.</div>';
+  }
+  document.getElementById('lv-body').innerHTML=h;
+  // Acknowledge UI: only meaningful when there are no hard errors.
+  const ackWrap=document.getElementById('lv-ack-wrap');
+  const ackLabel=document.getElementById('lv-ack-label');
+  const ack=document.getElementById('lv-ack');
+  const confirmBtn=document.getElementById('lv-confirm');
+  if(errs.length){
+    ackWrap.style.display='none';
+    confirmBtn.disabled=true;
+    confirmBtn.textContent='Fix errors to continue';
+  }else{
+    confirmBtn.textContent='Mark Validated';
+    if(warns.length){
+      const total=warns.reduce((s,w)=>s+(w.count||0),0);
+      ackLabel.textContent='I confirm these '+total+' flagged lot(s) are intentional';
+      ackWrap.style.display='flex';
+      ack.checked=false;
+      confirmBtn.disabled=true;
+    }else{
+      // Clean — no acknowledgement needed.
+      ackWrap.style.display='none';
+      confirmBtn.disabled=false;
+    }
+  }
+}
+function lvAckChanged(){
+  const ack=document.getElementById('lv-ack');
+  const confirmBtn=document.getElementById('lv-confirm');
+  const errs=_lvData&&_lvData.errors?_lvData.errors.length:0;
+  confirmBtn.disabled=!(ack && ack.checked && !errs);
+}
+async function confirmLotValidate(){
+  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+  if(!aid) return;
+  const btn=document.getElementById('lv-confirm');
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    const d=await j('/api/auctions/'+aid+'/validate-lots/confirm',{method:'POST'});
+    toast('✓ Lots validated — price import unlocked');
+    hideModal('lot-validate-modal');
+    // Refresh the price-import gate banner if that modal is/becomes open.
+    _piGateClean=true;
+    if(typeof piRefreshValidationGate==='function') piRefreshValidationGate();
+  }catch(e){
+    btn.disabled=false;btn.textContent='Mark Validated';
+    alert(e.message||'Could not validate');
+    // Re-render in case errors appeared since load.
+    openLotValidate();
   }
 }
 
