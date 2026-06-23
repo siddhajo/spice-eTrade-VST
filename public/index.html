@@ -3521,7 +3521,6 @@ input[type="search"]:focus{
                  List (Before) sheet before re-importing it here. Behind
                  the flag_price_list_mapping feature toggle. -->
             <button class="btn btn-o feat-price-list-mapping" style="height:38px;padding:0 16px;font-weight:600" onclick="go('plmap')" title="Fill the CODE column on a Price List sheet from TRADE NAME">🗺 Price List Mapping</button>
-            <button id="lot-validate-btn" class="needs-lot-write btn btn-o feat-lot-validation" style="height:38px;padding:0 16px;font-weight:600" onclick="openLotValidate()" title="Check the entered lots tally — no duplicate lots, no sellers missing details — before price import">✅ Validate Lots</button>
             <button class="needs-lot-write btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="openPriceImport()">📥 Price Import</button>
           </div>
         </div>
@@ -3563,6 +3562,10 @@ input[type="search"]:focus{
             <div style="font-size:10.5px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">My Today's Lots</div>
             <div id="le-stats" style="height:38px;padding:0 12px;display:inline-flex;align-items:center;background:var(--green-bg);color:var(--green);font-weight:700;border-radius:8px;font-size:14px;font-family:monospace">0 lots · 0 kg</div>
           </div>
+          <!-- Validate the entered lots for this trade (flag_lot_validation).
+               Sits here so the operator can check the lots tally right after
+               entry; price import (Lots tab) is also gated on this. -->
+          <button id="le-validate-btn" class="needs-lot-write btn btn-o feat-lot-validation" style="height:38px;padding:0 16px;font-weight:600;margin-left:auto" onclick="openLotValidate(document.getElementById('le-auction').value)" title="Check the entered lots tally — no duplicate lots, no sellers missing details — before price import">✅ Validate Lots</button>
         </div>
       </div>
 
@@ -16448,10 +16451,15 @@ async function doPriceImport(){
 // Pre-price-import safety net. Opens against the topbar trade, fetches
 // the reconciliation report, and renders errors (block) + warnings
 // (acknowledge). Confirming stamps the gate doPriceImport() checks.
-let _lvData=null;
-async function openLotValidate(){
-  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
-  if(!aid){ alert('Pick a trade in the topbar first.'); return; }
+let _lvData=null, _lvAid=null;
+async function openLotValidate(aid){
+  // The Lot Entry tab passes its own le-auction (independent of the
+  // topbar shared trade); the Price Import banner passes nothing and we
+  // fall back to the shared trade. Whatever opened the modal is the
+  // auction every action in it (confirm, jump-to-lots) operates on.
+  aid = aid || (typeof getSharedAuctionId==='function' ? getSharedAuctionId() : '');
+  if(!aid){ alert('Pick a trade first.'); return; }
+  _lvAid = aid;
   _lvData=null;
   document.getElementById('lv-subtitle').textContent='';
   document.getElementById('lv-body').innerHTML='<div style="padding:24px;text-align:center;color:var(--spice-text-mute)">Loading…</div>';
@@ -16572,7 +16580,7 @@ function lvAckChanged(){
 // using the existing per-row edit pencils. Points the Lots tab at the
 // SAME trade the validation ran against.
 function lvJumpToLots(searchVal){
-  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+  const aid=_lvAid || ((typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '');
   hideModal('lot-validate-modal');
   if(typeof go==='function') go('lots');
   const sel=document.getElementById('lot-auction');
@@ -16584,7 +16592,7 @@ function lvJumpToLots(searchVal){
 function lvViewSeller(encName){ lvJumpToLots(decodeURIComponent(encName||'')); }
 function lvViewLot(encLot){ lvJumpToLots(decodeURIComponent(encLot||'')); }
 async function confirmLotValidate(){
-  const aid=(typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '';
+  const aid=_lvAid || ((typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '');
   if(!aid) return;
   const btn=document.getElementById('lv-confirm');
   btn.disabled=true;btn.textContent='Saving…';
@@ -16598,8 +16606,8 @@ async function confirmLotValidate(){
   }catch(e){
     btn.disabled=false;btn.textContent='Mark Validated';
     alert(e.message||'Could not validate');
-    // Re-render in case errors appeared since load.
-    openLotValidate();
+    // Re-render the SAME trade in case errors appeared since load.
+    openLotValidate(_lvAid);
   }
 }
 
