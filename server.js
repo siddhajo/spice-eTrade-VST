@@ -10186,6 +10186,11 @@ app.post('/api/lot-receipt/pdf', requireViewOrLotEntry, async (req, res) => {
     // built-in default page size.
     const _wmm = Number(_mCfg.lot_receipt_width_mm || 0);
     if (_wmm > 0) payload.widthMm = _wmm;
+    // Optional Sample Wt / Gross Wt columns on the detailed slip — decided
+    // server-side from company_settings so an old/tampered client can't
+    // override them. getSettingsFlat returns booleans for boolean fields.
+    payload.showSample = _mCfg.lot_receipt_show_sample === true || _mCfg.lot_receipt_show_sample === 'true';
+    payload.showGross  = _mCfg.lot_receipt_show_gross  === true || _mCfg.lot_receipt_show_gross  === 'true';
     const pdf = await generateLotReceiptPDF(payload);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="LotReceipt.pdf"');

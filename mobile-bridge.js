@@ -76,6 +76,10 @@ function getReceiptConfig(db) {
     // Paper Width"). Same key the desktop print path reads, so a 58mm
     // HOP-HL58 prints the same width from mobile. Blank/0 → legacy widths.
     paperWidthMm: parseFloat(get('lot_receipt_width_mm', '')) || 0,
+    // Opt-in Sample Wt / Gross Wt columns on the DETAILED slip (same keys
+    // the desktop receipt reads). Compact never shows these.
+    showSampleDetailed: getBool('lot_receipt_show_sample', false),
+    showGrossDetailed:  getBool('lot_receipt_show_gross', false),
     labels:       {},  // spice-config doesn't customize labels; defaults fine
   };
 }
@@ -185,9 +189,15 @@ function renderSellerReceipt(doc, sellerLots, cfg) {
   doc.moveDown(0.3);
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.5).stroke(); doc.moveDown(0.3);
 
-  const cols = [64, 59, 82, 65].map(c => c * sc);
-  const hdrs = [lb('lot_no','Lot#'), lb('bags','Bags'), lb('net_wt','Net'), lb('sample_wt','Smp')];
-  if (cfg.showMoisture) { cols.push(38 * sc); hdrs.push(lb('moisture','Mst%')); }
+  // Columns: Lot# / Bags / Net always; Smp + Gross are opt-in (Settings →
+  // Lot Entry Defaults); Mst% when moisture is enabled. Equal widths filling
+  // the slip so any combination fits without overflow. Gross = Net + Sample.
+  const hdrs = [lb('lot_no','Lot#'), lb('bags','Bags'), lb('net_wt','Net')];
+  if (cfg.showSampleDetailed) hdrs.push(lb('sample_wt','Smp'));
+  if (cfg.showGrossDetailed)  hdrs.push(lb('gross_wt','Gross'));
+  if (cfg.showMoisture)       hdrs.push(lb('moisture','Mst%'));
+  const colW = w / hdrs.length;
+  const cols = hdrs.map(() => colW);
 
   const hdrY = doc.y;
   doc.font('Helvetica-Bold').fontSize(fs(7.5));
@@ -202,13 +212,10 @@ function renderSellerReceipt(doc, sellerLots, cfg) {
     const ry = doc.y;
     cx = m;
     const sw = Number(l.sample_weight) || cfg.sampleWeight || 0;
-    const rowData = [
-      l.lot_no,
-      l.bags,
-      Number(l.qty).toFixed(3),
-      sw ? sw.toFixed(3) : '',
-    ];
-    if (cfg.showMoisture) rowData.push(l.moisture ? Number(l.moisture).toFixed(1) : '');
+    const rowData = [l.lot_no, l.bags, Number(l.qty).toFixed(3)];
+    if (cfg.showSampleDetailed) rowData.push(sw ? sw.toFixed(3) : '');
+    if (cfg.showGrossDetailed)  rowData.push(((Number(l.qty) || 0) + sw).toFixed(3));
+    if (cfg.showMoisture)       rowData.push(l.moisture ? Number(l.moisture).toFixed(1) : '');
     rowData.forEach((v, i) => { doc.text(String(v), cx, ry, { width: cols[i], align: 'center' }); cx += cols[i]; });
     doc.y = ry + 13 * vs;
     totalQty    += Number(l.qty) || 0;
@@ -220,7 +227,8 @@ function renderSellerReceipt(doc, sellerLots, cfg) {
   doc.font('Helvetica-Bold').fontSize(fs(8));
   let totLine = sellerLots.length + ' lot(s) | ' + totalBags + ' ' + lb('bags','bags') +
                 ' | ' + lb('net_wt','Net') + ': ' + totalQty.toFixed(3);
-  if (totalSample) totLine += ' | ' + lb('sample_wt','Smp') + ': ' + totalSample.toFixed(3);
+  if (cfg.showSampleDetailed && totalSample) totLine += ' | ' + lb('sample_wt','Smp') + ': ' + totalSample.toFixed(3);
+  if (cfg.showGrossDetailed)  totLine += ' | ' + lb('gross_wt','Grs') + ': ' + (totalQty + totalSample).toFixed(3);
   doc.text(totLine, m, doc.y, { width: w, align: 'center' });
 
   doc.moveDown(0.4);

@@ -13208,7 +13208,12 @@ function leReceiptPrep(format, lots, ctx) {
   // narrow roll (e.g. 58mm HOP-HL58) prints edge-to-edge instead of being
   // scaled onto an A4 sheet. 0 / blank keeps each format's built-in default.
   const paperWidthMm = parseFloat(cfg.lot_receipt_width_mm) || 0;
-  return { format, groups, co, dateStr, ano, printedAt, traderInfo, paperWidthMm };
+  // Optional Sample Wt / Gross Wt columns on the DETAILED slip (Settings →
+  // Lot Entry Defaults). getSettingsFlat returns these as real booleans;
+  // tolerate the string 'true' too in case a flat fetch wasn't coerced.
+  const showSample = cfg.lot_receipt_show_sample === true || cfg.lot_receipt_show_sample === 'true';
+  const showGross  = cfg.lot_receipt_show_gross  === true || cfg.lot_receipt_show_gross  === 'true';
+  return { format, groups, co, dateStr, ano, printedAt, traderInfo, paperWidthMm, showSample, showGross };
 }
 
 function leGroupLotsByTrader(lots) {
@@ -13256,13 +13261,13 @@ function leBuildCompactHtml(p) {
     }).join('');
     const totalQty    = g.lots.reduce((s, l) => s + (Number(l.qty)       || 0), 0);
     const totalBags   = g.lots.reduce((s, l) => s + (parseInt(l.bags, 10)|| 0), 0);
-    const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
-    const sampleRow = totalSample > 0 ? `
-      <tr style="border-top:1px dashed #000">
-        <td colspan="2" style="text-align:left">Sample</td>
-        <td style="text-align:right">${g.lots.length}</td>
-        <td style="text-align:right">${totalSample.toFixed(3)} kg</td>
-      </tr>` : '';
+    // Totals row — total bags + total weight (replaces the old Sample row).
+    const totalRow = `
+      <tr style="border-top:1px solid #000;font-weight:700">
+        <td colspan="2" style="text-align:left">Total</td>
+        <td style="text-align:right">${totalBags}</td>
+        <td style="text-align:right">${totalQty.toFixed(3)}</td>
+      </tr>`;
     return `
     <section class="receipt">
       <div class="hdr">${escapeHtml(nickname)}</div>
@@ -13272,7 +13277,7 @@ function leBuildCompactHtml(p) {
       <div class="meta">Trade: ${escapeHtml(String(ano))}&nbsp;&nbsp;Date: ${escapeHtml(dateStr)}</div>
       <table class="rows">
         <thead><tr><th>S.No</th><th>Lots</th><th>Bags</th><th>Weight(kg)</th></tr></thead>
-        <tbody>${lotRows}${sampleRow}</tbody>
+        <tbody>${lotRows}${totalRow}</tbody>
       </table>
       <div class="thanks">Thank you!</div>
       <div class="printed">${escapeHtml(printedAt)}</div>
@@ -13314,10 +13319,11 @@ function leBuildCompactHtml(p) {
 }
 
 // ── Detailed A4 receipt ─────────────────────────────────────────
-// Mirrors the modern ASPPL Spice e-Trade format reviewed by dad,
-// with Grade / Litre / Sample Wt columns DROPPED per his red marks.
+// Mirrors the modern ASPPL Spice e-Trade format reviewed by dad. Base
+// columns are Lot / Bag / Qty; Sample Wt and Gross Wt are opt-in via
+// Settings → Lot Entry Defaults (Grade / Litre stay dropped per his marks).
 function leBuildDetailedHtml(p) {
-  const { groups, co, dateStr, ano, printedAt, traderInfo, escapeHtml } = p;
+  const { groups, co, dateStr, ano, printedAt, traderInfo, escapeHtml, showSample, showGross } = p;
   // Detailed slip header keeps it minimal: company name + branch + GSTIN.
   // Address / contact / PAN / FSSAI / SBL are intentionally omitted to
   // keep the 60mm slip uncluttered — those fields still appear on the
@@ -13330,15 +13336,29 @@ function leBuildDetailedHtml(p) {
     const ifsc = bank.ifsc ? maskIfsc(bank.ifsc) : '';
     const place = [g.ppla, g.ppin].filter(Boolean).join(', ');
     const cr = g.cr || '';
+    // Sample / Gross columns are opt-in (Settings → Lot Entry Defaults).
+    // Gross = Net + Sample, computed live (same as the lot-entry form).
     const lotRows = g.lots.map(l => {
-      return `<tr>
-        <td>${escapeHtml(l.lot_no || '')}</td>
-        <td style="text-align:right">${escapeHtml(String(l.bags || 0))}</td>
-        <td style="text-align:right">${Number(l.qty || 0).toFixed(3)}</td>
-      </tr>`;
+      const sample = Number(l.sample_wt) || 0;
+      const gross  = (Number(l.qty) || 0) + sample;
+      let cells = `<td>${escapeHtml(l.lot_no || '')}</td>`
+        + `<td style="text-align:right">${escapeHtml(String(l.bags || 0))}</td>`
+        + `<td style="text-align:right">${Number(l.qty || 0).toFixed(3)}</td>`;
+      if (showSample) cells += `<td style="text-align:right">${sample.toFixed(3)}</td>`;
+      if (showGross)  cells += `<td style="text-align:right">${gross.toFixed(3)}</td>`;
+      return `<tr>${cells}</tr>`;
     }).join('');
-    const totalBags  = g.lots.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0);
-    const totalQty   = g.lots.reduce((s, l) => s + (Number(l.qty)        || 0), 0);
+    const totalBags   = g.lots.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0);
+    const totalQty    = g.lots.reduce((s, l) => s + (Number(l.qty)        || 0), 0);
+    const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt)  || 0), 0);
+    const totalGross  = totalQty + totalSample;
+    const nCols = 3 + (showSample ? 1 : 0) + (showGross ? 1 : 0);
+    let headCells = '<th>Lot</th><th style="text-align:right">Bag</th><th style="text-align:right">Qty</th>';
+    if (showSample) headCells += '<th style="text-align:right">Sample</th>';
+    if (showGross)  headCells += '<th style="text-align:right">Gross Wt</th>';
+    let summaryLine = `${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${totalQty.toFixed(3)}`;
+    if (showSample) summaryLine += ` | Sample: ${totalSample.toFixed(3)}`;
+    if (showGross)  summaryLine += ` | Gross Wt: ${totalGross.toFixed(3)}`;
     return `
     <section class="receipt">
       <header>
@@ -13366,10 +13386,10 @@ function leBuildDetailedHtml(p) {
         ${ifsc ? `<tr><td class="lbl">IFSC</td><td style="font-family:monospace">${escapeHtml(ifsc)}</td></tr>` : ''}
       </table>
       <table class="lot-table">
-        <thead><tr><th>Lot</th><th style="text-align:right">Bag</th><th style="text-align:right">Qty</th></tr></thead>
+        <thead><tr>${headCells}</tr></thead>
         <tbody>${lotRows}</tbody>
         <tfoot>
-          <tr><td colspan="3" class="summary"><b>${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${totalQty.toFixed(3)}</b></td></tr>
+          <tr><td colspan="${nCols}" class="summary"><b>${summaryLine}</b></td></tr>
         </tfoot>
       </table>
       <div class="thanks">** THANK YOU **</div>

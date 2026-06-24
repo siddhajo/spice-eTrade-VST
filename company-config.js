@@ -283,6 +283,12 @@ const DEFAULTS = [
   // print @page size and the WhatsApp/PDF slip both match the paper.
   // Height is always automatic — receipts grow down the continuous roll.
   { key: 'lot_receipt_width_mm', value: '',           category: 'lot_entry', label: 'Lot Receipt Paper Width (mm; blank = default. e.g. 58 for HOP-HL58 thermal)', type: 'number' },
+  // Optional columns on the DETAILED lot receipt. The compact slip never
+  // shows these (it prints Lot / Bags / Weight + a Total row). Both default
+  // OFF, so the detailed slip is Lot / Bag / Qty unless the user opts in.
+  // Gross Wt = Net + Sample, computed live (same as the lot-entry form).
+  { key: 'lot_receipt_show_sample', value: 'false',   category: 'lot_entry', label: 'Show Sample Wt column on Detailed Receipt', type: 'boolean' },
+  { key: 'lot_receipt_show_gross',  value: 'false',   category: 'lot_entry', label: 'Show Gross Wt column on Detailed Receipt', type: 'boolean' },
 
   // ── BUSINESS MODE ──────────────────────────────────────────
   // This build is e-Trade only. business_mode is kept in the DB so calc
