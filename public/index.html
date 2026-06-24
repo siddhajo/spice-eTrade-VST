@@ -5646,17 +5646,18 @@ input[type="search"]:focus{
      with no seller) that block import, and acknowledge-able warnings
      (sellers missing GSTIN / bank / PAN / phone). Confirming stamps the
      gate that doPriceImport() checks. -->
-<div class="modal-bg" id="lot-validate-modal"><div class="modal" style="max-width:760px">
-  <h2>Validate Entered Lots</h2>
-  <div id="lv-subtitle" style="font-size:12px;color:var(--spice-text-mute);margin-bottom:12px"></div>
-  <div id="lv-body" style="min-height:80px">
+<div class="modal-bg" id="lot-validate-modal"><div class="modal" style="max-width:760px;display:flex;flex-direction:column;max-height:90vh;overflow:hidden;padding:0">
+  <!-- Flex column: fixed header, scrolling body, fixed footer. This keeps
+       the action buttons pinned at the bottom and stops the lot list from
+       overflowing past them (a sticky footer glitched on long lists). -->
+  <div style="flex-shrink:0;padding:24px 28px 10px">
+    <h2 style="margin:0 0 8px">Validate Entered Lots</h2>
+    <div id="lv-subtitle" style="font-size:12px;color:var(--spice-text-mute)"></div>
+  </div>
+  <div id="lv-body" style="flex:1 1 auto;overflow-y:auto;padding:4px 28px 10px;min-height:80px">
     <div style="padding:24px;text-align:center;color:var(--spice-text-mute)">Loading…</div>
   </div>
-  <!-- Sticky footer: the acknowledge bar + action buttons stay pinned to
-       the bottom of the modal so they're never buried under the scrolling
-       lot list. The ack bar is a prominent amber box so it reads as a
-       required step, not an easy-to-miss line. -->
-  <div id="lv-footer" style="position:sticky;bottom:0;z-index:3;background:var(--card);margin:14px -28px -28px;padding:14px 28px 22px;border-top:1px solid var(--border)">
+  <div id="lv-footer" style="flex-shrink:0;background:var(--card);padding:14px 28px 22px;border-top:1px solid var(--border)">
     <label id="lv-ack-wrap" style="display:none;align-items:center;gap:11px;font-size:13.5px;color:#7C2D12;cursor:pointer;font-weight:700;background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:9px;padding:12px 14px;margin:0 0 12px">
       <input type="checkbox" id="lv-ack" onchange="lvAckChanged()" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
       <span id="lv-ack-label">I confirm the lots above are intentional</span>
@@ -16683,15 +16684,29 @@ function renderLotValidate(d){
       +'</span>'
       +'<a href="#" onclick="lvToggleAllSellers(true);return false" style="font-size:11px;color:var(--green);margin-left:auto">Select all</a>'
       +'<a href="#" onclick="lvToggleAllSellers(false);return false" style="font-size:11px;color:var(--spice-text-mute)">Clear</a>'
+      +'<span style="color:var(--border)">|</span>'
+      +'<a href="#" onclick="lvToggleAllGroups(true);return false" style="font-size:11px;color:var(--green)">Expand all</a>'
+      +'<a href="#" onclick="lvToggleAllGroups(false);return false" style="font-size:11px;color:var(--spice-text-mute)">Collapse all</a>'
       +'</div>';
     h+='<div>';
     sellerGroups.forEach(([nm,arr],gi)=>{
       const hasErr=arr.some(x=>x.severity==='error');
-      h+='<label style="display:flex;align-items:center;gap:9px;cursor:pointer;margin:12px 0 5px;padding:6px 8px;background:rgba(0,0,0,.03);border-radius:6px;border-bottom:1px solid var(--border)">'
-        +'<input type="checkbox" class="lv-seller-cb" data-idx="'+gi+'" onchange="lvUpdateSellerSelCount()" style="width:17px;height:17px;cursor:pointer;flex-shrink:0">'
-        +'<span style="font-weight:700;font-size:12.5px;color:'+(hasErr?'#7F1D1D':'var(--spice-text)')+'">'+esc(nm)+'</span>'
-        +'<span style="font-weight:400;color:var(--spice-text-mute);font-size:11px">— '+arr.length+' lot'+(arr.length>1?'s':'')+'</span></label>';
-      h+=arr.map(lotRow).join('');
+      const gid='lv-grp-'+gi;
+      // Distinct issue titles for this seller, shown as small badges on the
+      // (collapsed) heading so dad sees what's wrong without expanding.
+      const titleMap=new Map();
+      arr.forEach(e=>e.titles.forEach(t=>{ if(!titleMap.has(t.title)||t.severity==='error') titleMap.set(t.title,t.severity); }));
+      const sumBadges=Array.from(titleMap.entries()).map(([t,sev])=>'<span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:4px;background:'+(sev==='error'?'#DC2626':'#F59E0B')+';color:#fff">'+esc(t)+'</span>').join('');
+      h+='<div style="display:flex;align-items:center;gap:9px;margin:8px 0 0;padding:7px 8px;background:rgba(0,0,0,.03);border-radius:6px">'
+        +'<input type="checkbox" class="lv-seller-cb" data-idx="'+gi+'" onchange="lvUpdateSellerSelCount()" title="Select this seller" style="width:17px;height:17px;cursor:pointer;flex-shrink:0">'
+        +'<div onclick="lvToggleGroup(\''+gid+'\',this)" title="Show / hide this seller’s lots" style="flex:1;min-width:0;cursor:pointer;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+          +'<span class="lv-caret" style="font-size:10px;color:var(--text3);width:10px;flex-shrink:0">▸</span>'
+          +'<span style="font-weight:700;font-size:12.5px;color:'+(hasErr?'#7F1D1D':'var(--spice-text)')+'">'+esc(nm)+'</span>'
+          +'<span style="font-weight:400;color:var(--spice-text-mute);font-size:11px">— '+arr.length+' lot'+(arr.length>1?'s':'')+'</span>'
+          +sumBadges
+        +'</div>'
+      +'</div>';
+      h+='<div id="'+gid+'" style="display:none;padding:4px 0 2px 26px">'+arr.map(lotRow).join('')+'</div>';
     });
     h+='</div>';
   }else{
@@ -16734,6 +16749,19 @@ function lvUpdateSellerSelCount(){
 function lvToggleAllSellers(on){
   document.querySelectorAll('.lv-seller-cb').forEach(cb=>{ cb.checked=!!on; });
   lvUpdateSellerSelCount();
+}
+// Collapse / expand a single seller's lot cards.
+function lvToggleGroup(id, headEl){
+  const box=document.getElementById(id);
+  if(!box) return;
+  const open = box.style.display==='none';
+  box.style.display = open ? 'block' : 'none';
+  const caret = headEl && headEl.querySelector('.lv-caret');
+  if(caret) caret.textContent = open ? '▾' : '▸';
+}
+function lvToggleAllGroups(open){
+  document.querySelectorAll('#lv-body [id^="lv-grp-"]').forEach(box=>{ box.style.display = open ? 'block' : 'none'; });
+  document.querySelectorAll('#lv-body .lv-caret').forEach(c=>{ c.textContent = open ? '▾' : '▸'; });
 }
 // Collect the ticked sellers, switch to Lot Entry on the validated trade,
 // and filter Recent Entries to those sellers' lots so dad can correct
