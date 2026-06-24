@@ -704,17 +704,21 @@ function generateLotReceiptPDF(payload) {
   const printedAt = String((payload && payload.printedAt) || '');
 
   const num = (v, dp = 3) => Number(v || 0).toFixed(dp);
-  // Gross weight on the receipt is ALWAYS Net + Sample — the form's own
-  // definition (leCalcGross in index.html). Computed live here so a lot
-  // whose stored gross_wt is stale or 0 still prints the correct value,
-  // and Gross never silently collapses to Net when sample data is present.
-  const grossOf = (l) => (Number(l.qty) || 0) + (Number(l.sample_wt) || 0);
   const { getLogoSource } = require('./logo-paths');
 
   // Page geometry — defined here so the height calcs + the text measuring
   // helper below share it with the draw pass further down.
   const isCompact = format === 'compact';
-  const pageW = isCompact ? 226 : 200;
+  // Page width follows the configured thermal paper width (Settings → Lot
+  // Entry Defaults → "Lot Receipt Paper Width (mm)"), injected by the
+  // server route as payload.widthMm. Blank/0 keeps the legacy defaults
+  // (compact 226pt ≈ 80mm, detailed 200pt). PDFKit measures in points
+  // (72pt = 1in), so mm → pt is mm * 72 / 25.4. Clamped to a sane floor so
+  // a fat-fingered tiny value can't produce a zero-width unprintable page.
+  const widthMm = Number((payload && payload.widthMm) || 0);
+  const pageW = widthMm > 0
+    ? Math.max(120, Math.round(widthMm * 72 / 25.4))
+    : (isCompact ? 226 : 200);
   const margin = 10;
   const contentW = pageW - margin * 2;
   // Off-screen doc used ONLY to measure wrapped text — heightOfString needs a
@@ -738,7 +742,6 @@ function generateLotReceiptPDF(payload) {
   function compactHeight(g) {
     const rows = g.lots.length;
     const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
-    const totalGross  = g.lots.reduce((s, l) => s + grossOf(l), 0);
     let h = 12 + 18;                         // pad + nickname
     if (g.branch) h += 12;
     if (co.gstin) h += 12;
@@ -748,7 +751,6 @@ function generateLotReceiptPDF(payload) {
     h += 10 + 14;                            // table header
     h += rows * 13;
     if (totalSample > 0) h += 13;
-    if (totalGross > 0) h += 8 + 14;
     h += 12 + 16;                            // thanks
     h += 12;                                 // printed
     h += 12;                                 // bottom pad
@@ -790,21 +792,12 @@ function generateLotReceiptPDF(payload) {
       y += 13;
     });
     const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
-    const totalGross  = g.lots.reduce((s, l) => s + grossOf(l), 0);
     if (totalSample > 0) {
       doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).dash(2, { space: 2 }).stroke().undash();
       doc.text('Sample', c1, y + 1, { width: 96 });
       doc.text(String(g.lots.length), c3r - 30, y + 1, { width: 60, align: 'right' });
       doc.text(num(totalSample, 3) + ' kg', c4r - 70, y + 1, { width: 70, align: 'right' });
       y += 13;
-    }
-    if (totalGross > 0) {
-      y += 4;
-      doc.moveTo(cx + 2, y).lineTo(cx + cw - 2, y).lineWidth(0.7).stroke();
-      y += 4;
-      doc.font('Helvetica-Bold').fontSize(10).text('Gross Wt.  ' + num(totalGross, 3) + ' kg', cx, y, { width: cw - 2, align: 'right', lineBreak: false });
-      doc.font('Helvetica');
-      y += 14;
     }
     y += 12;
     doc.font('Helvetica-Bold').fontSize(11).text('Thank you!', cx, y, { width: cw, align: 'center' });
@@ -890,32 +883,29 @@ function generateLotReceiptPDF(payload) {
     if (ifsc) metaRow('IFSC', ifsc, true);
     // Lot table
     y += 2;
-    const lcLot = cx + 4, lcBag = cx + cw - 150, lcQty = cx + cw - 100, lcGross = cx + cw - 4;
+    const lcLot = cx + 4, lcBag = cx + cw - 70, lcQty = cx + cw - 4;
     doc.font('Helvetica-Bold').fontSize(8);
     doc.rect(cx + 2, y - 2, cw - 4, 14).fillAndStroke('#f6f6f6', '#cccccc');
     doc.fillColor('#000');
     doc.text('Lot', lcLot, y + 1, { width: 60 });
-    doc.text('Bag', lcBag - 40, y + 1, { width: 50, align: 'right' });
-    doc.text('Qty', lcQty - 20, y + 1, { width: 50, align: 'right' });
-    doc.text('Gross Wt', lcGross - 60, y + 1, { width: 60, align: 'right' });
+    doc.text('Bag', lcBag - 50, y + 1, { width: 50, align: 'right' });
+    doc.text('Qty', lcQty - 60, y + 1, { width: 60, align: 'right' });
     y += 14;
     doc.font('Helvetica').fontSize(8.5);
-    let totalBags = 0, totalQty = 0, totalGross = 0;
+    let totalBags = 0, totalQty = 0;
     g.lots.forEach(l => {
       totalBags += parseInt(l.bags, 10) || 0;
       totalQty += Number(l.qty) || 0;
-      totalGross += grossOf(l);
       doc.text(String(l.lot_no || ''), lcLot, y + 1, { width: 60 });
-      doc.text(String(l.bags || 0), lcBag - 40, y + 1, { width: 50, align: 'right' });
-      doc.text(num(l.qty, 3), lcQty - 20, y + 1, { width: 50, align: 'right' });
-      doc.text(num(grossOf(l), 3), lcGross - 60, y + 1, { width: 60, align: 'right' });
+      doc.text(String(l.bags || 0), lcBag - 50, y + 1, { width: 50, align: 'right' });
+      doc.text(num(l.qty, 3), lcQty - 60, y + 1, { width: 60, align: 'right' });
       doc.moveTo(cx + 2, y + 13).lineTo(cx + cw - 2, y + 13).lineWidth(0.3).strokeColor('#eeeeee').stroke().strokeColor('#000');
       y += 14;
     });
     // Summary
     doc.rect(cx + 2, y, cw - 4, 16).fillAndStroke('#fafafa', '#cccccc');
     doc.fillColor('#000').font('Helvetica-Bold').fontSize(8);
-    doc.text(`${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${num(totalQty, 3)} | Gross Wt: ${num(totalGross, 3)}`,
+    doc.text(`${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${num(totalQty, 3)}`,
       cx + 2, y + 4, { width: cw - 4, align: 'center' });
     y += 16;
     y += 12;

@@ -10180,6 +10180,12 @@ app.post('/api/lot-receipt/pdf', requireViewOrLotEntry, async (req, res) => {
       ifsc: _mCfg.mask_ifsc || 'none',
       phone: _mCfg.mask_phone || 'none',
     };
+    // Thermal paper width (Settings → Lot Entry Defaults). Decided
+    // server-side so the WhatsApp/PDF slip matches the configured printer
+    // roll regardless of what an old client sends. Blank/0 → renderer's
+    // built-in default page size.
+    const _wmm = Number(_mCfg.lot_receipt_width_mm || 0);
+    if (_wmm > 0) payload.widthMm = _wmm;
     const pdf = await generateLotReceiptPDF(payload);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="LotReceipt.pdf"');

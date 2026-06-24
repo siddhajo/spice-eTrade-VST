@@ -273,6 +273,16 @@ const DEFAULTS = [
   // details. Field staff on thermal hardware should set this to
   // "compact" once and forget it.
   { key: 'lot_receipt_format', value: 'detailed',     category: 'lot_entry', label: 'Lot Receipt Format (compact|detailed)', type: 'text' },
+  // Physical paper width of the lot-receipt slip, in millimetres. Thermal
+  // receipt printers come in fixed roll widths (e.g. the HOP-HL58 is a
+  // 58mm roll, common alternatives are 80mm and 76mm). When this is blank
+  // / 0 the slip uses its built-in default page size (80mm for compact,
+  // 2.5in for detailed) — which on a narrower 58mm printer overflows the
+  // paper and the driver silently falls back to scaling onto an A4 sheet.
+  // Set this to the printer's roll width (58 for the HOP-HL58) so the
+  // print @page size and the WhatsApp/PDF slip both match the paper.
+  // Height is always automatic — receipts grow down the continuous roll.
+  { key: 'lot_receipt_width_mm', value: '',           category: 'lot_entry', label: 'Lot Receipt Paper Width (mm; blank = default. e.g. 58 for HOP-HL58 thermal)', type: 'number' },
 
   // ── BUSINESS MODE ──────────────────────────────────────────
   // This build is e-Trade only. business_mode is kept in the DB so calc

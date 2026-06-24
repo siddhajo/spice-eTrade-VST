@@ -3972,7 +3972,7 @@ input[type="search"]:focus{
           </label>
           <label class="le-print-fmt" data-format="detailed" style="display:flex;flex-direction:column;gap:4px;padding:12px;border:1.5px solid var(--border);border-radius:10px;cursor:pointer;background:#fff;transition:all .15s">
             <span style="font-weight:700;font-size:13px">Detailed (~2.5×3.5″)</span>
-            <span style="font-size:11px;color:var(--text3);line-height:1.4">Compact slip with company header + seller bank details · lot / bag / qty / gross wt</span>
+            <span style="font-size:11px;color:var(--text3);line-height:1.4">Compact slip with company header + seller bank details · lot / bag / qty</span>
           </label>
         </div>
 
@@ -12430,10 +12430,11 @@ async function leNextLotNo() {
 //
 //   • compact  → 80mm thermal slip, monospace, tightest layout.
 //                Mirrors the legacy dot-matrix receipt (Lot, Bags,
-//                Weight, Sample, Gross). One per seller.
+//                Weight, plus a Sample total row). One per seller.
 //   • detailed → A4-style with company logo + branch header + seller
-//                bank details + multi-row lot table. Drops Grade /
-//                Litre / Sample Wt columns per dad's review.
+//                bank details + multi-row lot table (Lot / Bag / Qty).
+//                Drops Grade / Litre / Sample Wt / Gross Wt columns
+//                per dad's review.
 //
 // Print Selected groups checked lots by trader so a seller with three
 // lots prints as one receipt with three rows, not three receipts.
@@ -13202,7 +13203,12 @@ function leReceiptPrep(format, lots, ctx) {
   const ano = auction.ano || '?';
 
   const co = { nickname, tradeName, shortName, phone, email, addr1, addr2, place, pin, gstin, pan, fssai, sbl, branch, logoUrl };
-  return { format, groups, co, dateStr, ano, printedAt, traderInfo };
+  // Thermal paper width (Settings → Lot Entry Defaults → "Lot Receipt Paper
+  // Width"). Drives the printed slip's @page size + content width so a
+  // narrow roll (e.g. 58mm HOP-HL58) prints edge-to-edge instead of being
+  // scaled onto an A4 sheet. 0 / blank keeps each format's built-in default.
+  const paperWidthMm = parseFloat(cfg.lot_receipt_width_mm) || 0;
+  return { format, groups, co, dateStr, ano, printedAt, traderInfo, paperWidthMm };
 }
 
 function leGroupLotsByTrader(lots) {
@@ -13251,9 +13257,6 @@ function leBuildCompactHtml(p) {
     const totalQty    = g.lots.reduce((s, l) => s + (Number(l.qty)       || 0), 0);
     const totalBags   = g.lots.reduce((s, l) => s + (parseInt(l.bags, 10)|| 0), 0);
     const totalSample = g.lots.reduce((s, l) => s + (Number(l.sample_wt) || 0), 0);
-    // Gross = Net + Sample (form definition); computed live so a stale/0
-    // stored gross_wt doesn't make Gross collapse onto Net.
-    const totalGross  = g.lots.reduce((s, l) => s + (Number(l.qty) || 0) + (Number(l.sample_wt) || 0), 0);
     const sampleRow = totalSample > 0 ? `
       <tr style="border-top:1px dashed #000">
         <td colspan="2" style="text-align:left">Sample</td>
@@ -13271,22 +13274,24 @@ function leBuildCompactHtml(p) {
         <thead><tr><th>S.No</th><th>Lots</th><th>Bags</th><th>Weight(kg)</th></tr></thead>
         <tbody>${lotRows}${sampleRow}</tbody>
       </table>
-      ${totalGross > 0 ? `<div class="gross">Gross Wt.&nbsp;&nbsp;<b>${totalGross.toFixed(3)} kg</b></div>` : ''}
       <div class="thanks">Thank you!</div>
       <div class="printed">${escapeHtml(printedAt)}</div>
     </section>`;
   }).join('');
 
-  // CSS targets 80mm thermal width but renders fine in a regular
-  // browser window for preview. font-size in mm so it scales right
-  // on actual thermal hardware.
+  // CSS targets 80mm thermal width by default but follows the configured
+  // paper width (p.paperWidthMm) when set — e.g. 58 for a HOP-HL58 roll.
+  // The 3mm @page margin is reserved on each side, so the slip body is the
+  // paper width minus 6mm. font-size in mm so it scales right on hardware.
+  const pageMm = p.paperWidthMm > 0 ? p.paperWidthMm : 80;
+  const recMm  = Math.max(20, pageMm - 6);
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Receipt</title>
 <style>
-  @page { size: 80mm auto; margin: 3mm }
+  @page { size: ${pageMm}mm auto; margin: 3mm }
   html, body { margin:0; padding:0; background:#eee; font-family: 'Courier New', ui-monospace, monospace; }
   body { padding:20px; display:flex; flex-direction:column; align-items:center; gap:14px }
-  .receipt { width: 74mm; background:#fff; padding:6mm 4mm; box-sizing:border-box; box-shadow:0 2px 6px rgba(0,0,0,.15); page-break-after: always; }
+  .receipt { width: ${recMm}mm; background:#fff; padding:6mm 4mm; box-sizing:border-box; box-shadow:0 2px 6px rgba(0,0,0,.15); page-break-after: always; }
   .receipt:last-child { page-break-after: auto; }
   .logo-wrap { text-align:center; margin-bottom:4px }
   .logo-img { max-height:40px; max-width:60mm; object-fit:contain }
@@ -13299,7 +13304,6 @@ function leBuildCompactHtml(p) {
   table.rows td { padding:2px 0 }
   table.rows tr td:nth-child(3), table.rows tr td:nth-child(4),
   table.rows tr th:nth-child(3), table.rows tr th:nth-child(4) { text-align:right }
-  .gross { margin-top:8px; padding-top:4px; border-top:1px solid #000; font-size:12px; text-align:right }
   .thanks { text-align:center; font-weight:700; margin-top:10px; font-size:12px }
   .printed { text-align:center; font-size:10px; margin-top:2px; color:#444 }
   @media print {
@@ -13331,12 +13335,10 @@ function leBuildDetailedHtml(p) {
         <td>${escapeHtml(l.lot_no || '')}</td>
         <td style="text-align:right">${escapeHtml(String(l.bags || 0))}</td>
         <td style="text-align:right">${Number(l.qty || 0).toFixed(3)}</td>
-        <td style="text-align:right">${((Number(l.qty) || 0) + (Number(l.sample_wt) || 0)).toFixed(3)}</td>
       </tr>`;
     }).join('');
     const totalBags  = g.lots.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0);
     const totalQty   = g.lots.reduce((s, l) => s + (Number(l.qty)        || 0), 0);
-    const totalGross = g.lots.reduce((s, l) => s + (Number(l.qty) || 0) + (Number(l.sample_wt) || 0), 0);
     return `
     <section class="receipt">
       <header>
@@ -13364,28 +13366,32 @@ function leBuildDetailedHtml(p) {
         ${ifsc ? `<tr><td class="lbl">IFSC</td><td style="font-family:monospace">${escapeHtml(ifsc)}</td></tr>` : ''}
       </table>
       <table class="lot-table">
-        <thead><tr><th>Lot</th><th style="text-align:right">Bag</th><th style="text-align:right">Qty</th><th style="text-align:right">Gross Wt</th></tr></thead>
+        <thead><tr><th>Lot</th><th style="text-align:right">Bag</th><th style="text-align:right">Qty</th></tr></thead>
         <tbody>${lotRows}</tbody>
         <tfoot>
-          <tr><td colspan="4" class="summary"><b>${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${totalQty.toFixed(3)} | Gross Wt: ${totalGross.toFixed(3)}</b></td></tr>
+          <tr><td colspan="3" class="summary"><b>${g.lots.length} lot(s) | ${totalBags} Bag | Qty: ${totalQty.toFixed(3)}</b></td></tr>
         </tfoot>
       </table>
       <div class="thanks">** THANK YOU **</div>
     </section>`;
   }).join('');
 
+  // Detailed slip defaults to ~2.5in wide but follows the configured paper
+  // width (p.paperWidthMm) when set — e.g. 58 for a HOP-HL58 roll. A 2mm
+  // @page margin is reserved each side, so the body is paper width − 4mm.
+  const pageSize = p.paperWidthMm > 0 ? `${p.paperWidthMm}mm auto` : '2.5in auto';
+  const recWidth = p.paperWidthMm > 0 ? `${Math.max(20, p.paperWidthMm - 4)}mm` : '60mm';
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Receipt</title>
 <style>
-  /* Detailed slip — sized to ~2.5in × 3.5in (≈ 64mm × 89mm). Width is
-     fixed; height is auto so receipts with multiple lots can grow
-     downward instead of clipping content. The browser's print dialog
-     respects @page size, so a thermal/label printer with matching
-     stock prints edge-to-edge. */
-  @page { size: 2.5in auto; margin: 2mm }
+  /* Detailed slip — width follows the configured paper width (height is
+     auto so multi-lot receipts grow downward instead of clipping). The
+     browser's print dialog respects @page size, so a thermal/label printer
+     with matching stock prints edge-to-edge. */
+  @page { size: ${pageSize}; margin: 2mm }
   html, body { margin:0; padding:0; background:#eee; font-family: 'Inter', -apple-system, sans-serif; color:#1a1a1a; }
   body { padding:14px; display:flex; flex-direction:column; align-items:center; gap:12px }
-  .receipt { width: 60mm; background:#fff; padding:3mm 4mm; box-sizing:border-box; box-shadow:0 1px 4px rgba(0,0,0,.12); page-break-after: always; }
+  .receipt { width: ${recWidth}; background:#fff; padding:3mm 4mm; box-sizing:border-box; box-shadow:0 1px 4px rgba(0,0,0,.12); page-break-after: always; }
   .receipt:last-child { page-break-after: auto; }
   header { text-align:center; padding-bottom:4px }
   .brand { display:inline-flex; gap:6px; align-items:center; justify-content:center }

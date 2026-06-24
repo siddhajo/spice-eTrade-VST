@@ -72,43 +72,59 @@ function getReceiptConfig(db) {
     maskPhone:    get('mask_phone', 'none'),
     showMoisture: getBool('show_moisture', false),
     sampleWeight: parseFloat(get('sample_weight', '0')) || 0,
+    // Thermal paper width (Settings → Lot Entry Defaults → "Lot Receipt
+    // Paper Width"). Same key the desktop print path reads, so a 58mm
+    // HOP-HL58 prints the same width from mobile. Blank/0 → legacy widths.
+    paperWidthMm: parseFloat(get('lot_receipt_width_mm', '')) || 0,
     labels:       {},  // spice-config doesn't customize labels; defaults fine
   };
 }
 
 // ── HEADER (full size: ~340pt wide) ──────────────────────────────
-function addReceiptHeader(doc, appTitle, branch, dateFmt, tradeNo) {
-  const w = 300, m = 20;
+function addReceiptHeader(doc, appTitle, branch, dateFmt, tradeNo, pageW) {
+  const m = 20;
+  const pw = pageW || 340;
+  const w = pw - 2 * m;
+  const sc = w / 300;
+  // Font + row-height scaling so the detailed header stays legible on a
+  // narrow roll. fs() floors at 5.5pt (thermal-legible); vs floors the
+  // fixed row height at 0.78. Both are 1 at the default 340pt page.
+  const fs = (b) => Math.max(5.5, b * sc);
+  const vs = Math.max(0.78, Math.min(1, sc));
+  const logoSz = Math.round(45 * sc);  // scale logo with paper width
   const logoPath = getLogoPath();
   if (logoPath) {
     try {
-      doc.image(logoPath, (340 - 45) / 2, doc.y, { width: 45, height: 45 });
-      doc.y += 50;
+      doc.image(logoPath, (pw - logoSz) / 2, doc.y, { width: logoSz, height: logoSz });
+      doc.y += logoSz + 5;
     } catch (e) {}
   }
-  doc.font('Helvetica-Bold').fontSize(14).text(appTitle, m, doc.y, { width: w, align: 'center' });
-  doc.fontSize(10).text((branch || '') + ' BRANCH', m, doc.y, { width: w, align: 'center' });
+  doc.font('Helvetica-Bold').fontSize(fs(14)).text(appTitle, m, doc.y, { width: w, align: 'center' });
+  doc.fontSize(fs(10)).text((branch || '') + ' BRANCH', m, doc.y, { width: w, align: 'center' });
   doc.moveDown(0.4);
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.5).stroke(); doc.moveDown(0.4);
 
-  doc.font('Helvetica').fontSize(10);
+  doc.font('Helvetica').fontSize(fs(10));
   const y0 = doc.y;
   doc.text('Date: ' + dateFmt, m, y0, { width: w / 2 });
   doc.text('Trade #' + tradeNo, m + w / 2, y0, { width: w / 2, align: 'right' });
-  doc.y = y0 + 16;
+  doc.y = y0 + 16 * vs;
   doc.moveDown(0.2);
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).dash(3, { space: 3 }).lineWidth(0.5).stroke().undash();
   doc.moveDown(0.4);
 }
 
 // ── HEADER (compact: ~180pt wide, thermal-printer friendly) ──────
-function addReceiptHeaderCompact(doc, appTitle, branch, dateFmt, tradeNo) {
-  const w = 160, m = 10;
+function addReceiptHeaderCompact(doc, appTitle, branch, dateFmt, tradeNo, pageW) {
+  const m = 10;
+  const pw = pageW || 180;
+  const w = pw - 2 * m;
+  const logoSz = Math.round(28 * (w / 160));  // scale logo with paper width
   const logoPath = getLogoPath();
   if (logoPath) {
     try {
-      doc.image(logoPath, (180 - 28) / 2, doc.y, { width: 28, height: 28 });
-      doc.y += 30;
+      doc.image(logoPath, (pw - logoSz) / 2, doc.y, { width: logoSz, height: logoSz });
+      doc.y += logoSz + 2;
     } catch (e) {}
   }
   doc.font('Helvetica-Bold').fontSize(10).text(appTitle, m, doc.y, { width: w, align: 'center' });
@@ -126,16 +142,28 @@ function addReceiptHeaderCompact(doc, appTitle, branch, dateFmt, tradeNo) {
 
 // ── RENDERER (full) ──────────────────────────────────────────────
 function renderSellerReceipt(doc, sellerLots, cfg) {
-  const w = 300, m = 20;
+  const m = 20;
+  // Content width + column scale follow the configured paper width (same
+  // receiptPageW the document page was sized to). sc === 1 at the default
+  // 340pt page, so default receipts are byte-for-byte unchanged.
+  const pageW = receiptPageW(false, cfg.paperWidthMm);
+  const w = pageW - 2 * m;
+  const sc = w / 300;
+  // On a narrow roll, shrink fonts (floored at 5.5pt so they stay legible)
+  // and the fixed per-row heights (floored at vs=0.78 so a row never gets
+  // shorter than its text). Both are 1 at the default 340pt page, so a
+  // full-size detailed slip is byte-for-byte unchanged.
+  const fs = (b) => Math.max(5.5, b * sc);
+  const vs = Math.max(0.78, Math.min(1, sc));
   const lot = sellerLots[0];
   const dateFmt = lot.date ? String(lot.date).split('-').reverse().join('/') : '';
   const L = cfg.labels || {};
   const lb = (k, d) => L[k] || d;
   const headerBranch = cfg.branch || lot.branch;
 
-  addReceiptHeader(doc, cfg.appTitle, headerBranch, dateFmt, lot.ano);
+  addReceiptHeader(doc, cfg.appTitle, headerBranch, dateFmt, lot.ano, pageW);
 
-  const lw = 70;
+  const lw = 70 * sc;
   const maskedAcct = maskField(lot.acctnum, cfg.maskAcct);
   const maskedIfsc = maskField(lot.ifsc, cfg.maskIfsc);
   const sellerFields = [
@@ -145,31 +173,31 @@ function renderSellerReceipt(doc, sellerLots, cfg) {
     [lb('acct_no','A/C No'), maskedAcct || '--NIL--'],
     [lb('ifsc',   'IFSC'),   maskedIfsc || '--NIL--'],
   ];
-  doc.fontSize(9);
+  doc.fontSize(fs(9));
   sellerFields.forEach(([label, value]) => {
     if (!value) return;
     const y = doc.y;
     doc.font('Helvetica-Bold').text(label, m, y, { width: lw });
     doc.font('Helvetica').text(String(value), m + lw, y, { width: w - lw });
-    if (doc.y < y + 13) doc.y = y + 13;
+    if (doc.y < y + 13 * vs) doc.y = y + 13 * vs;
   });
 
   doc.moveDown(0.3);
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.5).stroke(); doc.moveDown(0.3);
 
-  const cols = [50, 46, 64, 50, 60];
-  const hdrs = [lb('lot_no','Lot#'), lb('bags','Bags'), lb('net_wt','Net'), lb('sample_wt','Smp'), lb('gross_wt','Gross')];
-  if (cfg.showMoisture) { cols.push(38); hdrs.push(lb('moisture','Mst%')); }
+  const cols = [64, 59, 82, 65].map(c => c * sc);
+  const hdrs = [lb('lot_no','Lot#'), lb('bags','Bags'), lb('net_wt','Net'), lb('sample_wt','Smp')];
+  if (cfg.showMoisture) { cols.push(38 * sc); hdrs.push(lb('moisture','Mst%')); }
 
   const hdrY = doc.y;
-  doc.font('Helvetica-Bold').fontSize(7.5);
+  doc.font('Helvetica-Bold').fontSize(fs(7.5));
   let cx = m;
   hdrs.forEach((h, i) => { doc.text(h, cx, hdrY, { width: cols[i], align: 'center' }); cx += cols[i]; });
-  doc.y = hdrY + 11;
+  doc.y = hdrY + 11 * vs;
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.3).stroke(); doc.moveDown(0.2);
 
-  doc.font('Helvetica').fontSize(8);
-  let totalQty = 0, totalGross = 0, totalBags = 0, totalSample = 0;
+  doc.font('Helvetica').fontSize(fs(8));
+  let totalQty = 0, totalBags = 0, totalSample = 0;
   sellerLots.forEach(l => {
     const ry = doc.y;
     cx = m;
@@ -179,48 +207,51 @@ function renderSellerReceipt(doc, sellerLots, cfg) {
       l.bags,
       Number(l.qty).toFixed(3),
       sw ? sw.toFixed(3) : '',
-      l.gross_weight != null ? Number(l.gross_weight).toFixed(3) : '',
     ];
     if (cfg.showMoisture) rowData.push(l.moisture ? Number(l.moisture).toFixed(1) : '');
     rowData.forEach((v, i) => { doc.text(String(v), cx, ry, { width: cols[i], align: 'center' }); cx += cols[i]; });
-    doc.y = ry + 13;
+    doc.y = ry + 13 * vs;
     totalQty    += Number(l.qty) || 0;
-    totalGross  += Number(l.gross_weight) || 0;
     totalBags   += Number(l.bags) || 0;
     totalSample += sw;
   });
 
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.5).stroke(); doc.moveDown(0.3);
-  doc.font('Helvetica-Bold').fontSize(8);
+  doc.font('Helvetica-Bold').fontSize(fs(8));
   let totLine = sellerLots.length + ' lot(s) | ' + totalBags + ' ' + lb('bags','bags') +
                 ' | ' + lb('net_wt','Net') + ': ' + totalQty.toFixed(3);
   if (totalSample) totLine += ' | ' + lb('sample_wt','Smp') + ': ' + totalSample.toFixed(3);
-  if (totalGross)  totLine += ' | ' + lb('gross_wt','Grs') + ': ' + totalGross.toFixed(3);
   doc.text(totLine, m, doc.y, { width: w, align: 'center' });
 
   doc.moveDown(0.4);
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.5).stroke(); doc.moveDown(0.2);
   if (cfg.showUser) {
-    doc.font('Helvetica').fontSize(8).fillColor('#888')
+    doc.font('Helvetica').fontSize(fs(8)).fillColor('#888')
        .text('Entered by: ' + (lot.user_id || ''), m, doc.y, { width: w });
     doc.moveDown(0.2);
   }
-  doc.fillColor('#000').font('Helvetica-Bold').fontSize(10)
+  doc.fillColor('#000').font('Helvetica-Bold').fontSize(fs(10))
      .text('** THANK YOU **', m, doc.y, { width: w, align: 'center' });
 }
 
 // ── RENDERER (compact, thermal-printer / ~2.5"×3.5") ─────────────
 function renderSellerReceiptCompact(doc, sellerLots, cfg) {
-  const w = 160, m = 10;
+  const m = 10;
+  // Content width + column scale follow the configured paper width (same
+  // receiptPageW the document page was sized to). sc === 1 at the default
+  // 180pt page, so default thermal slips are byte-for-byte unchanged.
+  const pageW = receiptPageW(true, cfg.paperWidthMm);
+  const w = pageW - 2 * m;
+  const sc = w / 160;
   const lot = sellerLots[0];
   const dateFmt = lot.date ? String(lot.date).split('-').reverse().join('/') : '';
   const L = cfg.labels || {};
   const lb = (k, d) => L[k] || d;
   const headerBranch = cfg.branch || lot.branch;
 
-  addReceiptHeaderCompact(doc, cfg.appTitle, headerBranch, dateFmt, lot.ano);
+  addReceiptHeaderCompact(doc, cfg.appTitle, headerBranch, dateFmt, lot.ano, pageW);
 
-  const lw = 32;
+  const lw = 32 * sc;
   const maskedAcct = maskField(lot.acctnum, cfg.maskAcct);
   const maskedIfsc = maskField(lot.ifsc, cfg.maskIfsc);
   const sellerFields = [
@@ -241,8 +272,8 @@ function renderSellerReceiptCompact(doc, sellerLots, cfg) {
   doc.moveDown(0.2);
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.4).stroke(); doc.moveDown(0.2);
 
-  const cols = [28, 28, 50, 54];
-  const hdrs = [lb('lot_no','Lot#'), lb('bags','Bags'), lb('net_wt','Net'), lb('gross_wt','Gross')];
+  const cols = [44, 44, 72].map(c => c * sc);
+  const hdrs = [lb('lot_no','Lot#'), lb('bags','Bags'), lb('net_wt','Net')];
 
   const hdrY = doc.y;
   doc.font('Helvetica-Bold').fontSize(6.5);
@@ -252,28 +283,25 @@ function renderSellerReceiptCompact(doc, sellerLots, cfg) {
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.3).stroke(); doc.moveDown(0.15);
 
   doc.font('Helvetica').fontSize(7);
-  let totalQty = 0, totalGross = 0, totalBags = 0;
+  let totalQty = 0, totalBags = 0;
   sellerLots.forEach(l => {
     const ry = doc.y;
     cx = m;
     const rowData = [
       l.lot_no, l.bags,
       Number(l.qty).toFixed(3),
-      l.gross_weight != null ? Number(l.gross_weight).toFixed(3) : '',
     ];
     rowData.forEach((v, i) => { doc.text(String(v), cx, ry, { width: cols[i], align: 'center' }); cx += cols[i]; });
     doc.y = ry + 11;
     totalQty   += Number(l.qty) || 0;
-    totalGross += Number(l.gross_weight) || 0;
     totalBags  += Number(l.bags) || 0;
   });
 
   doc.moveTo(m, doc.y).lineTo(m + w, doc.y).lineWidth(0.4).stroke(); doc.moveDown(0.15);
 
-  const sumCols = [40, 40, 40, 40];
-  const sumHdrs = ['Lots', lb('bags','Bags'), lb('net_wt','Net'), lb('gross_wt','Gross')];
-  const sumVals = [String(sellerLots.length), String(totalBags), totalQty.toFixed(3),
-                   totalGross ? totalGross.toFixed(3) : '-'];
+  const sumCols = [54, 53, 53].map(c => c * sc);
+  const sumHdrs = ['Lots', lb('bags','Bags'), lb('net_wt','Net')];
+  const sumVals = [String(sellerLots.length), String(totalBags), totalQty.toFixed(3)];
   const sHdrY = doc.y;
   doc.font('Helvetica-Bold').fontSize(6.5);
   let sx = m;
@@ -295,10 +323,38 @@ function renderSellerReceiptCompact(doc, sellerLots, cfg) {
      .text('** THANK YOU **', m, doc.y, { width: w, align: 'center' });
 }
 
-function pickReceiptRenderer(fmt) {
-  return fmt === 'compact'
-    ? { render: renderSellerReceiptCompact, pageSize: [180, 252], compact: true }
-    : { render: renderSellerReceipt,        pageSize: [340, 550], compact: false };
+// Receipt page WIDTH in points. Mirrors the desktop `lot_receipt_width_mm`
+// setting (Settings → Lot Entry Defaults) so the mobile PDF prints to the
+// same thermal roll as the desktop slip. Blank/0 keeps the legacy widths
+// (compact 180pt ≈ 63mm, full 340pt). PDFKit measures in points (72pt =
+// 1in), so mm → pt is mm * 72 / 25.4. Clamped so a tiny value can't make
+// an unprintable sliver of a page. The renderers derive their content
+// width + column scale from this SAME helper, so the drawn layout always
+// matches the page the document was sized to.
+function receiptPageW(compact, paperWidthMm) {
+  const mm = Number(paperWidthMm) || 0;
+  if (mm > 0) return Math.max(120, Math.round(mm * 72 / 25.4));
+  return compact ? 180 : 340;
+}
+
+// Vertical scale for the detailed slip on narrow paper. The detailed
+// renderer shrinks its fonts to fit a narrow roll (see `fs()` there); the
+// fixed per-row heights must shrink too or the slip is mostly whitespace.
+// Floored at 0.78 so a row never gets shorter than its (5.5pt-floored)
+// text — and ALWAYS ≥ the height receiptPageSize reserves, so the page
+// can't overflow into the junk-page shatter. 1 at the default width.
+function receiptVScale(compact, paperWidthMm) {
+  const m = compact ? 10 : 20;
+  const baseW = compact ? 160 : 300;
+  const sc = (receiptPageW(compact, paperWidthMm) - 2 * m) / baseW;
+  return Math.max(0.78, Math.min(1, sc));
+}
+
+function pickReceiptRenderer(fmt, paperWidthMm) {
+  const compact = fmt === 'compact';
+  return compact
+    ? { render: renderSellerReceiptCompact, pageW: receiptPageW(true,  paperWidthMm), vs: 1, compact: true }
+    : { render: renderSellerReceipt,        pageW: receiptPageW(false, paperWidthMm), vs: receiptVScale(false, paperWidthMm), compact: false };
 }
 
 // Page size that GROWS with the lot count so a single seller's receipt
@@ -310,9 +366,10 @@ function pickReceiptRenderer(fmt) {
 // finite so a bad row count can't request a 100-inch page.
 function receiptPageSize(r, lotCount) {
   const n = Math.max(1, lotCount || 1);
-  return r.compact
-    ? [180, Math.min(200 + n * 12 + 60, 1200)]
-    : [340, Math.min(200 + n * 18 + 90, 2200)];
+  const h = r.compact
+    ? Math.min(200 + n * 12 + 60, 1200)
+    : Math.min(200 + n * 18 * (r.vs || 1) + 90, 2200);
+  return [r.pageW, h];
 }
 
 // ── LOT SELECT — single helper used by every print endpoint ─────
@@ -1324,7 +1381,7 @@ function mountMobile(app, deps) {
 
     const cfg = getReceiptConfig(db);
     if (branch) cfg.branch = branch;
-    const r = pickReceiptRenderer(req.query.format);
+    const r = pickReceiptRenderer(req.query.format, cfg.paperWidthMm);
 
     const doc = new PDFDocument({ size: receiptPageSize(r, 1), margin: r.compact ? 10 : 20 });
     res.setHeader('Content-Type', 'application/pdf');
@@ -1337,7 +1394,7 @@ function mountMobile(app, deps) {
   // Shared helper — groups arbitrary lot rows by seller, then renders
   // one receipt page per seller. Used by print-batch and print-all-sellers.
   function streamGroupedReceipts(lots, req, res, cfg, filename) {
-    const r = pickReceiptRenderer(req.query.format || (req.body && req.body.format));
+    const r = pickReceiptRenderer(req.query.format || (req.body && req.body.format), cfg.paperWidthMm);
     const groups = {};
     for (const l of lots) {
       const key = l.trader_id || ('u_' + (l.trader_name || 'unknown'));
@@ -1403,7 +1460,7 @@ function mountMobile(app, deps) {
     const cfg = getReceiptConfig(db);
     if (branch) cfg.branch = branch;
     const fmt = (req.query && req.query.format) || (req.body && req.body.format);
-    const r = pickReceiptRenderer(fmt);
+    const r = pickReceiptRenderer(fmt, cfg.paperWidthMm);
     // Auto-grow page for long seller histories
     const doc = new PDFDocument({ size: receiptPageSize(r, lots.length), margin: r.compact ? 10 : 20 });
     res.setHeader('Content-Type', 'application/pdf');
