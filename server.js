@@ -3221,7 +3221,7 @@ function validateAuctionLots(db, auctionId) {
   // Bags / Litre / Qty). Used for every error/warning lot list.
   const disp = (l) => ({
     id: l.id, lot_no: l.lot_no, name: l.name || '', branch: l.branch || '',
-    bags: l.bags, litre: l.litre || '', qty: l.qty,
+    bags: l.bags, litre: l.litre || '', qty: l.qty, trader_id: l.trader_id || null,
   });
 
   const errors = [];

@@ -3837,6 +3837,11 @@ input[type="search"]:focus{
               <button type="button" onclick="leApplyPickLots()" class="le-toolbar-btn le-tb-secondary" style="height:34px">Tick</button>
             </div>
           </div>
+          <!-- Multi-seller filter banner — shown when the operator picks
+               sellers from Validate Lots → "Show selected in Recent
+               Entries". Lists the sellers being shown + a Clear link.
+               Painted by renderLeRecent(); hidden otherwise. -->
+          <div id="le-recent-seller-filter" style="display:none;margin-bottom:10px;padding:8px 12px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;font-size:12px;color:#7C2D12"></div>
           <div id="le-recent-list" style="font-size:13px"></div>
           <!-- Pagination footer — Prev / page indicator / Next. Filled by
                renderLeRecent() each load. Hidden when total ≤ page size. -->
@@ -5656,8 +5661,9 @@ input[type="search"]:focus{
       <input type="checkbox" id="lv-ack" onchange="lvAckChanged()" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
       <span id="lv-ack-label">I confirm the lots above are intentional</span>
     </label>
-    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;align-items:center">
       <button class="btn btn-o" onclick="hideModal('lot-validate-modal')">Close</button>
+      <button class="btn" id="lv-show-sellers" onclick="lvShowSelectedSellers()" disabled style="background:#2563eb;color:#fff;font-weight:600;margin-right:auto">📋 Show selected in Recent Entries</button>
       <button class="btn btn-g" id="lv-confirm" onclick="confirmLotValidate()" disabled>Mark Validated</button>
     </div>
   </div>
@@ -9932,6 +9938,11 @@ const _le = {
   })(),      // rows per page (persisted across reloads via localStorage)
   recentSearch: '',        // active seller filter (LIKE on lots.name via API)
   recentSearchTimer: null, // debounce for the seller-filter input
+  // Multi-seller filter (set from Validate Lots → "Show selected sellers
+  // in Recent Entries"). When recentSellerIds is non-empty, loadLeRecent
+  // switches to client-side mode and shows only these sellers' lots.
+  recentSellerIds: [],     // trader_ids to filter the recent list to
+  recentSellerNames: [],   // matching names (fallback for lots with no trader_id)
   changeSellerPick: null,  // trader chosen in the Change Seller modal
   sampleWeight: 0,         // from settings (sample_weight key, defaults to 0)
   defaultLitre: '',        // from settings — pre-fills litre input on each new lot
@@ -10263,6 +10274,8 @@ async function loadLotEntry(){
 function leOnAuctionChange(){
   const aid = document.getElementById('le-auction').value;
   document.getElementById('le-form-card').style.display = aid ? 'block' : 'none';
+  // A multi-seller filter is scoped to one trade — drop it on trade change.
+  _le.recentSellerIds = []; _le.recentSellerNames = [];
   if (!aid) {
     _le.recentLots = []; _le.recentTotal = 0; _le.recentPage = 1; _le.recentSearch = '';
     const sb = document.getElementById('le-recent-search'); if (sb) sb.value = '';
@@ -11001,8 +11014,37 @@ async function loadLeRecent(){
     const offset = (page - 1) * pageSize;
     const search = String(_le.recentSearch || '').trim();
     const tickActive = !!(_le.selectedForPrint && _le.selectedForPrint.size);
+    const sellerFilter = (Array.isArray(_le.recentSellerIds) && _le.recentSellerIds.length)
+      ? _le.recentSellerIds : null;
+    let clientTotals = null;
 
-    if (tickActive) {
+    if (sellerFilter) {
+      // Multi-seller filter (from Validate Lots). Fetch the whole trade
+      // and keep only the selected sellers' lots — matched by trader_id,
+      // with a name fallback for legacy lots that have no trader link.
+      // Ticked rows still pin to the top. Totals are computed here since
+      // the server summary can't express a multi-seller filter.
+      const all = await j(`/api/lots/${aid}`);
+      const list = Array.isArray(all) ? all : (Array.isArray(all && all.rows) ? all.rows : []);
+      const idSet = new Set(sellerFilter.map(Number));
+      const nameSet = new Set((_le.recentSellerNames || []).map(n => String(n || '').trim().toUpperCase()));
+      let filtered = list.filter(l =>
+        (l.trader_id != null && idSet.has(Number(l.trader_id))) ||
+        (nameSet.size > 0 && nameSet.has(String(l.name || '').trim().toUpperCase()))
+      );
+      if (tickActive) {
+        const t = [], r = [];
+        for (const l of filtered) (_le.selectedForPrint.has(l.id) ? t : r).push(l);
+        filtered = t.concat(r);
+      }
+      _le.recentTotal = filtered.length;
+      _le.recentLots  = filtered.slice(offset, offset + pageSize);
+      clientTotals = {
+        n: filtered.length,
+        bags: filtered.reduce((s, l) => s + (parseInt(l.bags, 10) || 0), 0),
+        qty:  filtered.reduce((s, l) => s + (Number(l.qty) || 0), 0),
+      };
+    } else if (tickActive) {
       // Bulk-tick is active — switch to client-side mode so we can
       // always pin the ticked rows to the TOP of page 1, no matter
       // where they live in the server's default lot_no DESC order.
@@ -11045,11 +11087,15 @@ async function loadLeRecent(){
     // across the whole trade (not just this page). When no filter is
     // active these are the trade-wide totals; with a seller typed in they
     // narrow to that seller. Cheap indexed COUNT/SUM via summary mode.
-    try {
-      const sumQs = 'summary=1' + (search ? `&name=${encodeURIComponent(search)}` : '');
-      const sum = await j(`/api/lots/${aid}?${sumQs}`);
-      _le.recentTotals = { n: Number(sum&&sum.n)||0, bags: Number(sum&&sum.bags)||0, qty: Number(sum&&sum.qty)||0 };
-    } catch(_) { _le.recentTotals = null; }
+    if (clientTotals) {
+      _le.recentTotals = clientTotals;
+    } else {
+      try {
+        const sumQs = 'summary=1' + (search ? `&name=${encodeURIComponent(search)}` : '');
+        const sum = await j(`/api/lots/${aid}?${sumQs}`);
+        _le.recentTotals = { n: Number(sum&&sum.n)||0, bags: Number(sum&&sum.bags)||0, qty: Number(sum&&sum.qty)||0 };
+      } catch(_) { _le.recentTotals = null; }
+    }
     renderLeRecent();
     leUpdateStats();
     leRefreshSellerSuggestions();
@@ -11095,6 +11141,11 @@ function leOnRecentSearchInput(){
     if (_le.recentSearch === v) return;
     _le.recentSearch = v;
     _le.recentPage = 1; // any filter change resets to page 1
+    // Typing a text search supersedes a multi-seller filter from Validate
+    // Lots — clear it so the two don't fight.
+    if (v && Array.isArray(_le.recentSellerIds) && _le.recentSellerIds.length) {
+      _le.recentSellerIds = []; _le.recentSellerNames = [];
+    }
     loadLeRecent();
   }, 200);
 }
@@ -11275,10 +11326,28 @@ function leSortRecent(rows, mode, dir){
 function renderLeRecent(){
   const host = document.getElementById('le-recent-list');
   const count = document.getElementById('le-recent-count');
+  // Multi-seller filter banner — reflects an active Validate-Lots filter.
+  const sfBanner = document.getElementById('le-recent-seller-filter');
+  if (sfBanner) {
+    const names = Array.isArray(_le.recentSellerNames) ? _le.recentSellerNames.filter(Boolean) : [];
+    const nSel = (Array.isArray(_le.recentSellerIds) ? _le.recentSellerIds.length : 0) || names.length;
+    if (nSel > 0) {
+      sfBanner.style.display = 'block';
+      sfBanner.innerHTML = '<b>Showing ' + nSel + ' selected seller' + (nSel>1?'s':'') + ':</b> '
+        + esc(names.join(', '))
+        + ' <a href="#" onclick="leClearSellerFilter();return false" style="color:var(--green);font-weight:700;margin-left:6px">✕ Clear filter</a>';
+    } else {
+      sfBanner.style.display = 'none';
+      sfBanner.innerHTML = '';
+    }
+  }
   if (!_le.recentLots.length) {
     // Empty state — distinguish "no lots in trade" from "filter yields nothing"
     const searchActive = !!String(_le.recentSearch || '').trim();
-    host.innerHTML = searchActive
+    const sellerFilterActive = !!(Array.isArray(_le.recentSellerIds) && _le.recentSellerIds.length);
+    host.innerHTML = sellerFilterActive
+      ? `<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">No lots for the selected seller(s) in this trade. <a href="#" onclick="leClearSellerFilter();return false" style="color:var(--green)">Clear filter</a></div>`
+      : searchActive
       ? `<div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">No lots match <b>${esc(_le.recentSearch)}</b> in this trade. <a href="#" onclick="leClearRecentSearch();return false" style="color:var(--green)">Clear filter</a></div>`
       : '<div style="padding:12px;color:var(--text3);font-size:12px;text-align:center">No lots in this trade yet</div>';
     if (count) count.textContent = '';
@@ -12406,6 +12475,37 @@ function leClearRecentSearch(){
   const el = document.getElementById('le-recent-search');
   if (el) el.value = '';
   _le.recentSearch = '';
+  _le.recentPage = 1;
+  loadLeRecent();
+}
+
+// Apply a multi-seller filter to the Recent Entries list (called from the
+// Validate Lots modal). ids = trader_ids, names = matching seller names
+// (used to label the banner + match lots that have no trader_id). Clears
+// the text search so the two filters don't fight, resets to page 1, and
+// scrolls the Recent Entries panel into view.
+function leFilterRecentBySellers(ids, names){
+  _le.recentSellerIds = (ids || []).map(Number).filter(n => Number.isFinite(n));
+  _le.recentSellerNames = (names || []).filter(Boolean);
+  // Clear the single-seller text search to avoid a confusing double filter.
+  const sb = document.getElementById('le-recent-search');
+  if (sb) sb.value = '';
+  _le.recentSearch = '';
+  _le.recentPage = 1;
+  // Make sure the Recent Entries section is expanded + visible.
+  try {
+    const card = document.querySelector('.le-collapsible[data-section="le-recent"]');
+    if (card) card.classList.remove('is-collapsed');
+  } catch(_){}
+  loadLeRecent();
+  setTimeout(() => {
+    const card = document.getElementById('le-recent-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 60);
+}
+function leClearSellerFilter(){
+  _le.recentSellerIds = [];
+  _le.recentSellerNames = [];
   _le.recentPage = 1;
   loadLeRecent();
 }
@@ -16469,7 +16569,7 @@ async function doPriceImport(){
 // Pre-price-import safety net. Opens against the topbar trade, fetches
 // the reconciliation report, and renders errors (block) + warnings
 // (acknowledge). Confirming stamps the gate doPriceImport() checks.
-let _lvData=null, _lvAid=null;
+let _lvData=null, _lvAid=null, _lvSellers=[];
 async function openLotValidate(aid){
   // The Lot Entry tab passes its own le-auction (independent of the
   // topbar shared trade); the Price Import banner passes nothing and we
@@ -16496,16 +16596,16 @@ async function openLotValidate(aid){
 function renderLotValidate(d){
   const sub=document.getElementById('lv-subtitle');
   sub.innerHTML='Trade '+esc(String(d.ano||''))+(d.date?(' · '+fmtD(d.date)):'')+' — '+(d.totals?d.totals.lots:0)+' lot(s) entered'
-    +'<span style="display:block;margin-top:2px;color:var(--spice-text-mute);font-size:11px">Tip: click any lot below to open it in the Lot Entry form to fix it.</span>';
+    +'<span style="display:block;margin-top:2px;color:var(--spice-text-mute);font-size:11px">Tip: tick the sellers you want to fix, then "Show selected in Recent Entries" to correct all their lots together.</span>';
   const rc=d.reconciliation||{};
   const errs=d.errors||[], warns=d.warnings||[];
   const lotNum=(s)=>{const m=String(s).match(/\d+/);return m?parseInt(m[0],10):0;};
   // One card per FLAGGED lot, styled like a Lot Entry "Recent entries"
   // row: Lot · Branch · Bags · Qty, with a red (error) or amber (warning)
   // background and the issue title(s) as badges. Seller name lives in the
-  // group heading, so it's not repeated here. A lot that trips several
-  // checks shows once with all its badges. Click → opens that lot in the
-  // Lot Entry edit form.
+  // group heading, so it's not repeated here. Cards are informational —
+  // the operator selects whole SELLERS (heading checkbox) to pull all
+  // their lots into Recent Entries for correcting.
   const lotRow=(e)=>{
     const l=e.lot;
     const isErr=e.severity==='error';
@@ -16514,14 +16614,12 @@ function renderLotValidate(d){
     const lotColor=isErr?'#7F1D1D':'#7C2D12';
     const badges=e.titles.map(t=>'<span style="display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;margin:2px 4px 0 0;background:'+(t.severity==='error'?'#DC2626':'#F59E0B')+';color:#fff">'+esc(t.title)+'</span>').join('');
     const meta=[esc(l.branch||''),(l.bags!=null?esc(String(l.bags))+' bags':''),(Number(l.qty||0).toFixed(3)+' kg')].filter(Boolean).join(' · ');
-    return '<div onclick="lvEditLot('+Number(l.id)+')" title="Click to edit this lot in Lot Entry" '+
-      'style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:6px;background:'+bg+';border:1px solid '+bd+';border-radius:8px;cursor:pointer">'+
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:6px;background:'+bg+';border:1px solid '+bd+';border-radius:8px">'+
       '<div style="font-family:monospace;font-weight:800;color:'+lotColor+';min-width:48px;text-align:center">#'+esc(String(l.lot_no))+'</div>'+
       '<div style="flex:1;min-width:0">'+
         '<div style="font-size:11px;color:var(--spice-text-mute)">'+meta+'</div>'+
         '<div>'+badges+'</div>'+
       '</div>'+
-      '<div style="color:'+lotColor+';font-size:18px;font-weight:700">›</div>'+
     '</div>';
   };
   let h='';
@@ -16571,16 +16669,28 @@ function renderLotValidate(d){
     if(ae!==be) return ae?-1:1;
     return a[0].localeCompare(b[0]);
   });
+  // Lookup for the seller checkboxes — name + its distinct trader_ids,
+  // indexed to match data-idx on each checkbox.
+  _lvSellers = sellerGroups.map(([nm,arr])=>({
+    name: nm,
+    tids: Array.from(new Set(arr.map(x=>x.lot.trader_id).filter(v=>v!=null).map(Number))),
+  }));
   if(rows.length){
-    h+='<div style="font-weight:700;font-size:13px;margin:4px 0 8px;color:'+(errLots?'#7F1D1D':'#7C2D12')+'">'
-      +(errLots?'🚫':'⚠')+' Records needing attention ('+rows.length+' lot'+(rows.length>1?'s':'')+' · '+sellerGroups.length+' seller'+(sellerGroups.length>1?'s':'')+')'
-      +(errLots?' — '+errLots+' must fix before import':' — acknowledge to proceed')
+    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 8px">'
+      +'<span style="font-weight:700;font-size:13px;color:'+(errLots?'#7F1D1D':'#7C2D12')+'">'
+        +(errLots?'🚫':'⚠')+' Records needing attention ('+rows.length+' lot'+(rows.length>1?'s':'')+' · '+sellerGroups.length+' seller'+(sellerGroups.length>1?'s':'')+')'
+        +(errLots?' — '+errLots+' must fix before import':' — acknowledge to proceed')
+      +'</span>'
+      +'<a href="#" onclick="lvToggleAllSellers(true);return false" style="font-size:11px;color:var(--green);margin-left:auto">Select all</a>'
+      +'<a href="#" onclick="lvToggleAllSellers(false);return false" style="font-size:11px;color:var(--spice-text-mute)">Clear</a>'
       +'</div>';
     h+='<div>';
-    sellerGroups.forEach(([nm,arr])=>{
+    sellerGroups.forEach(([nm,arr],gi)=>{
       const hasErr=arr.some(x=>x.severity==='error');
-      h+='<div style="font-weight:700;font-size:12.5px;color:'+(hasErr?'#7F1D1D':'var(--spice-text)')+';margin:12px 0 5px;padding-bottom:3px;border-bottom:1px solid var(--border)">'
-        +esc(nm)+' <span style="font-weight:400;color:var(--spice-text-mute);font-size:11px">— '+arr.length+' lot'+(arr.length>1?'s':'')+'</span></div>';
+      h+='<label style="display:flex;align-items:center;gap:9px;cursor:pointer;margin:12px 0 5px;padding:6px 8px;background:rgba(0,0,0,.03);border-radius:6px;border-bottom:1px solid var(--border)">'
+        +'<input type="checkbox" class="lv-seller-cb" data-idx="'+gi+'" onchange="lvUpdateSellerSelCount()" style="width:17px;height:17px;cursor:pointer;flex-shrink:0">'
+        +'<span style="font-weight:700;font-size:12.5px;color:'+(hasErr?'#7F1D1D':'var(--spice-text)')+'">'+esc(nm)+'</span>'
+        +'<span style="font-weight:400;color:var(--spice-text-mute);font-size:11px">— '+arr.length+' lot'+(arr.length>1?'s':'')+'</span></label>';
       h+=arr.map(lotRow).join('');
     });
     h+='</div>';
@@ -16611,26 +16721,36 @@ function renderLotValidate(d){
       confirmBtn.disabled=false;
     }
   }
+  lvUpdateSellerSelCount();
 }
-function lvAckChanged(){
-  const ack=document.getElementById('lv-ack');
-  const confirmBtn=document.getElementById('lv-confirm');
-  const errs=_lvData&&_lvData.errors?_lvData.errors.length:0;
-  confirmBtn.disabled=!(ack && ack.checked && !errs);
+// Reflect how many sellers are ticked on the "Show selected" button.
+function lvUpdateSellerSelCount(){
+  const n=document.querySelectorAll('.lv-seller-cb:checked').length;
+  const btn=document.getElementById('lv-show-sellers');
+  if(!btn) return;
+  btn.disabled = n===0;
+  btn.textContent = n>0 ? ('📋 Show '+n+' seller'+(n>1?'s':'')+' in Recent Entries') : '📋 Show selected in Recent Entries';
 }
-// Open a flagged lot in the Lot Entry edit form. Switches to the Lot
-// Entry tab, points it at the SAME trade the validation ran against
-// (so the lot is in scope), then loads the lot into the form via
-// leEditLot (which falls back to a server fetch if the lot isn't on the
-// currently-loaded recent page).
-async function lvEditLot(lotId){
+function lvToggleAllSellers(on){
+  document.querySelectorAll('.lv-seller-cb').forEach(cb=>{ cb.checked=!!on; });
+  lvUpdateSellerSelCount();
+}
+// Collect the ticked sellers, switch to Lot Entry on the validated trade,
+// and filter Recent Entries to those sellers' lots so dad can correct
+// them all together (each row opens its edit form on click, as usual).
+async function lvShowSelectedSellers(){
+  const cbs=document.querySelectorAll('.lv-seller-cb:checked');
+  if(!cbs.length) return;
+  const ids=[], names=[];
+  cbs.forEach(cb=>{
+    const s=_lvSellers[parseInt(cb.dataset.idx,10)];
+    if(s){ names.push(s.name); (s.tids||[]).forEach(t=>ids.push(t)); }
+  });
   const aid=_lvAid || ((typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '');
   hideModal('lot-validate-modal');
-  // IMPORTANT: do NOT use go('lotentry') here. go() fires loadLotEntry()
-  // asynchronously (fire-and-forget); loadLotEntry re-selects the trade
-  // and resets the entry form — which would wipe the lot we're about to
-  // load (race → blank form). Instead switch the tab manually and AWAIT
-  // the load so ordering is deterministic: load fully, THEN populate.
+  // Make sure we're on the Lot Entry tab, on the validated trade, with its
+  // data loaded — then apply the filter (await order matters, same as the
+  // edit flow: load fully, THEN filter, or loadLotEntry resets it).
   if(window._currentTab!=='lotentry'){
     window._currentTab='lotentry';
     document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab==='lotentry'));
@@ -16639,14 +16759,18 @@ async function lvEditLot(lotId){
     if(typeof renderScreenGuide==='function'){ try{ renderScreenGuide('lotentry'); }catch(_){} }
     if(typeof loadLotEntry==='function'){ try{ await loadLotEntry(); }catch(_){} }
   }
-  // Point the form at the validated trade (await the reset/reload so it
-  // finishes before we populate the lot, not after).
   const sel=document.getElementById('le-auction');
   if(sel && aid && String(sel.value)!==String(aid) && sel.querySelector('option[value="'+aid+'"]')){
     sel.value=String(aid);
-    if(typeof leOnAuctionChange==='function'){ try{ await leOnAuctionChange(); }catch(_){} }
+    if(typeof leOnAuctionChange==='function'){ try{ leOnAuctionChange(); }catch(_){} }
   }
-  if(typeof leEditLot==='function') await leEditLot(Number(lotId));
+  leFilterRecentBySellers(ids, names);
+}
+function lvAckChanged(){
+  const ack=document.getElementById('lv-ack');
+  const confirmBtn=document.getElementById('lv-confirm');
+  const errs=_lvData&&_lvData.errors?_lvData.errors.length:0;
+  confirmBtn.disabled=!(ack && ack.checked && !errs);
 }
 async function confirmLotValidate(){
   const aid=_lvAid || ((typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '');
