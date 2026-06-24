@@ -5647,13 +5647,19 @@ input[type="search"]:focus{
   <div id="lv-body" style="min-height:80px">
     <div style="padding:24px;text-align:center;color:var(--spice-text-mute)">Loading…</div>
   </div>
-  <label id="lv-ack-wrap" style="display:none;align-items:center;gap:8px;font-size:12.5px;color:#7C2D12;margin-top:14px;cursor:pointer;font-weight:600">
-    <input type="checkbox" id="lv-ack" onchange="lvAckChanged()">
-    <span id="lv-ack-label">I confirm the lots above are intentional</span>
-  </label>
-  <div class="actions">
-    <button class="btn btn-o" onclick="hideModal('lot-validate-modal')">Close</button>
-    <button class="btn btn-g" id="lv-confirm" onclick="confirmLotValidate()" disabled>Mark Validated</button>
+  <!-- Sticky footer: the acknowledge bar + action buttons stay pinned to
+       the bottom of the modal so they're never buried under the scrolling
+       lot list. The ack bar is a prominent amber box so it reads as a
+       required step, not an easy-to-miss line. -->
+  <div id="lv-footer" style="position:sticky;bottom:0;z-index:3;background:var(--card);margin:14px -28px -28px;padding:14px 28px 22px;border-top:1px solid var(--border)">
+    <label id="lv-ack-wrap" style="display:none;align-items:center;gap:11px;font-size:13.5px;color:#7C2D12;cursor:pointer;font-weight:700;background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:9px;padding:12px 14px;margin:0 0 12px">
+      <input type="checkbox" id="lv-ack" onchange="lvAckChanged()" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
+      <span id="lv-ack-label">I confirm the lots above are intentional</span>
+    </label>
+    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn btn-o" onclick="hideModal('lot-validate-modal')">Close</button>
+      <button class="btn btn-g" id="lv-confirm" onclick="confirmLotValidate()" disabled>Mark Validated</button>
+    </div>
   </div>
 </div></div>
 
@@ -16570,7 +16576,7 @@ function renderLotValidate(d){
       +(errLots?'🚫':'⚠')+' Records needing attention ('+rows.length+' lot'+(rows.length>1?'s':'')+' · '+sellerGroups.length+' seller'+(sellerGroups.length>1?'s':'')+')'
       +(errLots?' — '+errLots+' must fix before import':' — acknowledge to proceed')
       +'</div>';
-    h+='<div style="max-height:48vh;overflow-y:auto;padding-right:2px">';
+    h+='<div>';
     sellerGroups.forEach(([nm,arr])=>{
       const hasErr=arr.some(x=>x.severity==='error');
       h+='<div style="font-weight:700;font-size:12.5px;color:'+(hasErr?'#7F1D1D':'var(--spice-text)')+';margin:12px 0 5px;padding-bottom:3px;border-bottom:1px solid var(--border)">'
@@ -16620,11 +16626,25 @@ function lvAckChanged(){
 async function lvEditLot(lotId){
   const aid=_lvAid || ((typeof getSharedAuctionId==='function') ? getSharedAuctionId() : '');
   hideModal('lot-validate-modal');
-  if(typeof go==='function') go('lotentry');
+  // IMPORTANT: do NOT use go('lotentry') here. go() fires loadLotEntry()
+  // asynchronously (fire-and-forget); loadLotEntry re-selects the trade
+  // and resets the entry form — which would wipe the lot we're about to
+  // load (race → blank form). Instead switch the tab manually and AWAIT
+  // the load so ordering is deterministic: load fully, THEN populate.
+  if(window._currentTab!=='lotentry'){
+    window._currentTab='lotentry';
+    document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab==='lotentry'));
+    document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
+    const el=document.getElementById('tc-lotentry'); if(el) el.classList.add('active');
+    if(typeof renderScreenGuide==='function'){ try{ renderScreenGuide('lotentry'); }catch(_){} }
+    if(typeof loadLotEntry==='function'){ try{ await loadLotEntry(); }catch(_){} }
+  }
+  // Point the form at the validated trade (await the reset/reload so it
+  // finishes before we populate the lot, not after).
   const sel=document.getElementById('le-auction');
   if(sel && aid && String(sel.value)!==String(aid) && sel.querySelector('option[value="'+aid+'"]')){
     sel.value=String(aid);
-    if(typeof leOnAuctionChange==='function') leOnAuctionChange();
+    if(typeof leOnAuctionChange==='function'){ try{ await leOnAuctionChange(); }catch(_){} }
   }
   if(typeof leEditLot==='function') await leEditLot(Number(lotId));
 }
