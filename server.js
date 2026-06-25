@@ -3267,7 +3267,12 @@ function validateAuctionLots(db, auctionId) {
       });
     }
   };
-  pushWarn('no_gstin', 'No GSTIN',       'Seller has no GSTIN (excluded from Dealer List)', l => !hasValidGstin(l.cr));
+  // Flag the GSTIN issue ONLY when the column is blank/empty — not when a
+  // GSTIN is present but malformed (wrong length / stray text). cleanGstin
+  // strips a leading "GSTIN" label, so a prefix-only value ("GSTIN.") still
+  // counts as blank. (The Dealer List reconciliation below keeps its own
+  // strict 15-char rule via hasValidGstin — that's the real exclusion gap.)
+  pushWarn('no_gstin', 'No GSTIN',       'Seller has no GSTIN (excluded from Dealer List)', l => !cleanGstin(l.cr));
   pushWarn('no_bank',  'No bank account', 'Seller has no bank account on file',             l => l.trader_id && !tradersWithBank.has(l.trader_id));
   pushWarn('no_pan',   'No PAN',          'Seller has no PAN',                              l => !String(l.pan || '').trim());
   pushWarn('no_phone', 'No phone',        'Seller has no phone number',                     l => !String(l.tel || '').trim());
