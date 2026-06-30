@@ -3408,6 +3408,7 @@ input[type="search"]:focus{
                Filters server-side against the `ano` column; debounced 200ms. -->
           <div class="fg" style="margin:0;flex:1;min-width:180px"><input type="search" placeholder="Search by trade number…" oninput="searchAuctionsDebounced(this.value)"></div>
           <button class="btn btn-a" onclick="openImportAuctionModal()">Import Lots from XLS/XLSX</button>
+          <button class="btn btn-o" onclick="openTradeFairSync()" title="Pull prices from tradefair.intelloinsights.com">📡 Trade Fair</button>
           <button class="btn btn-o" onclick="downloadTemplate('auctions')">Download Template</button>
           <button id="trade-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="BulkActions.deleteSelected('trade')">🗑 Delete Selected <span id="trade-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
         </div>
@@ -5678,6 +5679,26 @@ input[type="search"]:focus{
   </div>
 </div></div>
 
+<!-- ═══ TRADE FAIR SYNC ═══════════════════════════════════════ -->
+<!-- Lists recent trade-fair auctions and imports a chosen one's price
+     list onto an app trade. Opened from Settings → Integrations →
+     Trade Fair → "Open Sync", or the Trades toolbar button. -->
+<div class="modal-bg" id="trade-fair-sync-modal"><div class="modal" style="max-width:920px;display:flex;flex-direction:column;max-height:90vh">
+  <h2>📡 Trade Fair — Sync Prices</h2>
+  <p style="font-size:13px;color:var(--spice-text-mute);margin-bottom:10px">Pick a trade-fair auction and import its price list onto an app trade. Prices update existing lots (same as a manual price import), so enter the lots first.</p>
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+    <label style="font-size:12.5px;color:var(--text2)">Show recent
+      <select id="tf-sync-limit" onchange="tfLoadHistory()" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;margin-left:4px">
+        <option>25</option><option selected>50</option><option>100</option><option>200</option>
+      </select>
+    </label>
+    <button class="btn btn-o" onclick="tfLoadHistory()">↻ Refresh</button>
+  </div>
+  <div id="tf-sync-status" style="display:none;padding:8px 14px;border-radius:6px;font-size:12px;margin-bottom:10px"></div>
+  <div id="tf-sync-body" style="flex:1;overflow:auto;min-height:120px"></div>
+  <div class="actions"><button class="btn btn-o" onclick="hideModal('trade-fair-sync-modal')">Close</button></div>
+</div></div>
+
 <!-- ═══ VALIDATE ENTERED LOTS ═══════════════════════════════ -->
 <!-- Pre-price-import safety net (flag_lot_validation). Shows a
      reconciliation of entered lots, hard errors (duplicate lots, lots
@@ -7485,6 +7506,194 @@ async function _testWhatsapp(){
   } catch (e) {
     if (msgEl){ msgEl.textContent = 'Test failed: '+e.message; msgEl.style.color='#991b1b'; }
   } finally { if (btn) btn.disabled = false; }
+}
+
+// ── Trade Fair sync config card (Settings → Integrations) ──────────
+// Pulls auction history + per-auction price lists from
+// tradefair.intelloinsights.com using a pasted _kcpmc_rails_session
+// cookie (stored server-side in trade_fair_config, never returned to
+// the browser). Inputs carry explicit borders/backgrounds so the
+// focused-but-invisible caret bug on Windows Electron can't bite them.
+const _tfInpStyle = 'width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;font-size:12.5px;box-sizing:border-box';
+async function _renderTradeFairCard(){
+  const host = document.getElementById('trade-fair-config-host');
+  if (!host) return;
+  host.innerHTML = '<div style="padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:#f9fafb;font-size:12.5px;color:var(--text2)">Loading Trade Fair status…</div>';
+  let s;
+  try {
+    const r = await fetch(B + '/api/trade-fair/status', { headers: T ? { 'Authorization':'Bearer '+T } : {}, cache:'no-store' });
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    s = await r.json();
+  } catch (e) {
+    host.innerHTML = `<div style="padding:14px 16px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#991b1b;font-size:12.5px">Could not load Trade Fair status: ${esc(e.message||String(e))}</div>`;
+    return;
+  }
+  const tone = s.configured
+    ? {bd:'#a7f3d0',fg:'#065f46',icon:'✓',head:`Session cookie saved${s.cookieFromEnv?' (from env)':''}${s.cookieUpdatedAt?(' · updated '+esc(new Date(s.cookieUpdatedAt).toLocaleString())):''}`}
+    : {bd:'#e5e7eb',fg:'#374151',icon:'ℹ',head:'Not connected — paste the _kcpmc_rails_session cookie below'};
+  const fldRow = (label, id, val, ph) =>
+    `<div class="fg" style="margin:0"><label style="font-size:11.5px;font-weight:600;color:var(--text2)">${esc(label)}</label>
+       <input id="${id}" value="${esc(val||'')}" placeholder="${esc(ph||'')}" style="${_tfInpStyle}"></div>`;
+  host.innerHTML = `
+    <div style="padding:14px 16px;border:1px solid ${tone.bd};border-radius:10px;background:#fff;color:var(--text1)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <span style="font-size:18px;line-height:1">📡</span>
+        <strong style="font-size:13.5px">Trade Fair sync</strong>
+        <span style="flex:1"></span>
+        <span style="font-size:11.5px;color:${tone.fg};font-weight:600">${tone.icon} ${esc(tone.head)}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text3);line-height:1.5;margin-bottom:12px">
+        Pulls the auction price list straight from tradefair.intelloinsights.com and runs it through the normal price import.
+        Log into the trade-fair site in your browser, copy the <code>_kcpmc_rails_session</code> cookie, and paste it here. Re-paste when it expires.
+      </div>
+      <div class="fg" style="margin:0 0 10px">
+        <label style="font-size:11.5px;font-weight:600;color:var(--text2)">Session cookie ${s.hasCookie?'<span style="color:#065f46">— saved (leave blank to keep)</span>':''}</label>
+        <textarea id="tf-cookie" rows="2" placeholder="paste _kcpmc_rails_session value (or the full Cookie header)" style="${_tfInpStyle};font-family:ui-monospace,Menlo,Consolas,monospace;resize:vertical"></textarea>
+      </div>
+      <details style="margin-bottom:10px">
+        <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text2)">Advanced — endpoints &amp; id mapping</summary>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          ${fldRow('Base URL','tf-base-url',s.baseUrl,'https://tradefair.intelloinsights.com')}
+          ${fldRow('Cookie name','tf-cookie-name',s.cookieName,'_kcpmc_rails_session')}
+          ${fldRow('History path','tf-history-path',s.historyPath)}
+          ${fldRow('Price-list path','tf-price-path',s.pricePath)}
+          ${fldRow('Id field (history → value)','tf-id-field',s.idField,'trade_session_id')}
+          ${fldRow('Price query param','tf-price-param',s.priceParam,'auction_id')}
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.5">
+          The price-list download sends <code>?&lt;price param&gt;=&lt;id field value&gt;</code>. If downloads come back empty, switch the id field between <code>trade_session_id</code> and <code>auction_id</code>.
+        </div>
+      </details>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" id="tf-save-btn" onclick="_saveTradeFairConfig()" style="padding:8px 16px;border:none;border-radius:6px;background:#0ea5e9;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Save</button>
+        <button type="button" id="tf-test-btn" onclick="_testTradeFair()" ${s.configured?'':'disabled'} style="padding:8px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;font-weight:600;font-size:12.5px;cursor:${s.configured?'pointer':'not-allowed'};opacity:${s.configured?'1':'.5'}">Test connection</button>
+        <button type="button" onclick="openTradeFairSync()" ${s.configured?'':'disabled'} style="padding:8px 16px;border:1px solid #0ea5e9;border-radius:6px;background:#e0f2fe;color:#075985;font-weight:700;font-size:12.5px;cursor:${s.configured?'pointer':'not-allowed'};opacity:${s.configured?'1':'.5'}">📡 Open Sync →</button>
+        <span id="tf-card-msg" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+    </div>`;
+}
+async function _saveTradeFairConfig(){
+  const v = (id) => { const el=document.getElementById(id); return el?el.value:undefined; };
+  const body = {
+    sessionCookie: v('tf-cookie'),
+    cookieName:    v('tf-cookie-name'),
+    baseUrl:       v('tf-base-url'),
+    historyPath:   v('tf-history-path'),
+    pricePath:     v('tf-price-path'),
+    idField:       v('tf-id-field'),
+    priceParam:    v('tf-price-param'),
+  };
+  const msgEl = document.getElementById('tf-card-msg');
+  const btn = document.getElementById('tf-save-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(B + '/api/trade-fair/config', { method:'PUT', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Save failed');
+    if (msgEl){ msgEl.textContent='Saved ✓'; msgEl.style.color='#065f46'; }
+    _renderTradeFairCard();
+  } catch (e) {
+    if (msgEl){ msgEl.textContent = e.message; msgEl.style.color='#991b1b'; }
+    if (btn) btn.disabled = false;
+  }
+}
+async function _testTradeFair(){
+  const msgEl = document.getElementById('tf-card-msg');
+  const btn = document.getElementById('tf-test-btn');
+  if (btn) btn.disabled = true;
+  if (msgEl){ msgEl.textContent='Contacting trade-fair site…'; msgEl.style.color='var(--text3)'; }
+  try {
+    const r = await fetch(B + '/api/trade-fair/history?limit=1', { headers:{'Authorization':'Bearer '+T} });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Test failed');
+    if (msgEl){ msgEl.textContent=`Connected ✓ — ${d.total!=null?d.total+' auctions visible':'history reachable'}`; msgEl.style.color='#065f46'; }
+  } catch (e) {
+    if (msgEl){ msgEl.textContent = 'Failed: '+e.message; msgEl.style.color='#991b1b'; }
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// ── Trade Fair sync modal ─────────────────────────────────────────
+// Lists recent trade-fair auctions and imports a chosen one's price
+// list onto an app trade (ano + date prefilled from the trade-fair
+// row, editable). Import goes through /api/trade-fair/import → the same
+// price-import pipeline as a manual upload (mode='price').
+function openTradeFairSync(){
+  showModal('trade-fair-sync-modal');
+  tfLoadHistory();
+}
+async function tfLoadHistory(){
+  const host = document.getElementById('tf-sync-body');
+  if (!host) return;
+  host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">Loading recent auctions…</div>';
+  let d;
+  try {
+    const limit = parseInt((document.getElementById('tf-sync-limit')||{}).value,10) || 50;
+    const r = await fetch(B + '/api/trade-fair/history?limit='+limit, { headers:{'Authorization':'Bearer '+T} });
+    d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Could not load history');
+  } catch (e) {
+    host.innerHTML = `<div style="padding:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#991b1b;font-size:12.5px">${esc(e.message)}</div>`;
+    return;
+  }
+  if (!d.auctions || !d.auctions.length){ host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">No auctions returned.</div>'; return; }
+  let html = `<div style="font-size:11.5px;color:var(--text3);margin-bottom:8px">Using <code>${esc(d.priceParam)}</code> = <code>${esc(d.idField)}</code>. Prices import onto the app trade you set in each row (defaults from the trade-fair row).</div>`;
+  html += '<div style="overflow:auto;max-height:52vh"><table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="background:var(--bg);position:sticky;top:0">'
+    + ['Trade No','Date','Type','Lots','Sold qty','→ App Trade No','→ Date',''].map(h=>`<th style="text-align:left;padding:6px 8px;white-space:nowrap">${h}</th>`).join('')
+    + '</tr></thead><tbody>';
+  d.auctions.forEach((a,i)=>{
+    const isoDate = _tfToIso(a.date);
+    html += `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:5px 8px;font-weight:600">${esc(a.ano)||'—'}</td>
+      <td style="padding:5px 8px;white-space:nowrap">${esc(a.date)||'—'}</td>
+      <td style="padding:5px 8px">${esc(a.tradeType)||''}</td>
+      <td style="padding:5px 8px;text-align:right">${a.lotCount!=null?esc(String(a.lotCount)):''}</td>
+      <td style="padding:5px 8px;text-align:right">${a.sellQty!=null?esc(String(a.sellQty)):''}</td>
+      <td style="padding:5px 8px"><input id="tf-ano-${i}" value="${esc(a.ano||'')}" style="width:90px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a"></td>
+      <td style="padding:5px 8px"><input type="date" id="tf-date-${i}" value="${esc(isoDate)}" style="padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a"></td>
+      <td style="padding:5px 8px"><button class="btn btn-g" style="padding:5px 12px;font-size:12px;font-weight:700" onclick='tfImportAuction(${JSON.stringify(String(a.idValue))}, ${i})'>Import prices</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  host.innerHTML = html;
+}
+// Trade-fair dates come as dd-mm-yyyy / dd/mm/yyyy or already ISO. Map
+// to yyyy-mm-dd for the <input type=date>; pass through if unrecognised.
+function _tfToIso(v){
+  const s = String(v||'').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m){ const y=m[3].length===2?'20'+m[3]:m[3]; return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; }
+  return '';
+}
+async function tfImportAuction(idValue, i){
+  const ano = (document.getElementById('tf-ano-'+i)||{}).value || '';
+  const date = (document.getElementById('tf-date-'+i)||{}).value || '';
+  if (!ano.trim()){ alert('Set the app Trade No for this row first.'); return; }
+  const status = document.getElementById('tf-sync-status');
+  status.style.display='block'; status.style.background='var(--amber-bg)'; status.style.color='var(--amber)';
+  status.textContent = `Downloading & importing prices for Trade ${ano}…`;
+  try {
+    const r = await fetch(B + '/api/trade-fair/import', {
+      method:'POST', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'},
+      body: JSON.stringify({ idValue, ano: ano.trim(), date, mode:'price' })
+    });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error || (d.detail ? d.detail : 'Import failed'));
+    status.style.background='var(--green-bg)'; status.style.color='var(--green-dk)';
+    let html = `<div style="font-weight:700;margin-bottom:4px">✓ Updated ${d.updated||0} lot(s) on Trade ${esc(ano)} · ${d.skipped||0} skipped of ${d.total||0} rows</div>`;
+    if (d.skipped>0 && d.skipReasons && d.skipReasons.length){
+      html += `<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:700;color:var(--amber)">⚠ Why were rows skipped?</summary>`;
+      html += '<div style="margin-top:6px;max-height:200px;overflow:auto;background:#fff;border:1px solid var(--border);border-radius:6px;padding:8px"><table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left;padding:3px 6px">Row</th><th style="text-align:left;padding:3px 6px">Lot</th><th style="text-align:left;padding:3px 6px">Reason</th></tr></thead><tbody>';
+      d.skipReasons.slice(0,50).forEach(sk=>{ html += `<tr><td style="padding:2px 6px">${sk.row}</td><td style="padding:2px 6px">${esc(sk.lot)||''}</td><td style="padding:2px 6px">${esc(sk.reason)}</td></tr>`; });
+      html += '</tbody></table></div></details>';
+    }
+    status.innerHTML = html;
+    if (typeof loadAuctions==='function') loadAuctions();
+  } catch (e) {
+    status.style.background='var(--red-bg)'; status.style.color='var(--red)';
+    status.textContent = 'Error: '+e.message;
+  }
 }
 
 async function login(){
@@ -14052,6 +14261,7 @@ function renderSettingsPanel(){
     // below the standard integration fields rather than via fld().
     if (ck === 'integrations') {
       html += '<div id="whatsapp-config-host" style="margin-top:18px"></div>';
+      html += '<div id="trade-fair-config-host" style="margin-top:18px"></div>';
     }
   }
   document.getElementById('settings-root').innerHTML=html;
@@ -14062,6 +14272,9 @@ function renderSettingsPanel(){
   }
   if (ck === 'integrations' && typeof _renderWhatsappCard === 'function') {
     try { _renderWhatsappCard(); } catch(_){}
+  }
+  if (ck === 'integrations' && typeof _renderTradeFairCard === 'function') {
+    try { _renderTradeFairCard(); } catch(_){}
   }
   // Rates panel — apply flag-driven visibility (hide local_transport
   // input when flag_local_transport is off, etc.) and bind live

@@ -603,6 +603,30 @@ async function initDb() {
   )`);
   wrapped.exec("INSERT OR IGNORE INTO whatsapp_config (id) VALUES (1)");
 
+  // Trade-fair integration (tradefair.intelloinsights.com). Single-row
+  // config mirroring whatsapp_config: endpoint paths + the pasted
+  // `_kcpmc_rails_session` cookie used to replay the auction-history and
+  // price-list endpoints (see trade-fair.js). The cookie is a secret —
+  // it's never returned to the browser, only a `hasCookie` boolean.
+  // `id_field` picks which history field carries the value sent as the
+  // price-list query param (`price_param`); both are configurable
+  // because the live endpoint's naming is inconsistent (the ?auction_id=
+  // param actually carries trade_session_id on this deployment).
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS trade_fair_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    base_url TEXT DEFAULT 'https://tradefair.intelloinsights.com',
+    history_path TEXT DEFAULT '/spices/admin/get_trade_fair_history',
+    price_path TEXT DEFAULT '/spices/reports/download_price_list_report_excel/',
+    id_field TEXT DEFAULT 'trade_session_id',
+    price_param TEXT DEFAULT 'auction_id',
+    cookie_name TEXT DEFAULT '_kcpmc_rails_session',
+    session_cookie TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    cookie_updated_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  wrapped.exec("INSERT OR IGNORE INTO trade_fair_config (id) VALUES (1)");
+
   // Outbound/inbound message log. Every Cloud send inserts a row; the Meta
   // webhook later updates `status`/`error` by `wamid` as delivery receipts
   // arrive (sent → delivered → read, or failed). `ref_type`/`ref_id` tie a

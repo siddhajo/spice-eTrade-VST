@@ -17,6 +17,7 @@ const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { initDb, getDb, DB_PATH, replaceFromBuffer } = require('./db');
+const tradeFair = require('./trade-fair');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
 const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0, distributeRoundedPayable } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateLotReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
@@ -3477,38 +3478,46 @@ app.post('/api/auctions/:id/validate-lots/confirm', requireLotWrite, (req, res) 
   res.json({ success: true, state: lvGateState(db, id), ...report });
 });
 
-// Express middleware: block PRICE IMPORT until the trade's entered
-// lots have been validated. Only gates mode='price' (the price
-// import) — mode='full' (initial lot import) passes through, since
-// that's the very step that CREATES the lots to validate. Resolves
-// the target auction from auction_id (preferred) or ano+date. MUST be
-// mounted AFTER upload.single so req.body is populated.
-function requireLotsValidatedForPriceImport(req, res, next) {
-  const db = getDb();
-  if (!lvFlagOn(db)) return next();
-  if (String((req.body && req.body.mode) || '') !== 'price') return next();
-  let aid = req.body.auction_id ? parseInt(req.body.auction_id, 10) : null;
-  if (!aid && req.body.ano) {
-    const d = normalizeDate(req.body.date);
+// Returns null when the price-import lot-validation gate is satisfied
+// (or doesn't apply), otherwise { status, body } describing the block.
+// Shared by the upload middleware (below) and the Trade Fair sync, so
+// both enforce the gate identically. Only gates mode='price'; mode='full'
+// (the step that CREATES the lots) passes through.
+function lotValidationGateBlock(db, body) {
+  body = body || {};
+  if (!lvFlagOn(db)) return null;
+  if (String(body.mode || '') !== 'price') return null;
+  let aid = body.auction_id ? parseInt(body.auction_id, 10) : null;
+  if (!aid && body.ano) {
+    const d = normalizeDate(body.date);
     const auc = d
-      ? db.get('SELECT id FROM auctions WHERE ano = ? AND date = ?', [req.body.ano, d])
-      : db.get('SELECT id FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [req.body.ano]);
+      ? db.get('SELECT id FROM auctions WHERE ano = ? AND date = ?', [body.ano, d])
+      : db.get('SELECT id FROM auctions WHERE ano = ? ORDER BY date DESC LIMIT 1', [body.ano]);
     if (auc) aid = auc.id;
   }
   if (!aid) {
-    return res.status(412).json({
+    return { status: 412, body: {
       error: 'Validate entered lots first',
       detail: 'Pick the specific trade (ANO + date) so its entered lots can be validated before price import.',
       gate: 'lot_validation',
-    });
+    } };
   }
-  if (lvGateState(db, aid) === 'clean') return next();
-  return res.status(412).json({
+  if (lvGateState(db, aid) === 'clean') return null;
+  return { status: 412, body: {
     error: 'Validate entered lots first',
     detail: 'Open Lots → Validate Entered Lots, resolve all errors and acknowledge the warnings, then import prices.',
     auctionId: aid,
     gate: 'lot_validation',
-  });
+  } };
+}
+
+// Express middleware: block PRICE IMPORT until the trade's entered lots
+// have been validated. MUST be mounted AFTER upload.single so req.body
+// is populated.
+function requireLotsValidatedForPriceImport(req, res, next) {
+  const block = lotValidationGateBlock(getDb(), req.body || {});
+  if (!block) return next();
+  return res.status(block.status).json(block.body);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -4240,17 +4249,21 @@ app.get('/api/auctions/:id/next-lot/:branch', requireViewOrLotEntry, (req, res) 
 });
 
 // ── Import Auction + Lots from XLS/XLSX (replaces APPA.PRG) ──
-app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), requireLotsValidatedForPriceImport, async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  try {
-    const workbook = XLSX.readFile(req.file.path);
+// Core lot/price import — shared by the manual upload route
+// (/api/auctions/import) and the Trade Fair sync (/api/trade-fair/import).
+// Reads the .xls/.xlsx at `filePath`, applies mode 'full' (insert new
+// lots) or 'price' (update price/qty/code/buyer on existing lots), and
+// returns the summary object. Does NOT delete the file or touch any HTTP
+// response — callers own those.
+function runLotImport(db, filePath, body) {
+    body = body || {};
+    const workbook = XLSX.readFile(filePath);
     const ws = workbook.Sheets[workbook.SheetNames[0]];
     if (!ws) throw new Error('No worksheet found');
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
     if (!rows.length) throw new Error('File is empty');
 
-    const db = getDb();
-    const mode = req.body.mode || 'full'; // 'full' = new lots, 'price' = update price/buyer only
+    const mode = body.mode || 'full'; // 'full' = new lots, 'price' = update price/buyer only
 
     const mapCol = (row, ...names) => {
       for (const n of names) { if (row[n] !== undefined) return String(row[n]).trim(); }
@@ -4265,10 +4278,10 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), req
 
     // If user specified ano/date in the form → that OVERRIDES every row (single-auction import)
     // Otherwise → resolve auction per row from its own ANO/DATE columns (multi-auction import)
-    const overrideAno = req.body.ano;
-    const overrideDate = normalizeDate(req.body.date);
-    const cropType = req.body.crop_type || mapCol(rows[0], 'CRPT', 'CROP_TYPE', 'CROPTYPE') || (getSetting(db, 'default_crop_type') || 'VST');
-    const state = req.body.state || mapCol(rows[0], 'STATE') || 'TAMIL NADU';
+    const overrideAno = body.ano;
+    const overrideDate = normalizeDate(body.date);
+    const cropType = body.crop_type || mapCol(rows[0], 'CRPT', 'CROP_TYPE', 'CROPTYPE') || (getSetting(db, 'default_crop_type') || 'VST');
+    const state = body.state || mapCol(rows[0], 'STATE') || 'TAMIL NADU';
 
     // Cache of resolved auctions so we don't query the DB for every row
     const auctionCache = new Map(); // key = "ano|date" → {id, ano, date}
@@ -4540,18 +4553,212 @@ app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), req
     }
     auctionBreakdown.sort((a,b) => String(a.ano).localeCompare(String(b.ano), undefined, {numeric:true}));
 
-    fs.unlink(req.file.path, () => {});
-    res.json({
+    return {
       success: true,
       imported, updated, skipped, total: rows.length,
       auctionCount: auctionBreakdown.length,
       auctionBreakdown,
       autoAllocCreated,
       skipReasons
-    });
+    };
+}
+
+// Manual price/lot import from an uploaded .xls/.xlsx file.
+app.post('/api/auctions/import', requireAuctionWrite, upload.single('file'), requireLotsValidatedForPriceImport, (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const result = runLotImport(getDb(), req.file.path, req.body);
+    fs.unlink(req.file.path, () => {});
+    res.json(result);
   } catch (e) {
     if (req.file) fs.unlink(req.file.path, () => {});
     res.status(400).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// TRADE FAIR SYNC (tradefair.intelloinsights.com)
+// ──────────────────────────────────────────────────────────────
+// Pull auction history + per-auction price-list .xlsx from the
+// trade-fair site (using a pasted _kcpmc_rails_session cookie) and feed
+// the price list straight through the SAME import pipeline a manual
+// upload uses (runLotImport, mode='price'). Config + secret cookie live
+// in the trade_fair_config table; see trade-fair.js for the client.
+// ══════════════════════════════════════════════════════════════
+
+// Resolve effective trade-fair config: process.env wins over the DB
+// row (lets a hosted deploy set TRADEFAIR_* vars; desktop pastes into
+// the Settings card). Returns the cookie too — callers keep it
+// server-side and never echo it to the browser.
+function _tfConfig(db) {
+  let row = {};
+  try { row = db.get('SELECT * FROM trade_fair_config WHERE id = 1') || {}; } catch (_) { row = {}; }
+  const envv = (k) => (process.env[k] && String(process.env[k]).trim()) || '';
+  const dbv  = (c) => (row[c] != null && String(row[c]).trim()) || '';
+  const pick = (k, c, dflt) => envv(k) || dbv(c) || (dflt || '');
+  const sessionCookie = pick('TRADEFAIR_COOKIE', 'session_cookie', '');
+  return {
+    baseUrl:     pick('TRADEFAIR_BASE_URL',     'base_url',     'https://tradefair.intelloinsights.com'),
+    historyPath: pick('TRADEFAIR_HISTORY_PATH', 'history_path', '/spices/admin/get_trade_fair_history'),
+    pricePath:   pick('TRADEFAIR_PRICE_PATH',   'price_path',   '/spices/reports/download_price_list_report_excel/'),
+    idField:     pick('TRADEFAIR_ID_FIELD',     'id_field',     'trade_session_id'),
+    priceParam:  pick('TRADEFAIR_PRICE_PARAM',  'price_param',  'auction_id'),
+    cookieName:  dbv('cookie_name') || '_kcpmc_rails_session',
+    sessionCookie,
+    enabled:     row.enabled == null ? 1 : Number(row.enabled),
+    cookieUpdatedAt: dbv('cookie_updated_at'),
+    updatedAt:   dbv('updated_at'),
+    cookieFromEnv: !!envv('TRADEFAIR_COOKIE'),
+    configured:  !!sessionCookie,
+  };
+}
+
+// Read the (possibly nested) id value used for the price-list download
+// from a history row, honouring the configured id_field with sensible
+// fallbacks.
+function _tfRowId(cfg, r) {
+  let v = r[cfg.idField];
+  if (v == null) v = r.auction_id != null ? r.auction_id : r.trade_session_id;
+  if (v != null && typeof v === 'object') v = (v.id != null ? v.id : v.value);
+  return v == null ? '' : v;
+}
+
+// Non-secret status for the Settings card. NEVER returns the cookie —
+// only whether one is saved + when.
+app.get('/api/trade-fair/status', requireView, (req, res) => {
+  const cfg = _tfConfig(getDb());
+  res.json({
+    configured:      cfg.configured,
+    enabled:         !!cfg.enabled,
+    baseUrl:         cfg.baseUrl,
+    historyPath:     cfg.historyPath,
+    pricePath:       cfg.pricePath,
+    idField:         cfg.idField,
+    priceParam:      cfg.priceParam,
+    cookieName:      cfg.cookieName,
+    hasCookie:       cfg.configured,
+    cookieFromEnv:   cfg.cookieFromEnv,
+    cookieUpdatedAt: cfg.cookieUpdatedAt || null,
+    source:          cfg.cookieFromEnv ? 'env' : (cfg.configured ? 'db' : 'none'),
+  });
+});
+
+// Upsert trade-fair config. The session cookie is write-only: a blank/
+// absent value leaves the stored cookie UNCHANGED (so saving paths
+// doesn't wipe it). Saving a new cookie stamps cookie_updated_at.
+app.put('/api/trade-fair/config', requireSettingsWrite, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const sets = [], vals = [];
+  const put = (col, val) => { sets.push(`${col} = ?`); vals.push(val); };
+  const putField = (col, val) => { if (val !== undefined) put(col, String(val).trim()); };
+  putField('base_url', b.baseUrl);
+  putField('history_path', b.historyPath);
+  putField('price_path', b.pricePath);
+  putField('id_field', b.idField);
+  putField('price_param', b.priceParam);
+  putField('cookie_name', b.cookieName);
+  if (b.enabled !== undefined) put('enabled', b.enabled ? 1 : 0);
+  // Secret cookie — only overwrite when a non-blank value is supplied.
+  if (typeof b.sessionCookie === 'string' && b.sessionCookie.trim()) {
+    put('session_cookie', b.sessionCookie.trim());
+    put('cookie_updated_at', new Date().toISOString());
+  } else if (b.clearCookie) {
+    put('session_cookie', '');
+    put('cookie_updated_at', '');
+  }
+  if (!sets.length) return res.json({ ok: true, updated: 0 });
+  try {
+    db.run(`UPDATE trade_fair_config SET ${sets.join(', ')}, updated_at = datetime('now','localtime') WHERE id = 1`, vals);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true, updated: sets.length });
+});
+
+// List recent trade-fair auctions/sessions (newest first). Doubles as
+// the "test connection" probe — a bad/expired cookie surfaces here as a
+// clear session-expired error.
+app.get('/api/trade-fair/history', requireAuctionWrite, async (req, res) => {
+  const cfg = _tfConfig(getDb());
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 1000);
+  const search = req.query.search ? String(req.query.search) : '';
+  try {
+    const { rows, total } = await tradeFair.fetchHistory(cfg, { limit, search });
+    const auctions = rows.map(r => ({
+      idValue:        _tfRowId(cfg, r),
+      ano:            r.auction_number != null ? String(r.auction_number) : '',
+      sbAuction:      r.sb_auction_number || '',
+      date:           r.auction_date || '',
+      tradeType:      r.trade_type || '',
+      status:         r.trade_session_status || '',
+      lotCount:       r.auction_lot_count,
+      lotQty:         r.auction_lot_qty,
+      sellQty:        r.trade_session_sell_qty,
+      auctionId:      r.auction_id,
+      tradeSessionId: r.trade_session_id,
+    }));
+    res.json({ ok: true, total, count: auctions.length, idField: cfg.idField, priceParam: cfg.priceParam, auctions });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// Download one auction's raw price-list .xlsx for inspection / manual
+// import — handy when the auto-import column mapping needs checking.
+app.get('/api/trade-fair/price-list', requireAuctionWrite, async (req, res) => {
+  const cfg = _tfConfig(getDb());
+  const idValue = req.query.id || req.query.idValue;
+  if (!idValue) return res.status(400).json({ error: 'Missing ?id= (the auction/session id)' });
+  try {
+    const { buffer, ext } = await tradeFair.downloadPriceList(cfg, idValue);
+    const name = `tradefair-price-${String(idValue).replace(/[^A-Za-z0-9._-]+/g, '')}${ext}`;
+    res.setHeader('Content-Type', ext === '.xls'
+      ? 'application/vnd.ms-excel'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(buffer);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// Download a trade-fair auction's price list and run it through the
+// price-import pipeline (mode='price' by default). The operator maps
+// the trade-fair auction (idValue) onto an app trade (ano + date),
+// which override every row so prices land on the right lots. Respects
+// the same lot-validation gate as the manual upload.
+app.post('/api/trade-fair/import', requireAuctionWrite, async (req, res) => {
+  const db = getDb();
+  const cfg = _tfConfig(db);
+  const b = req.body || {};
+  const idValue = b.idValue != null ? b.idValue : b.id;
+  if (idValue == null || idValue === '') return res.status(400).json({ error: 'Missing idValue (the trade-fair auction/session id).' });
+
+  // Build the import body. Default to 'price' (update existing lots) —
+  // that's the post-auction price sync the trade-fair sheet is for.
+  const importBody = {
+    mode: b.mode === 'full' ? 'full' : 'price',
+    ano: b.ano != null ? String(b.ano).trim() : '',
+    date: b.date || '',
+    crop_type: b.crop_type,
+    state: b.state,
+  };
+
+  // Same lot-validation gate the manual upload enforces.
+  const block = lotValidationGateBlock(db, importBody);
+  if (block) return res.status(block.status).json(block.body);
+
+  let tmpPath = null;
+  try {
+    const { buffer, ext } = await tradeFair.downloadPriceList(cfg, idValue);
+    try { fs.mkdirSync(uploadDir, { recursive: true }); } catch (_) {}
+    tmpPath = path.join(uploadDir, 'tf-' + crypto.randomBytes(6).toString('hex') + ext);
+    fs.writeFileSync(tmpPath, buffer);
+    const result = runLotImport(db, tmpPath, importBody);
+    res.json({ ...result, source: 'trade-fair', idValue });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  } finally {
+    if (tmpPath) fs.unlink(tmpPath, () => {});
   }
 });
 
