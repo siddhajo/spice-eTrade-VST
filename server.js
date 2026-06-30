@@ -4275,6 +4275,14 @@ function runLotImport(db, filePath, body) {
       return '';
     };
     const mapNum = (row, ...names) => parseFloat(mapCol(row, ...names)) || 0;
+    // Does the row have ANY of these columns (by exact or case-insensitive
+    // header)? Used by price-update mode to decide whether to touch a
+    // field, so synonyms like "RATE PER Kg" trigger an update the same way
+    // a literal "PRICE" column does.
+    const hasCol = (row, ...names) => {
+      const keys = Object.keys(row);
+      return names.some(n => row[n] !== undefined || keys.some(k => k.toUpperCase() === n.toUpperCase()));
+    };
 
     // If user specified ano/date in the form → that OVERRIDES every row (single-auction import)
     // Otherwise → resolve auction per row from its own ANO/DATE columns (multi-auction import)
@@ -4333,7 +4341,7 @@ function runLotImport(db, filePath, body) {
         const auc = resolveAuction(rowAno, rowDate);
         const auctionId = auc.id;
 
-        const lotNo = mapCol(row, 'LOT', 'LOT_NO', 'LOTNO');
+        const lotNo = mapCol(row, 'LOT', 'LOT_NO', 'LOTNO', 'LOT NO', 'LOT NUMBER');
         if (!lotNo) { skipped++; skipReasons.push({row: rowNum, lot: '', reason: 'Missing LOT / LOT_NO column value'}); continue; }
 
         // (price mode continues below in original code)
@@ -4342,7 +4350,7 @@ function runLotImport(db, filePath, body) {
 
         try {
           // Parse each field from the row using generous synonyms so different XLSX layouts work
-          const price = mapNum(row, 'PRICE');
+          const price = mapNum(row, 'PRICE', 'RATE PER KG', 'RATE');
           const qty   = mapNum(row, 'QTY', 'QUANTITY', 'WEIGHT', 'WT');
           const bag   = mapNum(row, 'BAG', 'BAGS', 'NO_OF_BAGS');
           // If file didn't provide AMOUNT, compute qty × price (common in post-auction price sheets)
@@ -4352,7 +4360,7 @@ function runLotImport(db, filePath, body) {
           // Build UPDATE dynamically — only touch fields the file provided, so a sparse "price-only"
           // file doesn't wipe pre-existing bag/qty/buyer values
           const sets = []; const vals = [];
-          if (row.PRICE !== undefined || row.price !== undefined) { sets.push('price=?');  vals.push(price); }
+          if (hasCol(row, 'PRICE', 'RATE PER KG', 'RATE')) { sets.push('price=?');  vals.push(price); }
           if (amount)                                              { sets.push('amount=?'); vals.push(amount); }
           if (row.QTY !== undefined || row.qty !== undefined)      { sets.push('qty=?');    vals.push(qty); }
           if (row.BAG !== undefined || row.bag !== undefined ||
@@ -4362,7 +4370,7 @@ function runLotImport(db, filePath, body) {
 
           // Auto-resolve short CODE (e.g. RSH, TE, SL) to the full buyer record.
           // Priority: explicit BUYER/BIDDER column in file → matching buyers.code → matching buyers.ti → matching buyers.buyer
-          let resolvedBuyer  = mapCol(row, 'BUYER', 'BIDDER', 'BUYER_NAME');
+          let resolvedBuyer  = mapCol(row, 'BUYER', 'BIDDER', 'BUYER_NAME', 'NAME OF BUYER');
           let resolvedBuyer1 = mapCol(row, 'BUYER1', 'TRADE_NAME', 'TRADENAME');
           let resolvedSale   = mapCol(row, 'SALE', 'SALE_TYPE');
 
@@ -4424,7 +4432,7 @@ function runLotImport(db, filePath, body) {
         const auc = resolveAuction(rowAno, rowDate);
         const auctionId = auc.id;
         
-        const lotNo = mapCol(row, 'LOT', 'LOT_NO', 'LOTNO');
+        const lotNo = mapCol(row, 'LOT', 'LOT_NO', 'LOTNO', 'LOT NO', 'LOT NUMBER');
         if (!lotNo) { skipped++; skipReasons.push({row: rowNum, lot: '', reason: 'Missing LOT / LOT_NO column value'}); continue; }
 
         const existing = db.get('SELECT id FROM lots WHERE auction_id = ? AND lot_no = ?', [auctionId, lotNo]);
@@ -4464,10 +4472,10 @@ function runLotImport(db, filePath, body) {
              mapNum(row, 'BAG', 'BAGS'),
              mapCol(row, 'LITRE', 'LITRE_WT'),
              mapNum(row, 'QTY', 'QUANTITY', 'NET_QTY'),
-             mapNum(row, 'PRICE', 'RATE'),
+             mapNum(row, 'PRICE', 'RATE', 'RATE PER KG'),
              mapNum(row, 'AMOUNT'),
              mapCol(row, 'CODE', 'BUYER_CODE'),
-             mapCol(row, 'BUYER', 'BIDDER'),
+             mapCol(row, 'BUYER', 'BIDDER', 'BUYER_NAME', 'NAME OF BUYER'),
              mapCol(row, 'BUYER1', 'TRADE_NAME', 'TRADENAME'),
              mapCol(row, 'SALE', 'SALE_TYPE'),
              mapCol(row, 'INVO', 'INVOICE'),
