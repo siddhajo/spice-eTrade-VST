@@ -1239,16 +1239,22 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const consigneeY = midY;
   const buyerY = showShipTo ? (midY + (midH / 2)) : midY;
 
-  // Consignee (Ship to) — uses consignee fields if present, else falls back to buyer
-  const hasConsignee = !!(buyer.cbuyer1 || buyer.cadd1 || buyer.cpla || buyer.cgstin);
+  // Consignee (Ship to) — uses consignee fields if present, else falls back to buyer.
+  // `cpin` MUST be in this gate: a buyer may carry ONLY a ship-to PIN (a
+  // different delivery pincode for the same trade name — the e-way distance
+  // case) with no separate consignee name/address. Without cpin here the whole
+  // block fell back to bill-to and printed the bill-to PIN on the e-way bill.
+  // Each field also falls back to its bill-to counterpart INDIVIDUALLY, so a
+  // PIN-only consignee shows the bill-to name/address with the ship-to PIN.
+  const hasConsignee = !!(buyer.cbuyer1 || buyer.cadd1 || buyer.cpla || buyer.cgstin || buyer.cpin);
   const ship = hasConsignee ? {
     name: buyer.cbuyer1 || buyer.buyer1 || buyer.buyer || '',
-    addr: buyer.cadd1 || '',
-    pla:  buyer.cpla  || '',
-    pin:  buyer.cpin  || '',
-    state: buyer.cstate || '',
-    stCode: buyer.cst_code || '',
-    gstin: buyer.cgstin || '',
+    addr: buyer.cadd1 || [buyer.add1, buyer.add2].filter(Boolean).join(','),
+    pla:  buyer.cpla  || buyer.pla || '',
+    pin:  buyer.cpin  || buyer.pin || '',
+    state: buyer.cstate || buyer.state || '',
+    stCode: buyer.cst_code || buyer.st_code || '',
+    gstin: buyer.cgstin || buyer.gstin || '',
   } : {
     name: buyer.buyer1 || buyer.buyer || '',
     addr: [buyer.add1, buyer.add2].filter(Boolean).join(','),
@@ -1278,7 +1284,9 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
     doc.font('Helvetica').fontSize(8);
     const cAnchor = { v: cy };
     writeLeft(ship.addr, cAnchor);
-    writeLeft(ship.pla,  cAnchor);
+    // Place + PIN on one line (e.g. "CHENNAI - 600001"); falls back to
+    // whichever is present so a PIN-only consignee still shows its pincode.
+    writeLeft([ship.pla, ship.pin].filter(Boolean).join(' - '), cAnchor);
     if (ship.gstin) writeLeft(`GSTIN/UIN      : ${ship.gstin}`, cAnchor);
     if (ship.state) writeLeft(`State Name     : ${ship.state}, Code : ${ship.stCode || ''}`, cAnchor);
   }
@@ -1307,6 +1315,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
       add1:   _identBT.address1  || cfg.s_address1  || '',
       add2:   _identBT.address2  || cfg.s_address2  || '',
       pla:    cfg.s_place || '',
+      pin:    cfg.s_pin || '',
       gstin:  _identBT.gstin     || cfg.s_gstin     || '',
       state:  _identBT.state     || cfg.s_state     || 'KERALA',
       stCode: _identBT.stateCode || cfg.s_st_code   || '32',
@@ -1317,6 +1326,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
       add1:   _identBT.address1  || cfg.tn_address1 || '',
       add2:   _identBT.address2  || cfg.tn_address2 || '',
       pla:    cfg.tn_place || '',
+      pin:    cfg.tn_pin || '',
       gstin:  _identBT.gstin     || cfg.tn_gstin    || '',
       state:  _identBT.state     || cfg.tn_state    || 'TAMIL NADU',
       stCode: _identBT.stateCode || cfg.tn_st_code  || '33',
@@ -1327,6 +1337,7 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
       add1:  buyer.add1 || '',
       add2:  buyer.add2 || '',
       pla:   buyer.pla || '',
+      pin:   buyer.pin || '',
       gstin: buyer.gstin || '',
       state: buyer.state || '',
       stCode: buyer.st_code || '',
@@ -1341,7 +1352,8 @@ function generateSalesInvoicePDF(invoiceData, cfg, saleType, invoiceNo, invoiceD
   const bAddr = [billTo.add1, billTo.add2].filter(Boolean).join(',');
   const bAnchor = { v: by };
   writeLeft(bAddr, bAnchor);
-  writeLeft(billTo.pla, bAnchor);
+  // Place + PIN on one line, matching the Consignee block.
+  writeLeft([billTo.pla, billTo.pin].filter(Boolean).join(' - '), bAnchor);
   if (billTo.gstin) writeLeft(`GSTIN/UIN      : ${billTo.gstin}`, bAnchor);
   if (billTo.state) writeLeft(`State Name     : ${billTo.state}, Code : ${billTo.stCode || ''}`, bAnchor);
 
