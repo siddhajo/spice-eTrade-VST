@@ -7621,14 +7621,21 @@ function openTradeFairSync(){
   showModal('trade-fair-sync-modal');
   tfLoadHistory();
 }
+// App trades cached for the row dropdowns, fetched when the modal opens.
+let _tfAppTrades = [];
 async function tfLoadHistory(){
   const host = document.getElementById('tf-sync-body');
   if (!host) return;
   host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">Loading recent auctions…</div>';
   let d;
   try {
+    // App trades (for the mapping dropdown) + trade-fair history in parallel.
     const limit = parseInt((document.getElementById('tf-sync-limit')||{}).value,10) || 50;
-    const r = await fetch(B + '/api/trade-fair/history?limit='+limit, { headers:{'Authorization':'Bearer '+T} });
+    const [trades, r] = await Promise.all([
+      fetch(B + '/api/auctions', { headers:{'Authorization':'Bearer '+T} }).then(x=>x.ok?x.json():[]).catch(()=>[]),
+      fetch(B + '/api/trade-fair/history?limit='+limit, { headers:{'Authorization':'Bearer '+T} }),
+    ]);
+    _tfAppTrades = Array.isArray(trades) ? trades : (trades.rows || []);
     d = await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(d.error||'Could not load history');
   } catch (e) {
@@ -7636,24 +7643,34 @@ async function tfLoadHistory(){
     return;
   }
   if (!d.auctions || !d.auctions.length){ host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">No auctions returned.</div>'; return; }
-  let html = `<div style="font-size:11.5px;color:var(--text3);margin-bottom:8px">Using <code>${esc(d.priceParam)}</code> = <code>${esc(d.idField)}</code>. Prices import onto the app trade you set in each row (defaults from the trade-fair row).</div>`;
+  const selectedAid = (typeof getSharedAuctionId==='function') ? String(getSharedAuctionId()||'') : '';
+  // Pre-pick each row's app trade: same lot count first, else the
+  // topbar-selected trade. Trade-fair numbers ≠ app trade numbers, so
+  // we never match on number.
+  const matchTrade = (a) => {
+    const byLots = _tfAppTrades.find(t => a.lotCount!=null && Number(t.lot_count)===Number(a.lotCount));
+    if (byLots) return String(byLots.id);
+    return selectedAid;
+  };
+  const tradeOpts = (sel) => '<option value="">— pick trade —</option>' + _tfAppTrades.map(t =>
+    `<option value="${t.id}" ${String(t.id)===String(sel)?'selected':''}>#${esc(String(t.ano))} · ${esc(t.date_fmt||t.date||'')} · ${t.lot_count||0} lots</option>`).join('');
+  let html = `<div style="font-size:11.5px;color:var(--text3);margin-bottom:8px">Using <code>${esc(d.priceParam)}</code> = <code>${esc(d.idField)}</code>. Pick which of <b>your</b> trades each trade-fair auction's prices import onto (auto-matched by lot count where possible).</div>`;
   html += '<div style="overflow:auto;max-height:52vh"><table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="background:var(--bg);position:sticky;top:0">'
-    + ['Trade No','Date','Type','Lots','Sold qty','→ App Trade No','→ Date',''].map(h=>`<th style="text-align:left;padding:6px 8px;white-space:nowrap">${h}</th>`).join('')
+    + ['Trade-fair No','Date','Type','Lots','Sold qty','→ Import onto your trade',''].map(h=>`<th style="text-align:left;padding:6px 8px;white-space:nowrap">${h}</th>`).join('')
     + '</tr></thead><tbody>';
   d.auctions.forEach((a,i)=>{
-    const isoDate = _tfToIso(a.date);
     html += `<tr style="border-top:1px solid var(--border)">
       <td style="padding:5px 8px;font-weight:600">${esc(a.ano)||'—'}</td>
-      <td style="padding:5px 8px;white-space:nowrap">${esc(a.date)||'—'}</td>
+      <td style="padding:5px 8px;white-space:nowrap">${esc(_tfToIso(a.date)||a.date)||'—'}</td>
       <td style="padding:5px 8px">${esc(a.tradeType)||''}</td>
       <td style="padding:5px 8px;text-align:right">${a.lotCount!=null?esc(String(a.lotCount)):''}</td>
       <td style="padding:5px 8px;text-align:right">${a.sellQty!=null?esc(String(a.sellQty)):''}</td>
-      <td style="padding:5px 8px"><input id="tf-ano-${i}" value="${esc(a.ano||'')}" style="width:90px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a"></td>
-      <td style="padding:5px 8px"><input type="date" id="tf-date-${i}" value="${esc(isoDate)}" style="padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a"></td>
+      <td style="padding:5px 8px"><select id="tf-trade-${i}" style="min-width:230px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a">${tradeOpts(matchTrade(a))}</select></td>
       <td style="padding:5px 8px"><button class="btn btn-g" style="padding:5px 12px;font-size:12px;font-weight:700" onclick='tfImportAuction(${JSON.stringify(String(a.idValue))}, ${i})'>Import prices</button></td>
     </tr>`;
   });
   html += '</tbody></table></div>';
+  if (!_tfAppTrades.length) html += '<div style="margin-top:10px;font-size:12px;color:#991b1b">No app trades found — create the trade and enter its lots first, then sync prices onto it.</div>';
   host.innerHTML = html;
 }
 // Trade-fair dates come as dd-mm-yyyy / dd/mm/yyyy or already ISO. Map
@@ -7667,21 +7684,22 @@ function _tfToIso(v){
   return '';
 }
 async function tfImportAuction(idValue, i){
-  const ano = (document.getElementById('tf-ano-'+i)||{}).value || '';
-  const date = (document.getElementById('tf-date-'+i)||{}).value || '';
-  if (!ano.trim()){ alert('Set the app Trade No for this row first.'); return; }
+  const sel = document.getElementById('tf-trade-'+i);
+  const auctionId = sel ? sel.value : '';
+  if (!auctionId){ alert('Pick which of your trades to import these prices onto.'); return; }
+  const label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : auctionId;
   const status = document.getElementById('tf-sync-status');
   status.style.display='block'; status.style.background='var(--amber-bg)'; status.style.color='var(--amber)';
-  status.textContent = `Downloading & importing prices for Trade ${ano}…`;
+  status.textContent = `Downloading & importing prices onto ${label}…`;
   try {
     const r = await fetch(B + '/api/trade-fair/import', {
       method:'POST', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'},
-      body: JSON.stringify({ idValue, ano: ano.trim(), date, mode:'price' })
+      body: JSON.stringify({ idValue, auction_id: auctionId, mode:'price' })
     });
     const d = await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(d.error || (d.detail ? d.detail : 'Import failed'));
     status.style.background='var(--green-bg)'; status.style.color='var(--green-dk)';
-    let html = `<div style="font-weight:700;margin-bottom:4px">✓ Updated ${d.updated||0} lot(s) on Trade ${esc(ano)} · ${d.skipped||0} skipped of ${d.total||0} rows</div>`;
+    let html = `<div style="font-weight:700;margin-bottom:4px">✓ Updated ${d.updated||0} lot(s) on ${esc(label)} · ${d.skipped||0} skipped of ${d.total||0} rows</div>`;
     if (d.skipped>0 && d.skipReasons && d.skipReasons.length){
       html += `<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:700;color:var(--amber)">⚠ Why were rows skipped?</summary>`;
       html += '<div style="margin-top:6px;max-height:200px;overflow:auto;background:#fff;border:1px solid var(--border);border-radius:6px;padding:8px"><table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left;padding:3px 6px">Row</th><th style="text-align:left;padding:3px 6px">Lot</th><th style="text-align:left;padding:3px 6px">Reason</th></tr></thead><tbody>';

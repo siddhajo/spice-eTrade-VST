@@ -4743,6 +4743,19 @@ app.post('/api/trade-fair/import', requireAuctionWrite, async (req, res) => {
     state: b.state,
   };
 
+  // The trade-fair auction number is NOT the app trade number, so the
+  // reliable mapping is the app trade's own id (picked from a dropdown
+  // in the UI). Resolve it to ano+date so runLotImport targets exactly
+  // that trade — and so the gate keys off the right auction.
+  if (b.auction_id) {
+    const auc = db.get('SELECT id, ano, date FROM auctions WHERE id = ?', [parseInt(b.auction_id, 10)]);
+    if (!auc) return res.status(404).json({ error: 'The selected app trade was not found.' });
+    importBody.auction_id = auc.id;
+    importBody.ano = String(auc.ano);
+    importBody.date = auc.date;
+  }
+  if (!importBody.ano) return res.status(400).json({ error: 'Pick which app trade to import these prices onto.' });
+
   // Same lot-validation gate the manual upload enforces.
   const block = lotValidationGateBlock(db, importBody);
   if (block) return res.status(block.status).json(block.body);
