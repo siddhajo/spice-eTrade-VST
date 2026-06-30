@@ -9769,7 +9769,8 @@ app.get('/api/invoices/distances/:auctionId', requireView, (req, res) => {
     const dispatchPin = getDispatchPin(db);
     const rows = db.all(
       `SELECT i.id, i.ano, i.invo, i.buyer, i.buyer1, i.gstin, i.state,
-              b.pin AS buyer_pin, b.pla AS buyer_pla,
+              b.pin AS buyer_bill_pin, b.cpin AS buyer_ship_pin,
+              b.pla AS buyer_pla,
               i.distance_km
        FROM invoices i
        LEFT JOIN buyers b ON b.buyer = i.buyer
@@ -9795,17 +9796,28 @@ app.get('/api/invoices/distances/:auctionId', requireView, (req, res) => {
       }
     } catch (e) { /* table may not exist on very old DBs */ }
 
-    // Annotate each row with resolved distance + source
+    // Annotate each row with resolved distance + source.
+    //
+    // SOURCE PINCODE PRIORITY (mirrors the voucher generator, the read-
+    // hydration path, and the route-save path): ship-to (consignee) cpin
+    // wins, bill-to pin is the fallback. The ship-to address is where the
+    // goods physically arrive, so it's the correct e-way bill destination;
+    // a buyer can bill to one PIN (e.g. head office) but take delivery at
+    // another. `buyer_pin` is surfaced as this resolved value so display,
+    // the NIC/Maps lookups, and the Save route key all key off the same PIN.
     const enriched = rows.map(r => {
+      const shipPin = r.buyer_ship_pin ? String(r.buyer_ship_pin).trim() : '';
+      const billPin = r.buyer_bill_pin ? String(r.buyer_bill_pin).trim() : '';
+      const buyer_pin = shipPin || billPin;
       let km = null, source = 'none';
       if (r.distance_km != null) {
         km = r.distance_km;
         source = 'manual';
-      } else if (r.buyer_pin && routes[String(r.buyer_pin).trim()] != null) {
-        km = routes[String(r.buyer_pin).trim()];
+      } else if (buyer_pin && routes[buyer_pin] != null) {
+        km = routes[buyer_pin];
         source = 'route';
       }
-      return { ...r, resolved_km: km, distance_source: source };
+      return { ...r, buyer_pin, resolved_km: km, distance_source: source };
     });
 
     res.json({
