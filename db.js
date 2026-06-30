@@ -413,6 +413,10 @@ async function initDb() {
     tot REAL DEFAULT 0,
     addl_chg REAL DEFAULT 0,
     addl_name TEXT DEFAULT '',
+    -- Per-invoice "No Transport & Insurance" flag. When 1, this invoice
+    -- carries no transport/insurance: pava_hc + ins are 0, the PDF hides
+    -- both rows, and the Tally voucher skips both ledgers.
+    no_ti INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
@@ -719,6 +723,11 @@ async function initDb() {
     // ledger label (also used as the Tally ledger name in XML).
     "ALTER TABLE invoices ADD COLUMN addl_chg REAL DEFAULT 0",
     "ALTER TABLE invoices ADD COLUMN addl_name TEXT DEFAULT ''",
+    // Per-invoice "No Transport & Insurance" flag. When 1, the invoice is
+    // (re)built with transport + insurance forced to 0 — they drop out of
+    // the taxable value, GST, PDF rows and Tally ledgers. Toggleable from
+    // the Generate modal and the Invoices tab.
+    'ALTER TABLE invoices ADD COLUMN no_ti INTEGER DEFAULT 0',
     // Per-invoice lorry / truck number. Set from the Invoices tab via a
     // bulk-action button; emitted into the e-way bill <VEHICLENUMBER>
     // (and BASICSHIPVESSELNO) fields when generating sales vouchers

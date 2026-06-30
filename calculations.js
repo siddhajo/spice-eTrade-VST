@@ -341,7 +341,13 @@ function calculateTCS(invoiceAmount, priorSales, cfg) {
  * Aggregates lots by buyer for a given auction
  * Sale type filter is optional — if lots don't have sale set yet, filter by buyer only
  */
-function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
+function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg, opts) {
+  // Per-invoice "No Transport & Insurance" switch. When true, this whole
+  // invoice carries no transport/insurance — both costs come out 0 (and so
+  // drop out of the taxable value, GST, PDF and Tally via their >0 guards).
+  // Set per invoice from the Generate modal / the Invoices-tab toggle
+  // (invoices.no_ti).
+  const noTI = !!(opts && opts.noTI);
   // Get all lots for this buyer in this auction that have amounts
   // Don't filter by sale — we're ASSIGNING the sale type now.
   // Locked lots are excluded — they're finalized records and must not
@@ -433,14 +439,16 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
         ? (useInterInsurance ? pickRate(cfg.insurance, 0.75) : 0)
         : (useLocalInsurance ? pickRate(cfg.local_insurance, cfg.insurance, 0.75) : 0));
 
-  // Transport: ₹/kg (qty × rate)
-  const transportCost = round2(totalQty * transportRate);
+  // Transport: ₹/kg (qty × rate). Forced to 0 when this invoice is marked
+  // "No Transport & Insurance".
+  const transportCost = noTI ? 0 : round2(totalQty * transportRate);
 
-  // Insurance: per ₹1000 of (cardamom + gunny + GST on those)
+  // Insurance: per ₹1000 of (cardamom + gunny + GST on those). Forced to 0
+  // when this invoice is marked "No Transport & Insurance".
   //   insurance = ((cardamom_amount + gunny_cost) × (1 + gstGoods/100)) / 1000 × rate
   const subtotalGoods = totalAmount + gunnyCost;
   const gstOnGoods = subtotalGoods * gstGoods / 100;
-  const insuranceCost = round2((subtotalGoods + gstOnGoods) / 1000 * insuranceRate);
+  const insuranceCost = noTI ? 0 : round2((subtotalGoods + gstOnGoods) / 1000 * insuranceRate);
 
   // Taxable value = cardamom + gunny + transport + insurance
   const taxableValue = subtotalGoods + transportCost + insuranceCost;
@@ -507,6 +515,7 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg) {
     lineItems,
     summary: {
       totalQty, totalBags, totalAmount,
+      noTI,   // whether transport & insurance were skipped for this invoice
       gunnyCost, transportCost, insuranceCost,
       taxableValue, cgst, sgst, igst,
       // Per-component pre-rounded GST — consumed by the HSN summary

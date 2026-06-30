@@ -5585,6 +5585,9 @@ app.post('/api/invoices/generate/:auctionId',
   const _gen = _checkGenerationGate(db, 'invoices', auctionIdForGate);
   if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { saleType, buyerCode, invoiceNo } = req.body;
+  // Per-invoice "No Transport & Insurance" — when set, this invoice is
+  // generated with transport + insurance forced to 0.
+  const noTI = (req.body.noTI === true || String(req.body.noTI || '').toLowerCase() === 'true' || Number(req.body.noTI) === 1) ? 1 : 0;
 
   if (!saleType || !buyerCode || !invoiceNo) {
     return res.status(400).json({ error: 'saleType, buyerCode, and invoiceNo are required' });
@@ -5601,7 +5604,7 @@ app.post('/api/invoices/generate/:auctionId',
       [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
   }
 
-  const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg);
+  const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg, { noTI });
   if (!invoice) return res.status(404).json({ error: `No lots found for buyer "${buyerCode}" in this auction. Make sure lots have this buyer code assigned.` });
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
@@ -5635,12 +5638,12 @@ app.post('/api/invoices/generate/:auctionId',
   // from ISP invoices in the same auction, which matters for the sales
   // list cross-reference (ASP Inv# column).
   const invoiceState = cfg.business_state || auction.state || '';
-  db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name,no_ti)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [req.params.auctionId,auction.ano,auction.date,invoiceState,saleType,String(invoiceNo),buyerCode,invoice.buyer.buyer1||'',
      invoice.buyer.gstin||'',invoice.buyer.pla||'',s.totalBags,s.totalQty,s.totalAmount,s.gunnyCost,s.transportCost,s.insuranceCost,
-     s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'']);
-  
+     s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'',noTI]);
+
   // Update lots with sale type and invoice number.
   // Workflow trace:
   //   - In Kerala (ASP) context: set `invo` AND `asp_invo` to the new ASP
@@ -5806,7 +5809,10 @@ app.post('/api/invoices/generate-all/:auctionId',
   const _gen = _checkGenerationGate(db, 'invoices', auctionIdForGate);
   if (!_gen.allowed) return res.status(412).json(_gen.error);
   const { startInvoiceNo, saleType } = req.body;
-  
+  // Per-invoice "No Transport & Insurance" — applies to every invoice in
+  // this bulk run when set.
+  const noTI = (req.body.noTI === true || String(req.body.noTI || '').toLowerCase() === 'true' || Number(req.body.noTI) === 1) ? 1 : 0;
+
   let nextNo = parseInt(startInvoiceNo);
   if (!nextNo || nextNo < 1) return res.status(400).json({ error: 'startInvoiceNo must be a positive integer' });
   
@@ -5865,7 +5871,7 @@ app.post('/api/invoices/generate-all/:auctionId',
         errors.push({ buyer: row.buyer, error: `Already invoiced as #${dupBuyer.invo}` });
         continue;
       }
-      const invoice = buildSalesInvoice(db, req.params.auctionId, row.buyer, useSaleType, cfg);
+      const invoice = buildSalesInvoice(db, req.params.auctionId, row.buyer, useSaleType, cfg, { noTI });
       if (!invoice) { errors.push({ buyer: row.buyer, error: 'No matching lots' }); continue; }
       const s = invoice.summary;
       const invoNo = String(nextNo);
@@ -5883,11 +5889,11 @@ app.post('/api/invoices/generate-all/:auctionId',
         // an earlier iteration.
         continue;
       }
-      db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      db.run(`INSERT INTO invoices (auction_id,ano,date,state,sale,invo,buyer,buyer1,gstin,place,bag,qty,amount,gunny,pava_hc,ins,cgst,sgst,igst,tcs,rund,tot,addl_chg,addl_name,no_ti)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [req.params.auctionId,auction.ano,auction.date,invoiceState,useSaleType,invoNo,row.buyer,invoice.buyer.buyer1||'',
          invoice.buyer.gstin||'',invoice.buyer.pla||'',s.totalBags,s.totalQty,s.totalAmount,s.gunnyCost,s.transportCost,s.insuranceCost,
-         s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'']);
+         s.cgst,s.sgst,s.igst,0,s.roundDiff,s.grandTotal,s.addlCharge||0,s.addlChargeName||'',noTI]);
       // ASP-aware lot update: see single-invoice handler above for rationale.
       const isASPStateBulk = String(cfg.business_state || '').toUpperCase() === 'KERALA';
       for (const li of invoice.lineItems) {
@@ -6094,6 +6100,37 @@ app.post('/api/invoices/revert-all/:auctionId', requireInvoiceRevert, (req, res)
   res.json({ success: true, invoicesReverted: revertedIds.length, lotsFreed, skipped_locked: skippedLocked });
 });
 
+// Toggle "No Transport & Insurance" on an existing invoice. Recomputes
+// transport/insurance/GST/round/total under the new flag and persists the
+// financial columns + no_ti so the list, PDF and Tally voucher all stay
+// consistent. Body: { value: 0|1 }.
+app.post('/api/invoices/:id/no-ti', requireInvoiceWrite, (req, res) => {
+  const db = getDb(); const cfg = getSettingsFlat(db);
+  const inv = db.get('SELECT * FROM invoices WHERE id=?', [req.params.id]);
+  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+  // Cascade lock — same rule as edit: a locked lot finalises the invoice.
+  if (!isAdmin(req) && lotsLockedForInvoice(db, req.params.id)) {
+    return res.status(423).json({ error: 'This invoice is locked because at least one of its lots is locked — only an admin can change it.' });
+  }
+  const value = (req.body.value === true || String(req.body.value || '').toLowerCase() === 'true' || Number(req.body.value) === 1) ? 1 : 0;
+  // Rebuild from the invoice's lots so transport/insurance/GST/total are
+  // recomputed under the new flag. Requires the underlying lots to still
+  // carry this (auction, buyer, sale) — they do unless the invoice was
+  // reverted, in which case there's nothing to recompute.
+  const rebuilt = inv.auction_id
+    ? buildSalesInvoice(db, inv.auction_id, inv.buyer, inv.sale, cfg, { noTI: value })
+    : null;
+  if (!rebuilt) {
+    return res.status(409).json({ error: 'Cannot recompute this invoice — its lots are no longer available. Revert and regenerate instead.' });
+  }
+  const s = rebuilt.summary;
+  db.run(
+    `UPDATE invoices SET no_ti=?, pava_hc=?, ins=?, cgst=?, sgst=?, igst=?, tcs=?, rund=?, tot=? WHERE id=?`,
+    [value, s.transportCost, s.insuranceCost, s.cgst, s.sgst, s.igst, s.tdsAmount || 0, s.roundDiff, s.grandTotal, req.params.id]
+  );
+  res.json({ success: true, value, summary: s });
+});
+
 // Sales Invoice PDF
 app.get('/api/invoices/pdf/:id', requireView, async (req, res) => {
   try {
@@ -6104,7 +6141,7 @@ app.get('/api/invoices/pdf/:id', requireView, async (req, res) => {
 
     // Try to rebuild fresh from lots (gives line-item detail), fall back to stored summary
     let invoice = stored.auction_id
-      ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg)
+      ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg, { noTI: stored.no_ti })
       : null;
 
     // Defensive: even when lots exist, if buyer lookup missed, enrich from stored invoice fields
@@ -6208,7 +6245,7 @@ app.get('/api/invoices/purchase-pdf/:id', requireView, async (req, res) => {
 
     // Same enrichment pattern as the sales-invoice endpoint
     let invoice = stored.auction_id
-      ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg)
+      ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg, { noTI: stored.no_ti })
       : null;
 
     const enrichBuyer = (buyer) => {
@@ -6305,7 +6342,7 @@ app.post('/api/invoices/pdf-bulk', requireView, async (req, res) => {
       const stored = db.get('SELECT * FROM invoices WHERE id=?', [id]);
       if (!stored) continue; // silently skip missing IDs
       let invoice = stored.auction_id
-        ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg)
+        ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg, { noTI: stored.no_ti })
         : null;
       if (invoice) {
         invoice.buyer = enrichBuyer(invoice.buyer, stored);
@@ -6404,7 +6441,7 @@ app.post('/api/invoices/purchase-pdf-bulk', requireView, async (req, res) => {
       const stored = db.get('SELECT * FROM invoices WHERE id=?', [id]);
       if (!stored) continue;
       let invoice = stored.auction_id
-        ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg)
+        ? buildSalesInvoice(db, stored.auction_id, stored.buyer, stored.sale, cfg, { noTI: stored.no_ti })
         : null;
       if (invoice) {
         invoice.buyer = enrichBuyer(invoice.buyer, stored);
@@ -8578,7 +8615,9 @@ app.get('/api/exports/individual-register', requireExport, async (req, res) => {
 app.post('/api/invoices/preview/:auctionId', requireView, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   const { saleType, buyerCode, type } = req.body;
-  
+  // Per-invoice "No Transport & Insurance" — preview reflects the toggle.
+  const noTI = (req.body.noTI === true || String(req.body.noTI || '').toLowerCase() === 'true' || Number(req.body.noTI) === 1) ? 1 : 0;
+
   // Auto-calculate any uncalculated lots first (read-only would be better but we need the data)
   const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [req.params.auctionId]);
   for (const lot of uncalc) {
@@ -8594,9 +8633,9 @@ app.post('/api/invoices/preview/:auctionId', requireView, (req, res) => {
     invoice = buildAgriBill(db, req.params.auctionId, buyerCode, cfg);
     if (invoice && invoice.error) return res.status(404).json({ error: invoice.error });
   } else {
-    invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg);
+    invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg, { noTI });
   }
-  
+
   if (!invoice) return res.status(404).json({ error: 'No data found' });
   res.json({ preview: true, invoice });
 });

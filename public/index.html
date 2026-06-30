@@ -5371,6 +5371,14 @@ input[type="search"]:focus{
   </div>
   <div id="gi-hint" style="font-size:11px;color:var(--text3);padding:4px 0"></div>
   <div class="fg"><label>Starting Invoice No <span style="color:var(--text3);font-weight:400">— auto-increments for each selected buyer</span></label><input id="gi-invno" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 6"></div>
+  <!-- Per-invoice "No Transport & Insurance". When ticked the generated
+       invoice(s) carry no transport/insurance — both come out 0 and drop
+       out of the PDF + Tally voucher. Can also be toggled later per
+       invoice from the Sales list. Applies to every selected buyer. -->
+  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;margin:4px 0 2px">
+    <input type="checkbox" id="gi-no-ti" style="width:16px;height:16px;cursor:pointer">
+    No Transport &amp; Insurance for these invoices
+  </label>
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('gen-inv-modal')">Cancel</button>
     <button class="btn btn-a" onclick="previewInvoice('sales')">Preview</button>
@@ -17023,6 +17031,9 @@ async function loadPurEligibleSellers(){
 
 function openGenInvModal(){
   if(!document.getElementById('inv-auction').value){toast('Select an auction first');return}
+  // Reset the per-invoice "No Transport & Insurance" toggle each time the
+  // modal opens so it never silently carries over from a prior run.
+  const noTiCb=document.getElementById('gi-no-ti'); if(noTiCb) noTiCb.checked=false;
   loadInvEligibleBuyers();showModal('gen-inv-modal');
 }
 function openGenPurModal(){
@@ -18239,6 +18250,8 @@ async function generateInvoice(){
   const checked=Array.from(list?.querySelectorAll('.gi-cb:checked')||[]);
   if(!checked.length){toast('Select at least one buyer');return}
   const buyers=checked.map(cb=>cb.value);
+  // Per-invoice "No Transport & Insurance" — applies to every selected buyer.
+  const noTI=!!document.getElementById('gi-no-ti')?.checked;
 
   // Single buyer: keep old behavior (immediate feedback, quick)
   if(buyers.length===1){
@@ -18248,7 +18261,7 @@ async function generateInvoice(){
         const r=await fetch(B+`/api/invoices/generate/${aid}`,{
           method:'POST',
           headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},
-          body:JSON.stringify({saleType,buyerCode,invoiceNo:String(startInvNo)})});
+          body:JSON.stringify({saleType,buyerCode,invoiceNo:String(startInvNo),noTI})});
         const d=await r.json();
         if(!r.ok)throw new Error(d.error||'Failed to generate invoice');
         hideModal('gen-inv-modal');
@@ -18271,7 +18284,7 @@ async function generateInvoice(){
           const r=await fetch(B+`/api/invoices/generate/${aid}`,{
             method:'POST',
             headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},
-            body:JSON.stringify({saleType,buyerCode,invoiceNo:invNo})});
+            body:JSON.stringify({saleType,buyerCode,invoiceNo:invNo,noTI})});
           const d=await r.json();
           if(!r.ok)throw new Error(d.error||'Generation failed');
           results.success.push({buyerCode,invNo,total:Number(d.invoice.grandTotal)});
@@ -18464,8 +18477,16 @@ async function loadInvoices(opts){
           const purchaseBtn = isASPCtx
             ? iconBtn('purchase', purchaseTitle, `viewPurchaseViewPDF(${i.id})`)
             : `<button class="icon-btn i-purchase" title="${purchaseTitle}" style="opacity:.35;cursor:not-allowed" disabled>${ICONS.purchase}</button>`;
+          // No Transport & Insurance toggle. Coloured + bold when the
+          // invoice currently has T&I removed (no_ti=1); faded otherwise.
+          // Clicking recomputes and persists totals server-side.
+          const tiOff = Number(i.no_ti) === 1;
+          const tiBtn = `<button class="icon-btn needs-invoice-write" title="${tiOff
+              ? 'No Transport & Insurance is ON — click to add T&I back and recompute totals'
+              : 'Remove Transport & Insurance from this invoice (recomputes totals)'}" onclick="toggleInvoiceNoTI(${i.id},${tiOff?0:1})" style="${tiOff?'color:#0e7490;font-weight:700':'opacity:.5'}">🚫</button>`;
           return iconBtn('pdf','View / download PDF',`viewInvoicePDF(${i.id})`)
             + purchaseBtn
+            + tiBtn
             + iconBtn('whatsapp','Send via WhatsApp',`whatsappInvoice(${i.id},'${encodeURIComponent(i.buyer1||i.buyer||'')}','${encodeURIComponent(i.invo||'')}','${encodeURIComponent(i.sale||'')}',${Number(i.tot)||0},'${esc(i.ano||'')}')`)
             + iconBtn('edit','Edit invoice',`openInvoiceEdit(${JSON.stringify(i).replace(/"/g,'&quot;')})`)
             + iconBtn('revert','Revert \u2014 delete invoice & re-enable lots for re-invoicing',`revertInvoice(${i.id},'${esc(i.buyer1||i.buyer)}','${esc(i.sale)}-${esc(i.invo)}')`)
@@ -18484,6 +18505,24 @@ async function revertInvoice(id, buyerName, invLabel){
     toast(`Reverted: ${d.lotsFreed} lot(s) freed for re-invoicing`);
     loadInvoices();
     loadInvEligibleBuyers&&loadInvEligibleBuyers();
+  }catch(e){showError(e)}
+}
+
+// Toggle "No Transport & Insurance" on an existing invoice. The server
+// recomputes transport/insurance/GST/round/total under the new flag and
+// persists them, so the list, PDF and Tally voucher all stay consistent.
+async function toggleInvoiceNoTI(id, value){
+  try{
+    const r=await fetch(B+`/api/invoices/${id}/no-ti`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+T},
+      body:JSON.stringify({value})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'Failed to update invoice');
+    toast(Number(value)===1
+      ? 'Transport & Insurance removed from this invoice'
+      : 'Transport & Insurance added back to this invoice');
+    await loadInvoices({keepPage:true});
   }catch(e){showError(e)}
 }
 
@@ -23629,7 +23668,7 @@ async function previewInvoice(type){
     if(checked.length>1){
       if(!confirm(`Preview shows ONE buyer at a time. Showing "${checked[0].value}".\n\nContinue?`))return;
     }
-    body={saleType:document.getElementById('gi-sale').value,buyerCode:checked[0].value,type:'sales'};
+    body={saleType:document.getElementById('gi-sale').value,buyerCode:checked[0].value,type:'sales',noTI:!!document.getElementById('gi-no-ti')?.checked};
   }else if(type==='purchase'){
     aid=document.getElementById('pur-auction').value;
     body={buyerCode:document.getElementById('gp-seller').value.trim(),type:'purchase'};
