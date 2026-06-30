@@ -1601,10 +1601,14 @@ async function exportLotBuyer(db, auctionId) {
 }
 
 async function exportLotName(db, auctionId) {
+  // PRICE is blanked when 0 (lot not yet priced) so the column reads
+  // empty rather than "0.00" — matching exportPriceListBefore.
   const rows = db.all(
     `SELECT lot_no AS lot, COALESCE(name,'') AS name,
             ${BR_FROM_STATE_SQL} AS br,
-            bags AS bag, qty, price, '' AS control
+            bags AS bag, qty,
+            CASE WHEN COALESCE(price,0) = 0 THEN '' ELSE price END AS price,
+            '' AS control
      FROM lots WHERE auction_id = ? ORDER BY lot_no`,
     [auctionId]
   );
