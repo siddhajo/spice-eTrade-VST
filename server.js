@@ -4324,6 +4324,26 @@ function runLotImport(db, filePath, body) {
       return auc;
     };
 
+    // Per-auction lot index keyed by NORMALISED lot number, so a price
+    // file that lists lots as 1,2,3 matches lots stored zero-padded as
+    // 001,002,003 (and vice-versa) — see parseLotNo. Without this, the
+    // exact-string lookup silently skips every row. Lots with an alpha
+    // prefix (e.g. A001) match on prefix+number too.
+    const normLotKey = (v) => {
+      const p = parseLotNo(v);
+      return p ? `${p.prefix}|${p.num}` : String(v == null ? '' : v).trim().toUpperCase();
+    };
+    const lotIdxCache = new Map(); // auctionId → Map(normLotKey → {id, lot_no})
+    const getLotIdx = (auctionId) => {
+      if (lotIdxCache.has(auctionId)) return lotIdxCache.get(auctionId);
+      const idx = new Map();
+      for (const l of db.all('SELECT id, lot_no FROM lots WHERE auction_id = ?', [auctionId])) {
+        idx.set(normLotKey(l.lot_no), l);
+      }
+      lotIdxCache.set(auctionId, idx);
+      return idx;
+    };
+
     // Pre-validate: if no form override AND no ANO column anywhere, bail early with a clear message
     if (!overrideAno) {
       const firstAno = rows.length ? mapCol(rows[0], 'ANO', 'TNO', 'TRADE', 'TRADE_NO', 'TRADENO') : '';
@@ -4362,8 +4382,10 @@ function runLotImport(db, filePath, body) {
         const lotNo = mapCol(row, 'LOT', 'LOT_NO', 'LOTNO', 'LOT NO', 'LOT NUMBER');
         if (!lotNo) { skipped++; skipReasons.push({row: rowNum, lot: '', reason: 'Missing LOT / LOT_NO column value'}); continue; }
 
-        // (price mode continues below in original code)
-        const existing = db.get('SELECT id FROM lots WHERE auction_id = ? AND lot_no = ?', [auctionId, lotNo]);
+        // Match against the existing lot by normalised lot number, so
+        // 1/01/001 all resolve to the same stored lot (price files often
+        // drop the zero-padding the app stores).
+        const existing = getLotIdx(auctionId).get(normLotKey(lotNo));
         if (!existing) { skipped++; skipReasons.push({row: rowNum, lot: lotNo, reason: `Lot ${lotNo} does not exist in Trade ${rowAno} (price-update requires existing lot)`}); continue; }
 
         try {
