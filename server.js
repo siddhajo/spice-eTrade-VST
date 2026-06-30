@@ -4260,28 +4260,46 @@ function runLotImport(db, filePath, body) {
     const workbook = XLSX.readFile(filePath);
     const ws = workbook.Sheets[workbook.SheetNames[0]];
     if (!ws) throw new Error('No worksheet found');
-    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+    // Header normaliser: trim, uppercase, collapse runs of spaces /
+    // underscores / dashes to a single space. So "LOT NO", "Lot_No",
+    // "LOT  NO " and "lot-no" all hash to "LOT NO" — header matching is
+    // tolerant of the cosmetic differences between export formats.
+    const normKey = (s) => String(s == null ? '' : s).trim().toUpperCase().replace(/[\s_\-]+/g, ' ');
+
+    // Some exports (notably the trade-fair price list) prepend title /
+    // banner rows above the real column header. sheet_to_json otherwise
+    // treats row 1 as the header → every row looks like it has no LOT.
+    // Scan the first 20 rows for the one carrying a LOT-like column and
+    // parse from there. Falls back to row 1 (the common case) when none
+    // matches, so existing files behave exactly as before.
+    const LOT_HEADERS = new Set(['LOT', 'LOT NO', 'LOTNO', 'LOT NUMBER']);
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    let headerRowIdx = 0;
+    for (let i = 0; i < Math.min(aoa.length, 20); i++) {
+      if ((aoa[i] || []).some(c => LOT_HEADERS.has(normKey(c)))) { headerRowIdx = i; break; }
+    }
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '', range: headerRowIdx });
     if (!rows.length) throw new Error('File is empty');
 
     const mode = body.mode || 'full'; // 'full' = new lots, 'price' = update price/buyer only
 
     const mapCol = (row, ...names) => {
       for (const n of names) { if (row[n] !== undefined) return String(row[n]).trim(); }
-      const keys = Object.keys(row);
-      for (const n of names) {
-        const found = keys.find(k => k.toUpperCase() === n.toUpperCase());
-        if (found && row[found] !== undefined) return String(row[found]).trim();
+      const want = names.map(normKey);
+      for (const k of Object.keys(row)) {
+        if (want.includes(normKey(k))) return row[k] !== undefined ? String(row[k]).trim() : '';
       }
       return '';
     };
     const mapNum = (row, ...names) => parseFloat(mapCol(row, ...names)) || 0;
-    // Does the row have ANY of these columns (by exact or case-insensitive
-    // header)? Used by price-update mode to decide whether to touch a
-    // field, so synonyms like "RATE PER Kg" trigger an update the same way
-    // a literal "PRICE" column does.
+    // Does the row have ANY of these columns (by normalised header)? Used
+    // by price-update mode to decide whether to touch a field, so synonyms
+    // like "RATE PER Kg" trigger an update the same way a literal "PRICE"
+    // column does.
     const hasCol = (row, ...names) => {
-      const keys = Object.keys(row);
-      return names.some(n => row[n] !== undefined || keys.some(k => k.toUpperCase() === n.toUpperCase()));
+      const want = names.map(normKey);
+      return Object.keys(row).some(k => want.includes(normKey(k))) || names.some(n => row[n] !== undefined);
     };
 
     // If user specified ano/date in the form → that OVERRIDES every row (single-auction import)
