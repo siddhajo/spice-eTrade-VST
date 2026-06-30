@@ -1249,6 +1249,11 @@ function recalcUnlockedLots(db, cfg) {
   return n;
 }
 
+// Rates & charges whose changes are logged to settings_history and shown
+// on hover in the Settings → Rates panel. `insurance` is the rates-section
+// key (the To Tally panel's tally_insurance_rate is a separate field).
+const TRACKED_HISTORY_KEYS = ['gunny_rate', 'transport', 'insurance', 'discount_pct', 'discount_days', 'dealer_days'];
+
 app.put('/api/company-settings', requireSettingsWrite, (req, res) => {
   const db = getDb();
   const incoming = req.body.settings || {};
@@ -1262,6 +1267,24 @@ app.put('/api/company-settings', requireSettingsWrite, (req, res) => {
   // stale one for the rest of the process lifetime.
   invalidateDateFormatCache();
   const after = getSettingsFlat(db);
+
+  // Log rates/charges changes to settings_history. getSettingsFlat
+  // normalises numbers (parseFloat), so "2.5" vs "2.50" won't register
+  // as a change — only a real value difference is recorded. Other panels
+  // never touch these keys, so before===after and nothing is logged.
+  try {
+    const histStmt = db.prepare(
+      `INSERT INTO settings_history (key, old_value, new_value)
+       VALUES (?, ?, ?)`
+    );
+    for (const k of TRACKED_HISTORY_KEYS) {
+      const ov = String(before[k] ?? '');
+      const nv = String(after[k] ?? '');
+      if (ov !== nv) histStmt.run(k, ov, nv);
+    }
+  } catch (e) {
+    console.warn('[settings history] log failed:', e.message);
+  }
   const calcChanged = CALC_AFFECTING_SETTINGS.some(
     k => String(before[k] ?? '') !== String(after[k] ?? '')
   );
@@ -1273,6 +1296,27 @@ app.put('/api/company-settings', requireSettingsWrite, (req, res) => {
   res.json({ success: true, updated: count, recalculated });
 });
 app.get('/api/company-settings/flat', requireViewOrLotEntry, (req, res) => res.json(getSettingsFlat(getDb())));
+
+// Change history for the tracked rates/charges settings. Returns a map
+// of { key: [{ old_value, new_value, changed_at }, ...newest first] }.
+// Powers the hover-to-view history panel under Settings → Rates.
+app.get('/api/settings-history', requireView, (req, res) => {
+  try {
+    const db = getDb();
+    const stmt = db.prepare(
+      `SELECT old_value, new_value, changed_at
+         FROM settings_history
+        WHERE key = ?
+        ORDER BY id DESC
+        LIMIT 50`
+    );
+    const out = {};
+    for (const k of TRACKED_HISTORY_KEYS) out[k] = stmt.all(k);
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Company identity presets — REMOVED in e-Trade-only build ──────────
 // The original Spice Config app had ISP/ASP preset switching tied to the

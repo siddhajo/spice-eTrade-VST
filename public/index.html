@@ -2207,6 +2207,36 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 }
 .help-wrap:hover .help-tip{opacity:1}
 
+/* ── Rates & charges change-history panel ──────────────────────
+   Sits below the Rates settings grid. Hovering (or focusing) one of
+   the tracked rate inputs fills it with that rate's change history. */
+.fg.has-history{position:relative}
+.fg.has-history>label::after{
+  content:'history';font-size:9px;font-weight:600;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--spice-cardamom-dk,#5a7a2f);
+  background:var(--green-bg,#eaf3df);border-radius:6px;padding:1px 5px;margin-left:6px;
+  vertical-align:middle;opacity:.7
+}
+.fg.has-history:hover>label::after,.fg.has-history:focus-within>label::after{opacity:1}
+.rate-hist-panel{
+  margin-top:18px;border:1px solid var(--border);border-radius:8px;
+  background:var(--spice-cream,#fbf8f1);padding:12px 14px;min-height:54px
+}
+.rate-hist-hint{color:var(--text3);font-size:12px;font-style:italic}
+.rate-hist-title{font-weight:700;font-size:13px;margin-bottom:8px;color:var(--spice-cardamom-dk,#5a7a2f)}
+.rate-hist-empty{color:var(--text3);font-size:12px}
+.rate-hist-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.rate-hist-tbl th{
+  text-align:left;font-weight:600;color:var(--text2);
+  border-bottom:1px solid var(--border);padding:4px 8px
+}
+.rate-hist-tbl td{padding:4px 8px;border-bottom:1px solid var(--border)}
+.rate-hist-tbl tr:last-child td{border-bottom:none}
+.rate-hist-tbl .rh-arrow{color:var(--text3);text-align:center;width:24px}
+.rate-hist-tbl .rh-old{color:var(--text3)}
+.rate-hist-tbl .rh-new{font-weight:700;color:var(--spice-cardamom-dk,#5a7a2f);font-family:monospace}
+.rate-hist-tbl .rh-when{color:var(--text2);font-family:monospace;white-space:nowrap}
+
 /* ── Per-screen guide banner (plain-English help for every tab) ─
    ONE shared banner lives at the top of .content, OUTSIDE the
    tab-content (#tc-*) divs — so the per-tab loaders that rewrite
@@ -13722,6 +13752,78 @@ function _bindRateFlagListeners(){
   }
 }
 
+// ── Rates & charges change history (hover to view) ────────────────
+// These rates carry a per-change audit trail (settings_history table,
+// written server-side on every save). Hovering or focusing one of these
+// fields in the Rates panel shows its history in the panel below the grid.
+const RATE_HISTORY_KEYS = ['gunny_rate', 'transport', 'insurance', 'discount_pct', 'discount_days', 'dealer_days'];
+let _rateHistoryCache = null;   // { key: [{old_value,new_value,changed_at}] }; null = not loaded
+
+async function _loadRateHistory(){
+  try { _rateHistoryCache = await j('/api/settings-history'); }
+  catch (e) { _rateHistoryCache = {}; }   // {} = loaded-but-empty so we stop refetching on every hover
+  return _rateHistoryCache;
+}
+
+function _rateLabelFor(key){
+  const f = (_sdata.rates || []).find(x => x.key === key);
+  return f ? f.label : key;
+}
+
+function _renderRateHistory(key){
+  const host = document.getElementById('rate-history-host');
+  if (!host) return;
+  const label = _rateLabelFor(key);
+  const hist = (_rateHistoryCache && _rateHistoryCache[key]) || [];
+  if (!hist.length){
+    host.innerHTML = `<div class="rate-hist-title">${esc(label)} — change history</div>`
+      + `<div class="rate-hist-empty">No changes recorded yet. Future edits to this rate will be logged here.</div>`;
+    return;
+  }
+  const rows = hist.map(h => `<tr>`
+    + `<td class="rh-when">${esc(h.changed_at || '')}</td>`
+    + `<td class="rh-old">${esc(h.old_value === '' || h.old_value == null ? '—' : h.old_value)}</td>`
+    + `<td class="rh-arrow">→</td>`
+    + `<td class="rh-new">${esc(h.new_value === '' || h.new_value == null ? '—' : h.new_value)}</td>`
+    + `</tr>`).join('');
+  host.innerHTML = `<div class="rate-hist-title">${esc(label)} — change history</div>`
+    + `<table class="rate-hist-tbl"><thead><tr><th>When</th><th>From</th><th></th><th>To</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
+}
+
+async function _showRateHistory(key){
+  if (!_rateHistoryCache) await _loadRateHistory();
+  _renderRateHistory(key);
+}
+
+// Build the history host below the grid and bind hover/focus on each
+// tracked field. Idempotent — safe to call on every rates-panel render.
+function _wireRateHistory(){
+  const root = document.getElementById('settings-root');
+  if (!root) return;
+  let host = document.getElementById('rate-history-host');
+  if (!host){
+    host = document.createElement('div');
+    host.id = 'rate-history-host';
+    host.className = 'rate-hist-panel';
+    host.innerHTML = '<div class="rate-hist-hint">Hover a rate above (marked “history”) to see how it changed over time.</div>';
+    root.appendChild(host);
+  }
+  for (const key of RATE_HISTORY_KEYS){
+    const input = root.querySelector(`[data-key="${key}"]`);
+    if (!input) continue;                 // hidden by a flag/mode — skip
+    const fg = input.closest('.fg') || input;
+    fg.classList.add('has-history');
+    if (fg.dataset._histBound) continue;
+    fg.dataset._histBound = '1';
+    const show = () => _showRateHistory(key);
+    fg.addEventListener('mouseenter', show);
+    input.addEventListener('focus', show);
+  }
+  // Prime the cache so the first hover paints instantly.
+  _loadRateHistory();
+}
+
 // ── Partnership <-> CIN mutual exclusion ──────────────────────────
 // is_partnership = ON → 'CIN' is disabled / greyed; partnership_name
 //                       is the active identifier.
@@ -13967,6 +14069,7 @@ function renderSettingsPanel(){
   if (ck === 'rates') {
     applyRateVisibility();
     _bindRateFlagListeners();
+    _wireRateHistory();
   }
   // Company panel — Partnership toggle disables either CIN or
   // Partnership Name/No. depending on its state.
@@ -14571,6 +14674,13 @@ async function saveSettings(){
   if (s.logo) window._cachedLogoCode = String(s.logo).trim();
 
   const _saveResp = await j('/api/company-settings',{method:'PUT',body:JSON.stringify({settings:s})});
+  // A save may have logged new rate-history rows — drop the cache so the
+  // next hover refetches. If the Rates panel is open, repaint its hint.
+  _rateHistoryCache = null;
+  if (typeof _activeCat !== 'undefined' && _activeCat === 'rates') {
+    const _host = document.getElementById('rate-history-host');
+    if (_host) _host.innerHTML = '<div class="rate-hist-hint">Hover a rate above (marked “history”) to see how it changed over time.</div>';
+  }
   _companyDirty = false;
   // Change is now persisted (server recalculates affected lots) — clear the
   // "you changed a setting, save to apply" reminder.

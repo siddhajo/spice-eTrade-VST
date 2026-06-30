@@ -498,6 +498,23 @@ async function initDb() {
     PRIMARY KEY (from_pin, to_pin)
   )`);
 
+  // ── SETTINGS HISTORY (rates & charges change log) ──────────
+  // One row per change to a tracked rates/charges setting (gunny rate,
+  // transport, insurance, discount %, discount days, dealer days).
+  // Written by PUT /api/company-settings whenever one of those keys'
+  // value actually changes; read by the Settings → Rates panel to show
+  // each rate's change history on hover. Old → new value + timestamp so
+  // the operator can see "when did the gunny rate go from 165 to 170".
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS settings_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    changed_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_settings_history_key
+    ON settings_history (key, id DESC)`);
+
   // ── LOT ALLOCATIONS (per-trade per-branch lot-number ranges) ──
   // Each row reserves a contiguous range of lot numbers (e.g. 001-080)
   // for one branch within one trade. The Lot Entry workflow validates
