@@ -5699,6 +5699,21 @@ input[type="search"]:focus{
   <div class="actions"><button class="btn btn-o" onclick="hideModal('trade-fair-sync-modal')">Close</button></div>
 </div></div>
 
+<!-- ═══ RESOLVE BUYERS ════════════════════════════════════════ -->
+<!-- Follow-up to a trade-fair price import: match imported buyer trade
+     names (lots.buyer1) to Buyers-master records so lots get an invoice
+     code (lots.buyer). Reuses the Price List Mapping matcher. -->
+<div class="modal-bg" id="resolve-buyers-modal"><div class="modal" style="max-width:820px;display:flex;flex-direction:column;max-height:90vh">
+  <h2>🔗 Resolve Buyers <span id="rb-subtitle" style="font-weight:400;font-size:13px;color:var(--spice-text-mute);margin-left:6px"></span></h2>
+  <p style="font-size:12.5px;color:var(--spice-text-mute);margin-bottom:10px">Imported prices carry the buyer's trade name but no code. Match each name to your Buyers master — the code is what invoices join on. Green = one match (pre-picked); amber = choose; red = no match (skipped).</p>
+  <div id="rb-body" style="flex:1;overflow:auto;min-height:120px"></div>
+  <div class="actions" style="align-items:center">
+    <span id="rb-foot" style="flex:1;font-size:12px;color:var(--text3)"></span>
+    <button class="btn btn-o" onclick="hideModal('resolve-buyers-modal')">Close</button>
+    <button class="btn btn-g" id="rb-apply-btn" onclick="rbApply()">Assign buyers</button>
+  </div>
+</div></div>
+
 <!-- ═══ VALIDATE ENTERED LOTS ═══════════════════════════════ -->
 <!-- Pre-price-import safety net (flag_lot_validation). Shows a
      reconciliation of entered lots, hard errors (duplicate lots, lots
@@ -7709,12 +7724,96 @@ async function tfImportAuction(idValue, i){
       d.skipReasons.slice(0,50).forEach(sk=>{ html += `<tr><td style="padding:2px 6px">${sk.row}</td><td style="padding:2px 6px">${esc(sk.lot)||''}</td><td style="padding:2px 6px">${esc(sk.reason)}</td></tr>`; });
       html += '</tbody></table></div></details>';
     }
+    // Prices land with the buyer TRADE NAME but no code — offer to resolve
+    // those names to Buyers-master codes next (same matcher as Price List
+    // Mapping). Button carries the app trade id + label.
+    html += `<div style="margin-top:10px"><button class="btn btn-a" style="padding:6px 14px;font-weight:700" onclick="openResolveBuyers('${esc(auctionId)}', ${JSON.stringify(label)})">🔗 Resolve buyers →</button>
+      <span style="font-size:11px;color:var(--text3);margin-left:8px">Match imported buyer names to your Buyers master (assigns the code used on invoices).</span></div>`;
     status.innerHTML = html;
     if (typeof loadAuctions==='function') loadAuctions();
   } catch (e) {
     status.style.background='var(--red-bg)'; status.style.color='var(--red)';
     status.textContent = 'Error: '+e.message;
   }
+}
+
+// ── Resolve Buyers (trade-fair follow-up) ─────────────────────────
+// Loads the distinct unresolved buyer names on a trade and lets the
+// operator map each to a Buyers-master record (green=1 match auto-picked,
+// amber=ambiguous → choose, red=no match → skipped). Apply writes the
+// code/name/sale back onto the lots. Reuses the Price List Mapping matcher.
+async function openResolveBuyers(auctionId, label){
+  window._rbAuctionId = auctionId;
+  window._rbLabel = label || ('Trade ' + auctionId);
+  showModal('resolve-buyers-modal');
+  const sub = document.getElementById('rb-subtitle');
+  if (sub) sub.textContent = window._rbLabel;
+  rbLoad();
+}
+async function rbLoad(){
+  const host = document.getElementById('rb-body');
+  const foot = document.getElementById('rb-foot');
+  if (foot) foot.textContent = '';
+  host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">Loading buyer names…</div>';
+  let d;
+  try {
+    d = await j('/api/auctions/'+window._rbAuctionId+'/resolve-buyers');
+  } catch(e){
+    host.innerHTML = `<div style="padding:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#991b1b;font-size:12.5px">${esc(e.message||String(e))}</div>`;
+    return;
+  }
+  if (!d.names || !d.names.length){
+    host.innerHTML = '<div style="padding:20px;text-align:center;color:#065f46;font-weight:600">✓ Nothing to resolve — every lot on this trade already has a buyer code.</div>';
+    return;
+  }
+  const s = d.summary||{};
+  const tone = {matched:{bg:'#ecfdf5',bd:'#a7f3d0',fg:'#065f46',t:'matched'},ambiguous:{bg:'#fffbeb',bd:'#fde68a',fg:'#92400e',t:'ambiguous'},unmatched:{bg:'#fef2f2',bd:'#fecaca',fg:'#991b1b',t:'no match'}};
+  let html = `<div style="font-size:12px;color:var(--text2);margin-bottom:10px">${s.names} name(s) on ${s.lotsUnresolved} lot(s): <b style="color:#065f46">${s.matched} matched</b> · <b style="color:#92400e">${s.ambiguous} to choose</b> · <b style="color:#991b1b">${s.unmatched} no match</b>.</div>`;
+  html += '<div style="overflow:auto;max-height:52vh"><table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="background:var(--bg);position:sticky;top:0">'
+    + ['Buyer name (from file)','Lots','Status','→ Assign buyer'].map(h=>`<th style="text-align:left;padding:6px 8px;white-space:nowrap">${h}</th>`).join('')
+    + '</tr></thead><tbody>';
+  window._rbNames = d.names;
+  d.names.forEach((n,i)=>{
+    const tn = tone[n.status]||tone.unmatched;
+    let picker;
+    if (n.status==='unmatched'){
+      picker = '<span style="color:#991b1b;font-size:11.5px">no match in Buyers — skipped</span>';
+    } else {
+      const opts = (n.status==='ambiguous' ? '<option value="">— choose buyer —</option>' : '')
+        + n.candidates.map(c=>`<option value="${c.id}" ${String(c.id)===String(n.pickedBuyerId)?'selected':''}>${esc(c.code||c.buyer||'?')} · ${esc(c.buyer1||c.buyer||'')}${c.gstin?(' · '+esc(c.gstin)):''}</option>`).join('');
+      picker = `<select id="rb-pick-${i}" style="min-width:280px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a">${opts}</select>`;
+    }
+    html += `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 8px;font-weight:600">${esc(n.name)}</td>
+      <td style="padding:6px 8px;text-align:right">${n.lots}</td>
+      <td style="padding:6px 8px"><span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;background:${tn.bg};border:1px solid ${tn.bd};color:${tn.fg}">${tn.t}</span></td>
+      <td style="padding:6px 8px">${picker}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  host.innerHTML = html;
+}
+async function rbApply(){
+  const foot = document.getElementById('rb-foot');
+  const btn = document.getElementById('rb-apply-btn');
+  const picks = [];
+  (window._rbNames||[]).forEach((n,i)=>{
+    if (n.status==='unmatched') return;
+    const sel = document.getElementById('rb-pick-'+i);
+    const buyerId = sel ? sel.value : '';
+    if (buyerId) picks.push({ name: n.name, buyerId });
+  });
+  if (!picks.length){ if(foot){foot.style.color='#991b1b';foot.textContent='Nothing selected to assign.';} return; }
+  if (btn) btn.disabled = true;
+  if (foot){ foot.style.color='var(--text3)'; foot.textContent='Assigning buyers…'; }
+  try {
+    const d = await j('/api/auctions/'+window._rbAuctionId+'/resolve-buyers', { method:'POST', body: JSON.stringify({ picks }) });
+    if (foot){ foot.style.color='#065f46'; foot.textContent=`✓ Assigned ${d.resolvedNames} buyer(s) across ${d.updatedLots} lot(s).`; }
+    if (typeof loadAuctions==='function') loadAuctions();
+    rbLoad(); // refresh — resolved names drop off the list
+  } catch(e){
+    if (foot){ foot.style.color='#991b1b'; foot.textContent = 'Error: '+(e.message||e); }
+  } finally { if (btn) btn.disabled = false; }
 }
 
 async function login(){

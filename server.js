@@ -4451,8 +4451,12 @@ function runLotImport(db, filePath, body) {
 
           // Auto-resolve short CODE (e.g. RSH, TE, SL) to the full buyer record.
           // Priority: explicit BUYER/BIDDER column in file → matching buyers.code → matching buyers.ti → matching buyers.buyer
-          let resolvedBuyer  = mapCol(row, 'BUYER', 'BIDDER', 'BUYER_NAME', 'NAME OF BUYER');
-          let resolvedBuyer1 = mapCol(row, 'BUYER1', 'TRADE_NAME', 'TRADENAME');
+          // NOTE: buyer = the CODE/join key; buyer1 = the human trade name.
+          // A "NAME OF BUYER" / "BUYER NAME" column is a trade NAME, so it
+          // maps to buyer1 — never into the code field (buyer). The
+          // name→code resolution happens later via the Resolve Buyers step.
+          let resolvedBuyer  = mapCol(row, 'BUYER', 'BIDDER');
+          let resolvedBuyer1 = mapCol(row, 'BUYER1', 'TRADE_NAME', 'TRADENAME', 'BUYER_NAME', 'NAME OF BUYER');
           let resolvedSale   = mapCol(row, 'SALE', 'SALE_TYPE');
 
           if (codeVal && (!resolvedBuyer || !resolvedBuyer1)) {
@@ -4556,8 +4560,8 @@ function runLotImport(db, filePath, body) {
              mapNum(row, 'PRICE', 'RATE', 'RATE PER KG'),
              mapNum(row, 'AMOUNT'),
              mapCol(row, 'CODE', 'BUYER_CODE'),
-             mapCol(row, 'BUYER', 'BIDDER', 'BUYER_NAME', 'NAME OF BUYER'),
-             mapCol(row, 'BUYER1', 'TRADE_NAME', 'TRADENAME'),
+             mapCol(row, 'BUYER', 'BIDDER'),
+             mapCol(row, 'BUYER1', 'TRADE_NAME', 'TRADENAME', 'BUYER_NAME', 'NAME OF BUYER'),
              mapCol(row, 'SALE', 'SALE_TYPE'),
              mapCol(row, 'INVO', 'INVOICE'),
              mapNum(row, 'PQTY', 'PUR_QTY'),
@@ -4866,6 +4870,95 @@ app.post('/api/trade-fair/import', requireAuctionWrite, async (req, res) => {
   } finally {
     if (tmpPath) fs.unlink(tmpPath, () => {});
   }
+});
+
+// ── RESOLVE BUYERS (name → code) ──────────────────────────────
+// After a trade-fair price import, lots carry a buyer trade NAME in
+// `buyer1` but no CODE in `buyer` (buyer is the invoice join key). This
+// resolves those names against the Buyers master using the SAME matcher
+// the Price List Mapping screen uses (_plBuildTradeIndex): each distinct
+// unresolved name is matched (1) / ambiguous (many) / unmatched (0).
+// Unmatched names are left as-is (skipped) per the chosen workflow.
+
+// Preview: distinct unresolved buyer names on a trade + their matches.
+app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'invalid auction id' });
+  const db = getDb();
+  const auc = db.get('SELECT id, ano, date FROM auctions WHERE id = ?', [id]);
+  if (!auc) return res.status(404).json({ error: 'auction not found' });
+  // A lot needs resolving when it has a buyer NAME (buyer1) but no CODE
+  // (buyer). Group by the normalised name so "Kallar Spices" / "KALLAR
+  // SPICES" count once.
+  const rows = db.all(
+    `SELECT TRIM(buyer1) AS name, COUNT(*) AS lots
+       FROM lots
+      WHERE auction_id = ?
+        AND TRIM(COALESCE(buyer1,'')) <> ''
+        AND TRIM(COALESCE(buyer,'')) = ''
+      GROUP BY UPPER(TRIM(buyer1))
+      ORDER BY name`,
+    [id]
+  );
+  const idx = _plBuildTradeIndex(db);
+  const names = rows.map(r => {
+    const cands = idx.get(String(r.name).toUpperCase()) || [];
+    const status = cands.length === 0 ? 'unmatched' : (cands.length === 1 ? 'matched' : 'ambiguous');
+    return {
+      name: r.name,
+      lots: r.lots,
+      status,
+      candidates: cands.map(b => ({ id: b.id, code: b.code, buyer: b.buyer, buyer1: b.buyer1, sale: b.sale, gstin: b.gstin })),
+      pickedBuyerId: cands.length === 1 ? cands[0].id : null,
+    };
+  });
+  res.json({
+    auctionId: id, ano: auc.ano, date: auc.date,
+    summary: {
+      names: names.length,
+      matched:   names.filter(n => n.status === 'matched').length,
+      ambiguous: names.filter(n => n.status === 'ambiguous').length,
+      unmatched: names.filter(n => n.status === 'unmatched').length,
+      lotsUnresolved: rows.reduce((s, r) => s + Number(r.lots || 0), 0),
+    },
+    names,
+  });
+});
+
+// Apply picks: body { picks: [{ name, buyerId }] }. For each pick, stamp
+// the chosen buyer's code/name/sale onto every still-unresolved lot on
+// this trade whose buyer1 matches that name. Picks with no buyerId
+// (unmatched/skipped) are ignored.
+app.post('/api/auctions/:id/resolve-buyers', requireLotWrite, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'invalid auction id' });
+  const db = getDb();
+  const auc = db.get('SELECT id FROM auctions WHERE id = ?', [id]);
+  if (!auc) return res.status(404).json({ error: 'auction not found' });
+  const picks = Array.isArray(req.body && req.body.picks) ? req.body.picks : [];
+  let resolvedNames = 0, updatedLots = 0;
+  const skipped = [];
+  for (const p of picks) {
+    const name = String((p && p.name) || '').trim();
+    const buyerId = p && p.buyerId ? parseInt(p.buyerId, 10) : null;
+    if (!name || !buyerId) continue; // unmatched / left blank
+    const b = db.get('SELECT buyer, buyer1, code, sale FROM buyers WHERE id = ?', [buyerId]);
+    if (!b) { skipped.push({ name, reason: 'buyer not found' }); continue; }
+    const cnt = db.get(
+      `SELECT COUNT(*) AS c FROM lots
+        WHERE auction_id = ? AND UPPER(TRIM(buyer1)) = UPPER(TRIM(?)) AND TRIM(COALESCE(buyer,'')) = ''`,
+      [id, name]
+    ).c;
+    if (!cnt) continue;
+    db.run(
+      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ?
+        WHERE auction_id = ? AND UPPER(TRIM(buyer1)) = UPPER(TRIM(?)) AND TRIM(COALESCE(buyer,'')) = ''`,
+      [b.buyer || '', b.buyer1 || '', b.code || '', b.sale || 'L', id, name]
+    );
+    resolvedNames++;
+    updatedLots += Number(cnt || 0);
+  }
+  res.json({ success: true, resolvedNames, updatedLots, skipped });
 });
 
 // ── Download Auction/Lots template XLSX ──────────────────────
