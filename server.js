@@ -4880,6 +4880,31 @@ app.post('/api/trade-fair/import', requireAuctionWrite, async (req, res) => {
 // unresolved name is matched (1) / ambiguous (many) / unmatched (0).
 // Unmatched names are left as-is (skipped) per the chosen workflow.
 
+// A lot is "resolved" when its buyer CODE (lots.buyer) is a real code in
+// the Buyers master. Lots imported from the trade fair carry only a buyer
+// NAME — in buyer1, or (from imports made before the name→buyer1 fix)
+// stuck in the buyer/code field — so their code isn't a valid master code
+// and they need resolving. The name to match on is buyer1 if present,
+// else buyer. Returns { unresolved: [{lotId, name}], validCodes:Set }.
+function _collectUnresolvedBuyers(db, auctionId) {
+  const validCodes = new Set(
+    db.all("SELECT DISTINCT UPPER(TRIM(buyer)) AS c FROM buyers WHERE TRIM(COALESCE(buyer,'')) <> ''").map(r => r.c)
+  );
+  const lots = db.all(
+    "SELECT id, TRIM(COALESCE(buyer,'')) AS buyer, TRIM(COALESCE(buyer1,'')) AS buyer1 FROM lots WHERE auction_id = ?",
+    [auctionId]
+  );
+  const unresolved = [];
+  for (const l of lots) {
+    const resolved = l.buyer && validCodes.has(l.buyer.toUpperCase());
+    if (resolved) continue;
+    const name = l.buyer1 || l.buyer;   // prefer the name field
+    if (!name) continue;                // nothing to name-match on
+    unresolved.push({ lotId: l.id, name });
+  }
+  return { unresolved, validCodes };
+}
+
 // Preview: distinct unresolved buyer names on a trade + their matches.
 app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -4887,31 +4912,28 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
   const db = getDb();
   const auc = db.get('SELECT id, ano, date FROM auctions WHERE id = ?', [id]);
   if (!auc) return res.status(404).json({ error: 'auction not found' });
-  // A lot needs resolving when it has a buyer NAME (buyer1) but no CODE
-  // (buyer). Group by the normalised name so "Kallar Spices" / "KALLAR
-  // SPICES" count once.
-  const rows = db.all(
-    `SELECT TRIM(buyer1) AS name, COUNT(*) AS lots
-       FROM lots
-      WHERE auction_id = ?
-        AND TRIM(COALESCE(buyer1,'')) <> ''
-        AND TRIM(COALESCE(buyer,'')) = ''
-      GROUP BY UPPER(TRIM(buyer1))
-      ORDER BY name`,
-    [id]
-  );
+
+  const { unresolved } = _collectUnresolvedBuyers(db, id);
+  const groups = new Map(); // UPPER(name) -> { name, lots }
+  for (const u of unresolved) {
+    const key = u.name.toUpperCase();
+    if (!groups.has(key)) groups.set(key, { name: u.name, lots: 0 });
+    groups.get(key).lots++;
+  }
   const idx = _plBuildTradeIndex(db);
-  const names = rows.map(r => {
-    const cands = idx.get(String(r.name).toUpperCase()) || [];
-    const status = cands.length === 0 ? 'unmatched' : (cands.length === 1 ? 'matched' : 'ambiguous');
-    return {
-      name: r.name,
-      lots: r.lots,
-      status,
-      candidates: cands.map(b => ({ id: b.id, code: b.code, buyer: b.buyer, buyer1: b.buyer1, sale: b.sale, gstin: b.gstin })),
-      pickedBuyerId: cands.length === 1 ? cands[0].id : null,
-    };
-  });
+  const names = Array.from(groups.values())
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(g => {
+      const cands = idx.get(g.name.toUpperCase()) || [];
+      const status = cands.length === 0 ? 'unmatched' : (cands.length === 1 ? 'matched' : 'ambiguous');
+      return {
+        name: g.name,
+        lots: g.lots,
+        status,
+        candidates: cands.map(b => ({ id: b.id, code: b.code, buyer: b.buyer, buyer1: b.buyer1, sale: b.sale, gstin: b.gstin })),
+        pickedBuyerId: cands.length === 1 ? cands[0].id : null,
+      };
+    });
   res.json({
     auctionId: id, ano: auc.ano, date: auc.date,
     summary: {
@@ -4919,7 +4941,7 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
       matched:   names.filter(n => n.status === 'matched').length,
       ambiguous: names.filter(n => n.status === 'ambiguous').length,
       unmatched: names.filter(n => n.status === 'unmatched').length,
-      lotsUnresolved: rows.reduce((s, r) => s + Number(r.lots || 0), 0),
+      lotsUnresolved: unresolved.length,
     },
     names,
   });
@@ -4927,8 +4949,10 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
 
 // Apply picks: body { picks: [{ name, buyerId }] }. For each pick, stamp
 // the chosen buyer's code/name/sale onto every still-unresolved lot on
-// this trade whose buyer1 matches that name. Picks with no buyerId
-// (unmatched/skipped) are ignored.
+// this trade whose name (buyer1 or buyer) matches. Picks with no buyerId
+// (unmatched/skipped) are ignored. This also cleans up lots whose name
+// was stuck in the code field — buyer1 gets the canonical name, buyer the
+// real code.
 app.post('/api/auctions/:id/resolve-buyers', requireLotWrite, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'invalid auction id' });
@@ -4936,6 +4960,15 @@ app.post('/api/auctions/:id/resolve-buyers', requireLotWrite, (req, res) => {
   const auc = db.get('SELECT id FROM auctions WHERE id = ?', [id]);
   if (!auc) return res.status(404).json({ error: 'auction not found' });
   const picks = Array.isArray(req.body && req.body.picks) ? req.body.picks : [];
+
+  const { unresolved } = _collectUnresolvedBuyers(db, id);
+  const idsByName = new Map(); // UPPER(name) -> [lotId,...]
+  for (const u of unresolved) {
+    const key = u.name.toUpperCase();
+    if (!idsByName.has(key)) idsByName.set(key, []);
+    idsByName.get(key).push(u.lotId);
+  }
+
   let resolvedNames = 0, updatedLots = 0;
   const skipped = [];
   for (const p of picks) {
@@ -4944,19 +4977,15 @@ app.post('/api/auctions/:id/resolve-buyers', requireLotWrite, (req, res) => {
     if (!name || !buyerId) continue; // unmatched / left blank
     const b = db.get('SELECT buyer, buyer1, code, sale FROM buyers WHERE id = ?', [buyerId]);
     if (!b) { skipped.push({ name, reason: 'buyer not found' }); continue; }
-    const cnt = db.get(
-      `SELECT COUNT(*) AS c FROM lots
-        WHERE auction_id = ? AND UPPER(TRIM(buyer1)) = UPPER(TRIM(?)) AND TRIM(COALESCE(buyer,'')) = ''`,
-      [id, name]
-    ).c;
-    if (!cnt) continue;
+    const ids = idsByName.get(name.toUpperCase()) || [];
+    if (!ids.length) continue;
+    const ph = ids.map(() => '?').join(',');
     db.run(
-      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ?
-        WHERE auction_id = ? AND UPPER(TRIM(buyer1)) = UPPER(TRIM(?)) AND TRIM(COALESCE(buyer,'')) = ''`,
-      [b.buyer || '', b.buyer1 || '', b.code || '', b.sale || 'L', id, name]
+      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ? WHERE id IN (${ph})`,
+      [b.buyer || '', b.buyer1 || '', b.code || '', b.sale || 'L', ...ids]
     );
     resolvedNames++;
-    updatedLots += Number(cnt || 0);
+    updatedLots += ids.length;
   }
   res.json({ success: true, resolvedNames, updatedLots, skipped });
 });
