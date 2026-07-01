@@ -4422,7 +4422,7 @@ function runLotImport(db, filePath, body) {
           // Build UPDATE dynamically — only touch fields the file provided, so a sparse "price-only"
           // file doesn't wipe pre-existing bag/qty/buyer values
           const sets = []; const vals = [];
-          if (hasCol(row, 'PRICE', 'RATE PER KG', 'RATE')) { sets.push('price=?');  vals.push(price); }
+          if (price) { sets.push('price=?');  vals.push(price); }
           if (amount)                                              { sets.push('amount=?'); vals.push(amount); }
           if (row.QTY !== undefined || row.qty !== undefined)      { sets.push('qty=?');    vals.push(qty); }
           if (row.BAG !== undefined || row.bag !== undefined ||
