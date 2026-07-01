@@ -4283,6 +4283,25 @@ function runLotImport(db, filePath, body) {
     const ws = workbook.Sheets[workbook.SheetNames[0]];
     if (!ws) throw new Error('No worksheet found');
 
+    // Repair a too-narrow declared range. The trade-fair price-list export
+    // ships a bogus `!ref` (e.g. "A1:F206") that under-reports its width,
+    // even though real data runs out to column J — SheetJS trusts `!ref`
+    // and silently drops every column past F (RATE, buyer, seller...).
+    // Recompute the true bounding box from the actual cell addresses so
+    // every populated column is parsed. Harmless for well-formed files.
+    {
+      let maxC = -1, maxR = -1;
+      for (const k of Object.keys(ws)) {
+        if (k[0] === '!') continue;
+        const a = XLSX.utils.decode_cell(k);
+        if (a.c > maxC) maxC = a.c;
+        if (a.r > maxR) maxR = a.r;
+      }
+      if (maxC >= 0 && maxR >= 0) {
+        ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: maxC, r: maxR } });
+      }
+    }
+
     // Header normaliser: trim, uppercase, collapse runs of spaces /
     // underscores / dashes to a single space. So "LOT NO", "Lot_No",
     // "LOT  NO " and "lot-no" all hash to "LOT NO" — header matching is
