@@ -7700,6 +7700,9 @@ async function tfImportAuction(idValue, i){
     if (!r.ok) throw new Error(d.error || (d.detail ? d.detail : 'Import failed'));
     status.style.background='var(--green-bg)'; status.style.color='var(--green-dk)';
     let html = `<div style="font-weight:700;margin-bottom:4px">✓ Updated ${d.updated||0} lot(s) on ${esc(label)} · ${d.skipped||0} skipped of ${d.total||0} rows</div>`;
+    if (d.columns && d.columns.length){
+      html += `<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Columns detected: ${d.columns.map(c=>'<code>'+esc(c)+'</code>').join(', ')}</div>`;
+    }
     if (d.skipped>0 && d.skipReasons && d.skipReasons.length){
       html += `<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:700;color:var(--amber)">⚠ Why were rows skipped?</summary>`;
       html += '<div style="margin-top:6px;max-height:200px;overflow:auto;background:#fff;border:1px solid var(--border);border-radius:6px;padding:8px"><table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left;padding:3px 6px">Row</th><th style="text-align:left;padding:3px 6px">Lot</th><th style="text-align:left;padding:3px 6px">Reason</th></tr></thead><tbody>';

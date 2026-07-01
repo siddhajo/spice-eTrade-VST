@@ -3243,6 +3243,24 @@ function cleanGstin(cr) {
 }
 const hasValidGstin = (cr) => cleanGstin(cr).length === 15;
 
+// Classify a seller `cr` value and check the label convention:
+//   - a GSTIN  should be written  "GSTIN.<15-char code>"
+//   - a CR no. should be written  "CR.<number>"
+// Returns { kind: 'gstin' | 'cr' | 'blank', ok }. `ok` is whether the
+// value carries the expected prefix for its kind. A bare 15-char GSTIN
+// (kind 'gstin', ok false) or a bare registration number (kind 'cr',
+// ok false) is flagged so data entry stays consistent. Label-only
+// values ("GSTIN." / "CR.") and blanks are 'blank' (handled by the
+// separate no-GSTIN warning), so this check never double-flags them.
+function crLabelFormat(cr) {
+  const raw = String(cr == null ? '' : cr).trim();
+  if (!raw) return { kind: 'blank', ok: true };
+  const core = raw.replace(/^\s*(gstin|cr)\s*[.\s:_-]*/i, '').trim();
+  if (!core) return { kind: 'blank', ok: true };            // prefix with no value
+  if (GSTIN_RE.test(core.toUpperCase())) return { kind: 'gstin', ok: /^gstin\./i.test(raw) };
+  return { kind: 'cr', ok: /^cr\./i.test(raw) };
+}
+
 // Pure, read-only: build the validation report for one auction.
 // Returns { ok, errors[], warnings[], reconciliation, totals }.
 //   errors   — block import (duplicate lot numbers, lots with no seller)
@@ -3321,6 +3339,10 @@ function validateAuctionLots(db, auctionId) {
   pushWarn('no_bank',  'No bank account', 'Seller has no bank account on file',             l => l.trader_id && !tradersWithBank.has(l.trader_id));
   pushWarn('no_pan',   'No PAN',          'Seller has no PAN',                              l => !String(l.pan || '').trim());
   pushWarn('no_phone', 'No phone',        'Seller has no phone number',                     l => !String(l.tel || '').trim());
+  // Label-convention checks: a GSTIN must be prefixed "GSTIN.", a CR
+  // number must be prefixed "CR." (see crLabelFormat).
+  pushWarn('gstin_prefix', 'Add "GSTIN." prefix', 'GSTIN present but not prefixed with "GSTIN."', l => { const f = crLabelFormat(l.cr); return f.kind === 'gstin' && !f.ok; });
+  pushWarn('cr_prefix',    'Add "CR." prefix',    'Registration number not prefixed with "CR."',  l => { const f = crLabelFormat(l.cr); return f.kind === 'cr'    && !f.ok; });
 
   // ── Reconciliation (the "tally") ──────────────────────────────
   const totalLots = lots.length;
@@ -4607,7 +4629,11 @@ function runLotImport(db, filePath, body) {
       auctionCount: auctionBreakdown.length,
       auctionBreakdown,
       autoAllocCreated,
-      skipReasons
+      skipReasons,
+      // Actual header names parsed from the sheet — surfaced so a column
+      // that didn't map (price/buyer named differently than expected) is
+      // diagnosable from the UI without re-opening the file.
+      columns: Object.keys(rows[0] || {}),
     };
 }
 
