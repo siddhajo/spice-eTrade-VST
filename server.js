@@ -4880,6 +4880,23 @@ app.post('/api/trade-fair/import', requireAuctionWrite, async (req, res) => {
 // unresolved name is matched (1) / ambiguous (many) / unmatched (0).
 // Unmatched names are left as-is (skipped) per the chosen workflow.
 
+// Index the Buyers master by TRADE NAME (buyer1) ONLY. Resolve Buyers
+// matches the trade-fair buyer NAME against the buyers-master trade name,
+// not the code field (unlike _plBuildTradeIndex, which also indexes by
+// buyer). Case/whitespace-insensitive. Value = array of candidate buyers.
+function _buildBuyerNameIndex(db) {
+  const buyers = db.all('SELECT id, buyer, buyer1, code, ti, sale, gstin FROM buyers');
+  const idx = new Map();
+  for (const b of buyers) {
+    const k = String(b.buyer1 == null ? '' : b.buyer1).trim().toUpperCase();
+    if (!k) continue;
+    if (!idx.has(k)) idx.set(k, []);
+    const arr = idx.get(k);
+    if (!arr.some(x => x.id === b.id)) arr.push(b);
+  }
+  return idx;
+}
+
 // A lot is "resolved" when its buyer CODE (lots.buyer) is a real code in
 // the Buyers master. Lots imported from the trade fair carry only a buyer
 // NAME — in buyer1, or (from imports made before the name→buyer1 fix)
@@ -4920,7 +4937,7 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
     if (!groups.has(key)) groups.set(key, { name: u.name, lots: 0 });
     groups.get(key).lots++;
   }
-  const idx = _plBuildTradeIndex(db);
+  const idx = _buildBuyerNameIndex(db);   // match on trade name (buyer1) only
   const names = Array.from(groups.values())
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(g => {
