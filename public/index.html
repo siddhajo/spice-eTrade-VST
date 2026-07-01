@@ -7726,8 +7726,11 @@ async function tfImportAuction(idValue, i){
     }
     // Prices land with the buyer TRADE NAME but no code — offer to resolve
     // those names to Buyers-master codes next (same matcher as Price List
-    // Mapping). Button carries the app trade id + label.
-    html += `<div style="margin-top:10px"><button class="btn btn-a" style="padding:6px 14px;font-weight:700" onclick="openResolveBuyers('${esc(auctionId)}', ${JSON.stringify(label)})">🔗 Resolve buyers →</button>
+    // Mapping). Stash id+label in globals (avoids quoting the label into
+    // the inline onclick, which broke on the "·" separators / quotes).
+    window._rbAuctionId = auctionId;
+    window._rbLabel = label;
+    html += `<div style="margin-top:10px"><button class="btn btn-a" style="padding:6px 14px;font-weight:700" onclick="openResolveBuyers()">🔗 Resolve buyers →</button>
       <span style="font-size:11px;color:var(--text3);margin-left:8px">Match imported buyer names to your Buyers master (assigns the code used on invoices).</span></div>`;
     status.innerHTML = html;
     if (typeof loadAuctions==='function') loadAuctions();
@@ -7743,8 +7746,11 @@ async function tfImportAuction(idValue, i){
 // amber=ambiguous → choose, red=no match → skipped). Apply writes the
 // code/name/sale back onto the lots. Reuses the Price List Mapping matcher.
 async function openResolveBuyers(auctionId, label){
-  window._rbAuctionId = auctionId;
-  window._rbLabel = label || ('Trade ' + auctionId);
+  // id/label come from globals set by tfImportAuction (or passed directly).
+  if (auctionId) window._rbAuctionId = auctionId;
+  if (label) window._rbLabel = label;
+  if (!window._rbAuctionId) { alert('No trade to resolve — import prices first.'); return; }
+  if (!window._rbLabel) window._rbLabel = 'Trade ' + window._rbAuctionId;
   showModal('resolve-buyers-modal');
   const sub = document.getElementById('rb-subtitle');
   if (sub) sub.textContent = window._rbLabel;
