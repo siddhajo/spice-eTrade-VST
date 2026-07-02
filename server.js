@@ -290,8 +290,20 @@ function requireAuth(req, res, next) {
       must_change_password: true
     });
   }
-  // Touch last_used_at for cleanup / activity display
-  db.run(`UPDATE sessions SET last_used_at = datetime('now','localtime') WHERE token = ?`, [token]);
+  // Touch last_used_at for cleanup / activity display — but throttled. Without
+  // the WHERE guard this UPDATE fired on EVERY authenticated request, and each
+  // write forces sql.js to re-serialize the entire in-memory DB to disk, which
+  // blocks the single event loop and is the dominant cause of the request
+  // pileups under concurrent load. Only rewrite the stamp when it's actually
+  // stale (>5 min); the guard makes the statement a no-op most of the time, and
+  // the change-gated scheduleSave() in db.js then skips the disk write too.
+  db.run(
+    `UPDATE sessions SET last_used_at = datetime('now','localtime')
+     WHERE token = ?
+       AND (last_used_at IS NULL
+            OR last_used_at <= datetime('now','localtime','-5 minutes'))`,
+    [token]
+  );
   req.user = user;
   req.session = session;
   next();
@@ -4987,12 +4999,19 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
     .map(g => {
       const cands = idx.get(g.name.toUpperCase()) || [];
       const status = cands.length === 0 ? 'unmatched' : (cands.length === 1 ? 'matched' : 'ambiguous');
+      // Auto-pick like Price List Mapping: single → that one; ambiguous →
+      // first candidate with a non-blank code (else first). The operator
+      // adjusts individual lots later via the lot edit screen if needed.
+      let picked = null;
+      if (cands.length === 1) picked = cands[0];
+      else if (cands.length > 1) picked = cands.find(c => c.code && String(c.code).trim()) || cands[0];
       return {
         name: g.name,
         lots: g.lots,
         status,
         candidates: cands.map(b => ({ id: b.id, code: b.code, buyer: b.buyer, buyer1: b.buyer1, sale: b.sale, gstin: b.gstin })),
-        pickedBuyerId: cands.length === 1 ? cands[0].id : null,
+        pickedBuyerId: picked ? picked.id : null,
+        pickedCode: picked ? (picked.code || '') : '',
       };
     });
   res.json({

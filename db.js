@@ -827,6 +827,27 @@ async function initDb() {
     catch (e) { /* column already exists — ignore */ }
   }
 
+  // ── ONE-TIME MIGRATION FLAGS ───────────────────────────────
+  // Records which one-shot DATA migrations (backfills / retags) have already
+  // run, so expensive full-table rewrites don't re-execute on every boot.
+  // The column ALTERs above are naturally idempotent (they throw once the
+  // column exists); the data fixes below are not, and the invoice-state retag
+  // in particular re-scanned and re-UPDATEd every invoice on each restart —
+  // O(invoices × lots) synchronous work that stalled the first requests after
+  // every deploy/restart.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS migration_flags (
+    key TEXT PRIMARY KEY,
+    applied_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  const migrationDone = (key) => {
+    try { return !!wrapped.get('SELECT 1 AS x FROM migration_flags WHERE key = ?', [key]); }
+    catch (_) { return false; }
+  };
+  const markMigrationDone = (key) => {
+    try { wrapped.run('INSERT OR IGNORE INTO migration_flags (key) VALUES (?)', [key]); }
+    catch (_) {}
+  };
+
   // One-time backfill: assign crop_receipt_no to every lot that doesn't
   // have one yet, per auction, ordered by id (creation order). Without
   // this, existing rows would all read NULL and the new Recent Entries
@@ -894,6 +915,11 @@ async function initDb() {
   // Safe-by-default: only updates rows we can confidently classify.
   // Idempotent: re-running produces the same labels.
   try {
+    if (migrationDone('invoice_state_retag_v1')) {
+      // Already applied on a prior boot. New invoices get their state stamped
+      // correctly at insert time, so there's nothing left to backfill.
+      throw { _skip: true };
+    }
     const allInvs = wrapped.all('SELECT id, auction_id, buyer, invo FROM invoices');
     let aspCount = 0, ispCount = 0;
     for (const inv of allInvs) {
@@ -920,7 +946,9 @@ async function initDb() {
     if (aspCount + ispCount > 0) {
       console.log(`Migration: retagged ${aspCount} invoices as KERALA (ASP) and ${ispCount} as TAMIL NADU (ISP) based on lot lineage`);
     }
-  } catch (e) { /* table may not exist on fresh DB — ignore */ }
+    // Stamp so this full-table retag never runs again on subsequent boots.
+    markMigrationDone('invoice_state_retag_v1');
+  } catch (e) { if (!e || !e._skip) { /* table may not exist on fresh DB — ignore */ } }
 
   const row = wrapped.get('SELECT COUNT(*) as cnt FROM users');
   if (!row || row.cnt === 0) {
@@ -1001,7 +1029,12 @@ function makeWrapper() {
     run(sql, ...rest) {
       const params = normalizeParams(rest);
       const info = runStatement(sql, params);
-      scheduleSave();
+      // Only persist when the statement actually changed data. A write whose
+      // WHERE guard matched nothing (e.g. the throttled last_used_at touch in
+      // requireAuth) leaves the on-disk DB identical, so re-serializing the
+      // whole file via rawDb.export() would be wasted synchronous work that
+      // blocks the single event loop.
+      if (info.changes > 0) scheduleSave();
       return info;
     },
 
@@ -1032,7 +1065,8 @@ function makeWrapper() {
       return {
         run(...args) {
           const info = runStatement(sql, args);
-          scheduleSave();
+          // See run() above — skip the full-DB serialize when nothing changed.
+          if (info.changes > 0) scheduleSave();
           return info;
         },
         get(...args) {

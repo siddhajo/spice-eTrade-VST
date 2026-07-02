@@ -7922,50 +7922,52 @@ async function rbLoad(){
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Buyer name (from trade)</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lots</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Status</th>'+
-    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Assign buyer (trade name → code)</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Picked CODE</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Candidates</th>'+
     '</tr></thead><tbody>';
-  d.names.forEach((n,i)=>{
+  d.names.forEach((n)=>{
     const bg = n.status === 'unmatched' ? '#fef2f2'
              : n.status === 'ambiguous' ? '#fff7ed'
              : '#fff';
     const badge = _plStatusBadge(n.status);
-    let picker;
-    if (n.status==='unmatched'){
-      picker = '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>';
-    } else {
-      const opts = (n.status==='ambiguous' ? '<option value="">— choose buyer —</option>' : '')
-        + n.candidates.map(c=>`<option value="${c.id}" ${String(c.id)===String(n.pickedBuyerId)?'selected':''}>${esc(c.code||c.buyer||'?')} · ${esc(c.buyer1||c.buyer||'')}${c.gstin?(' · '+esc(c.gstin)):''}</option>`).join('');
-      picker = `<select id="rb-pick-${i}" style="min-width:260px;padding:4px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a">${opts}</select>`;
-    }
+    const cands = (n.candidates || []).map(c =>
+      '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+
+      '<b>'+escAttr(c.code||'(no code)')+'</b>' +
+      ' · ' + escAttr(c.buyer||'') +
+      (c.sale ? ' · <span style="color:#666">'+escAttr(c.sale)+'</span>' : '')+
+      '</span>'
+    ).join('');
     html += '<tr style="background:'+bg+'">'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:600">'+esc(n.name)+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:600">'+escAttr(n.name)+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+n.lots+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+picker+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:'+(n.pickedCode?'700':'400')+';color:'+(n.pickedCode?'#15803d':'#c00')+'">'+
+        escAttr(n.pickedCode || '— none —')+
+      '</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
     '</tr>';
   });
   html += '</tbody></table></div>';
   if (s.ambiguous){
     html += '<div style="margin-top:10px;font-size:12px;color:#a16207;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px">'+
-      '<b>⚠ '+s.ambiguous+' name(s) are ambiguous</b> — pick the right buyer from the dropdown before assigning.</div>';
+      '<b>⚠ '+s.ambiguous+' name(s) are ambiguous</b> — Assign uses the first candidate code (shown under Picked CODE). '+
+      'Switch a specific lot to a different code afterwards from the lot edit screen (it lists every code that shares a trade name).</div>';
   }
   if (s.unmatched){
     html += '<div style="margin-top:10px;font-size:12px;color:#c00;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px">'+
-      '<b>✗ '+s.unmatched+' name(s) have no matching buyer</b> — add them to the Buyers master, then re-run.</div>';
+      '<b>✗ '+s.unmatched+' name(s) have no matching buyer</b> — those lots are skipped; add the trade names to the Buyers master, then re-run.</div>';
   }
   host.innerHTML = html;
 }
 async function rbApply(){
   const foot = document.getElementById('pl-rb-foot');
   const btn = document.getElementById('pl-rb-apply-btn');
-  const picks = [];
-  (window._rbNames||[]).forEach((n,i)=>{
-    if (n.status==='unmatched') return;
-    const sel = document.getElementById('rb-pick-'+i);
-    const buyerId = sel ? sel.value : '';
-    if (buyerId) picks.push({ name: n.name, buyerId });
-  });
-  if (!picks.length){ if(foot){foot.style.color='#991b1b';foot.textContent='Nothing selected to assign.';} return; }
+  // Assign the auto-picked code for every matched/ambiguous name (same
+  // first-candidate rule the file preview uses). Unmatched are skipped.
+  const picks = (window._rbNames||[])
+    .filter(n => n.pickedBuyerId)
+    .map(n => ({ name: n.name, buyerId: n.pickedBuyerId }));
+  if (!picks.length){ if(foot){foot.style.color='#991b1b';foot.textContent='Nothing to assign — no names matched a buyer.';} return; }
   if (btn) btn.disabled = true;
   if (foot){ foot.style.color='var(--text3)'; foot.textContent='Assigning buyers…'; }
   try {
