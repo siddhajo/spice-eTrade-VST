@@ -7900,30 +7900,59 @@ async function rbLoad(){
   }
   if (applyBtn) applyBtn.style.display='';
   const s = d.summary||{};
-  const tone = {matched:{bg:'#ecfdf5',bd:'#a7f3d0',fg:'#065f46',t:'matched'},ambiguous:{bg:'#fffbeb',bd:'#fde68a',fg:'#92400e',t:'ambiguous'},unmatched:{bg:'#fef2f2',bd:'#fecaca',fg:'#991b1b',t:'no match'}};
-  let html = `<div style="font-size:12px;color:var(--text2);margin-bottom:10px"><b>${esc(window._rbLabel||'')}</b> — ${s.names} name(s) on ${s.lotsUnresolved} lot(s): <b style="color:#065f46">${s.matched} matched</b> · <b style="color:#92400e">${s.ambiguous} to choose</b> · <b style="color:#991b1b">${s.unmatched} no match</b>.</div>`;
-  html += '<div style="overflow:auto;max-height:52vh;border:1px solid var(--spice-line);border-radius:8px"><table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="background:var(--bg);position:sticky;top:0">'
-    + ['Buyer name','Lots','Status','→ Assign buyer (trade name → code)'].map(h=>`<th style="text-align:left;padding:6px 8px;white-space:nowrap">${h}</th>`).join('')
-    + '</tr></thead><tbody>';
   window._rbNames = d.names;
+  // Mirror the "From a file" preview layout: summary cards + bordered
+  // table with MATCHED/AMBIGUOUS/UNMATCHED badges and tinted rows. The
+  // action column keeps an interactive dropdown (trade mode writes the
+  // code back onto the lots, unlike the file mode which just fills a cell).
+  const card = (label, value, color) =>
+    '<div style="flex:1;min-width:120px;padding:10px 12px;border:1px solid '+color+';border-radius:8px;background:'+color+'1a">'+
+      '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.4px">'+label+'</div>'+
+      '<div style="font-size:22px;font-weight:700;color:'+color+'">'+value+'</div>'+
+    '</div>';
+  let html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+    card('Buyer names', s.names||0, '#374151')+
+    card('Matched',     s.matched||0, '#15803d')+
+    card('Ambiguous',   s.ambiguous||0, '#a16207')+
+    card('Unmatched',   s.unmatched||0, '#c00')+
+    card('Lots',        s.lotsUnresolved||0, '#0369a1')+
+    '</div>';
+  html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Buyer name (from trade)</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lots</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Status</th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Assign buyer (trade name → code)</th>'+
+    '</tr></thead><tbody>';
   d.names.forEach((n,i)=>{
-    const tn = tone[n.status]||tone.unmatched;
+    const bg = n.status === 'unmatched' ? '#fef2f2'
+             : n.status === 'ambiguous' ? '#fff7ed'
+             : '#fff';
+    const badge = _plStatusBadge(n.status);
     let picker;
     if (n.status==='unmatched'){
-      picker = '<span style="color:#991b1b;font-size:11.5px">no matching trade name in Buyers — skipped</span>';
+      picker = '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>';
     } else {
       const opts = (n.status==='ambiguous' ? '<option value="">— choose buyer —</option>' : '')
         + n.candidates.map(c=>`<option value="${c.id}" ${String(c.id)===String(n.pickedBuyerId)?'selected':''}>${esc(c.code||c.buyer||'?')} · ${esc(c.buyer1||c.buyer||'')}${c.gstin?(' · '+esc(c.gstin)):''}</option>`).join('');
-      picker = `<select id="rb-pick-${i}" style="min-width:280px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a">${opts}</select>`;
+      picker = `<select id="rb-pick-${i}" style="min-width:260px;padding:4px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#0f172a">${opts}</select>`;
     }
-    html += `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:6px 8px;font-weight:600">${esc(n.name)}</td>
-      <td style="padding:6px 8px;text-align:right">${n.lots}</td>
-      <td style="padding:6px 8px"><span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;background:${tn.bg};border:1px solid ${tn.bd};color:${tn.fg}">${tn.t}</span></td>
-      <td style="padding:6px 8px">${picker}</td>
-    </tr>`;
+    html += '<tr style="background:'+bg+'">'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:600">'+esc(n.name)+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+n.lots+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+picker+'</td>'+
+    '</tr>';
   });
   html += '</tbody></table></div>';
+  if (s.ambiguous){
+    html += '<div style="margin-top:10px;font-size:12px;color:#a16207;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px">'+
+      '<b>⚠ '+s.ambiguous+' name(s) are ambiguous</b> — pick the right buyer from the dropdown before assigning.</div>';
+  }
+  if (s.unmatched){
+    html += '<div style="margin-top:10px;font-size:12px;color:#c00;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px">'+
+      '<b>✗ '+s.unmatched+' name(s) have no matching buyer</b> — add them to the Buyers master, then re-run.</div>';
+  }
   host.innerHTML = html;
 }
 async function rbApply(){
