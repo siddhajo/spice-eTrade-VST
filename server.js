@@ -2994,8 +2994,11 @@ function _plBuildTradeIndex(db) {
   }
   return idx;
 }
-async function _plProcessFile(filePath) {
+async function _plProcessFile(filePath, overrides = {}) {
   // Returns { wb, ws, cols, perRow: [{row, tradeName, status, pickedCode, candidates}], summary }
+  // `overrides` maps an Excel row number (string) → a CODE the operator chose
+  // for that row's ambiguous match. An override is honoured only when it is one
+  // of the row's own candidate codes, so a stale/forged value can't slip in.
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
   const ws = wb.worksheets[0];
@@ -3051,6 +3054,14 @@ async function _plProcessFile(filePath) {
       entry.pickedCode = (withCode || cands[0]).code || '';
       ambiguous++;
     }
+    // Apply an operator override (from the preview UI) when it names one of
+    // this row's candidate codes. Lets the user resolve ambiguous rows up
+    // front instead of per-lot after Price Import.
+    const ov = overrides && overrides[String(r)];
+    if (ov != null && String(ov) !== '' &&
+        entry.candidates.some(c => String(c.code) === String(ov))) {
+      entry.pickedCode = String(ov);
+    }
     perRow.push(entry);
   }
   const summary = {
@@ -3074,7 +3085,11 @@ app.post('/api/price-list/map-preview', requireView, upload.single('file'), asyn
 app.post('/api/price-list/map-download', requireView, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
-    const { wb, ws, cols, perRow } = await _plProcessFile(req.file.path);
+    // Per-row CODE choices the operator made for ambiguous rows in the
+    // preview UI, sent as a JSON string in the multipart form.
+    let overrides = {};
+    try { if (req.body && req.body.overrides) overrides = JSON.parse(req.body.overrides) || {}; } catch (_) {}
+    const { wb, ws, cols, perRow } = await _plProcessFile(req.file.path, overrides);
     // Write the resolved code back into each row's CODE cell. We
     // explicitly set the cell value so the existing column-level numFmt
     // (which Excel uses to right-pad short codes like "RSH") still

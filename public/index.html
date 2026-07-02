@@ -7925,33 +7925,55 @@ async function rbLoad(){
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Picked CODE</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Candidates</th>'+
     '</tr></thead><tbody>';
-  d.names.forEach((n)=>{
+  d.names.forEach((n, i)=>{
     const bg = n.status === 'unmatched' ? '#fef2f2'
              : n.status === 'ambiguous' ? '#fff7ed'
              : '#fff';
     const badge = _plStatusBadge(n.status);
-    const cands = (n.candidates || []).map(c =>
-      '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+
-      '<b>'+escAttr(c.code||'(no code)')+'</b>' +
-      ' · ' + escAttr(c.buyer||'') +
-      (c.sale ? ' · <span style="color:#666">'+escAttr(c.sale)+'</span>' : '')+
-      '</span>'
-    ).join('');
+    const isAmb = n.status === 'ambiguous';
+    // Candidate badges. On ambiguous names they're clickable — clicking one
+    // picks its buyer (mirrors the dropdown in the Picked CODE column).
+    const cands = (n.candidates || []).map(c => {
+      const lbl = '<b>'+escAttr(c.code||'(no code)')+'</b>'+
+        ' · '+escAttr(c.buyer||'')+
+        (c.sale ? ' · <span style="color:#666">'+escAttr(c.sale)+'</span>' : '');
+      if (isAmb) {
+        const on = Number(c.id) === Number(n.pickedBuyerId);
+        return '<span data-rb-cand-idx="'+i+'" data-rb-cand-bid="'+Number(c.id)+'" onclick="rbPickEl(this)" '+
+          'title="Click to pick this buyer" '+
+          'style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;cursor:pointer;font-size:11px;'+
+          'background:'+(on?'#dcfce7':'#fafafa')+';outline:'+(on?'2px solid #15803d':'none')+'">'+lbl+'</span>';
+      }
+      return '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+lbl+'</span>';
+    }).join('');
+    // Picked CODE cell: a dropdown for ambiguous names so the operator can
+    // choose which buyer is assigned to those lots; plain text otherwise.
+    let pickedCell;
+    if (isAmb) {
+      const opts = (n.candidates || []).map(c =>
+        '<option value="'+Number(c.id)+'"'+(Number(c.id)===Number(n.pickedBuyerId)?' selected':'')+'>'+
+          escAttr((c.code||'(no code)')+' · '+(c.buyer||''))+'</option>'
+      ).join('');
+      pickedCell = '<select data-rb-idx="'+i+'" onchange="rbPick(this.getAttribute(\'data-rb-idx\'), this.value)" '+
+        'style="font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;max-width:240px;font-weight:700;color:#15803d">'+opts+'</select>';
+    } else {
+      pickedCell = '<span style="font-weight:'+(n.pickedCode?'700':'400')+';color:'+(n.pickedCode?'#15803d':'#c00')+'">'+
+        escAttr(n.pickedCode || '— none —')+'</span>';
+    }
     html += '<tr style="background:'+bg+'">'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:600">'+escAttr(n.name)+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+n.lots+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:'+(n.pickedCode?'700':'400')+';color:'+(n.pickedCode?'#15803d':'#c00')+'">'+
-        escAttr(n.pickedCode || '— none —')+
-      '</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
     '</tr>';
   });
   html += '</tbody></table></div>';
   if (s.ambiguous){
     html += '<div style="margin-top:10px;font-size:12px;color:#a16207;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px">'+
-      '<b>⚠ '+s.ambiguous+' name(s) are ambiguous</b> — Assign uses the first candidate code (shown under Picked CODE). '+
-      'Switch a specific lot to a different code afterwards from the lot edit screen (it lists every code that shares a trade name).</div>';
+      '<b>⚠ '+s.ambiguous+' name(s) are ambiguous</b> — more than one buyer shares the trade name. '+
+      'Pick the right buyer from the <b>Picked CODE</b> dropdown (or click a candidate) before you Assign. '+
+      'Untouched names default to the first candidate.</div>';
   }
   if (s.unmatched){
     html += '<div style="margin-top:10px;font-size:12px;color:#c00;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px">'+
@@ -7959,6 +7981,30 @@ async function rbLoad(){
   }
   host.innerHTML = html;
 }
+// Record the operator's buyer choice for an ambiguous name and keep the
+// dropdown + candidate badges in sync. `idx` indexes window._rbNames; rbApply
+// reads the mutated pickedBuyerId straight off it, so no other wiring needed.
+function rbPick(idx, buyerId){
+  idx = parseInt(idx, 10);
+  const n = (window._rbNames || [])[idx];
+  if (!n) return;
+  buyerId = buyerId ? parseInt(buyerId, 10) : null;
+  const c = (n.candidates || []).find(x => Number(x.id) === buyerId);
+  n.pickedBuyerId = c ? c.id : null;
+  n.pickedCode = c ? (c.code || '') : '';
+  const sel = document.querySelector('select[data-rb-idx="'+idx+'"]');
+  if (sel && String(sel.value) !== String(buyerId)) sel.value = String(buyerId);
+  document.querySelectorAll('[data-rb-cand-idx="'+idx+'"]').forEach(el => {
+    const on = Number(el.getAttribute('data-rb-cand-bid')) === buyerId;
+    el.style.background = on ? '#dcfce7' : '#fafafa';
+    el.style.outline = on ? '2px solid #15803d' : 'none';
+  });
+}
+// Click handler for a candidate badge — reads its index/buyer-id from data-attrs.
+function rbPickEl(el){
+  rbPick(el.getAttribute('data-rb-cand-idx'), el.getAttribute('data-rb-cand-bid'));
+}
+
 async function rbApply(){
   const foot = document.getElementById('pl-rb-foot');
   const btn = document.getElementById('pl-rb-apply-btn');
@@ -25275,6 +25321,11 @@ function escAttr(s){ return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&a
 // a successful preview, otherwise downloads can race ahead of the
 // user's review.
 let _plLastSummary = null;
+// Per-row CODE the operator picked for ambiguous rows, keyed by Excel row
+// number (as a string). Sent to /map-download so the chosen code — not the
+// auto-picked first candidate — lands in the file. Reset whenever a fresh
+// preview renders or a new file is chosen.
+let _plOverrides = {};
 
 function plOnFileChange(){
   // Picking a new file invalidates the previous preview, so reset the
@@ -25282,6 +25333,7 @@ function plOnFileChange(){
   // it, swap to File B, and download File B's mapping without seeing
   // its preview first.
   _plLastSummary = null;
+  _plOverrides = {};
   const btn = document.getElementById('pl-download-btn');
   if (btn) btn.disabled = true;
   const result = document.getElementById('pl-result');
@@ -25339,6 +25391,8 @@ function _plRenderPreview(data){
   const host = document.getElementById('pl-preview');
   if (!host) return;
   const rows = Array.isArray(data.rows) ? data.rows : [];
+  // Fresh preview → drop any selections made against the previous file.
+  _plOverrides = {};
 
   // Card summary on top — same idiom as the Import Old Data verify panel.
   const card = (label, value, color) =>
@@ -25376,21 +25430,47 @@ function _plRenderPreview(data){
              : rw.status === 'ambiguous' ? '#fff7ed'
              : '#fff';
     const badge = _plStatusBadge(rw.status);
-    const cands = (rw.candidates || []).map(c =>
-      '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+
-      '<b>'+escAttr(c.code||'(no code)')+'</b>' +
-      ' · ' + escAttr(c.buyer||'') +
-      (c.sale ? ' · <span style="color:#666">'+escAttr(c.sale)+'</span>' : '')+
-      '</span>'
-    ).join('');
+    const isAmb = rw.status === 'ambiguous';
+    // For ambiguous rows, seed the selection map with the auto-picked code so
+    // the download matches what's shown even if the operator never touches it.
+    if (isAmb) _plOverrides[String(rw.row)] = rw.pickedCode || '';
+    // Candidate badges. On ambiguous rows they're clickable — clicking one
+    // picks its code (mirrors the dropdown in the Picked CODE column).
+    const cands = (rw.candidates || []).map(c => {
+      const code = c.code || '';
+      const lbl = '<b>'+escAttr(code||'(no code)')+'</b>'+
+        ' · '+escAttr(c.buyer||'')+
+        (c.sale ? ' · <span style="color:#666">'+escAttr(c.sale)+'</span>' : '');
+      if (isAmb) {
+        const on = code === rw.pickedCode;
+        return '<span data-pl-cand-row="'+rw.row+'" data-pl-cand-code="'+escAttr(code)+'" onclick="_plPickEl(this)" '+
+          'title="Click to pick this code" '+
+          'style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;cursor:pointer;font-size:11px;'+
+          'background:'+(on?'#dcfce7':'#fafafa')+';outline:'+(on?'2px solid #15803d':'none')+'">'+lbl+'</span>';
+      }
+      return '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+lbl+'</span>';
+    }).join('');
+    // Picked CODE cell: a dropdown for ambiguous rows so the operator can
+    // choose which buyer's code is written to the file; plain text otherwise.
+    let pickedCell;
+    if (isAmb) {
+      const opts = (rw.candidates || []).map(c => {
+        const code = c.code || '';
+        return '<option value="'+escAttr(code)+'"'+(code===rw.pickedCode?' selected':'')+'>'+
+          escAttr((code||'(no code)')+' · '+(c.buyer||''))+'</option>';
+      }).join('');
+      pickedCell = '<select data-pl-row="'+rw.row+'" onchange="_plPick(this.value, this.getAttribute(\'data-pl-row\'))" '+
+        'style="font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;max-width:240px;font-weight:700;color:#15803d">'+opts+'</select>';
+    } else {
+      pickedCell = '<span style="font-weight:'+(rw.pickedCode?'700':'400')+';color:'+(rw.pickedCode?'#15803d':'#c00')+'">'+
+        escAttr(rw.pickedCode || '— none —')+'</span>';
+    }
     html += '<tr style="background:'+bg+'">'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+rw.row+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+escAttr(rw.lot||'')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.tradeName||'')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:'+(rw.pickedCode?'700':'400')+';color:'+(rw.pickedCode?'#15803d':'#c00')+'">'+
-        escAttr(rw.pickedCode || '— none —')+
-      '</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
     '</tr>';
   }
@@ -25398,8 +25478,9 @@ function _plRenderPreview(data){
 
   if (data.ambiguous) {
     html += '<div style="margin-top:10px;font-size:12px;color:#a16207;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px">'+
-      '<b>⚠ '+data.ambiguous+' row(s) are ambiguous</b> — the downloaded file uses the first candidate code. '+
-      'Switch a specific lot to a different code from the candidates by editing the lot after Price Import (the lot edit screen now lists every code that shares a trade name).'+
+      '<b>⚠ '+data.ambiguous+' row(s) are ambiguous</b> — more than one buyer shares the trade name. '+
+      'Pick the right code from the <b>Picked CODE</b> dropdown (or click a candidate). Your choice is written into the downloaded file. '+
+      'Untouched rows default to the first candidate code.'+
     '</div>';
   }
   if (data.unmatched) {
@@ -25415,6 +25496,25 @@ function _plStatusBadge(status){
   if (status === 'ambiguous') return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#fed7aa;color:#9a3412;font-weight:700;font-size:11px">AMBIGUOUS</span>';
   if (status === 'unmatched') return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#fecaca;color:#991b1b;font-weight:700;font-size:11px">UNMATCHED</span>';
   return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#374151;font-weight:700;font-size:11px">BLANK</span>';
+}
+
+// Record the operator's CODE choice for an ambiguous row and keep the
+// dropdown + candidate badges visually in sync. `row` is the Excel row number.
+function _plPick(code, row){
+  row = String(row);
+  _plOverrides[row] = code;
+  const sel = document.querySelector('select[data-pl-row="'+row+'"]');
+  if (sel && sel.value !== code) sel.value = code;
+  document.querySelectorAll('[data-pl-cand-row="'+row+'"]').forEach(el => {
+    const on = el.getAttribute('data-pl-cand-code') === code;
+    el.style.background = on ? '#dcfce7' : '#fafafa';
+    el.style.outline = on ? '2px solid #15803d' : 'none';
+  });
+}
+// Click handler for a candidate badge — reads its code/row from data-attrs so
+// we never have to escape the code into an inline onclick string.
+function _plPickEl(el){
+  _plPick(el.getAttribute('data-pl-cand-code'), el.getAttribute('data-pl-cand-row'));
 }
 
 async function plDownload(){
@@ -25434,6 +25534,9 @@ async function plDownload(){
   try {
     const fd = new FormData();
     fd.append('file', fileEl.files[0]);
+    // The operator's per-row CODE choices for ambiguous rows. The server
+    // validates each against that row's candidates before writing it.
+    fd.append('overrides', JSON.stringify(_plOverrides || {}));
     const r = await fetch(B + '/api/price-list/map-download', {
       method: 'POST', body: fd,
       headers: { 'Authorization': 'Bearer ' + T }
