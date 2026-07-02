@@ -4771,6 +4771,50 @@ app.put('/api/trade-fair/config', requireSettingsWrite, (req, res) => {
   res.json({ ok: true, updated: sets.length });
 });
 
+// ── In-app OTP login ──────────────────────────────────────────
+// Two-step: /otp/send requests an OTP to the mobile and stashes the
+// pre-auth session+csrf here; /otp/verify submits the OTP, captures the
+// AUTHENTICATED cookie, and saves it as the trade-fair session — so the
+// operator never has to paste a cookie. Pending logins live in memory,
+// keyed by mobile, and expire after 10 minutes.
+const _tfPendingOtp = new Map();
+function _tfSweepPending() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [k, v] of _tfPendingOtp) if (!v || v.at < cutoff) _tfPendingOtp.delete(k);
+}
+app.post('/api/trade-fair/otp/send', requireSettingsWrite, async (req, res) => {
+  const cfg = _tfConfig(getDb());
+  const mobile = String((req.body && req.body.mobile) || '').replace(/\D/g, '');
+  try {
+    _tfSweepPending();
+    const { session, csrf, otpExpiresAt } = await tradeFair.loginSendOtp(cfg, mobile);
+    _tfPendingOtp.set(mobile, { session, csrf, at: Date.now() });
+    res.json({ ok: true, otpExpiresAt });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+app.post('/api/trade-fair/otp/verify', requireSettingsWrite, async (req, res) => {
+  const db = getDb();
+  const cfg = _tfConfig(db);
+  const mobile = String((req.body && req.body.mobile) || '').replace(/\D/g, '');
+  const otp = String((req.body && req.body.otp) || '').trim();
+  const pending = _tfPendingOtp.get(mobile);
+  if (!pending) return res.status(400).json({ error: 'Send an OTP first — no pending login for this mobile number (or it expired).' });
+  try {
+    const { sessionCookie } = await tradeFair.loginVerifyOtp(cfg, mobile, otp, pending.session, pending.csrf);
+    if (!sessionCookie) throw new Error('Login succeeded but no session cookie came back.');
+    db.run(
+      `UPDATE trade_fair_config SET session_cookie = ?, cookie_updated_at = ?, updated_at = datetime('now','localtime') WHERE id = 1`,
+      [sessionCookie, new Date().toISOString()]
+    );
+    _tfPendingOtp.delete(mobile);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // List recent trade-fair auctions/sessions (newest first). Doubles as
 // the "test connection" probe — a bad/expired cookie surfaces here as a
 // clear session-expired error.

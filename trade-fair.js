@@ -60,16 +60,123 @@ function buildCookieHeader(cfg) {
   return `${cfg.cookieName || '_kcpmc_rails_session'}=${raw}`;
 }
 
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
 function baseHeaders(cfg, extra) {
   const cookie = buildCookieHeader(cfg);
   return Object.assign({
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
-      'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+    'User-Agent': UA,
     'X-Requested-With': 'XMLHttpRequest',
     'Accept': 'application/json, text/javascript, */*; q=0.01',
     'Referer': noSlash(cfg.baseUrl) + '/spices/admin',
     'Cookie': cookie,
   }, extra || {});
+}
+
+// ── OTP login (mobile + OTP, Rails Devise + CSRF) ─────────────
+// Discovered from the trade-fair site's own login JS:
+//   • login page:  GET  /trading/dashboard/sign_in  (sets _kcpmc_rails_session,
+//                  carries <meta name="csrf-token">)
+//   • send OTP:    GET  /users/generate_otp?user[mobile_number]=<m>&source=web
+//   • verify OTP:  POST /users/sign_in  user[mobile_number],user[otp],source=web
+// The CSRF token + session cookie from the login page must ride along on
+// both calls; the sign_in response hands back the AUTHENTICATED session
+// cookie, which is what we store and reuse for history/price-list calls.
+
+// Pull a named cookie value out of a fetch Response's Set-Cookie header(s).
+function _cookieFromResponse(res, name) {
+  let list = [];
+  if (typeof res.headers.getSetCookie === 'function') list = res.headers.getSetCookie();
+  else { const sc = res.headers.get('set-cookie'); if (sc) list = [sc]; }
+  for (const c of list) {
+    const m = String(c).match(new RegExp('(?:^|[;,]\\s*)' + name + '=([^;]+)'));
+    if (m) return m[1];
+  }
+  return '';
+}
+
+// Load the login page → { csrf, session }. Both are needed to send/verify.
+async function _loginPage(cfg) {
+  const url = noSlash(cfg.baseUrl) + '/trading/dashboard/sign_in';
+  let r;
+  try {
+    r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml' } });
+  } catch (e) {
+    throw new Error('Could not reach the trade-fair login page: ' + (e.message || e));
+  }
+  const html = await r.text();
+  const m = html.match(/<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']/i)
+         || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']csrf-token["']/i);
+  const csrf = m ? m[1] : '';
+  const session = _cookieFromResponse(r, cfg.cookieName || '_kcpmc_rails_session');
+  if (!csrf || !session) throw new Error('Could not initialise a login session (no CSRF token / cookie from the site).');
+  return { csrf, session };
+}
+
+function _normMobile(v) {
+  const d = String(v == null ? '' : v).replace(/\D/g, '');
+  return d.length === 11 && d[0] === '0' ? d.slice(1) : d; // drop a leading 0
+}
+
+// Step 1 — request an OTP to the mobile. Returns { session, csrf,
+// otpExpiresAt } to carry into the verify step.
+async function loginSendOtp(cfg, mobile) {
+  const m = _normMobile(mobile);
+  if (!/^\d{10}$/.test(m)) throw new Error('Enter a valid 10-digit mobile number.');
+  const { csrf, session } = await _loginPage(cfg);
+  const cookieName = cfg.cookieName || '_kcpmc_rails_session';
+  const u = new URL(noSlash(cfg.baseUrl) + '/users/generate_otp');
+  u.searchParams.set('user[mobile_number]', m);
+  u.searchParams.set('source', 'web');
+  const r = await fetch(u.toString(), {
+    method: 'GET',
+    headers: {
+      'User-Agent': UA, 'X-Requested-With': 'XMLHttpRequest',
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'X-CSRF-Token': csrf, 'Cookie': `${cookieName}=${session}`,
+      'Referer': noSlash(cfg.baseUrl) + '/trading/dashboard/sign_in',
+    },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (j.status !== 'success') {
+    throw new Error(j.error_msg || 'The trade-fair site did not send an OTP — check the mobile number is registered.');
+  }
+  return { session, csrf, otpExpiresAt: j.otp_expires_at || null };
+}
+
+// Step 2 — verify the OTP. Returns { sessionCookie } = the AUTHENTICATED
+// cookie to store and reuse. `session`/`csrf` come from loginSendOtp.
+async function loginVerifyOtp(cfg, mobile, otp, session, csrf) {
+  const m = _normMobile(mobile);
+  const code = String(otp == null ? '' : otp).trim();
+  if (!/^\d{10}$/.test(m)) throw new Error('Enter a valid 10-digit mobile number.');
+  if (!code) throw new Error('Enter the OTP.');
+  const cookieName = cfg.cookieName || '_kcpmc_rails_session';
+  const body = new URLSearchParams();
+  body.set('user[mobile_number]', m);
+  body.set('user[otp]', code);
+  body.set('source', 'web');
+  const r = await fetch(noSlash(cfg.baseUrl) + '/users/sign_in', {
+    method: 'POST',
+    headers: {
+      'User-Agent': UA, 'X-Requested-With': 'XMLHttpRequest',
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      'X-CSRF-Token': csrf, 'Cookie': `${cookieName}=${session}`,
+      'Referer': noSlash(cfg.baseUrl) + '/trading/dashboard/sign_in',
+    },
+    body: body.toString(),
+    redirect: 'manual',
+  });
+  // The authenticated session cookie is set on this response; fall back
+  // to the pre-auth session if the server chose not to rotate it.
+  const authCookie = _cookieFromResponse(r, cookieName) || session;
+  const j = await r.json().catch(() => ({}));
+  if (j.status !== 'success') {
+    throw new Error(j.error_msg || 'OTP verification failed — re-check the OTP and try again.');
+  }
+  return { sessionCookie: authCookie };
 }
 
 function buildHistoryParams({ start = 0, length = 200, draw = 1, search = '' }) {
@@ -202,5 +309,7 @@ module.exports = {
   fetchHistory,
   fetchHistoryPage,
   downloadPriceList,
+  loginSendOtp,
+  loginVerifyOtp,
   HISTORY_COLUMNS,
 };

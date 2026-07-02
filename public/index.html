@@ -7561,8 +7561,8 @@ async function _renderTradeFairCard(){
     return;
   }
   const tone = s.configured
-    ? {bd:'#a7f3d0',fg:'#065f46',icon:'✓',head:`Session cookie saved${s.cookieFromEnv?' (from env)':''}${s.cookieUpdatedAt?(' · updated '+esc(new Date(s.cookieUpdatedAt).toLocaleString())):''}`}
-    : {bd:'#e5e7eb',fg:'#374151',icon:'ℹ',head:'Not connected — paste the _kcpmc_rails_session cookie below'};
+    ? {bd:'#a7f3d0',fg:'#065f46',icon:'✓',head:`Connected${s.cookieFromEnv?' (from env)':''}${s.cookieUpdatedAt?(' · '+esc(new Date(s.cookieUpdatedAt).toLocaleString())):''}`}
+    : {bd:'#e5e7eb',fg:'#374151',icon:'ℹ',head:'Not connected — log in with your mobile + OTP below'};
   const fldRow = (label, id, val, ph) =>
     `<div class="fg" style="margin:0"><label style="font-size:11.5px;font-weight:600;color:var(--text2)">${esc(label)}</label>
        <input id="${id}" value="${esc(val||'')}" placeholder="${esc(ph||'')}" style="${_tfInpStyle}"></div>`;
@@ -7576,14 +7576,30 @@ async function _renderTradeFairCard(){
       </div>
       <div style="font-size:12px;color:var(--text3);line-height:1.5;margin-bottom:12px">
         Pulls the auction price list straight from tradefair.intelloinsights.com and runs it through the normal price import.
-        Log into the trade-fair site in your browser, copy the <code>_kcpmc_rails_session</code> cookie, and paste it here. Re-paste when it expires.
+        Log in below with your registered mobile number — the OTP is sent to that phone. The session is saved and reused until it expires, then just log in again.
       </div>
-      <div class="fg" style="margin:0 0 10px">
-        <label style="font-size:11.5px;font-weight:600;color:var(--text2)">Session cookie ${s.hasCookie?'<span style="color:#065f46">— saved (leave blank to keep)</span>':''}</label>
-        <textarea id="tf-cookie" rows="2" placeholder="paste _kcpmc_rails_session value (or the full Cookie header)" style="${_tfInpStyle};font-family:ui-monospace,Menlo,Consolas,monospace;resize:vertical"></textarea>
+
+      <!-- OTP login -->
+      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:10px;background:#f9fafb">
+        <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px">
+          <div class="fg" style="margin:0;flex:1;min-width:170px">
+            <label style="font-size:11.5px;font-weight:600;color:var(--text2)">Mobile number</label>
+            <input id="tf-mobile" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile" style="${_tfInpStyle}">
+          </div>
+          <button type="button" id="tf-send-otp-btn" onclick="_tfSendOtp()" style="padding:8px 16px;border:none;border-radius:6px;background:#0ea5e9;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Send OTP</button>
+        </div>
+        <div id="tf-otp-row" style="display:none;gap:8px;align-items:end;flex-wrap:wrap">
+          <div class="fg" style="margin:0;flex:1;min-width:170px">
+            <label style="font-size:11.5px;font-weight:600;color:var(--text2)">Enter OTP</label>
+            <input id="tf-otp" type="tel" inputmode="numeric" maxlength="6" placeholder="OTP from SMS" style="${_tfInpStyle}">
+          </div>
+          <button type="button" id="tf-verify-otp-btn" onclick="_tfVerifyOtp()" style="padding:8px 16px;border:none;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Verify &amp; Connect</button>
+        </div>
+        <div id="tf-otp-msg" style="font-size:12px;color:var(--text3);margin-top:8px"></div>
       </div>
+
       <details style="margin-bottom:10px">
-        <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text2)">Advanced — endpoints &amp; id mapping</summary>
+        <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text2)">Advanced — endpoints, id mapping &amp; cookie fallback</summary>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
           ${fldRow('Base URL','tf-base-url',s.baseUrl,'https://tradefair.intelloinsights.com')}
           ${fldRow('Cookie name','tf-cookie-name',s.cookieName,'_kcpmc_rails_session')}
@@ -7592,17 +7608,63 @@ async function _renderTradeFairCard(){
           ${fldRow('Id field (history → value)','tf-id-field',s.idField,'trade_session_id')}
           ${fldRow('Price query param','tf-price-param',s.priceParam,'auction_id')}
         </div>
+        <div class="fg" style="margin:10px 0 0">
+          <label style="font-size:11.5px;font-weight:600;color:var(--text2)">Session cookie — fallback ${s.hasCookie?'<span style="color:#065f46">(saved — leave blank to keep)</span>':''}</label>
+          <textarea id="tf-cookie" rows="2" placeholder="optional: paste _kcpmc_rails_session if OTP login isn't available" style="${_tfInpStyle};font-family:ui-monospace,Menlo,Consolas,monospace;resize:vertical"></textarea>
+        </div>
         <div style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.5">
           The price-list download sends <code>?&lt;price param&gt;=&lt;id field value&gt;</code>. If downloads come back empty, switch the id field between <code>trade_session_id</code> and <code>auction_id</code>.
         </div>
+        <div style="margin-top:10px">
+          <button type="button" id="tf-save-btn" onclick="_saveTradeFairConfig()" style="padding:8px 16px;border:none;border-radius:6px;background:#0ea5e9;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Save settings</button>
+        </div>
       </details>
+
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button type="button" id="tf-save-btn" onclick="_saveTradeFairConfig()" style="padding:8px 16px;border:none;border-radius:6px;background:#0ea5e9;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Save</button>
         <button type="button" id="tf-test-btn" onclick="_testTradeFair()" ${s.configured?'':'disabled'} style="padding:8px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;font-weight:600;font-size:12.5px;cursor:${s.configured?'pointer':'not-allowed'};opacity:${s.configured?'1':'.5'}">Test connection</button>
         <button type="button" onclick="openTradeFairSync()" ${s.configured?'':'disabled'} style="padding:8px 16px;border:1px solid #0ea5e9;border-radius:6px;background:#e0f2fe;color:#075985;font-weight:700;font-size:12.5px;cursor:${s.configured?'pointer':'not-allowed'};opacity:${s.configured?'1':'.5'}">📡 Open Sync →</button>
         <span id="tf-card-msg" style="font-size:12px;color:var(--text3)"></span>
       </div>
     </div>`;
+}
+// Send an OTP to the entered mobile, then reveal the OTP field.
+async function _tfSendOtp(){
+  const mobile = (document.getElementById('tf-mobile')||{}).value || '';
+  const msg = document.getElementById('tf-otp-msg');
+  const btn = document.getElementById('tf-send-otp-btn');
+  const digits = String(mobile).replace(/\D/g,'');
+  if (digits.length !== 10){ if(msg){msg.style.color='#991b1b';msg.textContent='Enter a valid 10-digit mobile number.';} return; }
+  if (btn) btn.disabled = true;
+  if (msg){ msg.style.color='var(--text3)'; msg.textContent='Sending OTP…'; }
+  try {
+    const r = await fetch(B + '/api/trade-fair/otp/send', { method:'POST', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'}, body: JSON.stringify({ mobile: digits }) });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Could not send OTP');
+    const row = document.getElementById('tf-otp-row'); if (row) row.style.display='flex';
+    const otpEl = document.getElementById('tf-otp'); if (otpEl) otpEl.focus();
+    if (msg){ msg.style.color='#065f46'; msg.textContent='OTP sent — check your phone, then enter it below.'; }
+  } catch(e){
+    if (msg){ msg.style.color='#991b1b'; msg.textContent='Failed: '+(e.message||e); }
+  } finally { if (btn) btn.disabled = false; }
+}
+// Verify the OTP → server captures + saves the authenticated session.
+async function _tfVerifyOtp(){
+  const mobile = String((document.getElementById('tf-mobile')||{}).value||'').replace(/\D/g,'');
+  const otp = String((document.getElementById('tf-otp')||{}).value||'').trim();
+  const msg = document.getElementById('tf-otp-msg');
+  const btn = document.getElementById('tf-verify-otp-btn');
+  if (!otp){ if(msg){msg.style.color='#991b1b';msg.textContent='Enter the OTP.';} return; }
+  if (btn) btn.disabled = true;
+  if (msg){ msg.style.color='var(--text3)'; msg.textContent='Verifying…'; }
+  try {
+    const r = await fetch(B + '/api/trade-fair/otp/verify', { method:'POST', headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'}, body: JSON.stringify({ mobile, otp }) });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.error||'Verification failed');
+    if (msg){ msg.style.color='#065f46'; msg.textContent='✓ Connected.'; }
+    _renderTradeFairCard(); // re-render → shows Connected + enables Test/Sync
+  } catch(e){
+    if (msg){ msg.style.color='#991b1b'; msg.textContent='Failed: '+(e.message||e); }
+  } finally { if (btn) btn.disabled = false; }
 }
 async function _saveTradeFairConfig(){
   const v = (id) => { const el=document.getElementById(id); return el?el.value:undefined; };
