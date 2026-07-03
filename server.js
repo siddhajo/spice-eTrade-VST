@@ -9999,12 +9999,24 @@ app.get('/api/reports/summary-pdf/:auctionId', (req, res, next) => {
   const m = 40, w = 515;
 
   function drawRow(y, cols, font, size) {
-    doc.font(font || 'Helvetica').fontSize(size || 9);
+    const sz = size || 9;
+    doc.font(font || 'Helvetica').fontSize(sz);
+    // Measure the tallest cell BEFORE advancing. A long value (e.g. a
+    // seller name like "BILAL SPICES PROCESSING&MARKETING COMPANY(P)LTD")
+    // wraps to 2-3 lines inside its column, so a fixed row advance made the
+    // next row paint on top of the overflow. heightOfString accounts for
+    // the wrap, so each row advances by its real height.
+    let rowH = sz;
+    cols.forEach(c => {
+      const txt = String(c.val == null ? '' : c.val);
+      const h = doc.heightOfString(txt, { width: c.w, align: c.align || 'left' });
+      if (h > rowH) rowH = h;
+    });
     cols.forEach(c => {
       doc.text(String(c.val == null ? '' : c.val), c.x, y,
         { width: c.w, align: c.align || 'left' });
     });
-    return y + (size || 9) + 5;
+    return y + rowH + 5;
   }
 
   // Header — draw the logo centered at the top margin, then push the text
