@@ -12,7 +12,9 @@
  * 
  * Key DBF rules learned from the previous chat:
  *   - LotNo, grade, pst_code, ppin, litre → store as TEXT (preserves leading zeros)
- *   - Date format: DD/MM/YYYY (string, not D type — FoxPro reads this)
+ *   - DATE columns are written as real DBF 'D' (date) fields via toDbfDate()
+ *     (built at UTC midnight so IST doesn't shift the day). fmtDate() is still
+ *     used for human-readable DD/MM/YYYY strings in XLSX header/meta lines.
  *   - Qty: 3 decimal places
  *   - Amount: 2 decimal places
  */
@@ -33,6 +35,23 @@ function fmtDate(d) {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   return s;
+}
+
+// Parse a stored date (ISO YYYY-MM-DD or DD/MM/YYYY) into a JS Date at UTC
+// midnight, for DBF 'D' (date) fields. The dbffile library formats a 'D'
+// value via Date#toISOString (UTC), so we build the Date in UTC — a local
+// Date would shift back a day in IST (UTC+5:30) and write the wrong date.
+// Returns null for blank/unparseable input, which dbffile writes as an
+// empty date field.
+function toDbfDate(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  let y, mo, d, m;
+  if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)))      { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/))) { d = +m[1]; mo = +m[2]; y = +m[3]; }
+  else return null;
+  if (!y || !mo || !d) return null;
+  return new Date(Date.UTC(y, mo - 1, d));
 }
 
 // Safely trim string values to fit DBF field size
@@ -91,6 +110,11 @@ function dbfFieldsToCols(fields) {
       col.align = 'right';
       const dp = f.decimalPlaces || 0;
       col.numFmt = dp > 0 ? ('#,##0.' + '0'.repeat(dp)) : '#,##0';
+    } else if (f.type === 'D') {
+      // DATE columns carry real JS Date objects (see toDbfDate). Give the
+      // XLSX twin a dd/mm/yyyy format so it shows a date, not a serial.
+      col.align = 'left';
+      col.numFmt = 'dd/mm/yyyy';
     } else {
       col.align = 'left';
     }
@@ -160,7 +184,7 @@ function buildLots(db, opts = {}) {
 
   const fields = [
     { name: 'ANO',      type: 'C', size: 10 },
-    { name: 'DATE',     type: 'C', size: 10 },
+    { name: 'DATE',     type: 'D', size: 8 },
     { name: 'LOT',      type: 'C', size: 10 },
     { name: 'CROP',     type: 'C', size: 10 },
     { name: 'GRADE',    type: 'C', size: 10 },
@@ -200,7 +224,7 @@ function buildLots(db, opts = {}) {
 
   const records = rows.map(r => ({
     ANO: fit(r.trade_no, 10),
-    DATE: fmtDate(r.trade_date),
+    DATE: toDbfDate(r.trade_date),
     LOT: fit(r.lot_no, 10),
     CROP: '',
     GRADE: fit(r.grade, 10),
@@ -255,7 +279,7 @@ function buildInvoices(db, opts = {}) {
 
   const fields = [
     { name: 'ANO',     type: 'C', size: 10 },
-    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'DATE',    type: 'D', size: 8 },
     { name: 'STATE',   type: 'C', size: 20 },
     { name: 'SALE',    type: 'C', size: 2 },
     { name: 'INVO',    type: 'C', size: 10 },
@@ -279,7 +303,7 @@ function buildInvoices(db, opts = {}) {
 
   const records = rows.map(r => ({
     ANO: fit(r.ano, 10),
-    DATE: fmtDate(r.date),
+    DATE: toDbfDate(r.date),
     STATE: fit(r.state, 20),
     SALE: fit(r.sale, 2),
     INVO: fit(r.invo, 10),
@@ -318,7 +342,7 @@ function buildPurchases(db, opts = {}) {
 
   const fields = [
     { name: 'ANO',     type: 'C', size: 10 },
-    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'DATE',    type: 'D', size: 8 },
     { name: 'STATE',   type: 'C', size: 20 },
     { name: 'BR',      type: 'C', size: 30 },
     { name: 'NAME',    type: 'C', size: 50 },
@@ -338,7 +362,7 @@ function buildPurchases(db, opts = {}) {
 
   const records = rows.map(r => ({
     ANO: fit(r.ano, 10),
-    DATE: fmtDate(r.date),
+    DATE: toDbfDate(r.date),
     STATE: fit(r.state, 20),
     BR: fit(r.br, 30),
     NAME: fit(r.name, 50),
@@ -373,7 +397,7 @@ function buildBills(db, opts = {}) {
 
   const fields = [
     { name: 'ANO',     type: 'C', size: 10 },
-    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'DATE',    type: 'D', size: 8 },
     { name: 'STATE',   type: 'C', size: 20 },
     { name: 'BR',      type: 'C', size: 30 },
     { name: 'CRPT',    type: 'C', size: 10 },
@@ -393,7 +417,7 @@ function buildBills(db, opts = {}) {
 
   const records = rows.map(r => ({
     ANO: fit(r.ano, 10),
-    DATE: fmtDate(r.date),
+    DATE: toDbfDate(r.date),
     STATE: fit(r.state, 20),
     BR: fit(r.br, 30),
     CRPT: fit(r.crpt, 10),
@@ -506,7 +530,7 @@ function buildDebitNotes(db, opts = {}) {
 
   const fields = [
     { name: 'ANO',     type: 'C', size: 10 },
-    { name: 'DATE',    type: 'C', size: 10 },
+    { name: 'DATE',    type: 'D', size: 8 },
     { name: 'STATE',   type: 'C', size: 20 },
     { name: 'NAME',    type: 'C', size: 50 },
     { name: 'NOTE_NO', type: 'C', size: 10 },
@@ -519,7 +543,7 @@ function buildDebitNotes(db, opts = {}) {
 
   const records = rows.map(r => ({
     ANO: fit(r.ano, 10),
-    DATE: fmtDate(r.date),
+    DATE: toDbfDate(r.date),
     STATE: fit(r.state, 20),
     NAME: fit(r.name, 50),
     NOTE_NO: fit(r.note_no, 10),

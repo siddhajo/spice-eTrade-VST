@@ -2611,6 +2611,16 @@ input[type="search"]:focus{
    tables don't shift. */
 #tc-dash .card table tbody tr:nth-child(even):not(:hover) td{background:#FBFAF5}
 
+/* Cap the per-trade breakdown to ~9 rows and scroll the body, so a season
+   with dozens of trades doesn't push the charts below it off-screen. The
+   header row and the Totals footer stay pinned while the body scrolls.
+   Sticky is applied to the cells (not thead/tfoot) because Chromium won't
+   make table SECTION elements sticky; backgrounds match the base th/tfoot
+   fills so scrolled rows don't bleed through the pinned rows. */
+#tc-dash .card .pt-scroll{max-height:440px;overflow-y:auto}
+#tc-dash .card .pt-scroll thead th{position:sticky;top:0;z-index:2;background:var(--spice-cream)}
+#tc-dash .card .pt-scroll tfoot td{position:sticky;bottom:0;z-index:2;background:var(--spice-cardamom-lt)}
+
 </style>
 <!-- Chart.js for dashboard + payments charts. Loaded from cdnjs to keep
      the app fully self-contained on Railway (no build step needed).
@@ -4958,7 +4968,7 @@ input[type="search"]:focus{
         <div class="tally-section-body">
         <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:#fff">
           <div style="font-size:11px;color:var(--text3);margin-bottom:10px;line-height:1.5">
-            Sales vouchers carry a <code style="background:var(--bg);padding:1px 4px;border-radius:3px">&lt;DISTANCE&gt;</code> field used by the e-way bill portal. Click <strong>NIC</strong> to look up the distance on the official portal (captcha-gated; one route at a time), paste the result, click <strong>Save</strong>. <strong>The value is saved per route</strong>, so every other invoice between the same two PINs — this auction and all future ones — picks it up automatically. The <span style="font-size:9px;padding:1px 5px;background:var(--green-bg);color:var(--green);border-radius:8px;font-weight:700">auto</span> badge marks rows that resolved via the saved route table.
+            Sales vouchers carry a <code style="background:var(--bg);padding:1px 4px;border-radius:3px">&lt;DISTANCE&gt;</code> field used by the e-way bill portal. Click <strong>NIC</strong> to look up the distance on the official portal (captcha-gated; one route at a time), paste the result, click <strong>Save</strong>. <strong>The value is saved per route</strong>, so every other invoice between the same two PINs — this auction and all future ones — picks it up automatically. The <span style="font-size:9px;padding:1px 5px;background:var(--green-bg);color:var(--green);border-radius:8px;font-weight:700">auto</span> badge marks rows that resolved via the saved route table. The <span style="font-size:9px;padding:1px 5px;background:#DBEAFE;color:#1D4ED8;border-radius:8px;font-weight:700">ship</span> / <span style="font-size:9px;padding:1px 5px;background:#F3E8FF;color:#7E22CE;border-radius:8px;font-weight:700">bill</span> badge next to each PIN shows which address the distance keys off — ship-to (consignee) PIN wins, bill-to PIN is the fallback.
           </div>
 
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -8950,7 +8960,7 @@ async function loadStats(auctionId){
         <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Per-trade breakdown</h2>
         <span style="font-size:12px;color:var(--spice-text-hint)">${PT.length} trade${PT.length===1?'':'s'}${isAllMode ? ' · click a row to drill in' : ' · click the selected row to clear'}</span>
       </div>
-      <div style="padding:0 4px;overflow-x:auto">
+      <div class="pt-scroll" style="padding:0 4px;overflow-x:auto">
         <table style="width:100%">
           <thead>
             <tr>
@@ -23874,9 +23884,21 @@ async function loadInvoiceDistances(){
       const km = resolvedKm == null ? '' : String(resolvedKm);
       const src = inv.distance_source || (inv.distance_km != null ? 'manual' : 'none');
       const buyerPin=String(inv.buyer_pin||'').trim();
+      // Which address did buyer_pin come from? Mirror the server priority:
+      // ship-to (consignee cpin) wins, bill-to pin is the fallback. The badge
+      // lets the operator see at a glance which pincode the distance keys off.
+      const shipPin=String(inv.buyer_ship_pin||'').trim();
+      const billPin=String(inv.buyer_bill_pin||'').trim();
+      let pinBadge='';
+      if(shipPin){
+        const alt=(billPin&&billPin!==shipPin)?` · bill-to is ${esc(billPin)}`:'';
+        pinBadge=`<span title="Using ship-to (consignee) PIN${alt}" style="font-size:9px;padding:1px 5px;background:#DBEAFE;color:#1D4ED8;border-radius:8px;margin-left:6px;font-weight:700">ship</span>`;
+      } else if(billPin){
+        pinBadge=`<span title="Using bill-to PIN — no separate ship-to (consignee) PIN on this buyer" style="font-size:9px;padding:1px 5px;background:#F3E8FF;color:#7E22CE;border-radius:8px;margin-left:6px;font-weight:700">bill</span>`;
+      }
       const cellBg='padding:7px 8px;border-bottom:1px solid var(--border);background:#fff';
       html+=`<div style="${cellBg};font-family:monospace;font-weight:700;color:var(--spice-cardamom-dk)">${esc(inv.invo)}</div>`;
-      html+=`<div style="${cellBg};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(inv.buyer1||inv.buyer)} <span style="color:var(--text3);font-family:monospace">${esc(buyerPin||'(no pin)')}</span></div>`;
+      html+=`<div style="${cellBg};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(inv.buyer1||inv.buyer)} <span style="color:var(--text3);font-family:monospace">${esc(buyerPin||'(no pin)')}</span>${pinBadge}</div>`;
       // Distance cell with source badge (route / manual / —). Route
       // values get a subtle "auto" pill so the user can see at a glance
       // which rows came from the lookup table vs being typed manually.
