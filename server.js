@@ -1,3 +1,15 @@
+// Pin the process timezone to IST (India) BEFORE anything else runs.
+// Every server-side timestamp flows from this: SQLite's
+// datetime('now','localtime') — which stamps the activity log, the
+// Delete-All audit log, settings/rate history, sessions, WhatsApp, etc.
+// — and JS `new Date()` "today" math both resolve against the process
+// TZ. Railway (and most Linux containers) default to UTC, which made
+// those logs read ~5.5h behind India time; the Windows desktop already
+// runs IST so this is a no-op there. Set before requiring db.js/sql.js
+// so the WASM SQLite build picks up IST on its first localtime call.
+// An explicit TZ (shell / .env / Railway var) still wins if provided.
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
+
 // Load env vars from .env (if present) BEFORE any other require runs.
 // Anything downstream — db.js, mobile-bridge, the tenant-preset admin
 // gate, the Anthropic API client — can then read process.env.<KEY>
@@ -9969,9 +9981,13 @@ app.get('/api/reports/summary-pdf/:auctionId', (req, res, next) => {
     [auctionId, ...bParamsPdf]
   );
 
-  // Logo for the header — resolves persistent-volume upload first,
-  // bundled default second, null if neither exists.
-  const logoPath = _resolveLogoPath('logo-ispl.png') || _resolveLogoPath('logo_kj.png');
+  // Logo for the header. getLogoSource returns the operator's UPLOADED logo
+  // (stored as a BLOB in company_logos, slot 'ispl') as a Buffer when present,
+  // falling back to a bundled file on disk, then null. The previous code only
+  // checked the filesystem via _resolveLogoPath, so an uploaded company logo
+  // never appeared on this report — and on cloud deploys, where the bundled
+  // logo-ispl.png is absent, nothing showed at all.
+  const logoSrc = _getLogoSource('ispl', ['logo-ispl.png', 'logo_kj.png']);
 
   const PDFDocument = require('pdfkit');
   const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -9991,9 +10007,18 @@ app.get('/api/reports/summary-pdf/:auctionId', (req, res, next) => {
     return y + (size || 9) + 5;
   }
 
-  // Header
-  if (logoPath) {
-    try { doc.image(logoPath, (595 - 45) / 2, doc.y, { width: 45, height: 45 }); doc.y += 50; } catch (_) {}
+  // Header — draw the logo centered at the top margin, then push the text
+  // cursor explicitly BELOW it so the title/subtitle can never overlap the
+  // image. doc.image() does not advance doc.y on its own, so we set it by
+  // hand from the logo's reserved box. `fit` preserves the logo's aspect
+  // ratio (no squashing) while capping it to a 46×46 box.
+  const _hdrTop = doc.y;
+  if (logoSrc) {
+    const LOGO = 46;
+    try {
+      doc.image(logoSrc, (595 - LOGO) / 2, _hdrTop, { fit: [LOGO, LOGO], align: 'center' });
+      doc.y = _hdrTop + LOGO + 8;
+    } catch (_) { doc.y = _hdrTop; }
   }
   doc.font('Helvetica-Bold').fontSize(16).text(appTitle, m, doc.y, { width: w, align: 'center' });
   doc.moveDown(0.2);

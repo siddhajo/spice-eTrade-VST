@@ -8,6 +8,12 @@
 // avoids the Windows multi-process firewall / antivirus prompt the
 // user would otherwise see on first launch.
 
+// Pin the desktop process to IST too, so any main-process date logic
+// and the in-process server share India time regardless of the machine
+// clock's zone. server.js sets the same default, but doing it here — the
+// true entry point — means it's active before that require runs.
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
+
 const { app, BrowserWindow, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -87,9 +93,31 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Disable DevTools in packaged builds so end users can't open
+      // Inspect and read the bundled client code. Kept enabled in dev
+      // so we can still debug. Cannot truly hide code served to a
+      // renderer — this just removes the obvious entry points.
+      devTools: !app.isPackaged,
     },
   });
   if (saved.maximized) win.maximize();
+
+  // In packaged builds, block the keyboard shortcuts that open DevTools
+  // (F12, Ctrl/Cmd+Shift+I/J/C). before-input-event fires before the
+  // page sees the key, so it can't be re-bound from the page side.
+  if (app.isPackaged) {
+    win.webContents.on('before-input-event', (event, input) => {
+      const key = (input.key || '').toLowerCase();
+      const mod = input.control || input.meta;
+      if (key === 'f12' || (mod && input.shift && ['i', 'j', 'c'].includes(key))) {
+        event.preventDefault();
+      }
+    });
+    // Suppress the right-click "Inspect Element" context menu.
+    win.webContents.on('context-menu', (e) => e.preventDefault());
+    // Belt-and-suspenders: if DevTools is ever opened, close it again.
+    win.webContents.on('devtools-opened', () => win.webContents.closeDevTools());
+  }
 
   try { await waitForServer(PORT); }
   catch (err) {
@@ -166,7 +194,9 @@ function buildMenu() {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
+        { role: 'reload' }, { role: 'forceReload' },
+        // Only expose Toggle Developer Tools in development.
+        ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }]),
         { type: 'separator' },
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
         { type: 'separator' },
