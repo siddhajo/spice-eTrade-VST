@@ -298,6 +298,13 @@ const DEFAULTS = [
 
   // ── INTEGRATIONS ───────────────────────────────────────────
   { key: 'gst_api_key',     value: '',               category: 'integrations', label: 'GST Lookup API Key (gstincheck.co.in)', type: 'text' },
+  // Extra-Lot Requests — when a mobile operator asks for more lots, the
+  // admin gets a WhatsApp push (in addition to the in-app queue). Leave
+  // the number blank to disable the push (the in-app queue still works).
+  // Template blank = reuse the generic text template configured below.
+  { key: 'extra_lot_alert_whatsapp', value: '',   category: 'integrations', label: 'Extra-Lot Requests — Admin WhatsApp number(s), comma-separated (with country code)', type: 'text' },
+  { key: 'extra_lot_alert_tpl',      value: '',   category: 'integrations', label: 'Extra-Lot Requests — WhatsApp template name (blank = default text template)', type: 'text' },
+  { key: 'extra_lot_alert_tpl_lang', value: 'en', category: 'integrations', label: 'Extra-Lot Requests — WhatsApp template language code', type: 'text' },
 
   // ── BACKUP (auto schedule) ────────────────────────────────
   // Server runs a periodic snapshot of the SQLite file into

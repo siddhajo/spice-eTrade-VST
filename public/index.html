@@ -2821,6 +2821,15 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           Lots
         </button>
+        <!-- Extra-Lot Requests — mobile operators asking the admin to
+             append more lot numbers to their branch's allocation. Only
+             visible to auction-write roles (the approvers). The badge
+             count is refreshed by pollExtraLotReqBadge(). -->
+        <button class="side-item needs-auction-write" data-tab="extralotreqs" onclick="go('extralotreqs')">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Extra-Lot Requests
+          <span class="count" id="extralot-badge" style="display:none;margin-left:auto;background:#C62828;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700"></span>
+        </button>
         <!-- Price List Mapping — sister tool of the Lots screen's Price
              Import button. Fills the CODE column on a Price List (Before)
              sheet from TRADE NAME values so the resulting file is ready
@@ -3400,6 +3409,29 @@ input[type="search"]:focus{
         <button class="btn btn-g" onclick="doChangeRole()">Save Role</button>
       </div>
     </div></div>
+
+    <!-- EXTRA-LOT REQUESTS (mobile operator → admin) -->
+    <div class="tc" id="tc-extralotreqs">
+      <div class="card">
+        <h2>Extra-Lot Requests
+          <button class="btn btn-o" style="margin-left:auto" onclick="loadExtraLotRequests()">🔄 Refresh</button>
+        </h2>
+        <p style="font-size:12.5px;color:var(--text2);margin:4px 0 12px;line-height:1.5">
+          Mobile operators who have run out of allocated lot numbers ask for more here.
+          Approving appends the proposed range to that branch's allocation immediately (re-checking
+          that no lot in the range is already allocated or entered). The operator is notified in their app.
+        </p>
+        <div style="display:flex;gap:6px;margin-bottom:12px">
+          <button id="elr-filter-pending" type="button" class="btn btn-g" onclick="setExtraLotFilter('pending')">Pending</button>
+          <button id="elr-filter-all" type="button" class="btn btn-o" onclick="setExtraLotFilter('all')">All</button>
+        </div>
+        <div style="overflow-x:auto"><table><thead><tr>
+          <th>Requested</th><th>Operator</th><th>Trade</th><th>Branch</th>
+          <th style="text-align:right">Count</th><th>Proposed Range</th><th>Reason</th>
+          <th>Status</th><th style="width:170px">Action</th>
+        </tr></thead><tbody id="extralotreqs-list"></tbody></table></div>
+      </div>
+    </div>
 
     <!-- SELLERS -->
     <div class="tc" id="tc-traders">
@@ -7206,6 +7238,9 @@ function applyPermissionAttributes(){
       badge.style.display = 'inline-block';
     }
   }
+  // Seed the extra-lot request badge now that permissions are set, so
+  // approvers see a pending count without waiting for the first poll tick.
+  if (typeof pollExtraLotReqBadge === 'function') { try { pollExtraLotReqBadge(); } catch (_) {} }
 }
 
 // Toggle the password input between text/password so the operator can
@@ -8586,6 +8621,7 @@ function go(tab){
     try { applyLogoBadge(); } catch(_) {}
   }
   const loaders={dash:loadStats,insights:loadInsights,settings:loadSettings,formulas:loadFormulas,fixdata:loadFixData,lotentry:loadLotEntry,users:loadUsers,reports:loadReports,traders:()=>searchTraders(''),buyers:()=>searchBuyers(''),
+    extralotreqs:loadExtraLotRequests,
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
     bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,registers:loadRegisterDefault,tally:loadTallyAuctions,
@@ -12584,6 +12620,100 @@ async function saveQuickAddLots() {
     _addLotsCtx = null;
   }
 }
+
+// ── Extra-Lot Requests (mobile operator → admin approval queue) ──
+// Operators ask for more lot numbers from their phone; approvers act on
+// them here. Approving appends the proposed range to the branch's
+// allocation (server-side). Badge poll keeps the sidebar count fresh.
+let _elrFilter = 'pending';
+function setExtraLotFilter(f) {
+  _elrFilter = f;
+  const p = document.getElementById('elr-filter-pending');
+  const a = document.getElementById('elr-filter-all');
+  if (p && a) {
+    p.className = 'btn ' + (f === 'pending' ? 'btn-g' : 'btn-o');
+    a.className = 'btn ' + (f === 'all' ? 'btn-g' : 'btn-o');
+  }
+  loadExtraLotRequests();
+}
+async function loadExtraLotRequests() {
+  const tbody = document.getElementById('extralotreqs-list');
+  if (!tbody) return;
+  try {
+    const d = await j('/api/extra-lot-requests?status=' + encodeURIComponent(_elrFilter));
+    const rows = d.requests || [];
+    updateExtraLotBadge(d.pending_count || 0);
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:18px">No ' + (_elrFilter === 'pending' ? 'pending ' : '') + 'requests</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const range = (r.status === 'approved' && r.applied_start)
+        ? esc(r.applied_start) + '–' + esc(r.applied_end)
+        : (r.proposed_start ? esc(r.proposed_start) + '–' + esc(r.proposed_end) : '—');
+      const statusColor = r.status === 'approved' ? 'var(--green)' : r.status === 'denied' ? '#C62828' : '#E67E22';
+      const statusTxt = r.status === 'pending' ? 'Pending'
+        : (r.status.charAt(0).toUpperCase() + r.status.slice(1)) + (r.decided_by_username ? ' · ' + esc(r.decided_by_username) : '');
+      const action = r.status === 'pending'
+        ? '<button class="btn btn-g" style="height:28px;padding:0 12px;font-size:11px" onclick="approveExtraLot(' + r.id + ')">✓ Approve</button> ' +
+          '<button class="btn" style="height:28px;padding:0 12px;font-size:11px;background:#C62828;color:#fff" onclick="denyExtraLot(' + r.id + ')">✕ Deny</button>'
+        : (r.decision_note ? '<span style="font-size:11px;color:var(--text3)">' + esc(r.decision_note) + '</span>' : '—');
+      return '<tr>' +
+        '<td style="white-space:nowrap">' + esc(String(r.created_at || '').replace('T', ' ').slice(0, 16)) + '</td>' +
+        '<td>' + esc(r.requester_username || '') + '</td>' +
+        '<td>' + esc(r.auction_no != null ? ('#' + r.auction_no) : '') + '</td>' +
+        '<td>' + esc(r.branch || '') + '</td>' +
+        '<td style="text-align:right;font-weight:600">+' + esc(String(r.count_requested)) + '</td>' +
+        '<td style="font-family:monospace">' + range + '</td>' +
+        '<td>' + esc(r.reason || '') + '</td>' +
+        '<td style="color:' + statusColor + ';font-weight:600">' + statusTxt + '</td>' +
+        '<td>' + action + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#C62828;padding:18px">Failed to load: ' + esc(e.message || 'error') + '</td></tr>';
+  }
+}
+async function approveExtraLot(id) {
+  const note = prompt('Approval note for the operator (optional):', '');
+  if (note === null) return; // cancelled
+  try {
+    const d = await j('/api/extra-lot-requests/' + id + '/approve', { method: 'POST', body: JSON.stringify({ note: note }) });
+    toast(d.message || 'Approved ✓');
+    loadExtraLotRequests();
+    if (typeof leLoadAllocBar === 'function') leLoadAllocBar();
+  } catch (e) { toast(e.message || 'Approve failed'); }
+}
+async function denyExtraLot(id) {
+  const note = prompt('Reason for denial (optional):', '');
+  if (note === null) return;
+  try {
+    await j('/api/extra-lot-requests/' + id + '/deny', { method: 'POST', body: JSON.stringify({ note: note }) });
+    toast('Request denied');
+    loadExtraLotRequests();
+  } catch (e) { toast(e.message || 'Deny failed'); }
+}
+function updateExtraLotBadge(n) {
+  const b = document.getElementById('extralot-badge');
+  if (!b) return;
+  if (n > 0) { b.textContent = n; b.style.display = ''; }
+  else { b.textContent = ''; b.style.display = 'none'; }
+}
+async function pollExtraLotReqBadge() {
+  // Only approvers have the endpoint; skip the poll otherwise.
+  if (document.body.getAttribute('data-perm-auction-write') !== '1') return;
+  try {
+    const d = await j('/api/extra-lot-requests?status=pending');
+    updateExtraLotBadge(d.pending_count || 0);
+    // If the admin is looking at the queue, keep it live.
+    if (window._currentTab === 'extralotreqs') {
+      const rows = d.requests || [];
+      // Only auto-refresh when viewing the Pending filter to avoid clobbering an All view.
+      if (_elrFilter === 'pending') loadExtraLotRequests();
+    }
+  } catch (_) { /* transient — try again next tick */ }
+}
+setInterval(pollExtraLotReqBadge, 12000);
 
 function switchAllocTab(tab) {
   document.getElementById('alloc-panel-edit').style.display     = tab === 'edit'     ? 'block' : 'none';

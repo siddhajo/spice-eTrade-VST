@@ -396,6 +396,7 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
     <div class="mi" onclick="toggleDarkMode()"><span id="dm-icon">🌙</span> <span id="dm-label">Dark Mode</span></div>
     <div class="mi" id="menu-undo" style="display:none" onclick="showUndoHistory()">↩ Undo History</div>
     <div class="mi" onclick="togglePrintFormat()">🖨 Print format: <span id="pf-label">Full</span></div>
+    <div class="mi" onclick="openExtraLots()">📦 Request Extra Lots <span id="menu-extralot-badge" style="display:none;background:#C62828;color:#fff;border-radius:10px;padding:0 7px;font-size:11px;font-weight:700"></span></div>
     <div class="mi" onclick="showChangePassword()">🔑 Change Password</div>
     <div class="mi" onclick="changeSession()">Change session</div>
     <div class="mi dg" onclick="doLogout()">Logout</div>
@@ -551,6 +552,25 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
   <div class="modal-foot"><button class="btn btn-sm btn-outline" onclick="document.getElementById('cp-modal').classList.remove('show')" style="flex:1">Cancel</button><button class="btn btn-sm" onclick="appChangePassword()" style="flex:2">Change Password</button></div>
 </div></div>
 
+<!-- Request Extra Lots (operator → admin). Operator sends a count; the
+     admin approves and the range is appended to this branch's allocation. -->
+<div class="modal-overlay" id="extra-lots-modal"><div class="modal" style="max-width:360px">
+  <div class="modal-hdr"><h2>Request Extra Lots</h2><button class="modal-close" onclick="closeExtraLots()">&#x2715;</button></div>
+  <div class="modal-body">
+    <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.5">
+      Out of lot numbers? Ask the admin to add more to your branch. Enter how many you need — the admin
+      approves and the new lots appear here automatically.
+    </div>
+    <div class="lb">BRANCH</div><input type="text" id="el-branch" readonly style="background:var(--bg2);color:var(--text3)">
+    <div class="lb" style="margin-top:8px">HOW MANY MORE LOTS?</div><input type="number" inputmode="numeric" min="1" max="500" id="el-count" placeholder="e.g. 20">
+    <div class="lb" style="margin-top:8px">REASON (optional)</div><input type="text" id="el-reason" placeholder="Why you need more lots">
+    <div id="el-err"></div>
+    <button class="btn btn-sm" onclick="submitExtraLots()" id="el-submit" style="width:100%;margin-top:12px">Send request to admin</button>
+    <div class="lb" style="margin-top:14px">MY REQUESTS</div>
+    <div id="el-mylist" style="font-size:12px;color:var(--text2)"></div>
+  </div>
+</div></div>
+
 <div class="modal-overlay" id="wa-queue-modal"><div class="modal" style="max-width:380px">
   <div class="modal-hdr"><h2>Send WhatsApp <span id="wa-q-count" style="font-weight:400;color:var(--text3);font-size:13px"></span></h2></div>
   <div class="modal-body">
@@ -647,6 +667,95 @@ async function refreshConfig(){
 }
 // Poll config every 30s while on lot entry
 setInterval(function(){if(document.getElementById('s-lots').classList.contains('active'))refreshConfig()},30000);
+
+// ── Request Extra Lots (operator → admin) ───────────────────────
+// Operator asks for more lot numbers on their branch; the admin approves
+// on the desktop and the appended range shows up here automatically.
+var _elrKnownStatus={}; // id -> last status we've notified the operator about
+var _elrAllocRev=null;  // last-seen allocation revision (bumps on approve)
+function openExtraLots(){
+  toggleMenu(true);
+  if(!aid){toast('Start a session first',true);return}
+  if(!br){toast('Select a branch first',true);return}
+  document.getElementById('el-branch').value=br;
+  document.getElementById('el-count').value='';
+  document.getElementById('el-reason').value='';
+  document.getElementById('el-err').innerHTML='';
+  document.getElementById('extra-lots-modal').classList.add('show');
+  loadMyExtraLotRequests(true);
+}
+function closeExtraLots(){document.getElementById('extra-lots-modal').classList.remove('show')}
+async function submitExtraLots(){
+  var er=document.getElementById('el-err');er.innerHTML='';
+  var count=parseInt(document.getElementById('el-count').value,10);
+  var reason=document.getElementById('el-reason').value.trim();
+  if(!count||count<1||count>500){er.innerHTML='<div class="eb">Enter how many extra lots (1–500)</div>';return}
+  var btn=document.getElementById('el-submit');btn.disabled=true;
+  try{
+    var r=await fetch(B+'/api/mobile/extra-lot-requests',{method:'POST',headers:ah(),body:JSON.stringify({auction_id:aid,branch:br,count:count,reason:reason})});
+    var d=await r.json();
+    if(!r.ok){er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';return}
+    toast('Request sent to admin',false);
+    document.getElementById('el-count').value='';
+    document.getElementById('el-reason').value='';
+    if(d.request)_elrKnownStatus[d.request.id]='pending';
+    loadMyExtraLotRequests();
+  }catch(e){er.innerHTML='<div class="eb">Could not connect</div>'}finally{btn.disabled=false}
+}
+async function loadMyExtraLotRequests(markSeen){
+  var host=document.getElementById('el-mylist');
+  try{
+    var r=await fetch(B+'/api/mobile/extra-lot-requests?auction_id='+aid,{headers:ah()});
+    var d=await r.json();
+    var rows=d.requests||[];
+    if(host){
+      if(!rows.length){host.innerHTML='<div style="color:var(--text3)">No requests yet</div>'}
+      else{host.innerHTML=rows.map(function(x){
+        var col=x.status==='approved'?'#1D9E75':x.status==='denied'?'#C62828':'#E67E22';
+        var rng=(x.status==='approved'&&x.applied_start)?(x.applied_start+'–'+x.applied_end):(x.proposed_start?(x.proposed_start+'–'+x.proposed_end):'');
+        return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px">'+
+          '<div style="display:flex;justify-content:space-between;align-items:center">'+
+          '<span style="font-weight:600">+'+x.count_requested+' lots'+(rng?' <span style="font-family:monospace;color:var(--text3);font-weight:400">'+rng+'</span>':'')+'</span>'+
+          '<span style="color:'+col+';font-weight:700;text-transform:capitalize">'+x.status+'</span></div>'+
+          (x.decision_note?'<div style="color:var(--text3);margin-top:2px">'+x.decision_note+'</div>':'')+
+          '</div>';
+      }).join('')}
+    }
+    // Mark decided requests as seen (clears the badge) when the operator
+    // is actively viewing the modal.
+    if(markSeen){
+      for(var i=0;i<rows.length;i++){if(rows[i].status!=='pending'&&!rows[i].seen_at){fetch(B+'/api/mobile/extra-lot-requests/'+rows[i].id+'/seen',{method:'POST',headers:ah()}).catch(function(){})}}
+      updateExtraLotBadge(0);
+    }
+  }catch(e){if(host)host.innerHTML='<div style="color:#C62828">Could not load</div>'}
+}
+function updateExtraLotBadge(n){
+  var b=document.getElementById('menu-extralot-badge');if(!b)return;
+  if(n>0){b.textContent=n;b.style.display=''}else{b.textContent='';b.style.display='none'}
+}
+async function pollExtraLotDecisions(){
+  if(!token||!aid)return;
+  if(document.getElementById('s-login').classList.contains('active'))return;
+  try{
+    var r=await fetch(B+'/api/mobile/extra-lot-requests?auction_id='+aid,{headers:ah()});
+    if(!r.ok)return;
+    var d=await r.json();
+    updateExtraLotBadge(d.unseen_decisions||0);
+    var reload=false;
+    (d.requests||[]).forEach(function(x){
+      if(x.status!=='pending'&&_elrKnownStatus[x.id]!==x.status){
+        _elrKnownStatus[x.id]=x.status;
+        if(x.status==='approved'){toast('Extra lots approved: '+((x.applied_start||x.proposed_start)+'–'+(x.applied_end||x.proposed_end)),false);reload=true}
+        else if(x.status==='denied'){toast('Extra-lot request denied',true)}
+      }else if(x.status!=='pending'){_elrKnownStatus[x.id]=x.status}
+    });
+    // Allocation changed (a range was appended) — refresh bars + lot grid.
+    if(_elrAllocRev!==null&&d.alloc_rev!==_elrAllocRev)reload=true;
+    _elrAllocRev=d.alloc_rev;
+    if(reload&&typeof loadStats==='function')loadStats();
+  }catch(e){}
+}
+setInterval(pollExtraLotDecisions,12000);
 
 async function doLogin(forceLogin){const u=document.getElementById('l-user').value.trim(),p=document.getElementById('l-pass').value,er=document.getElementById('l-err');er.innerHTML='';if(!u||!p){er.innerHTML='<div class="eb">Enter username and password</div>';return}document.getElementById('l-btn').disabled=true;try{const r=await fetch(B+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p,force:forceLogin||false})});const d=await r.json();if(r.status===409&&d.error==='already_logged_in'){er.innerHTML='<div class="eb" style="text-align:center">'+d.message+'<br><button onclick="doLogin(true)" style="margin-top:8px;background:#1D9E75;color:#fff;border:none;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Yes, switch to this device</button></div>';return}if(!r.ok){er.innerHTML='<div class="eb">'+(d.error||'Login failed')+'</div>';return}token=d.token;user=d.user.username;userBranch=d.user.branch||'';userRole=d.user.role||'user';localStorage.setItem('sa_token',token);goSession()}catch(e){er.innerHTML='<div class="eb">Could not connect</div>'}finally{document.getElementById('l-btn').disabled=false}}
 function doLogout(){fetch(B+'/api/auth/logout',{method:'POST',headers:ah()}).catch(()=>{});token='';user='';localStorage.removeItem('sa_token');toggleMenu(true);show('s-login')}

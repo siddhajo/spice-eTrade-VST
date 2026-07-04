@@ -532,6 +532,38 @@ async function initDb() {
     FOREIGN KEY (auction_id) REFERENCES auctions(id)
   )`);
 
+  // ── EXTRA-LOT REQUESTS ─────────────────────────────────────
+  // A mobile operator asks the admin to append more lot numbers to
+  // their branch's allocation (they've run out). The operator sends a
+  // COUNT; the server proposes the next range (branch max + 1 .. + N).
+  // Approving appends that range to lot_allocations. `seen_at` is
+  // cleared by the operator's app once they've read the decision.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS lot_extra_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    auction_id INTEGER NOT NULL,
+    branch TEXT NOT NULL,
+    count_requested INTEGER NOT NULL DEFAULT 0,
+    proposed_start TEXT DEFAULT '',
+    proposed_end   TEXT DEFAULT '',
+    reason TEXT DEFAULT '',
+    requester_user_id INTEGER,
+    requester_username TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    decided_by_user_id INTEGER,
+    decided_by_username TEXT DEFAULT '',
+    decision_note TEXT DEFAULT '',
+    applied_start TEXT DEFAULT '',
+    applied_end   TEXT DEFAULT '',
+    decided_at TEXT DEFAULT NULL,
+    seen_at TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (auction_id) REFERENCES auctions(id)
+  )`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_lot_extra_requests_auction_status
+    ON lot_extra_requests(auction_id, status)`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_lot_extra_requests_requester
+    ON lot_extra_requests(requester_user_id, status)`);
+
   // ── AUDIT LOG ──────────────────────────────────────────────
   wrapped.exec(`CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

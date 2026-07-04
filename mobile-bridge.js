@@ -415,7 +415,8 @@ const LOT_SELECT_SQL = `
 `;
 
 function mountMobile(app, deps) {
-  const { getDb, requireAuth, verifyPassword, hashPassword, isLegacyHash, ROLE_PERMISSIONS } = deps;
+  const { getDb, requireAuth, verifyPassword, hashPassword, isLegacyHash, ROLE_PERMISSIONS,
+          computeExtraLotRange, onExtraLotRequest } = deps;
 
   // ── 0. LAZY SELF-HEAL SCHEMA ──────────────────────────────────────
   // The bridge owns these tables/columns — declare them here so the
@@ -447,6 +448,31 @@ function mountMobile(app, deps) {
       // don't fail with "no such column" and the My Lots panel comes up
       // empty. Idempotent: harmless if already present.
       try { db.exec("ALTER TABLE lots ADD COLUMN bank_id INTEGER"); } catch (_) {}
+      // Extra-lot requests (mobile operator → admin). Declared in db.js
+      // too; mirrored here so the bridge works on installs whose db.js
+      // predates the feature. Idempotent.
+      try {
+        db.exec(`CREATE TABLE IF NOT EXISTS lot_extra_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          auction_id INTEGER NOT NULL,
+          branch TEXT NOT NULL,
+          count_requested INTEGER NOT NULL DEFAULT 0,
+          proposed_start TEXT DEFAULT '',
+          proposed_end   TEXT DEFAULT '',
+          reason TEXT DEFAULT '',
+          requester_user_id INTEGER,
+          requester_username TEXT DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending',
+          decided_by_user_id INTEGER,
+          decided_by_username TEXT DEFAULT '',
+          decision_note TEXT DEFAULT '',
+          applied_start TEXT DEFAULT '',
+          applied_end   TEXT DEFAULT '',
+          decided_at TEXT DEFAULT NULL,
+          seen_at TEXT DEFAULT NULL,
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        )`);
+      } catch (_) {}
       _healed = true;
     } catch (e) {
       // Not fatal — log and continue; the handler will surface the
@@ -800,6 +826,94 @@ function mountMobile(app, deps) {
       console.error('[/api/mobile/active-trade PUT] failed:', e && (e.stack || e.message || e));
       res.status(500).json({ error: e.message || 'Failed' });
     }
+  });
+
+  // ── 3b. EXTRA-LOT REQUESTS (operator → admin) ───────────────────
+  // The operator has run out of allocated lot numbers and asks the admin
+  // to append more to their branch. They send a COUNT; the server (via
+  // the injected computeExtraLotRange) proposes the next range and stores
+  // it. The admin approves/denies in the desktop queue; the operator polls
+  // GET for the decision (and an alloc_rev bump that tells the app to
+  // refresh its lot grid once a range is appended).
+
+  // Create a request.
+  app.post('/api/mobile/extra-lot-requests', requireAuth, (req, res) => {
+    const db = getDb();
+    const b = req.body || {};
+    const auctionId = parseInt(b.auction_id, 10);
+    const branch = String(b.branch || '').trim();
+    const count = parseInt(b.count, 10);
+    const reason = String(b.reason || '').trim();
+
+    if (!auctionId) return res.status(400).json({ error: 'Trade is required' });
+    if (!branch) return res.status(400).json({ error: 'Branch is required' });
+    if (!Number.isInteger(count) || count < 1 || count > 500) {
+      return res.status(400).json({ error: 'Enter how many extra lots (1–500)' });
+    }
+    const auction = db.get('SELECT id FROM auctions WHERE id = ?', [auctionId]);
+    if (!auction) return res.status(404).json({ error: 'Trade not found' });
+
+    // One open request per operator+trade+branch — avoids a pile-up of
+    // duplicates while the admin hasn't acted yet.
+    const dup = db.get(
+      "SELECT * FROM lot_extra_requests WHERE requester_user_id = ? AND auction_id = ? AND branch = ? AND status = 'pending'",
+      [req.user.id, auctionId, branch]
+    );
+    if (dup) return res.status(409).json({ error: 'You already have a pending request for this branch', request: dup });
+
+    let proposedStart = '', proposedEnd = '';
+    if (typeof computeExtraLotRange === 'function') {
+      const r = computeExtraLotRange(db, auctionId, branch, count);
+      if (!r.ok) return res.status(400).json({ error: r.error });
+      proposedStart = r.start; proposedEnd = r.end;
+    }
+
+    const info = db.run(
+      `INSERT INTO lot_extra_requests
+         (auction_id, branch, count_requested, proposed_start, proposed_end, reason,
+          requester_user_id, requester_username, status)
+       VALUES (?,?,?,?,?,?,?,?, 'pending')`,
+      [auctionId, branch, count, proposedStart, proposedEnd, reason, req.user.id, req.user.username || '']
+    );
+    const row = db.get('SELECT * FROM lot_extra_requests WHERE id = ?', [info.lastInsertRowid]);
+    if (typeof onExtraLotRequest === 'function') { try { onExtraLotRequest(row); } catch (_) {} }
+    res.status(201).json({ success: true, request: row });
+  });
+
+  // Poll: this operator's requests + a badge count of unseen decisions +
+  // an allocation revision marker (so the lot grid refreshes on approval).
+  app.get('/api/mobile/extra-lot-requests', requireAuth, (req, res) => {
+    const db = getDb();
+    const auctionId = req.query.auction_id ? parseInt(req.query.auction_id, 10) : null;
+    let where = 'WHERE requester_user_id = ?';
+    const params = [req.user.id];
+    if (auctionId) { where += ' AND auction_id = ?'; params.push(auctionId); }
+    const requests = db.all(
+      `SELECT * FROM lot_extra_requests ${where} ORDER BY created_at DESC LIMIT 50`,
+      params
+    );
+    const unseen = db.get(
+      `SELECT COUNT(*) AS c FROM lot_extra_requests ${where} AND status != 'pending' AND seen_at IS NULL`,
+      params
+    );
+    const rev = auctionId
+      ? db.get('SELECT MAX(id) AS m FROM lot_allocations WHERE auction_id = ?', [auctionId])
+      : { m: 0 };
+    res.json({
+      requests,
+      unseen_decisions: (unseen && unseen.c) || 0,
+      alloc_rev: (rev && rev.m) || 0,
+    });
+  });
+
+  // Mark a decided request as seen (clears the operator's badge).
+  app.post('/api/mobile/extra-lot-requests/:id/seen', requireAuth, (req, res) => {
+    const db = getDb();
+    const id = parseInt(req.params.id, 10);
+    const row = db.get('SELECT * FROM lot_extra_requests WHERE id = ? AND requester_user_id = ?', [id, req.user.id]);
+    if (!row) return res.status(404).json({ error: 'Request not found' });
+    db.run("UPDATE lot_extra_requests SET seen_at = datetime('now','localtime') WHERE id = ?", [id]);
+    res.json({ success: true });
   });
 
   // ── 4. STATUS ALIAS ─────────────────────────────────────────────

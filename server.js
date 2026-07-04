@@ -435,6 +435,11 @@ mountMobile(app, {
   hashPassword,
   isLegacyHash,
   ROLE_PERMISSIONS,
+  // Extra-lot request feature: the bridge computes the proposed range at
+  // request time and fires the admin WhatsApp push. Both are hoisted
+  // function declarations defined later in this file.
+  computeExtraLotRange: (db, auctionId, branch, count) => computeExtraLotRange(db, auctionId, branch, count),
+  onExtraLotRequest: (row) => { try { sendExtraLotRequestWhatsApp(getDb(), row); } catch (_) {} },
 });
 
 // Middleware factory: returns an Express middleware that requires the
@@ -1468,7 +1473,7 @@ const DELETE_ALL_RESOURCES = {
   invoices:     { table: 'invoices',    cascade: [],                                                        scope: 'global' },
   purchases:    { table: 'purchases',   cascade: [],                                                        scope: 'global' },
   bills:        { table: 'bills',       cascade: [],                                                        scope: 'global' },
-  auctions:     { table: 'auctions',    cascade: ['lots','invoices','purchases','bills','debit_notes','lot_allocations'], scope: 'global' },
+  auctions:     { table: 'auctions',    cascade: ['lots','invoices','purchases','bills','debit_notes','lot_allocations','lot_extra_requests'], scope: 'global' },
   'debit-notes': { table: 'debit_notes', cascade: [],                                                       scope: 'trade' },
 };
 
@@ -2388,6 +2393,20 @@ app.post('/api/whatsapp/webhook', (req, res) => {
         for (const m of (v.messages || [])) {
           const body = (m.text && m.text.body) || m.type || '';
           try { db.run('INSERT INTO whatsapp_inbound (wamid, phone, body) VALUES (?,?,?)', [m.id || '', m.from || '', String(body)]); } catch (_) {}
+          // Best-effort: an admin tapping an Approve/Deny quick-reply
+          // button on the extra-lot request template. Template quick-reply
+          // buttons arrive as type 'button' (m.button.payload/text);
+          // interactive list/reply buttons as m.interactive.button_reply.
+          // Only functions once a Meta-approved button template is set up;
+          // the in-app queue is the primary path.
+          try {
+            let payload = '';
+            if (m.type === 'button' && m.button) payload = m.button.payload || m.button.text || '';
+            else if (m.interactive && m.interactive.button_reply) payload = m.interactive.button_reply.id || m.interactive.button_reply.title || '';
+            payload = String(payload || '').trim().toLowerCase();
+            const mt = payload.match(/^(approve|deny)(?:\s*[:#]?\s*(\d+))?/);
+            if (mt) applyExtraLotWhatsAppDecision(db, m.from || '', mt[1], mt[2] ? parseInt(mt[2], 10) : null);
+          } catch (_) { /* malformed button payload — ignore */ }
         }
       }
     }
@@ -4257,6 +4276,233 @@ app.post('/api/auctions/:id/reassign-lots', requireAuctionWrite, (req, res) => {
 
   const allocs = db.all('SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot', [auctionId]);
   res.json({ success: true, allocations: allocs, message: `Lots ${start_lot}-${end_lot} reassigned from ${from_branch} to ${to_branch}` });
+});
+
+// ──────────────────────────────────────────────────────────────
+// EXTRA-LOT REQUESTS (mobile operator → admin approval)
+// A field operator who has run out of allocated lot numbers asks the
+// admin to append more to their branch. The operator sends a COUNT; we
+// propose the next contiguous range (branch max + 1 … + N). Approving
+// appends that range to lot_allocations — the same effect as the
+// desktop "+ Add Extra Lots". Reuses parseLotNo/buildLotNo/isLotInRange.
+// ──────────────────────────────────────────────────────────────
+
+// Propose the next range for `count` extra lots on a branch. Continues
+// the branch's highest existing range (preserving its prefix + padding);
+// if the branch has no allocation yet, starts at 001. Returns
+// { ok, start, end } or { ok:false, error }.
+function computeExtraLotRange(db, auctionId, branch, count) {
+  const n = parseInt(count, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 500) {
+    return { ok: false, error: 'Count must be a whole number between 1 and 500' };
+  }
+  const brName = String(branch || '').trim();
+  if (!brName) return { ok: false, error: 'Branch is required' };
+
+  const allocs = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? AND branch = ?',
+    [auctionId, brName]
+  );
+
+  let prefix = '', padLen = 3, maxNum = 0, seeded = false;
+  for (const a of allocs) {
+    const e = parseLotNo(a.end_lot);
+    if (!e) continue;
+    if (!seeded || e.num > maxNum) {
+      maxNum = e.num; prefix = e.prefix; padLen = e.padLen; seeded = true;
+    }
+  }
+  const startNum = seeded ? maxNum + 1 : 1;
+  const endNum = startNum + n - 1;
+  return {
+    ok: true,
+    start: buildLotNo(prefix, startNum, padLen),
+    end: buildLotNo(prefix, endNum, padLen),
+  };
+}
+
+// Apply an approved request: recompute the range NOW (the branch may
+// have grown since the request was filed) and append it. Defensive
+// overlap/used checks guard against a stale proposal colliding with an
+// existing allocation or a saved lot. Returns { ok, allocations, start,
+// end, message } or { ok:false, error }.
+function applyExtraLotRequest(db, reqRow, actor) {
+  const r = computeExtraLotRange(db, reqRow.auction_id, reqRow.branch, reqRow.count_requested);
+  if (!r.ok) return r;
+
+  const s = parseLotNo(r.start), e = parseLotNo(r.end);
+  if (!s || !e) return { ok: false, error: 'Could not compute a valid lot range' };
+
+  // None of the proposed numbers may already be covered or saved.
+  const existing = db.all('SELECT * FROM lot_allocations WHERE auction_id = ?', [reqRow.auction_id]);
+  const usedSet = new Set(
+    db.all('SELECT lot_no FROM lots WHERE auction_id = ?', [reqRow.auction_id]).map(l => l.lot_no)
+  );
+  for (let num = s.num; num <= e.num; num++) {
+    const lotNo = buildLotNo(s.prefix, num, s.padLen);
+    if (existing.some(a => isLotInRange(lotNo, a.start_lot, a.end_lot))) {
+      return { ok: false, error: `Lot ${lotNo} is already allocated — please review allocations manually` };
+    }
+    if (usedSet.has(lotNo)) {
+      return { ok: false, error: `Lot ${lotNo} is already entered — please review allocations manually` };
+    }
+  }
+
+  db.run(
+    'INSERT INTO lot_allocations (auction_id, branch, start_lot, end_lot) VALUES (?, ?, ?, ?)',
+    [reqRow.auction_id, reqRow.branch, r.start, r.end]
+  );
+  const allocations = db.all(
+    'SELECT * FROM lot_allocations WHERE auction_id = ? ORDER BY branch, start_lot',
+    [reqRow.auction_id]
+  );
+  return {
+    ok: true, allocations, start: r.start, end: r.end,
+    message: `Added ${reqRow.branch} ${r.start}-${r.end}`,
+  };
+}
+
+// Best-effort WhatsApp push to the admin(s) when a request is filed.
+// Recipients + template come from company settings; if no dedicated
+// template is configured we fall back to the generic text template that
+// document/text sharing already uses. Never throws into a handler.
+function sendExtraLotRequestWhatsApp(db, row) {
+  try {
+    const get = (k, d = '') => {
+      try { const v = db.get('SELECT value FROM company_settings WHERE key = ?', [k]); return v && v.value != null ? v.value : d; }
+      catch (_) { return d; }
+    };
+    const raw = String(get('extra_lot_alert_whatsapp', '')).trim();
+    if (!raw) return; // feature off until an admin number is configured
+    const phones = raw.split(',').map(p => p.trim()).filter(Boolean);
+    if (!phones.length) return;
+
+    const cfg = _waConfig(db);
+    if (!cfg.configured) return;
+    const template = String(get('extra_lot_alert_tpl', '')).trim() || cfg.tplText;
+    if (!template) return;
+    const lang = String(get('extra_lot_alert_tpl_lang', '')).trim() || cfg.tplTextLang || 'en';
+
+    const rangeLabel = row.proposed_start && row.proposed_end
+      ? `+${row.count_requested} (${row.proposed_start}-${row.proposed_end})`
+      : `+${row.count_requested}`;
+    const bodyParams = [
+      row.requester_username || 'operator',
+      row.branch || '',
+      rangeLabel,
+      row.reason || '(no reason given)',
+    ];
+
+    for (const phone of phones) {
+      _waSendTemplate(cfg, { phone, template, lang, bodyParams })
+        .then(wamid => _waLog(db, { wamid, phone, msg_type: 'template', caption: 'extra-lot request',
+          status: 'queued', ref_type: 'extra_lot_request', ref_id: row.id }))
+        .catch(err => _waLog(db, { phone, msg_type: 'template', caption: 'extra-lot request',
+          status: 'failed', error: (err && err.message) || String(err), ref_type: 'extra_lot_request', ref_id: row.id }));
+    }
+  } catch (_) { /* notification must never break request creation */ }
+}
+
+// Shared apply+notify path for a WhatsApp button reply on a request.
+// Applies the decision to `reqId` (or the most-recent pending request
+// from an allow-listed admin) and records the decision. Best-effort.
+function applyExtraLotWhatsAppDecision(db, fromPhone, action, reqId) {
+  try {
+    const get = (k, d = '') => {
+      try { const v = db.get('SELECT value FROM company_settings WHERE key = ?', [k]); return v && v.value != null ? v.value : d; }
+      catch (_) { return d; }
+    };
+    const allow = String(get('extra_lot_alert_whatsapp', '')).split(',').map(p => p.replace(/\D/g, '')).filter(Boolean);
+    const from = String(fromPhone || '').replace(/\D/g, '');
+    if (!allow.length || !allow.some(a => a === from || from.endsWith(a) || a.endsWith(from))) return;
+
+    let row = null;
+    if (reqId) row = db.get("SELECT * FROM lot_extra_requests WHERE id = ? AND status = 'pending'", [reqId]);
+    if (!row) row = db.get("SELECT * FROM lot_extra_requests WHERE status = 'pending' ORDER BY id DESC LIMIT 1");
+    if (!row) return;
+
+    const actor = { id: null, username: 'WhatsApp' };
+    if (action === 'approve') {
+      const out = applyExtraLotRequest(db, row, actor);
+      if (!out.ok) return;
+      db.run(
+        `UPDATE lot_extra_requests SET status='approved', applied_start=?, applied_end=?,
+           decided_by_username=?, decision_note=?, decided_at=datetime('now','localtime'), seen_at=NULL
+         WHERE id = ?`,
+        [out.start, out.end, 'WhatsApp', 'Approved via WhatsApp', row.id]
+      );
+    } else if (action === 'deny') {
+      db.run(
+        `UPDATE lot_extra_requests SET status='denied', decided_by_username=?, decision_note=?,
+           decided_at=datetime('now','localtime'), seen_at=NULL WHERE id = ?`,
+        ['WhatsApp', 'Denied via WhatsApp', row.id]
+      );
+    }
+  } catch (_) { /* never let a webhook payload 500 */ }
+}
+
+// Admin queue — list requests (pending by default). requireAuctionWrite
+// matches the reassign endpoints (only approvers see/act on these).
+app.get('/api/extra-lot-requests', requireAuctionWrite, (req, res) => {
+  const db = getDb();
+  const status = String(req.query.status || 'pending').toLowerCase();
+  const auctionId = req.query.auction_id ? parseInt(req.query.auction_id, 10) : null;
+  let where = 'WHERE 1=1';
+  const params = [];
+  if (status && status !== 'all') { where += ' AND r.status = ?'; params.push(status); }
+  if (auctionId) { where += ' AND r.auction_id = ?'; params.push(auctionId); }
+  const requests = db.all(
+    `SELECT r.*, a.ano AS auction_no, a.date AS auction_date
+       FROM lot_extra_requests r
+       LEFT JOIN auctions a ON a.id = r.auction_id
+       ${where}
+       ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.created_at DESC`,
+    params
+  );
+  const pc = db.get("SELECT COUNT(*) AS c FROM lot_extra_requests WHERE status = 'pending'");
+  res.json({ requests, pending_count: (pc && pc.c) || 0 });
+});
+
+// Approve → append the range now, mark decided.
+app.post('/api/extra-lot-requests/:id/approve', requireAuctionWrite, (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id, 10);
+  const note = String((req.body && req.body.note) || '').trim();
+  const row = db.get("SELECT * FROM lot_extra_requests WHERE id = ?", [id]);
+  if (!row) return res.status(404).json({ error: 'Request not found' });
+  if (row.status !== 'pending') return res.status(400).json({ error: `Request already ${row.status}` });
+
+  const out = applyExtraLotRequest(db, row, { id: req.user.id, username: req.user.username });
+  if (!out.ok) return res.status(400).json({ error: out.error });
+
+  db.run(
+    `UPDATE lot_extra_requests SET status='approved', applied_start=?, applied_end=?,
+       decided_by_user_id=?, decided_by_username=?, decision_note=?,
+       decided_at=datetime('now','localtime'), seen_at=NULL
+     WHERE id = ?`,
+    [out.start, out.end, req.user.id, req.user.username, note, id]
+  );
+  const updated = db.get('SELECT * FROM lot_extra_requests WHERE id = ?', [id]);
+  res.json({ success: true, request: updated, allocations: out.allocations, message: out.message });
+});
+
+// Deny → mark decided, no allocation change.
+app.post('/api/extra-lot-requests/:id/deny', requireAuctionWrite, (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id, 10);
+  const note = String((req.body && req.body.note) || '').trim();
+  const row = db.get("SELECT * FROM lot_extra_requests WHERE id = ?", [id]);
+  if (!row) return res.status(404).json({ error: 'Request not found' });
+  if (row.status !== 'pending') return res.status(400).json({ error: `Request already ${row.status}` });
+
+  db.run(
+    `UPDATE lot_extra_requests SET status='denied', decided_by_user_id=?, decided_by_username=?,
+       decision_note=?, decided_at=datetime('now','localtime'), seen_at=NULL
+     WHERE id = ?`,
+    [req.user.id, req.user.username, note, id]
+  );
+  const updated = db.get('SELECT * FROM lot_extra_requests WHERE id = ?', [id]);
+  res.json({ success: true, request: updated });
 });
 
 // Validate a single lot number against (a) duplicates and (b) the
