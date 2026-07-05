@@ -2732,6 +2732,25 @@ input[type="search"]:focus{
 .lots-filter{display:flex;gap:10px;margin:0 0 12px;flex-wrap:wrap}
 .lots-filter .bd-filt-inp{flex:1;min-width:140px;max-width:240px;font-size:12px;padding:5px 9px}
 
+/* Dashboard search/filter boxes: leading magnifier + trailing clear (×).
+   enhanceDashSearch() wraps each .bd-filt-inp in a .dash-search span and
+   injects the clear button; the glass is a CSS background so it needs no
+   markup. Works for the breakdown column filters and the lot-modal search. */
+.dash-search{position:relative;display:block}
+.lots-filter .dash-search{flex:1;min-width:140px;max-width:240px}
+.dash-search .bd-filt-inp{width:100%;box-sizing:border-box;padding-left:24px !important;padding-right:22px !important}
+.dash-search::before{
+  content:"";position:absolute;left:7px;top:50%;transform:translateY(-50%);
+  width:12px;height:12px;pointer-events:none;opacity:.55;
+  background:no-repeat center/contain;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999999' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E")}
+.dash-search-clear{
+  position:absolute;right:3px;top:50%;transform:translateY(-50%);
+  display:none;border:0;background:transparent;cursor:pointer;
+  color:var(--spice-text-hint);font-size:15px;font-weight:700;line-height:1;padding:0 4px}
+.dash-search-clear:hover{color:var(--spice-chili)}
+.dash-search.has-text .dash-search-clear{display:block}
+
 /* Per-trade table: capped height + scroll, sticky coloured header */
 .dash-pt-scroll{padding:0 4px;overflow:auto;max-height:440px}
 .dash-pt-scroll>table{width:100%}
@@ -9217,6 +9236,37 @@ function dashBreakdownTab(name, btn) {
   }
 }
 
+// Give every dashboard search/filter box a leading magnifier + a trailing
+// clear (×) button. Wraps each .bd-filt-inp in a .dash-search span once; the
+// glass is CSS, the × dispatches a synthetic 'input' so the existing
+// oninput handler (bdFilterInput / lotFilterInput) re-runs and re-renders.
+function enhanceDashSearch(root){
+  const scope = root || document;
+  scope.querySelectorAll('.bd-filt-inp').forEach(inp => {
+    if (inp.parentElement && inp.parentElement.classList.contains('dash-search')) return;
+    const wrap = document.createElement('span');
+    wrap.className = 'dash-search';
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dash-search-clear';
+    btn.setAttribute('aria-label', 'Clear');
+    btn.tabIndex = -1;
+    btn.textContent = '×';
+    btn.addEventListener('click', () => {
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      wrap.classList.remove('has-text');
+      inp.focus();
+    });
+    wrap.appendChild(btn);
+    const sync = () => wrap.classList.toggle('has-text', !!inp.value);
+    inp.addEventListener('input', sync);
+    sync();
+  });
+}
+
 
 async function loadStats(auctionId){
   // Allow explicit override; otherwise use the remembered selection
@@ -9334,7 +9384,7 @@ async function loadStats(auctionId){
         </table>
       </div>
       <div class="dash-snap-ft">
-        <div class="mf pay"><div class="k">Payable to sellers</div><div class="v">${inr2(T.payable_to_sellers)}</div></div>
+        <div class="mf pay"><div class="k">Payable to sellers</div><div class="v">${inr2(T.seller_amount != null ? T.seller_amount : T.payable_to_sellers)}</div></div>
         <div class="mf inc"><div class="k">Income (commission)</div><div class="v">${inr2(T.commission_income)}</div></div>
         <div class="mf"><div class="k">Stock (kg)</div><div class="v">${nq(T.stock_kg)}</div></div>
         <div class="mf"><div class="k">Min ₹/kg</div><div class="v">${T.min_price>0?inr2(T.min_price):'—'}</div></div>
@@ -9586,6 +9636,8 @@ async function loadStats(auctionId){
 
   // Populate the breakdown pane bodies now that their shells are in the DOM.
   ['planter', 'dealer', 'branch'].forEach(renderBdBody);
+  // Decorate the breakdown column filters with a glass + clear (×) icon.
+  enhanceDashSearch(document.getElementById('tc-dash'));
 }
 
 // Range tracker for the revenue-trend chart. Default 7 days; changed by

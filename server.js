@@ -11644,7 +11644,8 @@ app.get('/api/insights', requireView, (req, res) => {
        COALESCE(SUM(CASE WHEN ${SOLD} THEN l.amount ELSE 0 END), 0) AS sold_value,
        COALESCE(SUM(CASE WHEN ${SOLD} THEN l.qty    ELSE 0 END), 0) AS sold_qty,
        COALESCE(SUM(l.amount), 0) AS value,
-       COALESCE(SUM(l.balance), 0) AS payable_to_sellers
+       COALESCE(SUM(l.balance), 0) AS payable_to_sellers,
+       COALESCE(SUM(l.puramt), 0) AS seller_amount
      FROM lots l
      JOIN auctions a ON a.id = l.auction_id
      WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
@@ -11664,6 +11665,8 @@ app.get('/api/insights', requireView, (req, res) => {
     avg_price: Number(r.sold_qty) > 0 ? Number(r.sold_value) / Number(r.sold_qty) : 0,
     value:     Number(r.value)     || 0,
     payable_to_sellers: Number(r.payable_to_sellers) || 0,
+    // Gross purchase amount = Σ puramt — the Payments screen's "Amount" column.
+    seller_amount: Number(r.seller_amount) || 0,
   }));
 
   // ── Stacked bar series — pivot perTrade × perBranch into a
@@ -11755,6 +11758,11 @@ app.get('/api/insights', requireView, (req, res) => {
   }), { trades: 0, lots: 0, sold: 0, withdrawn: 0, qty: 0, bags: 0, value: 0,
         sold_value: 0, sold_qty: 0, sold_bags: 0, wd_value: 0, wd_qty: 0, wd_bags: 0 });
   totals.payable_to_sellers = perBranch.reduce((s, b) => s + b.payable_to_sellers, 0);
+  // Σ puramt across the scope — mirrors the Payments screen's "Amount" total.
+  // The Dashboard snapshot's "Payable to sellers" tile reads this (gross
+  // purchase amount), distinct from payable_to_sellers (net balance) which
+  // the Insights tab still uses.
+  totals.seller_amount = perBranch.reduce((s, b) => s + b.seller_amount, 0);
   totals.outstanding_by_buyers = outstandingByBuyer.reduce((s, b) => s + b.value, 0);
   // Quantity-weighted avg price across SOLD lots only (sold_value / sold_qty),
   // matching the per-trade and per-branch Avg columns. Using all-lots qty here
