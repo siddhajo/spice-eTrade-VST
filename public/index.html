@@ -2671,6 +2671,13 @@ input[type="search"]:focus{
   color:var(--spice-text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dash-snap-ft .mf.pay .v{color:var(--spice-saffron-dk)}
 .dash-snap-ft .mf.inc .v{color:var(--spice-cardamom-dk)}
+/* Secondary metric under a summary tile (e.g. Payable→GST, Income→To be earned) */
+.dash-snap-ft .mf-sub{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  margin-top:7px;padding-top:6px;border-top:1px dashed var(--spice-saffron-md);font-variant-numeric:tabular-nums}
+.dash-snap-ft .mf-sub .sk{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--spice-saffron-dk);opacity:.85;white-space:nowrap}
+.dash-snap-ft .mf-sub .sv{font-size:12.5px;font-weight:800;color:var(--spice-text-main);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:560px){.dash-snap-ft{grid-template-columns:repeat(2,1fr)}}
 
 /* ── Tabbed breakdown (Seller / Buyer / Branch) ── */
@@ -9059,6 +9066,8 @@ async function openLotsModal(el){
     </table></div></div>`).join('');
   body.innerHTML = tabsBar + filterBar + panes + `<div class="lot-grand" id="lots-grand"></div>`;
   renderLotBodies();
+  // Glass + clear (×) on the lot-modal Lot / counterparty search boxes.
+  enhanceDashSearch(document.getElementById('dash-lots-body'));
 }
 // Filter → sort → paint every grade pane in the lot-wise modal, plus the grand
 // total line. Only tbodies/tfeet are rewritten so the filter inputs keep focus.
@@ -9384,8 +9393,8 @@ async function loadStats(auctionId){
         </table>
       </div>
       <div class="dash-snap-ft">
-        <div class="mf pay"><div class="k">Payable to sellers</div><div class="v">${inr2(T.seller_amount != null ? T.seller_amount : T.payable_to_sellers)}</div></div>
-        <div class="mf inc"><div class="k">Income (commission)</div><div class="v">${inr2(T.commission_income)}</div></div>
+        <div class="mf pay"><div class="k">Payable to sellers</div><div class="v">${inr2(T.seller_amount != null ? T.seller_amount : T.payable_to_sellers)}</div><div class="mf-sub"><span class="sk">GST</span><span class="sv">${inr2(T.purchase_gst)}</span></div></div>
+        <div class="mf inc"><div class="k">Income (commission)</div><div class="v">${inr2(T.commission_income)}</div><div class="mf-sub"><span class="sk">To be earned</span><span class="sv">${inr2(T.to_be_earned)}</span></div></div>
         <div class="mf"><div class="k">Stock (kg)</div><div class="v">${nq(T.stock_kg)}</div></div>
         <div class="mf"><div class="k">Min ₹/kg</div><div class="v">${T.min_price>0?inr2(T.min_price):'—'}</div></div>
         <div class="mf"><div class="k">Max ₹/kg</div><div class="v">${T.max_price>0?inr2(T.max_price):'—'}</div></div>
@@ -9451,6 +9460,7 @@ async function loadStats(auctionId){
               <th class="num" title="Lots with a buyer code (excludes WD)">Sold Qty</th>
               <th class="num" title="Lots with code = WD">Withdrawn Qty</th>
               <th class="num">Amount</th>
+              <th class="num" title="Σ CGST + SGST + IGST across this trade's sales invoices">GST</th>
               <th class="num" title="Lowest sold price per kg">Min</th>
               <th class="num" title="Highest sold price per kg">Max</th>
               <th class="num" title="Σ amount ÷ Σ sold qty">Avg</th>
@@ -9478,6 +9488,7 @@ async function loadStats(auctionId){
                 <td class="num" style="color:var(--spice-cardamom-dk)">${kg(t.sold_qty)}</td>
                 <td class="num" style="color:${(t.wd_qty||0)>0?'#991B1B':'var(--spice-text-hint)'}">${kg(t.wd_qty)}</td>
                 <td class="num"><strong>${inr2(t.amount)}</strong></td>
+                <td class="num">${inr2(t.gst)}</td>
                 <td class="num">${inrPrice(t.min_price)}</td>
                 <td class="num">${inrPrice(t.max_price)}</td>
                 <td class="num"><strong>${inrPrice(t.avg_price)}</strong></td>
@@ -9500,6 +9511,7 @@ async function loadStats(auctionId){
               <td class="num">${kg(CUM.sold_qty)}</td>
               <td class="num">${kg(CUM.wd_qty)}</td>
               <td class="num">${inr2(CUM.amount)}</td>
+              <td class="num">${inr2(CUM.gst)}</td>
               <td class="num">${inrPrice(CUM.min_price)}</td>
               <td class="num">${inrPrice(CUM.max_price)}</td>
               <td class="num">${inrPrice(CUM.avg_price)}</td>

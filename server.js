@@ -11168,6 +11168,10 @@ app.get('/api/stats', requireView, (req, res) => {
   ) || {};
   const cumSoldQty = Number(cumRow.sold_qty) || 0;
   const cumSoldAmt = Number(cumRow.sold_amount) || 0;
+  // All-trades invoice GST for the per-trade table's Totals footer.
+  const cumGstRow = db.get(
+    `SELECT COALESCE(SUM(COALESCE(cgst,0)+COALESCE(sgst,0)+COALESCE(igst,0)),0) as gst FROM invoices`
+  ) || {};
   const cumulative = {
     qty:       cumRow.qty       || 0,
     amount:    cumRow.amount    || 0,
@@ -11178,6 +11182,7 @@ app.get('/api/stats', requireView, (req, res) => {
     min_price: Number(cumRow.min_price) || 0,
     max_price: Number(cumRow.max_price) || 0,
     avg_price: cumSoldQty > 0 ? round2(cumSoldAmt / cumSoldQty) : 0,
+    gst:       Number(cumGstRow.gst) || 0,
   };
 
   // ── Per-trade breakdown (one row per auction, newest first) ──
@@ -11205,7 +11210,12 @@ app.get('/api/stats', requireView, (req, res) => {
                                AND UPPER(TRIM(COALESCE(l.code,''))) NOT IN ('','WD')
                               THEN l.price END),0) as max_price,
             COALESCE(SUM(CASE WHEN l.amount > 0 THEN 1 ELSE 0 END),0) as priced,
-            COALESCE(SUM(CASE WHEN l.invo IS NOT NULL AND l.invo != '' THEN 1 ELSE 0 END),0) as invoiced
+            COALESCE(SUM(CASE WHEN l.invo IS NOT NULL AND l.invo != '' THEN 1 ELSE 0 END),0) as invoiced,
+            -- Invoice GST for this trade = Σ(CGST+SGST+IGST) over the Sales
+            -- Invoice screen's rows (every invoice for the auction). Drives
+            -- the dashboard per-trade table's GST column (after Amount).
+            COALESCE((SELECT SUM(COALESCE(iv.cgst,0)+COALESCE(iv.sgst,0)+COALESCE(iv.igst,0))
+                      FROM invoices iv WHERE iv.auction_id = a.id),0) as gst
      FROM auctions a
      LEFT JOIN lots l ON l.auction_id = a.id
      GROUP BY a.id, a.ano, a.date, a.crop_type
@@ -11645,7 +11655,7 @@ app.get('/api/insights', requireView, (req, res) => {
        COALESCE(SUM(CASE WHEN ${SOLD} THEN l.qty    ELSE 0 END), 0) AS sold_qty,
        COALESCE(SUM(l.amount), 0) AS value,
        COALESCE(SUM(l.balance), 0) AS payable_to_sellers,
-       COALESCE(SUM(l.puramt), 0) AS seller_amount
+       COALESCE(SUM(CASE WHEN l.amount > 0 THEN l.puramt ELSE 0 END), 0) AS seller_amount
      FROM lots l
      JOIN auctions a ON a.id = l.auction_id
      WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
@@ -11764,6 +11774,34 @@ app.get('/api/insights', requireView, (req, res) => {
   // the Insights tab still uses.
   totals.seller_amount = perBranch.reduce((s, b) => s + b.seller_amount, 0);
   totals.outstanding_by_buyers = outstandingByBuyer.reduce((s, b) => s + b.value, 0);
+
+  // ── "To be earned" — Σ of the Payments screen's Discount column across
+  //    every in-scope trade. Reuses getPaymentSummary so the figure matches
+  //    the Payments tab exactly (per-seller DN-or-refund merge). Feeds the
+  //    Dashboard Income tile. ──
+  let toBeEarned = 0;
+  try {
+    const cfgP = getSettingsFlat(db);
+    const scopeAucs = db.all(
+      `SELECT id FROM auctions a WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}`,
+      [from, to]
+    );
+    for (const a of scopeAucs) {
+      const summ = getPaymentSummary(db, a.id, undefined, cfgP) || [];
+      for (const s of summ) toBeEarned += Number(s.total_discount) || 0;
+    }
+  } catch (_) { toBeEarned = 0; }
+  totals.to_be_earned = toBeEarned;
+
+  // ── Purchase-invoice GST — Σ(CGST+SGST+IGST) over the Purchases screen's
+  //    rows in scope. Feeds the Dashboard Payable-to-sellers tile. ──
+  const purGstRow = db.get(
+    `SELECT COALESCE(SUM(COALESCE(cgst,0)+COALESCE(sgst,0)+COALESCE(igst,0)),0) AS gst
+     FROM purchases
+     WHERE date(date) BETWEEN date(?) AND date(?)${singleAuctionId ? ` AND auction_id = ${Number(singleAuctionId)}` : ''}`,
+    [from, to]
+  ) || {};
+  totals.purchase_gst = Number(purGstRow.gst) || 0;
   // Quantity-weighted avg price across SOLD lots only (sold_value / sold_qty),
   // matching the per-trade and per-branch Avg columns. Using all-lots qty here
   // would dilute the average with withdrawn/unsold kilos that carry no value.
