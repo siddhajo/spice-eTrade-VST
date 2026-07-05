@@ -302,9 +302,9 @@ const DEFAULTS = [
   // admin gets a WhatsApp push (in addition to the in-app queue). Leave
   // the number blank to disable the push (the in-app queue still works).
   // Template blank = reuse the generic text template configured below.
-  { key: 'extra_lot_alert_whatsapp', value: '',   category: 'integrations', label: 'Extra-Lot Requests — Admin WhatsApp number(s), comma-separated (with country code)', type: 'text' },
-  { key: 'extra_lot_alert_tpl',      value: '',   category: 'integrations', label: 'Extra-Lot Requests — WhatsApp template name (blank = default text template)', type: 'text' },
-  { key: 'extra_lot_alert_tpl_lang', value: 'en', category: 'integrations', label: 'Extra-Lot Requests — WhatsApp template language code', type: 'text' },
+  { key: 'extra_lot_alert_whatsapp', value: '',   category: 'alerts', label: 'Extra-Lot Requests — Admin WhatsApp number(s), comma-separated (with country code)', type: 'text' },
+  { key: 'extra_lot_alert_tpl',      value: '',   category: 'alerts', label: 'Extra-Lot Requests — WhatsApp template name (blank = default text template)', type: 'text' },
+  { key: 'extra_lot_alert_tpl_lang', value: 'en', category: 'alerts', label: 'Extra-Lot Requests — WhatsApp template language code', type: 'text' },
 
   // ── BACKUP (auto schedule) ────────────────────────────────
   // Server runs a periodic snapshot of the SQLite file into
@@ -436,6 +436,7 @@ const CATEGORIES = {
   flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
   lot_entry:  { order: 11.5, title: 'Lot Entry Defaults',   icon: '📝', description: 'Defaults applied when field staff enter lots from the Lot Entry tab. Sample weight is auto-filled into each new lot; moisture column shows when enabled; edit timeout limits how long after creation a non-admin user can edit their own lots.' },
   integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },
+  alerts:     { order: 12.2, title: 'Notifications / Alerts', icon: '🔔', description: 'Where operator requests and other alerts are pushed. Extra-Lot Requests always show in the desktop queue and the operator app; adding an admin WhatsApp number here also pushes a message when a request is filed.' },
   backup:     { order: 12.5, title: 'Auto Backup',        icon: '💾', description: 'Periodic snapshot of the database file into a local backups folder. Set the interval (hours) and how many backups to keep — older ones are pruned automatically.' },
   tally:      { order: 13, title: 'To Tally',             icon: '📤', description: 'Configure all settings for the Tally XML export — laid out exactly like the original Configration form. Ledger names here MUST match what exists in your Tally company; if a ledger is missing or misspelled, Tally will reject the import.' },
 };

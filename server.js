@@ -11543,6 +11543,13 @@ app.get('/api/insights', requireView, (req, res) => {
   const aidA = singleAuctionId ? ` AND a.id = ${Number(singleAuctionId)}` : '';
   const aidL = singleAuctionId ? ` AND l.auction_id = ${Number(singleAuctionId)}` : '';
 
+  // Default Sample Weight (kg) per lot — the seller (planter) is credited for
+  // the sample taken from each lot, so Seller Wt = net qty + sample × lots,
+  // and the firm accrues that sample weight as physical "Stock". Feeds the
+  // Dashboard snapshot's Seller Qty / Stock columns and the lot drill-down.
+  const sampleWt = Number((getSettingsFlat(db) || {}).sample_weight) || 0;
+  const ISP_COMMISSION_PCT = 1.25;   // ISP commission rate (config: deduction1)
+
   // ── Per-trade rollup ──────────────────────────────────────
   const tradeRows = db.all(
     `SELECT
@@ -11759,6 +11766,92 @@ app.get('/api/insights', requireView, (req, res) => {
   const _maxs = perTrade.map(t => t.max_price).filter(v => v != null && v > 0);
   totals.min_price = _mins.length ? Math.min(..._mins) : null;
   totals.max_price = _maxs.length ? Math.max(..._maxs) : null;
+  // Seller (planter) weighment = net qty + the sample taken from each lot;
+  // Buyer Wt stays the net qty. Stock = the firm's accrued sample weight
+  // across every lot. Income = the firm's ISP commission on sold value.
+  // These back the Dashboard snapshot matrix + summary band (T.*).
+  totals.seller_qty      = totals.qty      + sampleWt * totals.lots;
+  totals.sold_seller_qty = totals.sold_qty + sampleWt * totals.sold;
+  totals.wd_seller_qty   = totals.wd_qty   + sampleWt * totals.withdrawn;
+  totals.stock_kg = sampleWt * totals.lots;
+  totals.commission_income = totals.sold_value * (ISP_COMMISSION_PCT / 100);
+  totals.sample_weight = sampleWt;
+
+  // ── Seller purchase-invoice numbers, keyed by seller name (a seller's
+  //    "Inv No" is their purchase invoice from the purchases table). ──
+  const purInvBySeller = {};
+  db.all(
+    `SELECT TRIM(name) AS name, GROUP_CONCAT(DISTINCT NULLIF(TRIM(invo),'')) AS invos
+     FROM purchases
+     WHERE date(date) BETWEEN date(?) AND date(?)${singleAuctionId ? ` AND auction_id = ${Number(singleAuctionId)}` : ''}
+       AND COALESCE(TRIM(name),'')<>'' AND COALESCE(TRIM(invo),'')<>''
+     GROUP BY TRIM(name)`,
+    [from, to]
+  ).forEach(r => { purInvBySeller[r.name] = r.invos || ''; });
+
+  // ── Seller-wise breakdown — every lot a seller brought, ranked by
+  //    invoiced amount. Drives the Dashboard "Seller-wise" breakdown tab. ──
+  const perPlanter = db.all(
+    `SELECT COALESCE(NULLIF(TRIM(l.name),''),'(unknown)') AS planter,
+            COUNT(*) AS lots,
+            COALESCE(SUM(l.bags),0)    AS bags,
+            COALESCE(SUM(l.qty),0)     AS qty,
+            COALESCE(SUM(l.pqty),0)    AS pqty,
+            COALESCE(SUM(l.amount),0)  AS value,
+            COALESCE(SUM(l.balance),0) AS payable
+     FROM lots l JOIN auctions a ON a.id = l.auction_id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA} AND COALESCE(TRIM(l.name),'')<>''
+     GROUP BY COALESCE(NULLIF(TRIM(l.name),''),'(unknown)')
+     ORDER BY value DESC
+     LIMIT 2000`,
+    [from, to]
+  ).map(r => ({ planter: r.planter, invos: purInvBySeller[r.planter] || '', lots: Number(r.lots)||0, bags: Number(r.bags)||0, qty: Number(r.qty)||0, pqty: Number(r.pqty)||0, value: Number(r.value)||0, payable: Number(r.payable)||0 }));
+
+  // ── Dealer-wise (buyer) breakdown — sold lots grouped by buyer CODE to
+  //    dodge shared trade-name collisions. Drives the "Buyer-wise" tab. ──
+  const perDealer = db.all(
+    `SELECT l.buyer AS buyer_code,
+            COALESCE(NULLIF(TRIM(MAX(l.buyer1)),''), l.buyer) AS dealer,
+            COUNT(*) AS lots,
+            COALESCE(SUM(l.bags),0)   AS bags,
+            COALESCE(SUM(l.qty),0)    AS qty,
+            COALESCE(SUM(l.amount),0) AS value,
+            COALESCE(GROUP_CONCAT(DISTINCT
+              CASE WHEN COALESCE(TRIM(l.invo),'')<>''
+                   THEN TRIM(COALESCE(l.sale,'')) || ' - ' || TRIM(l.invo) END),'') AS invos
+     FROM lots l JOIN auctions a ON a.id = l.auction_id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA} AND ${SOLD} AND COALESCE(TRIM(l.buyer),'')<>''
+     GROUP BY l.buyer
+     ORDER BY value DESC
+     LIMIT 2000`,
+    [from, to]
+  ).map(r => ({
+    dealer: r.dealer || '(unknown)', buyer_code: r.buyer_code || '', invos: r.invos || '',
+    lots: Number(r.lots)||0, bags: Number(r.bags)||0, qty: Number(r.qty)||0, value: Number(r.value)||0,
+  }));
+
+  // ── Grade breakdown per status — drives the click-through modal on the
+  //    snapshot matrix (Booked / Sold / Withdrawn → Grade 1 / Grade 2). ──
+  const gradeRows = db.all(
+    `SELECT CASE WHEN TRIM(COALESCE(l.grade,'')) IN ('1','2') THEN TRIM(l.grade) ELSE 'other' END AS grade,
+            COUNT(*) AS b_lots, COALESCE(SUM(l.bags),0) AS b_bags, COALESCE(SUM(l.qty),0) AS b_qty, COALESCE(SUM(l.amount),0) AS b_amt,
+            SUM(CASE WHEN ${SOLD} THEN 1 ELSE 0 END) AS s_lots, COALESCE(SUM(CASE WHEN ${SOLD} THEN l.bags ELSE 0 END),0) AS s_bags, COALESCE(SUM(CASE WHEN ${SOLD} THEN l.qty ELSE 0 END),0) AS s_qty, COALESCE(SUM(CASE WHEN ${SOLD} THEN l.amount ELSE 0 END),0) AS s_amt,
+            SUM(CASE WHEN ${WD}   THEN 1 ELSE 0 END) AS w_lots, COALESCE(SUM(CASE WHEN ${WD} THEN l.bags ELSE 0 END),0) AS w_bags, COALESCE(SUM(CASE WHEN ${WD} THEN l.qty ELSE 0 END),0) AS w_qty, COALESCE(SUM(CASE WHEN ${WD} THEN l.amount ELSE 0 END),0) AS w_amt
+     FROM lots l JOIN auctions a ON a.id = l.auction_id
+     WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA}
+     GROUP BY CASE WHEN TRIM(COALESCE(l.grade,'')) IN ('1','2') THEN TRIM(l.grade) ELSE 'other' END`,
+    [from, to]
+  );
+  const gradeCell = (lots, bags, qty, amount) => ({
+    lots: Number(lots)||0, bags: Number(bags)||0, qty: Number(qty)||0,
+    seller_qty: (Number(qty)||0) + sampleWt * (Number(lots)||0), amount: Number(amount)||0,
+  });
+  const gradeBreakdown = { booked: {}, sold: {}, withdrawn: {} };
+  for (const g of gradeRows) {
+    gradeBreakdown.booked[g.grade]    = gradeCell(g.b_lots, g.b_bags, g.b_qty, g.b_amt);
+    gradeBreakdown.sold[g.grade]      = gradeCell(g.s_lots, g.s_bags, g.s_qty, g.s_amt);
+    gradeBreakdown.withdrawn[g.grade] = gradeCell(g.w_lots, g.w_bags, g.w_qty, g.w_amt);
+  }
 
   res.json({
     range: { from, to },
@@ -11766,10 +11859,70 @@ app.get('/api/insights', requireView, (req, res) => {
     totals,
     perTrade,
     perBranch,
+    perPlanter,
+    perDealer,
+    gradeBreakdown,
     branchStacked,
     outstandingByBuyer,
     buyerActivity,
   });
+});
+
+// ── Lot-level drill-down for the dashboard Breakdown widget ──────────
+// Returns every lot for ONE seller / buyer / branch within the current
+// scope, grade-tagged, so the frontend can segregate Grade 1 / Grade 2.
+// Scope resolution mirrors /api/insights: a specific auction_id, or all
+// auctions when auction_id=all (the Dashboard's cumulative view). Seller
+// Qty per lot = qty + the configured sample weight.
+app.get('/api/insights/lots', requireView, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const db = getDb();
+  const by  = String(req.query.by  || '').toLowerCase();
+  const key = String(req.query.key || '');
+  const rawAid = String(req.query.auction_id || '').trim();
+  let aids;
+  if (rawAid && rawAid !== '' && rawAid !== 'all') {
+    aids = [parseInt(rawAid, 10)].filter(n => !Number.isNaN(n));
+  } else {
+    aids = db.all(`SELECT id FROM auctions ORDER BY id`).map(r => r.id);
+  }
+  const sampleWt = Number((getSettingsFlat(db) || {}).sample_weight) || 0;
+  if (!aids.length || !key) return res.json({ by, key, sample_weight: sampleWt, lots: [] });
+  const ph = aids.map(() => '?').join(',');
+  let cond, params;
+  if (by === 'seller')      { cond = `COALESCE(NULLIF(TRIM(name),''),'(unknown)') = ?`;        params = [key]; }
+  else if (by === 'buyer')  { cond = `buyer = ?`;                                              params = [key]; }
+  else if (by === 'branch') { cond = `COALESCE(NULLIF(TRIM(branch),''),'(unspecified)') = ?`;  params = [key]; }
+  else return res.status(400).json({ error: 'by must be seller | buyer | branch' });
+  const num = v => Number(v) || 0;
+  const lots = db.all(
+    `SELECT lot_no,
+            CASE WHEN TRIM(COALESCE(grade,'')) IN ('1','2') THEN TRIM(grade) ELSE 'other' END AS grade,
+            COALESCE(bags,0) AS bags, COALESCE(qty,0) AS qty, COALESCE(amount,0) AS amount,
+            COALESCE(price,0) AS price, COALESCE(prate,0) AS prate,
+            COALESCE(isp_prate,0) AS isp_prate, COALESCE(isp_puramt,0) AS isp_puramt,
+            COALESCE(NULLIF(TRIM(name),''),'') AS seller,
+            COALESCE(NULLIF(TRIM(buyer1),''), buyer, '') AS buyer,
+            COALESCE(NULLIF(TRIM(branch),''),'(unspecified)') AS branch,
+            UPPER(TRIM(COALESCE(code,''))) AS code
+     FROM lots
+     WHERE auction_id IN (${ph}) AND ${cond}
+     ORDER BY (CASE WHEN TRIM(COALESCE(grade,'')) IN ('1','2') THEN CAST(grade AS INTEGER) ELSE 9 END),
+              CAST(lot_no AS INTEGER), lot_no
+     LIMIT 1000`,
+    [...aids, ...params]
+  ).map(r => {
+    const code = r.code || '';
+    const status = code === 'WD' ? 'withdrawn' : code !== '' ? 'sold' : 'unsold';
+    return {
+      lot_no: r.lot_no, grade: r.grade, bags: num(r.bags), qty: num(r.qty),
+      seller_qty: num(r.qty) + sampleWt, amount: num(r.amount),
+      price: num(r.price), prate: num(r.prate),
+      isp_prate: num(r.isp_prate), isp_puramt: num(r.isp_puramt),
+      seller: r.seller, buyer: r.buyer, branch: r.branch, status,
+    };
+  });
+  res.json({ by, key, sample_weight: sampleWt, lots });
 });
 
 // ══════════════════════════════════════════════════════════════

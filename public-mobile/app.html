@@ -561,7 +561,7 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
       Out of lot numbers? Ask the admin to add more to your branch. Enter how many you need — the admin
       approves and the new lots appear here automatically.
     </div>
-    <div class="lb">BRANCH</div><input type="text" id="el-branch" readonly style="background:var(--bg2);color:var(--text3)">
+    <div class="lb">BRANCH</div><select id="el-branch"></select>
     <div class="lb" style="margin-top:8px">HOW MANY MORE LOTS?</div><input type="number" inputmode="numeric" min="1" max="500" id="el-count" placeholder="e.g. 20">
     <div class="lb" style="margin-top:8px">REASON (optional)</div><input type="text" id="el-reason" placeholder="Why you need more lots">
     <div id="el-err"></div>
@@ -595,6 +595,7 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
 const B=window.location.origin;
 let token=localStorage.getItem('sa_token')||'',user='',userBranch='',userRole='';
 let aid=null,tno=1,br='',nxt='',lc=0,tq=0,sessionEnd=null;
+var cfgBranches=[]; // branch names from Settings, for the Request Extra Lots dropdown
 let selT=null,lastId=null,stm=null,editId=null;
 let appTitle='Spice Auction',lastSearchQuery='',editTimeoutMinutes=0;
 let allMyLots=[],editEnabled=true;
@@ -677,7 +678,12 @@ function openExtraLots(){
   toggleMenu(true);
   if(!aid){toast('Start a session first',true);return}
   if(!br){toast('Select a branch first',true);return}
-  document.getElementById('el-branch').value=br;
+  // Branch dropdown — every branch configured in Settings, defaulting to
+  // the operator's current session branch. Falls back to just `br` if the
+  // config hasn't loaded yet.
+  var opts=(cfgBranches&&cfgBranches.length?cfgBranches:[br]);
+  if(opts.indexOf(br)<0)opts=[br].concat(opts);
+  document.getElementById('el-branch').innerHTML=opts.map(function(b){return '<option value="'+b+'"'+(b===br?' selected':'')+'>'+b+'</option>'}).join('');
   document.getElementById('el-count').value='';
   document.getElementById('el-reason').value='';
   document.getElementById('el-err').innerHTML='';
@@ -687,20 +693,53 @@ function openExtraLots(){
 function closeExtraLots(){document.getElementById('extra-lots-modal').classList.remove('show')}
 async function submitExtraLots(){
   var er=document.getElementById('el-err');er.innerHTML='';
+  var reqBranch=document.getElementById('el-branch').value||br;
   var count=parseInt(document.getElementById('el-count').value,10);
   var reason=document.getElementById('el-reason').value.trim();
+  if(!reqBranch){er.innerHTML='<div class="eb">Select a branch</div>';return}
   if(!count||count<1||count>500){er.innerHTML='<div class="eb">Enter how many extra lots (1–500)</div>';return}
   var btn=document.getElementById('el-submit');btn.disabled=true;
   try{
-    var r=await fetch(B+'/api/mobile/extra-lot-requests',{method:'POST',headers:ah(),body:JSON.stringify({auction_id:aid,branch:br,count:count,reason:reason})});
+    var r=await fetch(B+'/api/mobile/extra-lot-requests',{method:'POST',headers:ah(),body:JSON.stringify({auction_id:aid,branch:reqBranch,count:count,reason:reason})});
     var d=await r.json();
     if(!r.ok){er.innerHTML='<div class="eb">'+(d.error||'Failed')+'</div>';return}
-    toast('Request sent to admin',false);
-    document.getElementById('el-count').value='';
-    document.getElementById('el-reason').value='';
     if(d.request)_elrKnownStatus[d.request.id]='pending';
-    loadMyExtraLotRequests();
+    closeExtraLots();
+    toast('Request sent to admin',false);
   }catch(e){er.innerHTML='<div class="eb">Could not connect</div>'}finally{btn.disabled=false}
+}
+// Short two-tone chime for request decisions. Guarded — some browsers
+// need a user gesture before audio; failures are silently ignored.
+function elrBeep(kind){
+  try{
+    var Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return;
+    var ctx=new Ctx();var t=ctx.currentTime;
+    var freqs=kind==='deny'?[440,330]:[660,880];
+    freqs.forEach(function(f,i){
+      var o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=f;
+      o.connect(g);g.connect(ctx.destination);
+      var s=t+i*0.16;g.gain.setValueAtTime(0.0001,s);g.gain.exponentialRampToValueAtTime(0.25,s+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,s+0.15);o.start(s);o.stop(s+0.16);
+    });
+    setTimeout(function(){try{ctx.close()}catch(_){}} ,600);
+  }catch(_){}
+}
+// Full-width banner slid in from the top for request decisions. Tap to
+// dismiss; auto-hides after ~6s.
+var _elrBannerTimer=null;
+function showExtraLotBanner(msg,kind){
+  var b=document.getElementById('el-notify-banner');
+  if(!b){
+    b=document.createElement('div');b.id='el-notify-banner';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2000;padding:14px 16px;font-size:14px;font-weight:600;color:#fff;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.25);transform:translateY(-100%);transition:transform .25s ease;cursor:pointer';
+    b.onclick=function(){b.style.transform='translateY(-100%)'};
+    document.body.appendChild(b);
+  }
+  b.style.background=kind==='deny'?'#C62828':'#1D9E75';
+  b.textContent=(kind==='deny'?'✕ ':'✓ ')+msg;
+  requestAnimationFrame(function(){b.style.transform='translateY(0)'});
+  clearTimeout(_elrBannerTimer);
+  _elrBannerTimer=setTimeout(function(){b.style.transform='translateY(-100%)'},6000);
 }
 async function loadMyExtraLotRequests(markSeen){
   var host=document.getElementById('el-mylist');
@@ -733,6 +772,7 @@ function updateExtraLotBadge(n){
   var b=document.getElementById('menu-extralot-badge');if(!b)return;
   if(n>0){b.textContent=n;b.style.display=''}else{b.textContent='';b.style.display='none'}
 }
+var _elrSeeded=false; // first poll records the baseline silently (no backlog banners)
 async function pollExtraLotDecisions(){
   if(!token||!aid)return;
   if(document.getElementById('s-login').classList.contains('active'))return;
@@ -743,15 +783,19 @@ async function pollExtraLotDecisions(){
     updateExtraLotBadge(d.unseen_decisions||0);
     var reload=false;
     (d.requests||[]).forEach(function(x){
-      if(x.status!=='pending'&&_elrKnownStatus[x.id]!==x.status){
-        _elrKnownStatus[x.id]=x.status;
-        if(x.status==='approved'){toast('Extra lots approved: '+((x.applied_start||x.proposed_start)+'–'+(x.applied_end||x.proposed_end)),false);reload=true}
-        else if(x.status==='denied'){toast('Extra-lot request denied',true)}
-      }else if(x.status!=='pending'){_elrKnownStatus[x.id]=x.status}
+      if(x.status==='pending')return;
+      var prev=_elrKnownStatus[x.id];
+      _elrKnownStatus[x.id]=x.status;
+      // Only banner+beep on a fresh transition, and never on the seeding pass.
+      if(_elrSeeded&&prev!==x.status){
+        if(x.status==='approved'){showExtraLotBanner('Extra lots approved: '+((x.applied_start||x.proposed_start)+'–'+(x.applied_end||x.proposed_end)),'approved');elrBeep('approve');reload=true}
+        else if(x.status==='denied'){showExtraLotBanner('Extra-lot request denied'+(x.decision_note?' — '+x.decision_note:''),'deny');elrBeep('deny')}
+      }
     });
     // Allocation changed (a range was appended) — refresh bars + lot grid.
-    if(_elrAllocRev!==null&&d.alloc_rev!==_elrAllocRev)reload=true;
+    if(_elrSeeded&&_elrAllocRev!==null&&d.alloc_rev!==_elrAllocRev)reload=true;
     _elrAllocRev=d.alloc_rev;
+    _elrSeeded=true;
     if(reload&&typeof loadStats==='function')loadStats();
   }catch(e){}
 }
@@ -846,7 +890,7 @@ function applyLabels(){
 }
 async function loadTitle(){try{const r=await fetch(B+'/api/config');const d=await r.json();applyMaskCfg(d);setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();loadAppLogo()}catch(e){}}
 
-async function goSession(){document.getElementById('ss-user').textContent=user;const lb=localStorage.getItem('sa_branch');try{const r=await fetch(B+'/api/config');const d=await r.json();applyMaskCfg(d);setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();var brSel=document.getElementById('ss-branch');if(userRole!=='admin'&&userBranch){brSel.innerHTML='<option value="'+userBranch+'">'+userBranch+'</option>';brSel.disabled=true}else{brSel.disabled=false;brSel.innerHTML=(d.branches||[]).map(b=>'<option value="'+b.value+'"'+(b.value===(userBranch||lb)?' selected':'')+'>'+b.value+'</option>').join('')}}catch(e){}
+async function goSession(){document.getElementById('ss-user').textContent=user;const lb=localStorage.getItem('sa_branch');try{const r=await fetch(B+'/api/config');const d=await r.json();applyMaskCfg(d);setTitle(d.title||'Spice Auction');editTimeoutMinutes=d.editTimeout||0;editEnabled=d.editEnabled!==false;cfgSampleWeight=d.sampleWeight||0;cfgGunnyWeight=d.gunnyWeight||0;cfgShowMoisture=d.showMoisture||false;cfgShowExtraFields=d.showExtraLotFields||false;cfgDefaultLitre=d.defaultLitre||'';document.getElementById('le-sample').value=cfgSampleWeight?Number(cfgSampleWeight).toFixed(3):'0.000';document.getElementById('le-moisture-wrap').style.display=cfgShowMoisture?'block':'none';applyExtraFieldsVisibility();if(d.labels)cfgLabels=Object.assign({lot_no:'Lot No',seller:'Seller',grade:'Grade',bags:'Bags',litre_wt:'Litre Wt',net_wt:'Net Wt (KG)',sample_wt:'Sample Wt',gross_wt:'Gross Wt',moisture:'Moisture %'},d.labels);applyLabels();cfgBranches=(d.branches||[]).map(function(b){return b.value});var brSel=document.getElementById('ss-branch');if(userRole!=='admin'&&userBranch){brSel.innerHTML='<option value="'+userBranch+'">'+userBranch+'</option>';brSel.disabled=true}else{brSel.disabled=false;brSel.innerHTML=(d.branches||[]).map(b=>'<option value="'+b.value+'"'+(b.value===(userBranch||lb)?' selected':'')+'>'+b.value+'</option>').join('')}}catch(e){}
 await loadAvailableTrades();
 show('s-session')}
 
