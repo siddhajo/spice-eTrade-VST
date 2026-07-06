@@ -11853,6 +11853,22 @@ app.get('/api/insights', requireView, (req, res) => {
     [from, to]
   ).map(r => ({ planter: r.planter, invos: purInvBySeller[r.planter] || '', lots: Number(r.lots)||0, bags: Number(r.bags)||0, qty: Number(r.qty)||0, pqty: Number(r.pqty)||0, value: Number(r.value)||0, payable: Number(r.payable)||0 }));
 
+  // Buyer's sales invoices, keyed by buyer CODE, each formatted "<sale> - <invo>"
+  // (e.g. "I - 273"). The sale type (L/I/E) lives on the invoices row, not the
+  // lot (lots.sale is blank), so the Buyer-wise "Inv No" is sourced here to
+  // carry the sale prefix — matching the Sales Invoice screen's Sale + Inv#.
+  const salesInvByBuyer = {};
+  db.all(
+    `SELECT buyer, GROUP_CONCAT(DISTINCT
+              CASE WHEN COALESCE(TRIM(invo),'')<>''
+                   THEN TRIM(COALESCE(sale,'')) || ' - ' || TRIM(invo) END) AS invos
+     FROM invoices
+     WHERE date(date) BETWEEN date(?) AND date(?)${singleAuctionId ? ` AND auction_id = ${Number(singleAuctionId)}` : ''}
+       AND COALESCE(TRIM(buyer),'')<>''
+     GROUP BY buyer`,
+    [from, to]
+  ).forEach(r => { salesInvByBuyer[r.buyer] = r.invos || ''; });
+
   // ── Dealer-wise (buyer) breakdown — sold lots grouped by buyer CODE to
   //    dodge shared trade-name collisions. Drives the "Buyer-wise" tab. ──
   const perDealer = db.all(
@@ -11861,10 +11877,7 @@ app.get('/api/insights', requireView, (req, res) => {
             COUNT(*) AS lots,
             COALESCE(SUM(l.bags),0)   AS bags,
             COALESCE(SUM(l.qty),0)    AS qty,
-            COALESCE(SUM(l.amount),0) AS value,
-            COALESCE(GROUP_CONCAT(DISTINCT
-              CASE WHEN COALESCE(TRIM(l.invo),'')<>''
-                   THEN TRIM(COALESCE(l.sale,'')) || ' - ' || TRIM(l.invo) END),'') AS invos
+            COALESCE(SUM(l.amount),0) AS value
      FROM lots l JOIN auctions a ON a.id = l.auction_id
      WHERE date(a.date) BETWEEN date(?) AND date(?)${aidA} AND ${SOLD} AND COALESCE(TRIM(l.buyer),'')<>''
      GROUP BY l.buyer
@@ -11872,7 +11885,8 @@ app.get('/api/insights', requireView, (req, res) => {
      LIMIT 2000`,
     [from, to]
   ).map(r => ({
-    dealer: r.dealer || '(unknown)', buyer_code: r.buyer_code || '', invos: r.invos || '',
+    dealer: r.dealer || '(unknown)', buyer_code: r.buyer_code || '',
+    invos: salesInvByBuyer[r.buyer_code] || '',
     lots: Number(r.lots)||0, bags: Number(r.bags)||0, qty: Number(r.qty)||0, value: Number(r.value)||0,
   }));
 
