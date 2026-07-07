@@ -19044,6 +19044,36 @@ function openLotEdit(l){
       }
     });
   }
+  // The "Buyer Code" field mirrors the Code field's WD/NA handling: if
+  // the operator types WD (withdrawn) or NA (n/a) here, stamp the buyer
+  // block + sale type and zero the price/amount immediately so the row
+  // reads as "no transaction" without waiting for the save + recalc. The
+  // server also enforces this on save (PUT /api/lots/:id) — this is just
+  // the instant on-screen feedback. Real buyer codes are left as typed;
+  // the Code field is where buyer-master lookups happen.
+  const buyerEl = document.getElementById('l-buyer');
+  if (buyerEl && !buyerEl._wiredWd) {
+    buyerEl._wiredWd = true;
+    buyerEl.addEventListener('change', () => {
+      const code = (buyerEl.value || '').trim().toUpperCase();
+      const SPECIAL = {
+        WD: { buyer1: 'Withdrawn', sale: 'W', toast: 'Marked as Withdrawn — sale type W, price zeroed' },
+        NA: { buyer1: 'N/A',       sale: 'N', toast: 'Marked as N/A — sale type N, price zeroed' },
+      };
+      if (!SPECIAL[code]) return;
+      const s = SPECIAL[code];
+      if (priceEl) priceEl.value = '0';
+      if (amtEl)   amtEl.value   = '0.00';
+      buyerEl.value = code;
+      const b1 = document.getElementById('l-buyer1');
+      const saleEl = document.getElementById('l-sale');
+      const cEl = document.getElementById('l-code');
+      if (b1)     b1.value   = s.buyer1;
+      if (saleEl) saleEl.value = s.sale;
+      if (cEl)    cEl.value   = code;
+      if (typeof toast === 'function') toast(s.toast);
+    });
+  }
   // Auto-recalculate amount when qty or price changes
   const recalcAmount = () => {
     const q = parseFloat(qtyEl?.value)   || 0;

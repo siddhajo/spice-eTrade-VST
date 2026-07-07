@@ -5647,6 +5647,20 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   const db = getDb();
   const lotId = parseInt(req.params.id, 10);
 
+  // Withdrawn invariant: setting a lot's buyer OR code to WD means no sale
+  // happened, so the price (and amount) must collapse to 0. Enforced here
+  // — server-side — so EVERY surface that sets the buyer to WD (the edit
+  // modal's Buyer Code / Code fields, the "Set Buyer" flow, any API
+  // caller) behaves identically without each remembering to send price:0.
+  // Because we stamp `code = 'WD'` (a CALC_TRIGGER_FIELD), the recalc below
+  // re-runs and zeroes the dependent planter columns too. Mirrors the bulk
+  // "Set Buyer → WD" endpoint.
+  if (String(l.code || '').trim().toUpperCase() === 'WD' ||
+      String(l.buyer || '').trim().toUpperCase() === 'WD') {
+    l.code = 'WD'; l.buyer = 'WD'; l.buyer1 = 'Withdrawn'; l.sale = 'W';
+    l.price = 0; l.amount = 0;
+  }
+
   // If lot_no or branch is being changed, re-run the allocation +
   // duplicate validation that POST /api/lots applies. Skipping these
   // on edit was a previous gap that let users move a lot outside its
