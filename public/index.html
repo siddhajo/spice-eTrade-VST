@@ -21013,6 +21013,26 @@ function undoPaymentExport(sellerName) {
   if (typeof loadPayments === 'function') loadPayments();
   if (typeof updatePaymentBulkButtons === 'function') updatePaymentBulkButtons();
 }
+// Mark / un-mark a seller as "Adjusted" (settled by adjustment, not a bank
+// transfer). Server-side: sets/clears lots.paid = 'ADJUSTED', which the
+// bank/voucher exports skip — so the seller drops out of those files while
+// still showing on the Payments tab with the "… and ADJUSTED" badge.
+async function togglePaymentAdjusted(aid, sellerName, makeAdjusted) {
+  aid = Number(aid) || Number(document.getElementById('pay-auction')?.value || 0);
+  if (!aid || !sellerName) return;
+  try {
+    await j(`/api/payments/${aid}/adjust`, {
+      method: 'POST',
+      body: JSON.stringify({ sellerName, adjusted: !!makeAdjusted }),
+    });
+    toast(makeAdjusted
+      ? `${sellerName} marked Adjusted — excluded from the bank/voucher file.`
+      : `${sellerName} un-adjusted — back in the bank/voucher file.`);
+    if (typeof loadPayments === 'function') loadPayments();
+  } catch (e) {
+    if (typeof showError === 'function') showError(e); else alert((e && e.message) || 'Failed');
+  }
+}
 function undoLastPaymentExport() {
   const aid = Number(document.getElementById('pay-auction')?.value || 0);
   if (!aid) { alert('Select an auction first'); return; }
@@ -21331,6 +21351,25 @@ function _payExportedLotsFor(aid, sellerName, cat) {
   const ex = m[sellerName];
   if (ex === '*' || (Array.isArray(ex) && ex.length)) return ex;
   return null;
+}
+// Most recent export date for a seller (across all categories), derived
+// from the batch history so it stays correct after Undo (which strips
+// sellers out of batches). Returns a display-formatted date per the user's
+// date_format, or '' if nothing has been exported. Powers the
+// "🚫 EXPORTED on {date}" badge on the Payments row.
+function _payExportDateFor(aid, sellerName) {
+  const s = _payLoadState(aid);
+  let latest = null;
+  for (const b of (s.batches || [])) {
+    if (b && b.ts && b.exports && Object.prototype.hasOwnProperty.call(b.exports, sellerName)) {
+      if (!latest || b.ts > latest) latest = b.ts;
+    }
+  }
+  if (!latest) return '';
+  const d = new Date(latest);
+  if (isNaN(d)) return fmtD(latest);
+  const pad = x => String(x).padStart(2, '0');
+  return _renderDateParts(pad(d.getDate()), pad(d.getMonth() + 1), String(d.getFullYear()));
 }
 // Per-category tri-state status: 'none' | 'partial' | 'full'. An array of
 // length === totalLots is promoted to 'full'; unknown totalLots → 'partial'.
@@ -22062,16 +22101,19 @@ async function loadPayments(opts){
               : '';
             const st = _payStatusOf(p);
             let expBadge = '';
+            const _adj = p.adjusted ? ' and ADJUSTED' : '';
             if (st === 'full') {
               // Fully blocked only when BOTH bank payment and voucher are out.
-              expBadge = `<span class="pay-exported-badge pay-exported-full" title="Bank payment AND voucher both fully exported. Use ↶ to undo.">🚫 EXPORTED</span>`;
+              const _expOn = _payExportDateFor(_payCurAid, sellerName);
+              expBadge = `<span class="pay-exported-badge pay-exported-full" title="Bank payment AND voucher both fully exported${_expOn ? ' on ' + esc(_expOn) : ''}${_adj ? ' — settled by adjustment' : ''}. Use ↶ to undo.">🚫 EXPORTED${_expOn ? ' on ' + esc(_expOn) : ''}${_adj}</span>`;
             } else if (st === 'partial') {
               // Show which export types have gone out so far (and how far),
               // so the operator can see what still has to happen before the
               // seller is fully paid/blocked.
               expBadge = _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'bank',    '🏦', 'Bank')
                        + _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'voucher', '🧾', 'Voucher')
-                       + _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'payment', '📊', 'Report');
+                       + _payCatBadgeHtml(_payCurAid, sellerName, totalLots, 'payment', '📊', 'Report')
+                       + (p.adjusted ? `<span class="pay-exported-badge pay-exported-full" title="Settled by adjustment — excluded from the bank/voucher file.">⚖ ADJUSTED</span>` : '');
             }
             // Warn when this seller's lots route to more than one bank
             // account. The export still pays a single (default) account, so
@@ -22143,11 +22185,20 @@ async function loadPayments(opts){
             const undoBtn = (st !== 'none')
               ? `<button class="icon-btn" title="${st === 'partial' ? 'Undo partial export — every lot becomes selectable again' : 'Undo export — re-enable this seller for a new export'}" onclick="undoPaymentExport(decodeURIComponent('${nm}'))" style="color:#7c2d12">↶</button>`
               : '';
+            // ⚖ Adjust — mark this seller as settled by adjustment (not a
+            // bank transfer). Only offered once something has been exported
+            // for them. When on, the badge reads "… and ADJUSTED" and the
+            // seller is dropped from the bank/voucher file (server-side).
+            const adjOn = !!p.adjusted;
+            const adjBtn = (st !== 'none')
+              ? `<button class="icon-btn" title="${adjOn ? 'Adjusted — settled by adjustment (not a bank transfer). Click to un-adjust.' : 'Mark Adjusted — settled by adjustment (not a bank transfer). Excludes this seller from the bank/voucher file.'}" onclick="togglePaymentAdjusted(${aid},decodeURIComponent('${nm}'),${adjOn ? 'false' : 'true'})" style="color:${adjOn ? '#7c2d12' : 'var(--text3)'};${adjOn ? 'font-weight:800' : ''}">⚖</button>`
+              : '';
             // 📋 opens the per-seller lots modal — lets the operator pick
             // specific lots to settle now and print a partial statement,
             // leaving the rest for a later visit.
             const lotsBtn = `<button class="icon-btn" title="See lots · pay selected only · save lot picks for the next Export Selected" onclick="openPayLotsModal(${aid},decodeURIComponent('${nm}'))">📋</button>`;
             return undoBtn
+                 + adjBtn
                  + lotsBtn
                  + iconBtn('print','Print full payment statement',`printPayment(${aid},decodeURIComponent('${nm}'))`)
                  + iconBtn('whatsapp','Send via WhatsApp',`whatsappPayment(${aid},decodeURIComponent('${nm}'),${pay})`);

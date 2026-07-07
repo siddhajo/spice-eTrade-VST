@@ -662,6 +662,7 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     SUM(COALESCE(l.igst,0)) as total_igst,
     SUM(l.balance) as total_payable,
     COUNT(*) as lot_count,
+    MIN(CASE WHEN UPPER(COALESCE(l.paid,'')) = 'ADJUSTED' THEN 1 ELSE 0 END) AS adjusted,
     GROUP_CONCAT(DISTINCT l.bank_id) AS bank_ids,
     COUNT(l.bank_id) AS bank_lot_count,
     MAX(l.trader_id) AS trader_id,
@@ -808,6 +809,11 @@ function getPaymentSummary(db, auctionId, state, cfg) {
         const bankCount = Number(bankCountByTraderId[s.trader_id]) || 0;
         return distinct > 1 || (distinct >= 1 && untagged && bankCount > 1);
       })(),
+      // Settled by adjustment (not a bank transfer): every payable lot of
+      // this seller carries paid = 'ADJUSTED'. Drives the "… and ADJUSTED"
+      // badge; it is ALSO why the bank/voucher export (which filters out
+      // lots whose `paid` is set) automatically skips this seller.
+      adjusted: Number(s.adjusted) === 1,
     };
   });
 }

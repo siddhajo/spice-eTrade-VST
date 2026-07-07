@@ -478,10 +478,16 @@ function buildBankPaymentSheet(db, auctionId, cfg, payments) {
   const senderIfsc  = (isKL ? cfg.bank_kl_ifsc  : cfg.bank_tn_ifsc)  || cfg.bank_tn_ifsc  || cfg.bank_kl_ifsc  || '';
   const senderBankPrefix = String(senderIfsc).slice(0, 4).toUpperCase();
 
-  // Auction context: ano (REMARKS prefix) + value date (DD/MM/YYYY).
+  // Auction context: ano (REMARKS prefix) + value date. Value Date is the
+  // date the file is generated (the export date), NOT the trade date — the
+  // bank posts each payment as of today, and this matches the Payments-tab
+  // "🚫 EXPORTED on …" badge. The trade date still travels in Credit Remarks
+  // via `ano`. Server TZ is pinned to IST so local date parts are correct.
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
   const ano = a.ano || '';
-  const valueDate = fmtUserDate(String(a.date || '').slice(0, 10));
+  const _now = new Date();
+  const _todayISO = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
+  const valueDate = fmtUserDate(_todayISO);
 
   // Buyer = the trading company itself, shown as the 3rd segment of Credit
   // Remarks (e.g. "VSTL"). Prefer the Praman nickname (the e-Trade company
@@ -591,10 +597,16 @@ function buildVoucherSheet(db, auctionId, cfg, payments) {
   const senderIfsc = (isKL ? cfg.bank_kl_ifsc : cfg.bank_tn_ifsc) || cfg.bank_tn_ifsc || cfg.bank_kl_ifsc || '';
   const senderBankPrefix = String(senderIfsc).slice(0, 4).toUpperCase();
 
-  // Auction context: ano (Particulars prefix) + value date (DD-MM-YYYY band).
+  // Auction context: ano (Particulars prefix) + value date. Value Date (the
+  // "Dt:" band) is the date the file is generated (the export date), NOT the
+  // trade date — matches the 12-column bank sheet and the Payments-tab
+  // "🚫 EXPORTED on …" badge. Server TZ is pinned to IST so local date parts
+  // are correct.
   const a = db.get('SELECT ano, date FROM auctions WHERE id = ?', [auctionId]) || {};
   const ano = a.ano || '';
-  const valueDate = fmtUserDate(String(a.date || '').slice(0, 10));
+  const _now = new Date();
+  const _todayISO = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
+  const valueDate = fmtUserDate(_todayISO);
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('VOUCHER_PAYMENT');

@@ -9584,6 +9584,38 @@ app.get('/api/payments/bank/:auctionId', requireView, (req, res) => {
   res.json(data);
 });
 
+// Toggle "Adjusted" (settled by adjustment, not a bank transfer) for ONE
+// seller in a trade. Sets/clears lots.paid = 'ADJUSTED' on that seller's
+// payable lots. The bank-payment + voucher exports already filter out lots
+// whose `paid` is set, so an adjusted seller is automatically dropped from
+// those files — for BOTH "Export All" and "Export Selected" — while still
+// appearing on the Payments tab (getPaymentSummary keys on amount>0, not
+// paid) so the "🚫 EXPORTED on {date} and ADJUSTED" badge can show. Server-
+// side so it persists across devices/browsers, unlike the client-side
+// exported markers.
+app.post('/api/payments/:auctionId/adjust', requireExport, (req, res) => {
+  const db = getDb();
+  const auctionId = parseInt(req.params.auctionId, 10);
+  const sellerName = String((req.body && req.body.sellerName) || '').trim();
+  const adjusted = req.body && (req.body.adjusted === true || req.body.adjusted === 'true');
+  if (!auctionId) return res.status(400).json({ error: 'invalid auction id' });
+  if (!sellerName) return res.status(400).json({ error: 'sellerName is required' });
+  let info;
+  if (adjusted) {
+    info = db.run(
+      "UPDATE lots SET paid = 'ADJUSTED' WHERE auction_id = ? AND UPPER(COALESCE(name,'')) = UPPER(?) AND amount > 0",
+      [auctionId, sellerName]
+    );
+  } else {
+    // Only clear the ADJUSTED marker — never wipe some other `paid` value.
+    info = db.run(
+      "UPDATE lots SET paid = '' WHERE auction_id = ? AND UPPER(COALESCE(name,'')) = UPPER(?) AND UPPER(COALESCE(paid,'')) = 'ADJUSTED'",
+      [auctionId, sellerName]
+    );
+  }
+  res.json({ success: true, adjusted: !!adjusted, updated: (info && info.changes) || 0 });
+});
+
 // ── Payment Statement PDF (per-seller) ────────────────────────
 // Lightweight A4 PDF showing the payment due to one seller for one
 // auction: header, seller block, lots breakdown, totals. Powers both
