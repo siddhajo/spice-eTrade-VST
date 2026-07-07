@@ -11802,6 +11802,23 @@ app.get('/api/insights', requireView, (req, res) => {
     [from, to]
   ) || {};
   totals.purchase_gst = Number(purGstRow.gst) || 0;
+
+  // ── Amount straight from the lots table — Σ(lots.amount) for the scope,
+  //    split Booked / Sold / Withdrawn. The Dashboard snapshot matrix reads
+  //    these so its "Amount" column equals SUM(amount) in the Lots screen
+  //    exactly, independent of whether each lot's trade still exists in the
+  //    auctions table (the auction-joined `value` above can under-count when
+  //    a lot's parent auction row is missing). Scoped to one trade when
+  //    drilled in, else every lot. ──
+  const lotsAmtRow = db.get(
+    `SELECT COALESCE(SUM(amount),0) AS total,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(code,''))) NOT IN ('','WD') THEN amount ELSE 0 END),0) AS sold,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(code,''))) = 'WD' THEN amount ELSE 0 END),0) AS wd
+     FROM lots${singleAuctionId ? ` WHERE auction_id = ${Number(singleAuctionId)}` : ''}`
+  ) || {};
+  totals.lots_amount      = Number(lotsAmtRow.total) || 0;
+  totals.lots_sold_amount = Number(lotsAmtRow.sold)  || 0;
+  totals.lots_wd_amount   = Number(lotsAmtRow.wd)    || 0;
   // Quantity-weighted avg price across SOLD lots only (sold_value / sold_qty),
   // matching the per-trade and per-branch Avg columns. Using all-lots qty here
   // would dilute the average with withdrawn/unsold kilos that carry no value.

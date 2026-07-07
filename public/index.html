@@ -9396,9 +9396,9 @@ async function loadStats(auctionId){
             <th title="Σ CGST + SGST + IGST on this scope's sales invoices (levied on sold goods)">GST</th>
           </tr></thead>
           <tbody>
-            ${mrow('Booked', '',   T.lots, T.bags, T.seller_qty, T.qty, T.value, null)}
-            ${mrow('Sold', 'sold', T.sold, T.sold_bags, T.sold_seller_qty, T.sold_qty, T.sold_value, scopeGst)}
-            ${mrow('Withdrawn', 'wd', T.withdrawn, T.wd_bags, T.wd_seller_qty, T.wd_qty, T.wd_value, null)}
+            ${mrow('Booked', '',   T.lots, T.bags, T.seller_qty, T.qty, (T.lots_amount != null ? T.lots_amount : T.value), null)}
+            ${mrow('Sold', 'sold', T.sold, T.sold_bags, T.sold_seller_qty, T.sold_qty, (T.lots_sold_amount != null ? T.lots_sold_amount : T.sold_value), scopeGst)}
+            ${mrow('Withdrawn', 'wd', T.withdrawn, T.wd_bags, T.wd_seller_qty, T.wd_qty, (T.lots_wd_amount != null ? T.lots_wd_amount : T.wd_value), null)}
           </tbody>
         </table>
       </div>
@@ -9588,7 +9588,7 @@ async function loadStats(auctionId){
       <div class="kpi money">
         <div class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M8 13v5M13 9v9M18 6v12"/></svg></div>
         <div class="kpi-label">${isAllMode ? 'Total volume' : 'Trade volume'}</div>
-        <div class="kpi-value">${inr2(isAllMode ? (T.value!=null?T.value:CUM.amount) : (A ? A.totalAmt : 0))}</div>
+        <div class="kpi-value">${inr2(T.lots_amount != null ? T.lots_amount : (isAllMode ? (T.value!=null?T.value:CUM.amount) : (A ? A.totalAmt : 0)))}</div>
         <span class="kpi-delta neutral">${isAllMode
           ? `${CUM.auctions||0} ${termAuction(CUM.auctions!==1, true)}`
           : (A ? `${kg(A.totalQty)} traded` : 'No ' + termAuction(false, true))}</span>
