@@ -253,6 +253,11 @@ const DEFAULTS = [
   // for grading, typically a constant per season. Moisture, default
   // litre, and edit timeout match the PWA's config keys 1:1.
   { key: 'sample_weight',   value: '0.000',          category: 'lot_entry', label: 'Default Sample Weight (kg)', type: 'number' },
+  // Sample Collection (kg) + Free Sample (kg) per lot — dedicated rates for
+  // the Dashboard Stock tile, independent of the Sample Weight above:
+  //   Stock = (lots × Sample Collection) − (lots × Free Sample).
+  { key: 'sample_collection', value: '0.000',        category: 'lot_entry', label: 'Default Sample Collection (kg)', type: 'number' },
+  { key: 'free_sample',     value: '0.000',          category: 'lot_entry', label: 'Default Free Sample (kg)', type: 'number' },
   { key: 'gunny_weight',    value: '0.000',          category: 'lot_entry', label: 'Default Gunny Weight (kg)', type: 'number' },
   { key: 'show_moisture',   value: 'false',          category: 'lot_entry', label: 'Show Moisture Column',     type: 'boolean' },
   // Master toggle for the extra lot-entry fields (Crop Receipt no. and

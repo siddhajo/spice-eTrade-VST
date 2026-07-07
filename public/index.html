@@ -1059,6 +1059,18 @@ html.sidebar-collapsed .sidebar .sb-collapse-btn svg{transform:rotate(180deg)}
 .icon-btn.i-star:hover{background:#fff7e6}
 .icon-btn.i-star.is-default{color:#d9a521}
 .icon-btn.i-star.is-default svg{fill:#f5b301;stroke:#d9a521}
+/* Payments-row action glyphs (undo ↶ / adjust ⚖ / lots 📋) render as text /
+   emoji, not SVG, so they need an explicit size + stronger border/colour to
+   read clearly on the tinted exported rows. */
+.icon-btn.i-glyph{font-size:17px;line-height:1;border-color:var(--spice-line-strong)}
+.icon-btn.i-glyph:hover{background:var(--spice-cream)}
+.icon-btn.i-undo{color:#c0392b}
+.icon-btn.i-undo:hover{background:#fdecea;border-color:#c0392b}
+.icon-btn.i-adjust{color:#8a5a1c}
+.icon-btn.i-adjust:hover{background:#fff7e6;border-color:#d9a521}
+.icon-btn.i-adjust.is-on{background:#fde9c8;border-color:#d9a521;box-shadow:inset 0 0 0 1.5px #d9a521}
+.icon-btn.i-lots{color:var(--text2)}
+.icon-btn.i-lots:hover{color:var(--green);border-color:var(--green)}
 /* DEFAULT badge next to the starred trade's number. */
 .trade-default-badge{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:1px 7px;border-radius:10px;background:#fef3c7;color:#92400e;font-size:10.5px;font-weight:700;letter-spacing:.3px;vertical-align:middle}
 .icon-btn.i-view{color:var(--blue);border-color:#bfd5ec}
@@ -9405,7 +9417,7 @@ async function loadStats(auctionId){
       <div class="dash-snap-ft">
         <div class="mf pay"><div class="k">Payable to sellers</div><div class="v">${inr2(T.seller_amount != null ? T.seller_amount : T.payable_to_sellers)}</div><div class="mf-sub"><span class="sk">GST</span><span class="sv">${inr2(T.purchase_gst)}</span></div></div>
         <div class="mf inc"><div class="k">Income (commission)</div><div class="v">${inr2(T.commission_income)}</div><div class="mf-sub"><span class="sk">To be earned</span><span class="sv">${inr2(T.to_be_earned)}</span></div></div>
-        <div class="mf"><div class="k">Stock (kg)</div><div class="v">${nq(T.stock_kg)}</div></div>
+        <div class="mf"><div class="k">Stock (kg)</div><div class="v">${nq(T.stock_kg)}</div><div class="mf-sub"><span class="sk">Sample collected</span><span class="sv">${nq(T.sample_collected)}</span></div><div class="mf-sub"><span class="sk">Free sample</span><span class="sv">${nq(T.free_sample)}</span></div></div>
         <div class="mf"><div class="k">Min ₹/kg</div><div class="v">${T.min_price>0?inr2(T.min_price):'—'}</div></div>
         <div class="mf"><div class="k">Max ₹/kg</div><div class="v">${T.max_price>0?inr2(T.max_price):'—'}</div></div>
         <div class="mf" title="Range ${priceRange}"><div class="k">Avg ₹/kg</div><div class="v">${T.avg_price>0?inr2(T.avg_price):'—'}</div></div>
@@ -22183,7 +22195,7 @@ async function loadPayments(opts){
             // "drop the per-lot export marker so EVERY lot can be
             // exported again, including the ones already paid."
             const undoBtn = (st !== 'none')
-              ? `<button class="icon-btn" title="${st === 'partial' ? 'Undo partial export — every lot becomes selectable again' : 'Undo export — re-enable this seller for a new export'}" onclick="undoPaymentExport(decodeURIComponent('${nm}'))" style="color:#7c2d12">↶</button>`
+              ? `<button class="icon-btn i-glyph i-undo" title="${st === 'partial' ? 'Undo partial export — every lot becomes selectable again' : 'Undo export — re-enable this seller for a new export'}" onclick="undoPaymentExport(decodeURIComponent('${nm}'))">↶</button>`
               : '';
             // ⚖ Adjust — mark this seller as settled by adjustment (not a
             // bank transfer). Only offered once something has been exported
@@ -22191,12 +22203,12 @@ async function loadPayments(opts){
             // seller is dropped from the bank/voucher file (server-side).
             const adjOn = !!p.adjusted;
             const adjBtn = (st !== 'none')
-              ? `<button class="icon-btn" title="${adjOn ? 'Adjusted — settled by adjustment (not a bank transfer). Click to un-adjust.' : 'Mark Adjusted — settled by adjustment (not a bank transfer). Excludes this seller from the bank/voucher file.'}" onclick="togglePaymentAdjusted(${aid},decodeURIComponent('${nm}'),${adjOn ? 'false' : 'true'})" style="color:${adjOn ? '#7c2d12' : 'var(--text3)'};${adjOn ? 'font-weight:800' : ''}">⚖</button>`
+              ? `<button class="icon-btn i-glyph i-adjust${adjOn ? ' is-on' : ''}" title="${adjOn ? 'Adjusted — settled by adjustment (not a bank transfer). Click to un-adjust.' : 'Mark Adjusted — settled by adjustment (not a bank transfer). Excludes this seller from the bank/voucher file.'}" onclick="togglePaymentAdjusted(${aid},decodeURIComponent('${nm}'),${adjOn ? 'false' : 'true'})">⚖</button>`
               : '';
             // 📋 opens the per-seller lots modal — lets the operator pick
             // specific lots to settle now and print a partial statement,
             // leaving the rest for a later visit.
-            const lotsBtn = `<button class="icon-btn" title="See lots · pay selected only · save lot picks for the next Export Selected" onclick="openPayLotsModal(${aid},decodeURIComponent('${nm}'))">📋</button>`;
+            const lotsBtn = `<button class="icon-btn i-glyph i-lots" title="See lots · pay selected only · save lot picks for the next Export Selected" onclick="openPayLotsModal(${aid},decodeURIComponent('${nm}'))">📋</button>`;
             return undoBtn
                  + adjBtn
                  + lotsBtn

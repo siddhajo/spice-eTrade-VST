@@ -11611,6 +11611,10 @@ app.get('/api/insights', requireView, (req, res) => {
   // and the firm accrues that sample weight as physical "Stock". Feeds the
   // Dashboard snapshot's Seller Qty / Stock columns and the lot drill-down.
   const sampleWt = Number((getSettingsFlat(db) || {}).sample_weight) || 0;
+  // Dedicated Stock-tile rates (kg per lot), independent of Sample Weight:
+  //   Stock = (lots × Sample Collection) − (lots × Free Sample).
+  const sampleCollectionWt = Number((getSettingsFlat(db) || {}).sample_collection) || 0;
+  const freeSampleWt       = Number((getSettingsFlat(db) || {}).free_sample) || 0;
   const ISP_COMMISSION_PCT = 1.25;   // ISP commission rate (config: deduction1)
 
   // ── Per-trade rollup ──────────────────────────────────────
@@ -11889,9 +11893,16 @@ app.get('/api/insights', requireView, (req, res) => {
   totals.seller_qty      = totals.qty      + sampleWt * totals.lots;
   totals.sold_seller_qty = totals.sold_qty + sampleWt * totals.sold;
   totals.wd_seller_qty   = totals.wd_qty   + sampleWt * totals.withdrawn;
-  totals.stock_kg = sampleWt * totals.lots;
+  // Stock = sample collected − free sample, each = total lots × its per-lot
+  // default (dedicated Sample Collection / Free Sample rates, NOT sampleWt).
+  // Feeds the Dashboard Stock tile + its breakdown sub-metrics.
+  totals.sample_collected = sampleCollectionWt * totals.lots;
+  totals.free_sample      = freeSampleWt       * totals.lots;
+  totals.stock_kg = totals.sample_collected - totals.free_sample;
   totals.commission_income = totals.sold_value * (ISP_COMMISSION_PCT / 100);
   totals.sample_weight = sampleWt;
+  totals.sample_collection_weight = sampleCollectionWt;
+  totals.free_sample_weight = freeSampleWt;
 
   // ── Seller purchase-invoice numbers, keyed by seller name (a seller's
   //    "Inv No" is their purchase invoice from the purchases table). ──
