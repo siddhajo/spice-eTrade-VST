@@ -6176,7 +6176,14 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
     // Inter-state lot would still carry the IGST flag from the prior
     // assignment.
     const buyerSale = String(b.sale || '').trim().toUpperCase();
-    const saleVal = ['L', 'I', 'E'].includes(buyerSale) ? buyerSale : 'L';
+    // A registered buyer whose master code is WD is the "withdrawn" marker
+    // even though it's a real row (some setups create a "WITH DRAWN" buyer
+    // with code WD instead of typing the literal WD sentinel). Treat it like
+    // the literal-WD path: force sale W and zero the price/amount so no money
+    // math survives. The client runs calculate right after, which then zeroes
+    // the planter columns too.
+    const isWithdrawn = String(b.code || '').trim().toUpperCase() === 'WD';
+    const saleVal = isWithdrawn ? 'W' : (['L', 'I', 'E'].includes(buyerSale) ? buyerSale : 'L');
     const { allowed: mutableIds, skipped: lockedIds } = filterLockedLotIds(db, numericIds);
     if (!mutableIds.length) {
       return res.json({
@@ -6196,7 +6203,7 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
     );
     affectedRows.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
     db.run(
-      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ? WHERE id IN (${placeholders})`,
+      `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ?${isWithdrawn ? ', price = 0, amount = 0' : ''} WHERE id IN (${placeholders})`,
       [b.buyer, b.buyer1 || '', b.code || '', saleVal, ...mutableIds]
     );
     for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); }
