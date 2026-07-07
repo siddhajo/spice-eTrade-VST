@@ -2936,42 +2936,6 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           Insights
         </button>
-        <button class="side-item needs-settings-write" data-tab="settings" onclick="go('settings')">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Settings
-        </button>
-        <!-- Formulas reference: read-only summary of every calculation
-             that runs on lots, payments, and sales invoices. Helps the
-             user verify the math against their spec without digging
-             through code.
-             Dev-only — hidden by default. Reveal for the current browser
-             by running `spiceDev(true)` in the JS console. Persists in
-             localStorage so a reload keeps it visible. Hide again with
-             `spiceDev(false)`. Server-side knows nothing about this flag,
-             so other users on the same install never see the menu item. -->
-        <button id="side-formulas" class="side-item" data-tab="formulas" onclick="go('formulas')" style="display:none">
-          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><path d="M14.5 19.5l2 2 4-4"/></svg>
-          Formulas
-        </button>
-        <!-- Fix Data — gentle, no-SQL editor for the end user (dad).
-             Same spiceDev(true) reveal; enable it once on his machine and
-             it persists. Read-only until he flips "Edit mode"; every
-             change spells out the exact before→after and asks again. -->
-        <button id="side-fixdata" class="side-item" data-tab="fixdata" onclick="go('fixdata')" style="display:none">
-          <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-          Fix Data
-        </button>
-        <button class="side-item needs-user-manage" data-tab="users" onclick="go('users')">
-          <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          Users
-        </button>
-        <!-- Backup & Restore — admin only. Lives in its own tab so the
-             dangerous Restore button isn't a stray click away from the
-             everyday Settings flow. -->
-        <button class="side-item needs-user-manage" data-tab="backup" onclick="go('backup')">
-          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Backup
-        </button>
       </div>
       <div class="side-group">
         <div class="side-group-lbl">Master Data</div>
@@ -2987,43 +2951,37 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
           Auctions
         </button>
+      </div>
+      <div class="side-group">
+        <div class="side-group-lbl">Trade Operations</div>
         <button class="side-item" data-tab="lots" onclick="go('lots')">
           <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           Lots
         </button>
-        <!-- Extra-Lot Requests — mobile operators asking the admin to
-             append more lot numbers to their branch's allocation. Only
-             visible to auction-write roles (the approvers). The badge
-             count is refreshed by pollExtraLotReqBadge(). -->
-        <button class="side-item needs-auction-write" data-tab="extralotreqs" onclick="go('extralotreqs')">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          Extra-Lot Requests
-          <span class="count" id="extralot-badge" style="display:none;margin-left:auto;background:#C62828;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700"></span>
-        </button>
-        <!-- Price List Mapping — sister tool of the Lots screen's Price
-             Import button. Fills the CODE column on a Price List (Before)
-             sheet from TRADE NAME values so the resulting file is ready
-             for re-import via Lots → Price Import. Behind the
-             flag_price_list_mapping feature toggle. -->
-        <button class="side-item feat-price-list-mapping" data-tab="plmap" onclick="go('plmap')">
-          <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
-          Price List Mapping
-        </button>
-        <!-- Price Check — reconciles an externally-recorded price sheet
-             against the lots table. Replaces the legacy
-             PriceCheck_VSTL.xlsm macro workbook. -->
-        <button class="side-item feat-price-check" data-tab="pricecheck" onclick="go('pricecheck')">
-          <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          Price Check
-        </button>
-        <!-- Lot Entry — fast desktop entry form for the auction-hall
-             workflow (one row per lot, seller search, save & next).
-             Uses the existing /api/traders + /api/lots endpoints so
-             data flows straight into the same DB the admin views.
+        <!-- Lot Entry — fast desktop entry form for the auction-hall workflow.
              Visible to lot_entry, operator, manager, admin roles. -->
         <button class="side-item needs-lot-entry-view" data-tab="lotentry" onclick="go('lotentry')">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
           Lot Entry
+        </button>
+        <!-- Price List Mapping — fills the CODE column on a Price List sheet
+             from TRADE NAME values. Behind flag_price_list_mapping. -->
+        <button class="side-item feat-price-list-mapping" data-tab="plmap" onclick="go('plmap')">
+          <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
+          Price List Mapping
+        </button>
+        <!-- Price Check — reconciles an external price sheet against lots. -->
+        <button class="side-item feat-price-check" data-tab="pricecheck" onclick="go('pricecheck')">
+          <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Price Check
+        </button>
+        <!-- Extra-Lot Requests — mobile operators asking the admin to append
+             more lot numbers to their branch's allocation. Only visible to
+             auction-write roles (the approvers). Badge via pollExtraLotReqBadge(). -->
+        <button class="side-item needs-auction-write" data-tab="extralotreqs" onclick="go('extralotreqs')">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Extra-Lot Requests
+          <span class="count" id="extralot-badge" style="display:none;margin-left:auto;background:#C62828;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700"></span>
         </button>
       </div>
       <div class="side-group">
@@ -3050,10 +3008,9 @@ input[type="search"]:focus{
         </button>
       </div>
       <div class="side-group">
-        <div class="side-group-lbl">Reports</div>
-        <!-- Reports hub — trade summary, branch comparison, links to
-             every report generator. Sits at the top of the Reports
-             section so it's the first thing the user sees. -->
+        <div class="side-group-lbl">Reports &amp; Exports</div>
+        <!-- Reports hub — trade summary, branch comparison, links to every
+             report generator. First thing the user sees in this section. -->
         <button class="side-item" data-tab="reports" onclick="go('reports')">
           <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
           Reports Hub
@@ -3082,9 +3039,37 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           To Tally
         </button>
+      </div>
+      <div class="side-group">
+        <div class="side-group-lbl">Administration</div>
+        <button class="side-item needs-settings-write" data-tab="settings" onclick="go('settings')">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+        <button class="side-item needs-user-manage" data-tab="users" onclick="go('users')">
+          <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Users
+        </button>
+        <!-- Backup & Restore — admin only. Own tab so the dangerous Restore
+             button isn't a stray click from the everyday Settings flow. -->
+        <button class="side-item needs-user-manage" data-tab="backup" onclick="go('backup')">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Backup
+        </button>
         <button class="side-item needs-user-manage" data-tab="importold" onclick="go('importold')">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 14l-5 5-5-5M12 19V3"/></svg>
           Import Old Data
+        </button>
+        <!-- Formulas — read-only calc reference. Dev-only: reveal for the
+             current browser with spiceDev(true); persists in localStorage. -->
+        <button id="side-formulas" class="side-item" data-tab="formulas" onclick="go('formulas')" style="display:none">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><path d="M14.5 19.5l2 2 4-4"/></svg>
+          Formulas
+        </button>
+        <!-- Fix Data — gentle no-SQL editor. Same spiceDev(true) reveal. -->
+        <button id="side-fixdata" class="side-item" data-tab="fixdata" onclick="go('fixdata')" style="display:none">
+          <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          Fix Data
         </button>
       </div>
     </aside>
