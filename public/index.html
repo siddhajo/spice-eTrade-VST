@@ -18533,6 +18533,11 @@ let _lotsTickedIds = new Set();
 // Tracks the auction id loadLots was last called for so we can wipe
 // _lotsTickedIds when the user switches trades.
 let _lotsLastAid = null;
+// Per-auction cache of every branch that actually appears in the trade's
+// lots — captured on each unfiltered load. The branch-filter dropdown unions
+// this with the configured branches so imported/legacy branch names (never
+// added in Settings) are still filterable. Keyed by auction id.
+let _lotBranchesByAuction = {};
 // Mirror direct DOM checkbox changes into the persistent set so
 // manually un-ticking a row sticks across re-renders. Without this,
 // the next loadLots would partition the un-ticked row right back
@@ -18650,7 +18655,8 @@ async function loadLots(opts){
   // auction are meaningless here. Same auction reload (refresh /
   // branch filter / post-action recalc) keeps the set so the sort-
   // to-top and re-tick survive.
-  if (_lotsLastAid && _lotsLastAid !== aid) _lotsTickedIds.clear();
+  const _auctionChanged = _lotsLastAid && _lotsLastAid !== aid;
+  if (_auctionChanged) _lotsTickedIds.clear();
   _lotsLastAid = aid;
   // Price-check gate — disables Calculate All / generate buttons until
   // verify has cleared. Becomes a no-op when flag_price_check is OFF.
@@ -18661,18 +18667,12 @@ async function loadLots(opts){
   // Pager: fresh loads reset to page 1; only pager-driven navigation
   // sets {keepPage:true} to preserve the user's current page.
   if (!opts || !opts.keepPage) _lotsPager.page = 1;
-  // Refresh the branch-filter dropdown options each load so any new
-  // branch added in Settings shows up here. The currently-selected
-  // branch survives a reload — selectedIndex is preserved via the
-  // value string match.
+  // Read the current branch filter from the dropdown (its options were built
+  // on the previous load; rebuilt from the fetched data further down). On a
+  // trade switch we clear it so the new trade's first load is unfiltered and
+  // captures that trade's full branch list.
   const branchSel = document.getElementById('lot-branch-filter');
-  if (branchSel) {
-    const current = branchSel.value;
-    const branches = getConfiguredBranches();
-    branchSel.innerHTML = '<option value="">All branches</option>'
-      + branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
-    if (current && branches.includes(current)) branchSel.value = current;
-  }
+  if (branchSel && _auctionChanged) branchSel.value = '';
   const branchFilter = branchSel ? branchSel.value : '';
   const branchParam = branchFilter ? `&branch=${encodeURIComponent(branchFilter)}` : '';
   // Search filters within the currently-selected trade.
@@ -18702,6 +18702,23 @@ async function loadLots(opts){
   // lot_no → id without re-fetching. Replaced on every load so it
   // stays in sync with deletes / inserts / branch filter changes.
   _lotsFull = arr;
+
+  // Rebuild the branch-filter dropdown = configured branches (Settings br1..br9)
+  // ∪ branches that actually appear in this trade's lots. An unfiltered load
+  // sees every branch, so we refresh the per-auction cache from it; a filtered
+  // load reuses the cache (its `arr` only holds one branch). This makes
+  // imported/legacy branch names filterable, not just the ones set up in
+  // Settings — which was why the filter looked broken.
+  if (branchSel) {
+    if (!branchFilter) {
+      _lotBranchesByAuction[aid] = [...new Set(arr.map(l => String(l.branch || '').trim()).filter(Boolean))];
+    }
+    const _allBranches = [...new Set([...getConfiguredBranches(), ...(_lotBranchesByAuction[aid] || [])])]
+      .sort((a, b) => a.localeCompare(b));
+    branchSel.innerHTML = '<option value="">All branches</option>'
+      + _allBranches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+    branchSel.value = (branchFilter && _allBranches.includes(branchFilter)) ? branchFilter : '';
+  }
 
   // Update KPI strip — count, qty, amount, calculated %
   const kpiStrip = document.getElementById('lot-kpis');
