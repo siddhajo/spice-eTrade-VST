@@ -1065,18 +1065,29 @@ function getTradeReportData(db, auctionId) {
     return a.localeCompare(b);
   });
 
-  // Statistics for the footer
+  // Statistics for the footer.
+  //   SOLD        = lots that fetched a price (amount > 0).
+  //   WITHDRAWN   = lots that did NOT sell but carry a code (e.g. 'WD' —
+  //                 withdrawn from the auction). A code means the lot WAS
+  //                 e-traded, just not sold — so it belongs in WITHDRAWN.
+  //   NOT eTRADED = lots that never got a code at all (never went to bid).
+  // Previously withdrawn was hardcoded to 0 and every non-sold lot (WD
+  // included) landed in NOT eTRADED — this splits them by presence of a code.
   const allLots = db.all(
-    `SELECT bags, qty, price, amount FROM lots WHERE auction_id = ?`, [auctionId]
+    `SELECT bags, qty, price, amount, code FROM lots WHERE auction_id = ?`, [auctionId]
   );
-  const sold = allLots.filter(l => Number(l.amount) > 0);
-  const notSold = allLots.filter(l => !(Number(l.amount) > 0));
+  const _hasCode = l => String(l.code || '').trim() !== '';
+  const sold      = allLots.filter(l => Number(l.amount) > 0);
+  const withdrawn = allLots.filter(l => !(Number(l.amount) > 0) && _hasCode(l));
+  const notSold   = allLots.filter(l => !(Number(l.amount) > 0) && !_hasCode(l));
   const sumLots = (xs, k) => xs.reduce((s, r) => s + (Number(r[k]) || 0), 0);
   const stats = {
     arrivals_qty:  sumLots(allLots, 'qty'),
     arrivals_bags: sumLots(allLots, 'bags'),
     arrivals_lots: allLots.length,
-    withdrawn_qty: 0, withdrawn_bags: 0, withdrawn_lots: 0,
+    withdrawn_qty:  sumLots(withdrawn, 'qty'),
+    withdrawn_bags: sumLots(withdrawn, 'bags'),
+    withdrawn_lots: withdrawn.length,
     sold_qty:      sumLots(sold, 'qty'),
     sold_bags:     sumLots(sold, 'bags'),
     sold_lots:     sold.length,
@@ -1101,8 +1112,8 @@ async function tradeReportXlsx(db, auctionId) {
   ws.columns = [
     { width: 6 },   // SALE
     { width: 22 },  // BIDDER
-    { width: 26 },  // TRADE NAME
-    { width: 6 },   // BAG
+    { width: 24 },  // TRADE NAME
+    { width: 10 },  // BAG (wide enough for the grand-total across states)
     { width: 12 },  // QUANTITY
     { width: 16 },  // AMOUNT
     { width: 16 },  // INV.AMOUNT
@@ -1305,8 +1316,8 @@ async function tradeReportPdf(db, auctionId) {
     Math.floor(usableW * 0.06),  // SL.NO
     Math.floor(usableW * 0.06),  // SALE
     Math.floor(usableW * 0.16),  // BIDDER
-    Math.floor(usableW * 0.18),  // TRADE NAME
-    Math.floor(usableW * 0.05),  // BAG
+    Math.floor(usableW * 0.15),  // TRADE NAME
+    Math.floor(usableW * 0.08),  // BAG (fits the grand-total summed across states)
     Math.floor(usableW * 0.11),  // QTY
     Math.floor(usableW * 0.16),  // AMOUNT
     Math.floor(usableW * 0.16),  // INV.AMOUNT

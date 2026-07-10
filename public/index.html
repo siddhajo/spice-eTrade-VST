@@ -4147,10 +4147,11 @@ input[type="search"]:focus{
           <span style="font-weight:700;font-size:14px;color:var(--spice-cardamom-dk)">Activity Log — this trade</span>
           <span id="le-activity-count" style="font-weight:400;color:var(--spice-cardamom-dk);opacity:.7;font-size:12px;margin-left:4px"></span>
           <span style="flex:1"></span>
-          <!-- Filter the feed to one lot's full history (create + every edit). -->
-          <input type="search" id="le-activity-lot-filter" placeholder="🔍 Lot # history" title="Show the full history of a single lot — who created it and who edited which fields"
+          <!-- Filter the feed to one or more lots' full history (create + every edit).
+               Accepts a comma-separated list and numeric ranges, e.g. "5, 12, 40-60". -->
+          <input type="search" id="le-activity-lot-filter" placeholder="🔍 Lots e.g. 5, 12, 40-60" title="Show the history of one or more lots — who created them and who edited which fields. Comma-separated; ranges like 40-60 are supported."
                  onclick="event.stopPropagation()" oninput="leActivityLotFilter(this.value)"
-                 style="height:30px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:12.5px;width:130px;color:var(--text)">
+                 style="height:30px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:12.5px;width:180px;color:var(--text)">
           <button type="button" onclick="event.stopPropagation();leLoadActivity(1)" class="le-toolbar-btn le-tb-ghost" title="Refresh the activity log">↻ Refresh</button>
           <button type="button" onclick="event.stopPropagation();leActivityClearAll()" class="le-toolbar-btn le-tb-ghost" title="Delete the entire activity log for this trade" style="color:var(--spice-chili)">🗑 Clear All</button>
         </div><!-- /le-collapse-head -->
@@ -11011,7 +11012,8 @@ const LOT_FIELD_LABELS = {
   reserved_price:'Reserved price', crop_receipt_no:'Crop receipt',
   code:'Code', buyer:'Buyer code', buyer1:'Buyer name', sale:'Sale',
   grade:'Grade', branch:'Branch', crop:'Crop', crpt:'Crop type',
-  cr:'GSTIN', pan:'PAN', tel:'Phone', prate:'P.Rate', puramt:'Pur amt', balance:'Payable',
+  cr:'GSTIN', pan:'PAN', tel:'Phone', aadhar:'Aadhaar', prate:'P.Rate', puramt:'Pur amt', balance:'Payable',
+  padd:'Address', ppla:'Place', ppin:'PIN', pstate:'State', pst_code:'State code',
 };
 function leActVal(v){
   if (v === null || v === undefined || String(v).trim() === '') return '(empty)';
@@ -11038,7 +11040,7 @@ function renderLeActivity(items){
   if (cntEl) cntEl.textContent = _leAct.total ? `(${_leAct.total})` : '';
   if (!items.length) {
     const msg = _leAct.lotNo
-      ? `No activity for lot #${esc(_leAct.lotNo)} in this trade.`
+      ? `No activity for lot(s) "${esc(_leAct.lotNo)}" in this trade.`
       : 'No activity recorded yet for this trade.';
     listEl.innerHTML = `<tr><td colspan="7" style="padding:14px;color:var(--text3)">${msg}</td></tr>`;
   } else {
@@ -26076,6 +26078,12 @@ async function plPreview(){
     }
     _plLastSummary = data;
     document.getElementById('pl-download-btn').disabled = false;
+    // Cache the Buyers master once so the bulk "map CODE to selected lots"
+    // toolbar can autocomplete + resolve a typed CODE to its trade name
+    // without a fetch per keystroke.
+    if (!window._plBuyers) {
+      try { window._plBuyers = await j('/api/buyers') || []; } catch (_) { window._plBuyers = []; }
+    }
     _plRenderPreview(data);
     const blocked = data.unmatched > 0 || data.ambiguous > 0;
     const summaryLine = '<b>Total rows:</b> '+data.total+
@@ -26124,8 +26132,31 @@ function _plRenderPreview(data){
     host.innerHTML = html;
     return;
   }
+  // Bulk toolbar — tick lots below, type/pick one CODE, apply to all ticked.
+  // Datalist is the distinct CODE column from the Buyers master (first buyer
+  // per code wins the trade-name label).
+  const _byCode = new Map();
+  for (const b of (window._plBuyers || [])) {
+    const c = String(b.code == null ? '' : b.code).trim();
+    if (c && !_byCode.has(c.toUpperCase())) _byCode.set(c.toUpperCase(), b);
+  }
+  const codeOpts = Array.from(_byCode.values())
+    .map(b => '<option value="'+escAttr(b.code)+'">'+escAttr(b.buyer1 || b.buyer || '')+'</option>')
+    .join('');
+  html += '<div id="pl-bulk-bar" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;border:1px solid var(--spice-line);border-radius:8px;background:#f8fafc">'+
+    '<div class="fg" style="margin:0;min-width:220px">'+
+      '<label style="font-size:11px">Map CODE to selected lots</label>'+
+      '<input id="pl-bulk-code" list="pl-bulk-codes" placeholder="Type or pick a CODE…" autocomplete="off" '+
+        'oninput="plBulkPreview()" onkeydown="if(event.key===\'Enter\'){event.preventDefault();plBulkApply();}" '+
+        'style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:200px">'+
+      '<datalist id="pl-bulk-codes">'+codeOpts+'</datalist>'+
+    '</div>'+
+    '<button class="btn btn-g" id="pl-bulk-apply" onclick="plBulkApply()" disabled>Apply to <span id="pl-bulk-count">0</span> selected</button>'+
+    '<span id="pl-bulk-preview" style="font-size:12px;color:var(--text2);flex:1;min-width:160px;padding-bottom:6px"></span>'+
+  '</div>';
   html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
+    '<th style="text-align:center;padding:4px 6px;border:1px solid #ddd;width:28px"><input type="checkbox" id="pl-sel-all" onclick="plToggleAllSel(this.checked)" title="Select / clear all" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Row</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lot</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Trade name (from file)</th>'+
@@ -26173,12 +26204,13 @@ function _plRenderPreview(data){
       pickedCell = '<span style="font-weight:'+(rw.pickedCode?'700':'400')+';color:'+(rw.pickedCode?'#15803d':'#c00')+'">'+
         escAttr(rw.pickedCode || '— none —')+'</span>';
     }
-    html += '<tr style="background:'+bg+'">'+
+    html += '<tr id="pl-row-'+rw.row+'" style="background:'+bg+'">'+
+      '<td style="text-align:center;padding:3px 6px;border:1px solid #f0f0f0"><input type="checkbox" class="pl-sel-cb" data-pl-row="'+rw.row+'" onclick="plSelSync()" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+rw.row+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+escAttr(rw.lot||'')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.tradeName||'')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
+      '<td id="pl-picked-'+rw.row+'" style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
     '</tr>';
   }
@@ -26223,6 +26255,84 @@ function _plPick(code, row){
 // we never have to escape the code into an inline onclick string.
 function _plPickEl(el){
   _plPick(el.getAttribute('data-pl-cand-code'), el.getAttribute('data-pl-cand-row'));
+}
+
+// ── Bulk "map CODE to selected lots" (file-mode preview) ──────────
+// Tick any rows (incl. unmatched ones the trade-name matcher couldn't
+// resolve), type/pick one CODE, and write it onto every ticked row's
+// override so the downloaded file carries it. Mirrors the per-row _plPick
+// path — it just fans one code out to the whole selection.
+function _plSelCbs(){ return Array.prototype.slice.call(document.querySelectorAll('.pl-sel-cb')); }
+function plToggleAllSel(on){
+  _plSelCbs().forEach(cb => { cb.checked = !!on; });
+  plSelSync();
+}
+function plSelSync(){
+  const cbs = _plSelCbs();
+  const ticked = cbs.filter(cb => cb.checked);
+  const countEl = document.getElementById('pl-bulk-count');
+  const applyEl = document.getElementById('pl-bulk-apply');
+  const allEl   = document.getElementById('pl-sel-all');
+  if (countEl) countEl.textContent = String(ticked.length);
+  if (applyEl) applyEl.disabled = ticked.length === 0;
+  if (allEl) {
+    allEl.checked = cbs.length > 0 && ticked.length === cbs.length;
+    allEl.indeterminate = ticked.length > 0 && ticked.length < cbs.length;
+  }
+}
+// Resolve the typed CODE against the Buyers master (by the CODE column, which
+// is what the file's CODE cell holds) and show the trade name — same feedback
+// idiom as the Lots-table bulk buyer picker.
+function plBulkPreview(){
+  const input = document.getElementById('pl-bulk-code');
+  const prev  = document.getElementById('pl-bulk-preview');
+  if (!input || !prev) return;
+  const code = String(input.value || '').trim().toUpperCase();
+  if (!code) { prev.innerHTML = ''; return; }
+  const b = (window._plBuyers || []).find(x => String(x.code || '').trim().toUpperCase() === code);
+  if (b) {
+    prev.innerHTML = '→ <strong style="color:var(--spice-cardamom)">'+esc(b.buyer1 || b.buyer || '(no trade name)')+'</strong>'+
+      '<span style="color:var(--text3)"> · CODE '+esc(b.code)+'</span>';
+  } else {
+    prev.innerHTML = '<span style="color:var(--spice-chili)">No buyer has CODE "'+esc(code)+'". Add it in the Buyers tab first.</span>';
+  }
+}
+function plBulkApply(){
+  const input = document.getElementById('pl-bulk-code');
+  const prev  = document.getElementById('pl-bulk-preview');
+  const raw   = String((input && input.value) || '').trim();
+  if (!raw) { if (prev) prev.innerHTML = '<span style="color:var(--spice-chili)">Enter a CODE first.</span>'; return; }
+  // The CODE must exist in the Buyers master (matched case-insensitively), and
+  // we write back the master's exact casing so the download matches the buyer.
+  const b = (window._plBuyers || []).find(x => String(x.code || '').trim().toUpperCase() === raw.toUpperCase());
+  if (!b) { if (prev) prev.innerHTML = '<span style="color:var(--spice-chili)">No buyer has CODE "'+esc(raw)+'". Add it in the Buyers tab first.</span>'; return; }
+  const code = String(b.code).trim();
+  const ticked = _plSelCbs().filter(cb => cb.checked);
+  if (!ticked.length) return;
+  ticked.forEach(cb => {
+    const row = cb.getAttribute('data-pl-row');
+    _plOverrides[String(row)] = code;
+    // Rewrite the Picked CODE cell — a manual assignment overrides whatever the
+    // matcher picked (incl. an ambiguous row's dropdown), so show a plain green
+    // code with a "manual" tag.
+    const cell = document.getElementById('pl-picked-'+row);
+    if (cell) cell.innerHTML = '<span style="font-weight:700;color:#15803d">'+esc(code)+'</span>'+
+      ' <span style="font-size:10px;color:#64748b">(manual)</span>';
+    // Tint the row so resolved lots read as done, and keep any candidate badge
+    // highlight in sync when the manual code happens to be one of the candidates.
+    const tr = document.getElementById('pl-row-'+row);
+    if (tr) tr.style.background = '#f0fdf4';
+    document.querySelectorAll('[data-pl-cand-row="'+row+'"]').forEach(el => {
+      const on = el.getAttribute('data-pl-cand-code') === code;
+      el.style.background = on ? '#dcfce7' : '#fafafa';
+      el.style.outline = on ? '2px solid #15803d' : 'none';
+    });
+    cb.checked = false;
+  });
+  plSelSync();
+  if (input) input.value = '';
+  if (prev) prev.innerHTML = '';
+  if (typeof toast === 'function') toast('Mapped CODE '+code+' to '+ticked.length+' lot'+(ticked.length===1?'':'s')+' — download to save');
 }
 
 async function plDownload(){

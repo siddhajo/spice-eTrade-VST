@@ -3174,7 +3174,18 @@ async function _plProcessFile(filePath, overrides = {}) {
   if (!cols.headerRow || !cols.tradeCol || !cols.codeCol) {
     throw new Error('Could not locate TRADE NAME and CODE columns. The sheet must have both headers.');
   }
-  const idx = _plBuildTradeIndex(getDb());
+  const db = getDb();
+  const idx = _plBuildTradeIndex(db);
+  // Every real CODE in the Buyers master. A manual override (from the preview
+  // UI's "map CODE to selected lots" bulk action) is honoured when it names
+  // one of these, even if it isn't among the row's own trade-name candidates —
+  // that's how the operator assigns a buyer to unmatched/mismatched lots. The
+  // set still blocks a stale/forged code from slipping in.
+  const validCodes = new Set(
+    db.all('SELECT DISTINCT code FROM buyers')
+      .map(b => String(b.code == null ? '' : b.code).trim().toUpperCase())
+      .filter(Boolean)
+  );
   const perRow = [];
   let matched = 0, unmatched = 0, ambiguous = 0, blank = 0;
   const maxRow = ws.rowCount || 0;
@@ -3221,13 +3232,18 @@ async function _plProcessFile(filePath, overrides = {}) {
       entry.pickedCode = (withCode || cands[0]).code || '';
       ambiguous++;
     }
-    // Apply an operator override (from the preview UI) when it names one of
-    // this row's candidate codes. Lets the user resolve ambiguous rows up
-    // front instead of per-lot after Price Import.
+    // Apply an operator override from the preview UI. Two sources, both honoured:
+    //   • per-row picker on an ambiguous row → one of that row's own candidates
+    //   • bulk "map CODE to selected lots" → any real CODE in the Buyers master
+    // The Buyers-master check keeps a stale/forged code from being written while
+    // still letting the operator assign a buyer to an unmatched/mismatched lot.
     const ov = overrides && overrides[String(r)];
-    if (ov != null && String(ov) !== '' &&
-        entry.candidates.some(c => String(c.code) === String(ov))) {
-      entry.pickedCode = String(ov);
+    if (ov != null && String(ov).trim() !== '') {
+      const ovStr = String(ov).trim();
+      const inCands = entry.candidates.some(c => String(c.code) === ovStr);
+      if (inCands || validCodes.has(ovStr.toUpperCase())) {
+        entry.pickedCode = ovStr;
+      }
     }
     perRow.push(entry);
   }
@@ -5644,6 +5660,41 @@ function logLotActivity(db, req, action, lotId, details) {
   } catch (e) { /* best-effort audit; ignore */ }
 }
 
+// True when a lot column's old/new value is effectively unchanged. Numeric-
+// looking values compare numerically so a 10 vs "10.0" round-trip isn't
+// flagged. Shared by the single-lot edit diff and logBulkLotChanges.
+function lotValSame(a, b) {
+  const na = Number(a), nb = Number(b);
+  if (a !== '' && b !== '' && a != null && b != null && !isNaN(na) && !isNaN(nb)) return na === nb;
+  return String(a ?? '').trim() === String(b ?? '').trim();
+}
+
+// Field-level activity logging for a BULK lot mutation. `beforeRows` are the
+// pre-update lot rows (each with id, auction_id, lot_no, name + the mutated
+// columns); `applied` is the { column: newValue } map common to all of them.
+// Writes one 'update' audit entry per lot that ACTUALLY changed, so bulk
+// Set Buyer / Change Seller / Set Grade show real before → after detail (and
+// feed the per-lot history filter) instead of nothing. Capped so a large
+// Price-Check apply can't flood the feed; best-effort like all audit writes.
+function logBulkLotChanges(db, req, beforeRows, applied, cap = 500) {
+  try {
+    let n = 0;
+    for (const row of beforeRows) {
+      if (n >= cap) break;
+      const changes = [];
+      for (const [k, v] of Object.entries(applied)) {
+        if (!lotValSame(row[k], v)) changes.push({ f: k, from: row[k], to: v });
+      }
+      if (!changes.length) continue;
+      logLotActivity(db, req, 'update', row.id, {
+        auction_id: row.auction_id, lot_no: row.lot_no, name: row.name,
+        fields: changes.map(c => c.f), changes,
+      });
+      n++;
+    }
+  } catch (e) { /* best-effort audit; ignore */ }
+}
+
 app.post('/api/lots', requireLotWrite, (req, res) => {
   const l = req.body;
   const db = getDb();
@@ -5895,6 +5946,7 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
     const changes = [];
     for (const [k, v] of Object.entries(l)) {
       if (!LOT_UPDATE_COLUMNS.has(k)) continue;
+      if (k === 'trader_id') continue;  // internal FK — Seller name conveys it
       if (!_same(current[k], v)) changes.push({ f: k, from: current[k], to: v });
     }
     logLotActivity(db, req, 'update', lotId, {
@@ -5932,13 +5984,40 @@ app.get('/api/lot-activity', requireAuth, (req, res) => {
     let where = "entity = 'lot'";
     const params = [];
     if (auctionId) { where += ' AND details LIKE ?'; params.push(`{"auction_id":${auctionId},%`); }
-    // Filter to a single lot's history (create + every edit + delete) by its
-    // stored lot_no. Matches the exact JSON token "lot_no":"<n>" so lot "5"
-    // doesn't collide with "55"; %/_ in the value are escaped for LIKE.
-    const lotNo = req.query.lotNo != null ? String(req.query.lotNo).trim() : '';
-    if (lotNo) {
-      where += " AND details LIKE ? ESCAPE '\\'";
-      params.push('%"lot_no":"' + lotNo.replace(/([%_\\])/g, '\\$1') + '"%');
+    // Filter to one OR MORE lots' history (create + every edit + delete).
+    // `lotNo` accepts a comma/space-separated list where each token is a
+    // single number, a numeric range (a-b), or an exact non-numeric code.
+    // Matching is on the exact JSON token "lot_no":"<n>" (so lot 5 doesn't
+    // collide with 55) but tolerant of zero-padding — typing 5 also finds a
+    // stored "005". %/_ in non-numeric codes are escaped for LIKE.
+    const lotNoRaw = req.query.lotNo != null ? String(req.query.lotNo) : '';
+    if (lotNoRaw.trim()) {
+      const nums = new Set();      // numeric lot values (padding-agnostic)
+      const literals = new Set();  // exact non-numeric tokens
+      for (let tok of lotNoRaw.split(/[\s,]+/)) {
+        tok = tok.trim();
+        if (!tok) continue;
+        let m;
+        if ((m = /^(\d+)\s*-\s*(\d+)$/.exec(tok))) {
+          let a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+          if (a > b) { const t = a; a = b; b = t; }
+          for (let n = a; n <= b && nums.size < 300; n++) nums.add(n);
+        } else if (/^\d+$/.test(tok)) {
+          nums.add(parseInt(tok, 10));
+        } else {
+          literals.add(tok);
+        }
+      }
+      const patterns = new Set();
+      for (const n of nums) {
+        for (let w = 1; w <= 6; w++) patterns.add('%"lot_no":"' + String(n).padStart(w, '0') + '"%');
+      }
+      for (const t of literals) patterns.add('%"lot_no":"' + t.replace(/([%_\\])/g, '\\$1') + '"%');
+      const uniq = [...patterns].slice(0, 400);
+      if (uniq.length) {
+        where += ' AND (' + uniq.map(() => "details LIKE ? ESCAPE '\\'").join(' OR ') + ')';
+        for (const p of uniq) params.push(p);
+      }
     }
     const totalRow = db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE ${where}`, params);
     const total = (totalRow && totalRow.n) || 0;
@@ -6213,7 +6292,9 @@ app.post('/api/lots/bulk-grade', requireLotWrite, (req, res) => {
       return res.json({ success: true, updated: 0, grade: g, skipped_locked: skipped.length });
     }
     const placeholders = allowed.map(() => '?').join(',');
+    const _before = db.all(`SELECT id, auction_id, lot_no, name, grade FROM lots WHERE id IN (${placeholders})`, allowed);
     db.run(`UPDATE lots SET grade = ? WHERE id IN (${placeholders})`, [g, ...allowed]);
+    logBulkLotChanges(db, req, _before, { grade: g });
     res.json({ success: true, updated: allowed.length, grade: g, skipped_locked: skipped.length });
   } catch (e) {
     res.status(500).json({ error: 'Bulk grade update failed: ' + (e.message || e) });
@@ -6316,15 +6397,16 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
       }
       const placeholders = mutableIds.map(() => '?').join(',');
       const touchedAuctions = new Set();
-      const affectedRows = db.all(
-        `SELECT DISTINCT auction_id FROM lots WHERE id IN (${placeholders})`,
+      const _before = db.all(
+        `SELECT id, auction_id, lot_no, name, buyer, buyer1, code, sale, price, amount FROM lots WHERE id IN (${placeholders})`,
         mutableIds
       );
-      affectedRows.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
+      _before.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
       db.run(
         `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ?, price = 0, amount = 0 WHERE id IN (${placeholders})`,
         ['WD', 'Withdrawn', 'WD', 'W', ...mutableIds]
       );
+      logBulkLotChanges(db, req, _before, { buyer: 'WD', buyer1: 'Withdrawn', code: 'WD', sale: 'W', price: 0, amount: 0 });
       for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); }
       return res.json({
         success: true,
@@ -6369,15 +6451,18 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
     // check gates — the buyer codes have changed, so an earlier verify
     // run no longer reflects the current state.
     const touchedAuctions = new Set();
-    const affectedRows = db.all(
-      `SELECT DISTINCT auction_id FROM lots WHERE id IN (${placeholders})`,
+    const _before = db.all(
+      `SELECT id, auction_id, lot_no, name, buyer, buyer1, code, sale, price, amount FROM lots WHERE id IN (${placeholders})`,
       mutableIds
     );
-    affectedRows.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
+    _before.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
     db.run(
       `UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ?${isWithdrawn ? ', price = 0, amount = 0' : ''} WHERE id IN (${placeholders})`,
       [b.buyer, b.buyer1 || '', b.code || '', saleVal, ...mutableIds]
     );
+    logBulkLotChanges(db, req, _before, isWithdrawn
+      ? { buyer: b.buyer, buyer1: b.buyer1 || '', code: b.code || '', sale: saleVal, price: 0, amount: 0 }
+      : { buyer: b.buyer, buyer1: b.buyer1 || '', code: b.code || '', sale: saleVal });
     for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); }
     res.json({
       success: true,
@@ -6429,6 +6514,10 @@ app.post('/api/lots/bulk-seller', requireLotWrite, (req, res) => {
       });
     }
     const placeholders = mutableIds.map(() => '?').join(',');
+    const _before = db.all(
+      `SELECT id, auction_id, lot_no, name, trader_id, cr, pan, tel, aadhar, padd, ppla, ppin, pstate, pst_code FROM lots WHERE id IN (${placeholders})`,
+      mutableIds
+    );
     // Mirror the same column set POST/PUT /api/lots populate when a
     // trader_id is supplied — keeps the source of truth single.
     db.run(
@@ -6460,6 +6549,13 @@ app.post('/api/lots/bulk-seller', requireLotWrite, (req, res) => {
         ...mutableIds,
       ]
     );
+    // trader_id (internal FK) is intentionally omitted — the seller change is
+    // conveyed by the human-readable Seller/GSTIN/Phone/… fields below.
+    logBulkLotChanges(db, req, _before, {
+      name: t.name || '', cr: t.cr || '', pan: t.pan || '',
+      tel: t.tel || '', aadhar: t.aadhar || '', padd: t.padd || '', ppla: t.ppla || '',
+      ppin: t.pin || '', pstate: t.pstate || '', pst_code: t.pst_code || '',
+    });
     res.json({
       success: true,
       updated: mutableIds.length,
