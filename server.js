@@ -86,6 +86,87 @@ app.use((req, res, next) => {
   next();
 });
 
+// ──────────────────────────────────────────────────────────────
+// APP ACTIVITY LOG — records every successful create / edit / delete
+// across the WHOLE app. Implemented as ONE after-the-fact middleware
+// (rather than a call inside each of ~190 endpoints) so nothing slips
+// through — and because the field-staff mobile app shares this same
+// Express instance, its mutations are captured too. Only successful
+// (status < 400) POST/PUT/PATCH/DELETE to /api/* are logged; GET reads,
+// auth churn, file downloads and webhooks are ignored. Best-effort: a
+// logging failure never affects the request. Viewed on the Backup screen.
+// ──────────────────────────────────────────────────────────────
+const _ACTIVITY_ENTITY = {
+  lots: 'lot', traders: 'seller', buyers: 'buyer', invoices: 'invoice',
+  purchases: 'purchase', bills: 'bill', 'debit-notes': 'debit note',
+  auctions: 'trade', users: 'user', 'company-settings': 'settings',
+  settings: 'settings', payments: 'payment', tally: 'tally', auth: 'account',
+};
+// Mutating paths we deliberately DON'T log (noise / not a data change).
+function _activitySkip(p) {
+  return /^\/api\/(auth\/login|login|auth\/logout|logout|exports|dbf-exports|whatsapp\/webhook|admin\/activity-log|activity-log|lot-activity|mobile\/active-trade|mobile\/status|status|health)\b/.test(p);
+}
+function _activityClassify(method, p) {
+  const seg = p.replace(/^\/api\//, '').split('/').filter(Boolean);
+  let head = seg[0] || 'other';
+  if (head === 'mobile') head = seg[1] || 'mobile';   // unwrap mobile-bridge namespace
+  let entity = _ACTIVITY_ENTITY[head] || String(head).replace(/-/g, ' ');
+  if (seg.includes('banks')) entity = 'seller bank';
+  if (p.includes('extra-lot-requests')) entity = 'extra-lot request';
+  let action = method === 'DELETE' ? 'delete' : (method === 'PUT' || method === 'PATCH') ? 'edit' : 'create';
+  const last = seg[seg.length - 1];
+  if (method === 'POST') {
+    if (['revert', 'revert-all', 'deny'].includes(last)) action = 'delete';
+    else if (['adjust', 'seen', 'default', 'no-ti', 'approve', 'change-password', 'change-role', 'reassign-lots', 'active-trade', 'unlock', 'lock'].includes(last)) action = 'edit';
+    else if (['generate', 'generate-all'].includes(last)) action = 'create';
+  }
+  let entityId = '';
+  for (let i = seg.length - 1; i >= 0; i--) { if (/^\d+$/.test(seg[i])) { entityId = seg[i]; break; } }
+  return { entity, action, entityId };
+}
+// Compact, secret-redacted one-line summary of the request body.
+function _activityRedact(body) {
+  if (!body || typeof body !== 'object') return '';
+  const out = {};
+  for (const k of Object.keys(body)) {
+    if (/pass|token|secret|hash|otp|cookie/i.test(k)) { out[k] = '***'; continue; }
+    const v = body[k];
+    if (v === null || v === undefined || v === '') continue;
+    if (typeof v === 'object') out[k] = Array.isArray(v) ? `[${v.length}]` : '{…}';
+    else out[k] = String(v).slice(0, 80);
+  }
+  try { return JSON.stringify(out).slice(0, 500); } catch (_) { return ''; }
+}
+app.use((req, res, next) => {
+  const m = req.method.toUpperCase();
+  if ((m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') &&
+      req.path.startsWith('/api/') && !_activitySkip(req.path)) {
+    // Snapshot the body NOW — handlers (e.g. the WD invariant) mutate req.body.
+    const bodySnap = (req.body && typeof req.body === 'object') ? { ...req.body } : {};
+    res.on('finish', () => {
+      try {
+        if (res.statusCode >= 400) return;   // only log successful mutations
+        const { entity, action, entityId } = _activityClassify(m, req.path);
+        const ua = String(req.headers['user-agent'] || '');
+        const source = /Mobile|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
+        const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+        const ip = String(fwd || req.ip || '').replace(/^::ffff:/, '').slice(0, 60);
+        getDb().run(
+          `INSERT INTO activity_log (user_id, username, source, action, entity, entity_id, method, path, status, details, ip)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            (req.user && req.user.id) || null,
+            (req.user && req.user.username) || 'unknown',
+            source, action, entity, entityId, m,
+            req.path.slice(0, 200), res.statusCode, _activityRedact(bodySnap), ip,
+          ]
+        );
+      } catch (_) { /* best-effort audit — never break the request */ }
+    });
+  }
+  next();
+});
+
 // Logo resolution helper — uploads go to a persistent volume
 // (SPICE_DATA_DIR/logos) so they survive Railway/Heroku redeploys,
 // which wipe everything outside the mounted volume. Without this the
@@ -1554,6 +1635,61 @@ app.get('/api/admin/delete-log', requireDeleteAll, (req, res) => {
     ...r,
     cascade_counts: (() => { try { return JSON.parse(r.cascade_counts || '{}'); } catch (_) { return {}; } })(),
   })));
+});
+
+// GET /api/admin/activity-log — the global create/edit/delete feed, with
+// filters (user / action / entity / source / date range / free-text) and
+// paging. `facets` lists the distinct users + entities seen so the client
+// can populate its filter dropdowns.
+app.get('/api/admin/activity-log', requireDeleteAll, (req, res) => {
+  try {
+    const db = getDb();
+    const q = req.query || {};
+    let where = '1=1'; const params = [];
+    if (q.user)   { where += ' AND username = ?'; params.push(String(q.user)); }
+    if (q.action) { where += ' AND action = ?';   params.push(String(q.action)); }
+    if (q.entity) { where += ' AND entity = ?';   params.push(String(q.entity)); }
+    if (q.source) { where += ' AND source = ?';   params.push(String(q.source)); }
+    if (q.from)   { where += ' AND created_at >= ?'; params.push(String(q.from).slice(0, 10) + ' 00:00:00'); }
+    if (q.to)     { where += ' AND created_at <= ?'; params.push(String(q.to).slice(0, 10) + ' 23:59:59'); }
+    if (q.q) {
+      where += ' AND (username LIKE ? OR entity LIKE ? OR path LIKE ? OR details LIKE ?)';
+      const like = '%' + String(q.q) + '%';
+      params.push(like, like, like, like);
+    }
+    const page = Math.max(1, parseInt(q.page, 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(q.pageSize, 10) || 50));
+    const totalRow = db.get(`SELECT COUNT(*) AS n FROM activity_log WHERE ${where}`, params);
+    const total = (totalRow && totalRow.n) || 0;
+    const items = db.all(
+      `SELECT id, username, source, action, entity, entity_id, method, path, status, details, ip, created_at
+         FROM activity_log WHERE ${where}
+        ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize]
+    );
+    // Facets for the dropdowns (whole table — tiny at this scale).
+    const users    = db.all("SELECT DISTINCT username FROM activity_log WHERE username != '' ORDER BY username").map(r => r.username);
+    const entities = db.all("SELECT DISTINCT entity   FROM activity_log WHERE entity != ''   ORDER BY entity").map(r => r.entity);
+    res.json({ items, total, page, pageSize, facets: { users, entities } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/admin/activity-log — clear the activity log. Whole table by
+// default, or only rows older than ?days=N (retention prune). Destructive,
+// so the client guards it behind a confirm().
+app.delete('/api/admin/activity-log', requireDeleteAll, (req, res) => {
+  try {
+    const db = getDb();
+    const days = parseInt(req.query.days, 10);
+    const info = (Number.isFinite(days) && days > 0)
+      ? db.run("DELETE FROM activity_log WHERE created_at < datetime('now','localtime', ?)", ['-' + days + ' days'])
+      : db.run('DELETE FROM activity_log');
+    res.json({ success: true, deleted: (info && info.changes) || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 function makeDeleteAll(resource) {

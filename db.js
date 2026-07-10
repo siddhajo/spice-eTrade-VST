@@ -575,6 +575,32 @@ async function initDb() {
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
+  // ── APP ACTIVITY LOG ───────────────────────────────────────
+  // Global feed of every successful create / edit / delete across the
+  // WHOLE app — the office desktop AND the field-staff mobile app (both
+  // share one Express server). Written by a single after-the-fact
+  // middleware in server.js (not per-endpoint), so nothing slips through.
+  // Surfaced + filterable on the Backup screen. Distinct from `audit_log`
+  // above, which is lot-only + per-trade (the Lot Entry activity feed).
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    username TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    action TEXT DEFAULT '',
+    entity TEXT DEFAULT '',
+    entity_id TEXT DEFAULT '',
+    method TEXT DEFAULT '',
+    path TEXT DEFAULT '',
+    status INTEGER,
+    details TEXT DEFAULT '',
+    ip TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at)`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_entity  ON activity_log(entity, action)`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_user    ON activity_log(username)`);
+
   // Forensic record of every "Delete All" wipe. Captures the operator,
   // the affected resource, how many rows actually went away, where the
   // pre-wipe backup landed, and the client IP — so a misclick can be

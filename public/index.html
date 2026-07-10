@@ -3198,6 +3198,33 @@ input[type="search"]:focus{
          `needs-user-manage` because that CSS rule sets display:initial
          which conflicts with the .tc tab-switching rules. -->
     <div class="tc" id="tc-backup">
+      <!-- ── App Activity Log — global create / edit / delete feed ─── -->
+      <div class="card">
+        <h2 style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+          <span style="width:36px;height:36px;border-radius:10px;background:#E0F2FE;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 36px">📋</span>
+          <span>App Activity Log</span>
+          <button class="btn btn-o" style="margin-left:auto;height:30px;padding:0 14px;font-size:12px;font-weight:600" onclick="loadActivityLog(1)">🔄 Refresh</button>
+        </h2>
+        <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;max-width:760px;line-height:1.55">
+          Every create, edit and delete across the whole app — the office desktop AND the field-staff mobile app — including lots, invoices, sellers, buyers, users and settings. Use the filters to narrow by user, action, entity, device or date.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px">
+          <div class="fg" style="margin:0;flex:1;min-width:150px"><label>Search</label><input type="search" id="act-f-q" placeholder="user, entity, path, details…" oninput="actFilterDebounced()"></div>
+          <div class="fg" style="margin:0"><label>User</label><select id="act-f-user" onchange="loadActivityLog(1)"><option value="">All</option></select></div>
+          <div class="fg" style="margin:0"><label>Action</label><select id="act-f-action" onchange="loadActivityLog(1)"><option value="">All</option><option value="create">Create</option><option value="edit">Edit</option><option value="delete">Delete</option></select></div>
+          <div class="fg" style="margin:0"><label>Entity</label><select id="act-f-entity" onchange="loadActivityLog(1)"><option value="">All</option></select></div>
+          <div class="fg" style="margin:0"><label>Device</label><select id="act-f-source" onchange="loadActivityLog(1)"><option value="">All</option><option value="Desktop">Desktop</option><option value="Mobile">Mobile</option></select></div>
+          <div class="fg" style="margin:0"><label>From</label><input type="date" id="act-f-from" onchange="loadActivityLog(1)"></div>
+          <div class="fg" style="margin:0"><label>To</label><input type="date" id="act-f-to" onchange="loadActivityLog(1)"></div>
+          <button class="btn btn-o" style="height:38px" onclick="actResetFilters()">Reset</button>
+          <button class="btn" style="height:38px;background:#7F1D1D;color:#fff;font-weight:600;border-color:#7F1D1D" onclick="actClearLog()" title="Delete activity-log entries (all, or older than N days)">🗑 Clear…</button>
+        </div>
+        <div id="act-log-host" style="overflow:auto;max-height:440px;border:1px solid var(--spice-line);border-radius:8px;background:#fff;font-size:12px">
+          <div style="padding:12px;color:var(--text3);font-style:italic">Loading…</div>
+        </div>
+        <div id="act-log-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
+      </div>
+
       <div class="card">
         <h2 style="display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:8px">
           <span style="width:36px;height:36px;border-radius:10px;background:#FEF3C7;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 36px">💾</span>
@@ -8810,7 +8837,7 @@ function go(tab){
     // Lazy-load the Delete All audit log when Backup opens so the
     // <details> drawer shows fresh data on first expand (loadDeleteLog
     // is idempotent — re-running it just re-renders the table).
-    backup: () => { if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
+    backup: () => { if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadActivityLog === 'function') loadActivityLog(1); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
     // Import Old Data has its own History panel; pre-load on tab open
     // so the operator sees recent imports without clicking the button.
     importold: () => { if (typeof impLoadHistory === 'function') impLoadHistory(); },
@@ -16448,6 +16475,97 @@ async function deleteAll(resource,label,ev){
 // Pull the most recent Delete All actions and render them as a table.
 // Each row shows when, who, the resource, how many rows went away, the
 // per-table cascade breakdown, the snapshot path, and the client IP.
+// ── App Activity Log (Backup screen) — global create/edit/delete feed ──
+let _actPage = 1;
+let _actFilterTimer = null;
+function actFilterDebounced(){ clearTimeout(_actFilterTimer); _actFilterTimer = setTimeout(() => loadActivityLog(1), 300); }
+function _actVal(id){ const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+async function loadActivityLog(page){
+  _actPage = Math.max(1, page || 1);
+  const host = document.getElementById('act-log-host');
+  if (!host) return;
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const p = new URLSearchParams();
+  p.set('page', _actPage); p.set('pageSize', 50);
+  const map = { q:'act-f-q', user:'act-f-user', action:'act-f-action', entity:'act-f-entity', source:'act-f-source', from:'act-f-from', to:'act-f-to' };
+  for (const [k, id] of Object.entries(map)) { const v = _actVal(id); if (v) p.set(k, v); }
+  host.innerHTML = '<div style="padding:12px;color:var(--text3);font-style:italic">Loading…</div>';
+  try {
+    const r = await fetch(B + '/api/admin/activity-log?' + p.toString(), { headers: { 'Authorization': 'Bearer ' + T } });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Failed to load activity log'); }
+    const data = await r.json();
+    _actSeedFacets(data.facets || {});
+    const items = data.items || [];
+    if (!items.length) {
+      host.innerHTML = '<div style="padding:12px;color:var(--text3);font-style:italic">No activity matches these filters.</div>';
+    } else {
+      const badge = (act) => {
+        const fg = act === 'delete' ? '#B91C1C' : act === 'edit' ? '#B45309' : '#166534';
+        const bg = act === 'delete' ? '#FEE2E2' : act === 'edit' ? '#FEF3C7' : '#DCFCE7';
+        return '<span style="display:inline-block;padding:1px 8px;border-radius:9px;font-size:11px;font-weight:700;color:' + fg + ';background:' + bg + '">' + _esc(act) + '</span>';
+      };
+      let html = '<table style="width:100%;border-collapse:collapse">' +
+        '<thead><tr style="background:var(--bg)">' +
+        ['When','User','Device','Action','Entity','Details','IP'].map(h => '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--spice-line);white-space:nowrap">' + h + '</th>').join('') +
+        '</tr></thead><tbody>';
+      for (const it of items) {
+        const ent = _esc(it.entity || '') + (it.entity_id ? ' <span style="color:var(--text3)">#' + _esc(it.entity_id) + '</span>' : '');
+        html += '<tr>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg);white-space:nowrap">' + _esc(it.created_at || '') + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + _esc(it.username || '—') + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + _esc(it.source || '') + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + badge(it.action || '') + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + ent + '</td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg);max-width:360px"><code style="font-size:11px;color:var(--text2);word-break:break-all">' + _esc(it.details || it.path || '') + '</code></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg);color:var(--text3)">' + _esc(it.ip || '') + '</td>' +
+          '</tr>';
+      }
+      host.innerHTML = html + '</tbody></table>';
+    }
+    const pager = document.getElementById('act-log-pager');
+    if (pager) {
+      const total = data.total || 0, ps = data.pageSize || 50, pages = Math.max(1, Math.ceil(total / ps));
+      const a = total ? ((_actPage - 1) * ps + 1) : 0, b = Math.min(total, _actPage * ps);
+      pager.innerHTML = '<span>Showing ' + a + '–' + b + ' of ' + total + '</span>' +
+        '<span style="display:flex;gap:6px;align-items:center">' +
+        '<button class="btn btn-o" style="height:30px" ' + (_actPage <= 1 ? 'disabled' : '') + ' onclick="loadActivityLog(' + (_actPage - 1) + ')">‹ Prev</button>' +
+        '<span>Page ' + _actPage + ' / ' + pages + '</span>' +
+        '<button class="btn btn-o" style="height:30px" ' + (_actPage >= pages ? 'disabled' : '') + ' onclick="loadActivityLog(' + (_actPage + 1) + ')">Next ›</button>' +
+        '</span>';
+    }
+  } catch (e) {
+    host.innerHTML = '<div style="padding:12px;color:#B91C1C">' + _esc(e.message || 'error') + '</div>';
+  }
+}
+function _actSeedFacets(facets){
+  const seed = (id, vals) => {
+    const el = document.getElementById(id); if (!el) return;
+    const cur = el.value;
+    const esc = v => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    el.innerHTML = ['<option value="">All</option>'].concat((vals || []).map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>')).join('');
+    if (cur && (vals || []).includes(cur)) el.value = cur;
+  };
+  seed('act-f-user', facets.users);
+  seed('act-f-entity', facets.entities);
+}
+function actResetFilters(){
+  ['act-f-q','act-f-user','act-f-action','act-f-entity','act-f-source','act-f-from','act-f-to'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  loadActivityLog(1);
+}
+async function actClearLog(){
+  const days = prompt('Clear activity log:\n\n• Enter a number of days to keep ONLY entries older than that.\n• Leave blank / 0 to delete the ENTIRE log.\n\nThis cannot be undone.', '');
+  if (days === null) return;
+  const n = parseInt(days, 10);
+  const older = Number.isFinite(n) && n > 0;
+  if (!confirm(older ? ('Delete activity older than ' + n + ' days?') : 'Delete the ENTIRE activity log?')) return;
+  try {
+    const r = await fetch(B + '/api/admin/activity-log' + (older ? '?days=' + n : ''), { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + T } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'Failed');
+    toast('Cleared ' + (d.deleted || 0) + ' activity entries');
+    loadActivityLog(1);
+  } catch (e) { if (typeof showError === 'function') showError(e); else alert((e && e.message) || 'Failed'); }
+}
 async function loadDeleteLog(){
   const host = document.getElementById('delete-log-host');
   if (!host) return;
