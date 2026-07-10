@@ -4149,7 +4149,7 @@ input[type="search"]:focus{
           <span style="flex:1"></span>
           <!-- Filter the feed to one or more lots' full history (create + every edit).
                Accepts a comma-separated list and numeric ranges, e.g. "5, 12, 40-60". -->
-          <input type="search" id="le-activity-lot-filter" placeholder="🔍 Lots e.g. 5, 12, 40-60" title="Show the history of one or more lots — who created them and who edited which fields. Comma-separated; ranges like 40-60 are supported."
+          <input type="search" id="le-activity-lot-filter" placeholder="Lots e.g. 5, 12, 40-60" title="Show the history of one or more lots — who created them and who edited which fields. Comma-separated; ranges like 40-60 are supported."
                  onclick="event.stopPropagation()" oninput="leActivityLotFilter(this.value)"
                  style="height:30px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:12.5px;width:180px;color:var(--text)">
           <button type="button" onclick="event.stopPropagation();leLoadActivity(1)" class="le-toolbar-btn le-tb-ghost" title="Refresh the activity log">↻ Refresh</button>
