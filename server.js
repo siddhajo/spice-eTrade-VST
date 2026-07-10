@@ -137,12 +137,74 @@ function _activityRedact(body) {
   }
   try { return JSON.stringify(out).slice(0, 500); } catch (_) { return ''; }
 }
+// Path head → DB table, for the single-row edit/delete diff below. Values are a
+// FIXED whitelist (never user input), so interpolating them into SQL is safe.
+const _ACTIVITY_TABLE = {
+  lots: 'lots', traders: 'traders', buyers: 'buyers', invoices: 'invoices',
+  purchases: 'purchases', bills: 'bills', 'debit-notes': 'debit_notes',
+  auctions: 'auctions', users: 'users',
+};
+// Columns we never diff/emit: primary key, timestamps, and any secret.
+const _ACTIVITY_DIFF_SKIP = /^(id|created_at|updated_at|locked_at)$|pass|token|secret|hash|otp|cookie/i;
+// Resolve a clean single-row (table,id) target for a mutating request, or null
+// when it isn't a per-row edit/delete we can diff (bulk ops, sub-actions like
+// /lots/123/lock, id-less settings PUTs, etc. keep the request-body summary).
+function _activityRowTarget(p) {
+  const seg = p.replace(/^\/api\//, '').split('/').filter(Boolean);
+  let head = seg[0] || '';
+  if (head === 'mobile') head = seg[1] || '';
+  const table = _ACTIVITY_TABLE[head];
+  if (!table) return null;
+  const last = seg[seg.length - 1];           // must be the numeric row id
+  if (!/^\d+$/.test(last)) return null;
+  return { table, id: last };
+}
+// Field-level before→after diff. Only columns whose value actually changed are
+// emitted; secrets/timestamps are skipped. Capped so a wide row can't bloat the
+// log. Returns [] when nothing meaningful changed.
+function _activityDiff(before, after) {
+  const out = [];
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  for (const k of keys) {
+    if (_ACTIVITY_DIFF_SKIP.test(k)) continue;
+    const av = before && before[k] != null ? String(before[k]) : '';
+    const bv = after  && after[k]  != null ? String(after[k])  : '';
+    if (av === bv) continue;
+    out.push({ f: k, from: av.slice(0, 80), to: bv.slice(0, 80) });
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+// A few identifying fields of a row about to be deleted (it's gone by the time
+// we log, so a diff is impossible — show what it was instead).
+function _activityIdentify(row) {
+  if (!row || typeof row !== 'object') return {};
+  const pick = ['lot_no', 'invo', 'name', 'buyer1', 'buyer', 'username', 'code', 'ano', 'date', 'grade'];
+  const out = {};
+  for (const k of pick) {
+    if (row[k] != null && String(row[k]).trim() !== '') {
+      out[k] = String(row[k]).slice(0, 80);
+      if (Object.keys(out).length >= 4) break;
+    }
+  }
+  return out;
+}
 app.use((req, res, next) => {
   const m = req.method.toUpperCase();
   if ((m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') &&
       req.path.startsWith('/api/') && !_activitySkip(req.path)) {
     // Snapshot the body NOW — handlers (e.g. the WD invariant) mutate req.body.
     const bodySnap = (req.body && typeof req.body === 'object') ? { ...req.body } : {};
+    // For a single-row edit/delete, snapshot the row BEFORE the handler runs so
+    // we can diff old→new (edit) or show what was removed (delete). Best-effort:
+    // any failure just falls back to the request-body summary.
+    let rowTarget = null, beforeRow = null;
+    if (m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
+      rowTarget = _activityRowTarget(req.path);
+      if (rowTarget) {
+        try { beforeRow = getDb().get(`SELECT * FROM ${rowTarget.table} WHERE id = ?`, [rowTarget.id]); } catch (_) {}
+      }
+    }
     res.on('finish', () => {
       try {
         if (res.statusCode >= 400) return;   // only log successful mutations
@@ -151,6 +213,20 @@ app.use((req, res, next) => {
         const source = /Mobile|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop';
         const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
         const ip = String(fwd || req.ip || '').replace(/^::ffff:/, '').slice(0, 60);
+        // Build the details payload: a real diff when we have a single-row
+        // target, else the legacy redacted-body summary (also the fallback when
+        // the before-snapshot was unavailable).
+        let details;
+        if (rowTarget && beforeRow && m === 'DELETE') {
+          details = JSON.stringify({ deleted: _activityIdentify(beforeRow) }).slice(0, 800);
+        } else if (rowTarget && beforeRow && (m === 'PUT' || m === 'PATCH')) {
+          let afterRow = null;
+          try { afterRow = getDb().get(`SELECT * FROM ${rowTarget.table} WHERE id = ?`, [rowTarget.id]); } catch (_) {}
+          const changes = _activityDiff(beforeRow, afterRow);
+          details = changes.length ? JSON.stringify({ changes }).slice(0, 2000) : _activityRedact(bodySnap);
+        } else {
+          details = _activityRedact(bodySnap);
+        }
         getDb().run(
           `INSERT INTO activity_log (user_id, username, source, action, entity, entity_id, method, path, status, details, ip)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
@@ -158,7 +234,7 @@ app.use((req, res, next) => {
             (req.user && req.user.id) || null,
             (req.user && req.user.username) || 'unknown',
             source, action, entity, entityId, m,
-            req.path.slice(0, 200), res.statusCode, _activityRedact(bodySnap), ip,
+            req.path.slice(0, 200), res.statusCode, details, ip,
           ]
         );
       } catch (_) { /* best-effort audit — never break the request */ }

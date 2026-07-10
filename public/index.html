@@ -2144,8 +2144,9 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 .le-collapse-head-themed{background:var(--green-bg) !important}
 .le-collapse-head-themed:hover{filter:brightness(.96)}
 .le-collapsible.is-collapsed > .le-collapse-head-themed{border-radius:14px !important}
-/* Sortable headers on the Lot-Entry activity log (solid-green header row). */
-.le-act-th:hover{background:rgba(255,255,255,.14)}
+/* Sortable headers on the Lot-Entry activity log (light-cardamom header row,
+   matching the Recent-entries table). Hover darkens slightly on the light bg. */
+.le-act-th:hover{background:rgba(0,0,0,.05)}
 .le-act-arrow{font-size:10px;opacity:.9;margin-left:2px}
 /* Sortable headers on the Backup → App Activity Log (solid-green header row). */
 .act-log-th:hover{background:rgba(255,255,255,.14)}
@@ -4163,7 +4164,7 @@ input[type="search"]:focus{
         <div class="le-collapse-body" style="padding:0 20px 16px">
           <div style="max-height:320px;overflow-y:auto;margin-top:8px;border:1px solid var(--border);border-radius:8px">
             <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-              <thead><tr class="le-act-hrow" style="position:sticky;top:0;background:var(--spice-cardamom);z-index:1;color:#fff">
+              <thead><tr class="le-act-hrow" style="position:sticky;top:0;background:var(--spice-cardamom-lt);z-index:1;color:var(--spice-cardamom-dk);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--spice-cardamom-md, #BBF7D0)">
                 <th class="le-act-th" data-sort="when"   onclick="leActSort('when')"   style="text-align:left;padding:8px 10px;white-space:nowrap;cursor:pointer;user-select:none" title="Sort by when">When <span class="le-act-arrow" data-for="when"></span></th>
                 <th class="le-act-th" data-sort="user"   onclick="leActSort('user')"   style="text-align:left;padding:8px 10px;cursor:pointer;user-select:none" title="Sort by user">User <span class="le-act-arrow" data-for="user"></span></th>
                 <th style="text-align:left;padding:8px 10px">Device</th>
@@ -16714,15 +16715,36 @@ function _actReadableDetails(it){
       ? '<span style="font-size:11px;color:var(--text3)">' + _esc(fallback) + '</span>'
       : '<span style="color:var(--text3)">—</span>';
   }
-  const parts = Object.keys(obj).map(k => {
-    const label = _ACT_DETAIL_LABELS[k] || _actPrettyKey(k);
-    let v = obj[k];
-    if (v === '***') v = '••• (hidden)';
-    else if (Array.isArray(v)) v = '[' + v.length + ']';
-    else v = String(v);
-    return '<span style="display:inline-block;margin:1px 0;white-space:normal">' +
-      '<b style="color:var(--text2)">' + _esc(label) + ':</b> ' + _esc(v) + '</span>';
-  });
+  const label = k => _ACT_DETAIL_LABELS[k] || _actPrettyKey(k);
+  const val = v => {
+    if (v === '***') return '••• (hidden)';
+    if (v == null || String(v).trim() === '') return '(empty)';
+    if (Array.isArray(v)) return '[' + v.length + ']';
+    return String(v);
+  };
+  // New-style rows: a real field-level diff (edit) — "Label: from → to".
+  if (Array.isArray(obj.changes)) {
+    if (!obj.changes.length) return '<span style="color:var(--text3)">no field changes</span>';
+    const rows = obj.changes.map(c =>
+      '<span style="display:block;white-space:normal">' +
+        '<b style="color:var(--text2)">' + _esc(label(c.f)) + ':</b> ' +
+        '<span style="color:var(--text3)">' + _esc(val(c.from)) + '</span> ' +
+        '<span style="color:var(--spice-cardamom)">→</span> ' +
+        '<b>' + _esc(val(c.to)) + '</b></span>');
+    return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text)">' + rows.join('') + '</div>';
+  }
+  // New-style rows: what a deleted record was — "Deleted: Label value · …".
+  if (obj.deleted && typeof obj.deleted === 'object') {
+    const keys = Object.keys(obj.deleted);
+    const ident = keys.length
+      ? keys.map(k => '<b style="color:var(--text2)">' + _esc(label(k)) + '</b> ' + _esc(val(obj.deleted[k]))).join(' <span style="color:var(--text3)">·</span> ')
+      : '<span style="color:var(--text3)">(no identifying details)</span>';
+    return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text)"><b style="color:#B91C1C">Deleted:</b> ' + ident + '</div>';
+  }
+  // Legacy / create rows: flat request-body values — "Label: value".
+  const parts = Object.keys(obj).map(k =>
+    '<span style="display:inline-block;margin:1px 0;white-space:normal">' +
+      '<b style="color:var(--text2)">' + _esc(label(k)) + ':</b> ' + _esc(val(obj[k])) + '</span>');
   return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text);display:flex;flex-wrap:wrap;gap:2px 10px">' +
     parts.join('') + '</div>';
 }
