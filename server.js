@@ -1661,10 +1661,26 @@ app.get('/api/admin/activity-log', requireDeleteAll, (req, res) => {
     const pageSize = Math.min(200, Math.max(1, parseInt(q.pageSize, 10) || 50));
     const totalRow = db.get(`SELECT COUNT(*) AS n FROM activity_log WHERE ${where}`, params);
     const total = (totalRow && totalRow.n) || 0;
+    // Sortable columns (whitelisted — the key is never interpolated raw).
+    // `when` sorts by id, which is monotonic with insertion time and matches
+    // the original default of id DESC.
+    const SORT_EXPR = {
+      when:   { expr: 'id', text: false },
+      user:   { expr: 'username', text: true },
+      device: { expr: 'source', text: true },
+      action: { expr: 'action', text: true },
+      entity: { expr: 'entity', text: true },
+      ip:     { expr: 'ip', text: true },
+    };
+    const sortKey = SORT_EXPR[q.sort] ? q.sort : 'when';
+    const dir = String(q.dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    const s = SORT_EXPR[sortKey];
+    const orderExpr = s.text ? `${s.expr} COLLATE NOCASE` : s.expr;
+    const orderBy = sortKey === 'when' ? `id ${dir}` : `${orderExpr} ${dir}, id DESC`;
     const items = db.all(
       `SELECT id, username, source, action, entity, entity_id, method, path, status, details, ip, created_at
          FROM activity_log WHERE ${where}
-        ORDER BY id DESC LIMIT ? OFFSET ?`,
+        ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, pageSize, (page - 1) * pageSize]
     );
     // Facets for the dropdowns (whole table — tiny at this scale).
@@ -3359,6 +3375,17 @@ function pcClearGate(db, auctionId) {
   // the gate to 'stale' (soft warning) instead of 'never' (hard block).
   db.run(`UPDATE auctions SET price_checked_at = '' WHERE id = ?`, [auctionId]);
 }
+// Stamp the auction the moment a lot's price/amount (or any value-affecting
+// field) changes. GET /api/auctions/:id/doc-freshness compares this to each
+// transaction doc's latest created_at — if the change is newer, the module
+// warns "prices changed after generating; regenerate for the actual prices".
+// Unconditional (NOT gated by any flag) and best-effort. Called at every
+// price-change site: single-lot edit, bulk set-buyer / WD, and price import.
+function _markPricesChanged(db, auctionId) {
+  if (!auctionId) return;
+  try { db.run("UPDATE auctions SET prices_changed_at = datetime('now','localtime') WHERE id = ?", [auctionId]); }
+  catch (_) { /* best-effort */ }
+}
 function pcGateState(db, auctionId) {
   if (!auctionId)   return 'never';
   if (!pcFlagOn(db)) return 'off';
@@ -4831,6 +4858,7 @@ function runLotImport(db, filePath, body) {
     let imported = 0, updated = 0, skipped = 0;
     const skipReasons = []; // [{row, lot, reason}]
     const auctionStats = new Map(); // key = "ano|date" → count
+    const _pricedAuctions = new Set(); // auctions whose lot prices changed → flag for "regenerate"
 
     // Helper: check if row is completely empty (all values blank/undefined)
     const isBlankRow = (row) => {
@@ -4928,6 +4956,7 @@ function runLotImport(db, filePath, body) {
           vals.push(existing.id);
           db.run(`UPDATE lots SET ${sets.join(', ')} WHERE id=?`, vals);
           updated++;
+          if (price || amount) _pricedAuctions.add(auctionId);   // price/amount touched → stale-check flag
           const key = `${rowAno}|${rowDate}`;
           auctionStats.set(key, (auctionStats.get(key) || 0) + 1);
         } catch (e) {
@@ -4935,6 +4964,9 @@ function runLotImport(db, filePath, body) {
           skipReasons.push({row: rowNum, lot: lotNo, reason: `DB error: ${e.message}`});
         }
       }
+      // Prices imported onto existing lots → flag those trades so the
+      // transaction modules can warn "regenerate for the actual prices".
+      for (const aid of _pricedAuctions) _markPricesChanged(db, aid);
     } else {
       // Full import — insert new lots (skip if lot_no already exists for this auction)
       for (let i = 0; i < rows.length; i++) {
@@ -5457,6 +5489,32 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
   });
 });
 
+// GET /api/auctions/:id/doc-freshness — for each transaction doc type
+// (invoices / purchases / bills / debit notes), report whether any have been
+// generated and whether a lot price/value changed AFTER the latest one was
+// generated (stale). Drives the "prices changed — regenerate" warning banner
+// in those modules.
+app.get('/api/auctions/:id/doc-freshness', requireView, (req, res) => {
+  const db = getDb();
+  const aid = parseInt(req.params.id, 10);
+  if (!aid) return res.status(400).json({ error: 'invalid auction id' });
+  const auc = db.get('SELECT prices_changed_at FROM auctions WHERE id = ?', [aid]);
+  const pca = (auc && auc.prices_changed_at) ? String(auc.prices_changed_at) : '';
+  const TABLES = { invoices: 'invoices', purchases: 'purchases', bills: 'bills', debit: 'debit_notes' };
+  const docs = {};
+  for (const [key, tbl] of Object.entries(TABLES)) {
+    let row = { c: 0, m: '' };
+    try { row = db.get(`SELECT COUNT(*) AS c, MAX(created_at) AS m FROM ${tbl} WHERE auction_id = ?`, [aid]) || row; }
+    catch (_) { /* very old DB may lack auction_id on a table — treat as none */ }
+    const generated = (Number(row.c) || 0) > 0;
+    const lastGen = row.m ? String(row.m) : '';
+    // Timestamps are 'YYYY-MM-DD HH:MM:SS' (local) — lexicographic compare works.
+    const stale = generated && !!pca && !!lastGen && pca > lastGen;
+    docs[key] = { generated, stale };
+  }
+  res.json({ auctionId: aid, prices_changed_at: pca, docs });
+});
+
 // Apply picks: body { picks: [{ name, buyerId }] }. For each pick, stamp
 // the chosen buyer's code/name/sale onto every still-unresolved lot on
 // this trade whose name (buyer1 or buyer) matches. Picks with no buyerId
@@ -5937,6 +5995,12 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   // the verify run looked at has changed. Operator must re-verify
   // before the next calculate/invoice/etc.
   if (current && current.auction_id) { pcClearGate(db, current.auction_id); lvClearGate(db, current.auction_id); }
+  // A value-affecting edit (price/qty/grade/refud/cr/code) means any already-
+  // generated invoices/purchases/bills/DN for this trade may now be stale.
+  if (current && current.auction_id &&
+      CALC_TRIGGER_FIELDS.some(f => Object.prototype.hasOwnProperty.call(l, f))) {
+    _markPricesChanged(db, current.auction_id);
+  }
   if (current) {
     const newLotNo = (l.lot_no != null) ? String(l.lot_no).trim() : current.lot_no;
     // Field-level diff: only columns whose value ACTUALLY changed, each with
@@ -6026,10 +6090,28 @@ app.get('/api/lot-activity', requireAuth, (req, res) => {
     }
     const totalRow = db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE ${where}`, params);
     const total = (totalRow && totalRow.n) || 0;
+    // Sortable columns (whitelisted — the key is never interpolated raw).
+    // Lot / Seller live inside the JSON `details` blob; json_valid() guards
+    // against legacy rows that aren't valid JSON (json_extract would otherwise
+    // raise "malformed JSON" and fail the whole query). `when` sorts by id,
+    // which is monotonic with insertion time — the original default was id DESC.
+    const SORT_EXPR = {
+      when:   { expr: 'id', text: false },
+      user:   { expr: 'user_id', text: true },
+      action: { expr: 'action', text: true },
+      lot:    { expr: "CAST(CASE WHEN json_valid(details) THEN json_extract(details,'$.lot_no') END AS INTEGER)", text: false },
+      seller: { expr: "CASE WHEN json_valid(details) THEN json_extract(details,'$.name') END", text: true },
+    };
+    const sortKey = SORT_EXPR[req.query.sort] ? req.query.sort : 'when';
+    const dir = String(req.query.dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    const s = SORT_EXPR[sortKey];
+    const orderExpr = s.text ? `${s.expr} COLLATE NOCASE` : s.expr;
+    // id DESC tiebreak keeps newest-first within equal sort values.
+    const orderBy = sortKey === 'when' ? `id ${dir}` : `${orderExpr} ${dir}, id DESC`;
     const rows = db.all(
       `SELECT id, user_id, action, entity_id, details, created_at
          FROM audit_log WHERE ${where}
-        ORDER BY id DESC LIMIT ? OFFSET ?`,
+        ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, pageSize, (page - 1) * pageSize]
     );
     const items = rows.map(r => {
@@ -6368,7 +6450,7 @@ app.post('/api/lots/bulk-set-buyer', requireLotWrite, (req, res) => {
     );
     if (info && typeof info.changes === 'number') updated += info.changes;
   }
-  for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); }
+  for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); if (hasPrice) _markPricesChanged(db, aid); }
   res.json({ success: true, updated, requested: ids.length, skipped_locked: lockedIds.length });
 });
 
@@ -6412,7 +6494,7 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
         ['WD', 'Withdrawn', 'WD', 'W', ...mutableIds]
       );
       logBulkLotChanges(db, req, _before, { buyer: 'WD', buyer1: 'Withdrawn', code: 'WD', sale: 'W', price: 0, amount: 0 });
-      for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); }
+      for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); _markPricesChanged(db, aid); }
       return res.json({
         success: true,
         updated: mutableIds.length,
@@ -6468,7 +6550,7 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
     logBulkLotChanges(db, req, _before, isWithdrawn
       ? { buyer: b.buyer, buyer1: b.buyer1 || '', code: b.code || '', sale: saleVal, price: 0, amount: 0 }
       : { buyer: b.buyer, buyer1: b.buyer1 || '', code: b.code || '', sale: saleVal });
-    for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); }
+    for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); if (isWithdrawn) _markPricesChanged(db, aid); }
     res.json({
       success: true,
       updated: mutableIds.length,

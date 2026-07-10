@@ -2144,6 +2144,11 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 .le-collapse-head-themed{background:var(--green-bg) !important}
 .le-collapse-head-themed:hover{filter:brightness(.96)}
 .le-collapsible.is-collapsed > .le-collapse-head-themed{border-radius:14px !important}
+/* Sortable headers on the Lot-Entry activity log (solid-green header row). */
+.le-act-th:hover{background:rgba(255,255,255,.14)}
+.le-act-arrow{font-size:10px;opacity:.9;margin-left:2px}
+/* Sortable headers on the Backup → App Activity Log (solid-green header row). */
+.act-log-th:hover{background:rgba(255,255,255,.14)}
 
 /* ── Lot-entry print toolbar (Print Selected / by Seller / Clear) ── */
 .le-toolbar-btn{
@@ -4158,13 +4163,13 @@ input[type="search"]:focus{
         <div class="le-collapse-body" style="padding:0 20px 16px">
           <div style="max-height:320px;overflow-y:auto;margin-top:8px;border:1px solid var(--border);border-radius:8px">
             <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-              <thead><tr style="position:sticky;top:0;background:var(--green-bg);z-index:1;color:var(--spice-cardamom-dk)">
-                <th style="text-align:left;padding:8px 10px;white-space:nowrap">When</th>
-                <th style="text-align:left;padding:8px 10px">User</th>
+              <thead><tr class="le-act-hrow" style="position:sticky;top:0;background:var(--spice-cardamom);z-index:1;color:#fff">
+                <th class="le-act-th" data-sort="when"   onclick="leActSort('when')"   style="text-align:left;padding:8px 10px;white-space:nowrap;cursor:pointer;user-select:none" title="Sort by when">When <span class="le-act-arrow" data-for="when"></span></th>
+                <th class="le-act-th" data-sort="user"   onclick="leActSort('user')"   style="text-align:left;padding:8px 10px;cursor:pointer;user-select:none" title="Sort by user">User <span class="le-act-arrow" data-for="user"></span></th>
                 <th style="text-align:left;padding:8px 10px">Device</th>
-                <th style="text-align:left;padding:8px 10px">Action</th>
-                <th style="text-align:left;padding:8px 10px">Lot</th>
-                <th style="text-align:left;padding:8px 10px">Seller</th>
+                <th class="le-act-th" data-sort="action" onclick="leActSort('action')" style="text-align:left;padding:8px 10px;cursor:pointer;user-select:none" title="Sort by action">Action <span class="le-act-arrow" data-for="action"></span></th>
+                <th class="le-act-th" data-sort="lot"    onclick="leActSort('lot')"    style="text-align:left;padding:8px 10px;cursor:pointer;user-select:none" title="Sort by lot">Lot <span class="le-act-arrow" data-for="lot"></span></th>
+                <th class="le-act-th" data-sort="seller" onclick="leActSort('seller')" style="text-align:left;padding:8px 10px;cursor:pointer;user-select:none" title="Sort by seller">Seller <span class="le-act-arrow" data-for="seller"></span></th>
                 <th style="text-align:left;padding:8px 10px">Changed</th>
               </tr></thead>
               <tbody id="le-activity-list"></tbody>
@@ -11075,7 +11080,7 @@ function leRestoreCollapseState(){
 // trade. Paginated server-side; the table body scrolls within a fixed
 // height. Refreshed automatically after every create / edit / delete and
 // whenever the operator switches trades, plus a manual ↻ Refresh button.
-const _leAct = { page: 1, pageSize: 20, total: 0, lotNo: '' };
+const _leAct = { page: 1, pageSize: 20, total: 0, lotNo: '', sort: 'when', dir: 'desc' };
 // Debounced "Lot # history" filter — scopes the feed to one lot so the
 // operator sees who created it and who edited which fields, oldest→newest.
 let _leActLotTimer = null;
@@ -11083,6 +11088,25 @@ function leActivityLotFilter(v){
   _leAct.lotNo = String(v || '').trim();
   clearTimeout(_leActLotTimer);
   _leActLotTimer = setTimeout(() => leLoadActivity(1), 250);
+}
+// Click a sortable header: toggle direction if it's the active column, else
+// switch to it (When defaults newest-first; text columns default A→Z). Sorting
+// is server-side so it spans every page, not just the 20 rows on screen.
+function leActSort(key){
+  if (_leAct.sort === key){
+    _leAct.dir = _leAct.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _leAct.sort = key;
+    _leAct.dir = (key === 'when') ? 'desc' : 'asc';
+  }
+  leLoadActivity(1);
+}
+// Paint the ▲/▼ arrow on the active column and clear the rest.
+function leActUpdateSortIndicators(){
+  document.querySelectorAll('#le-activity-card .le-act-arrow').forEach(el => {
+    const key = el.getAttribute('data-for');
+    el.textContent = (key === _leAct.sort) ? (_leAct.dir === 'asc' ? '▲' : '▼') : '';
+  });
 }
 async function leLoadActivity(page){
   const listEl = document.getElementById('le-activity-list');
@@ -11100,7 +11124,7 @@ async function leLoadActivity(page){
   }
   const lotParam = _leAct.lotNo ? `&lotNo=${encodeURIComponent(_leAct.lotNo)}` : '';
   try {
-    const data = await j(`/api/lot-activity?auctionId=${encodeURIComponent(aid)}&page=${_leAct.page}&pageSize=${_leAct.pageSize}${lotParam}`);
+    const data = await j(`/api/lot-activity?auctionId=${encodeURIComponent(aid)}&page=${_leAct.page}&pageSize=${_leAct.pageSize}&sort=${encodeURIComponent(_leAct.sort)}&dir=${encodeURIComponent(_leAct.dir)}${lotParam}`);
     _leAct.total = data.total || 0;
     renderLeActivity(data.items || []);
   } catch(e) {
@@ -11141,6 +11165,7 @@ function renderLeActivity(items){
   const listEl = document.getElementById('le-activity-list');
   const cntEl  = document.getElementById('le-activity-count');
   const pager  = document.getElementById('le-activity-pager');
+  leActUpdateSortIndicators();
   if (cntEl) cntEl.textContent = _leAct.total ? `(${_leAct.total})` : '';
   if (!items.length) {
     const msg = _leAct.lotNo
@@ -16584,6 +16609,8 @@ async function deleteAll(resource,label,ev){
 // ── App Activity Log (Backup screen) — global create/edit/delete feed ──
 let _actPage = 1;
 let _actFilterTimer = null;
+let _actSort = 'when';
+let _actDir  = 'desc';
 function actFilterDebounced(){ clearTimeout(_actFilterTimer); _actFilterTimer = setTimeout(() => loadActivityLog(1), 300); }
 function _actVal(id){ const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
 async function loadActivityLog(page){
@@ -16593,6 +16620,7 @@ async function loadActivityLog(page){
   const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   const p = new URLSearchParams();
   p.set('page', _actPage); p.set('pageSize', 50);
+  p.set('sort', _actSort); p.set('dir', _actDir);
   const map = { q:'act-f-q', user:'act-f-user', action:'act-f-action', entity:'act-f-entity', source:'act-f-source', from:'act-f-from', to:'act-f-to' };
   for (const [k, id] of Object.entries(map)) { const v = _actVal(id); if (v) p.set(k, v); }
   host.innerHTML = '<div style="padding:12px;color:var(--text3);font-style:italic">Loading…</div>';
@@ -16610,9 +16638,16 @@ async function loadActivityLog(page){
         const bg = act === 'delete' ? '#FEE2E2' : act === 'edit' ? '#FEF3C7' : '#DCFCE7';
         return '<span style="display:inline-block;padding:1px 8px;border-radius:9px;font-size:11px;font-weight:700;color:' + fg + ';background:' + bg + '">' + _esc(act) + '</span>';
       };
+      // Sortable columns → the arrow shows on the active one. `Details` and
+      // the (label-less) header cells that aren't real DB columns stay plain.
+      const arrow = (key) => key === _actSort ? '<span style="font-size:10px;margin-left:2px">' + (_actDir === 'asc' ? '▲' : '▼') + '</span>' : '';
+      const th = (label, key) => key
+        ? '<th class="act-log-th" onclick="actSort(\'' + key + '\')" style="text-align:left;padding:7px 10px;white-space:nowrap;cursor:pointer;user-select:none" title="Sort by ' + label + '">' + label + arrow(key) + '</th>'
+        : '<th style="text-align:left;padding:7px 10px;white-space:nowrap">' + label + '</th>';
       let html = '<table style="width:100%;border-collapse:collapse">' +
-        '<thead><tr style="background:var(--bg)">' +
-        ['When','User','Device','Action','Entity','Details','IP'].map(h => '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--spice-line);white-space:nowrap">' + h + '</th>').join('') +
+        '<thead><tr style="position:sticky;top:0;z-index:1;background:var(--spice-cardamom);color:#fff">' +
+        th('When','when') + th('User','user') + th('Device','device') + th('Action','action') +
+        th('Entity','entity') + th('Details',null) + th('IP','ip') +
         '</tr></thead><tbody>';
       for (const it of items) {
         const ent = _esc(it.entity || '') + (it.entity_id ? ' <span style="color:var(--text3)">#' + _esc(it.entity_id) + '</span>' : '');
@@ -16622,7 +16657,7 @@ async function loadActivityLog(page){
           '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + _esc(it.source || '') + '</td>' +
           '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + badge(it.action || '') + '</td>' +
           '<td style="padding:5px 10px;border-bottom:1px solid var(--bg)">' + ent + '</td>' +
-          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg);max-width:360px"><code style="font-size:11px;color:var(--text2);word-break:break-all">' + _esc(it.details || it.path || '') + '</code></td>' +
+          '<td style="padding:5px 10px;border-bottom:1px solid var(--bg);max-width:360px">' + _actReadableDetails(it) + '</td>' +
           '<td style="padding:5px 10px;border-bottom:1px solid var(--bg);color:var(--text3)">' + _esc(it.ip || '') + '</td>' +
           '</tr>';
       }
@@ -16642,6 +16677,54 @@ async function loadActivityLog(page){
   } catch (e) {
     host.innerHTML = '<div style="padding:12px;color:#B91C1C">' + _esc(e.message || 'error') + '</div>';
   }
+}
+// Click a sortable header: flip direction on the active column, else switch to
+// it (When defaults newest-first; text columns default A→Z). Server-side sort,
+// so it orders the whole log — not just the 50 rows on the page.
+function actSort(key){
+  if (_actSort === key){ _actDir = _actDir === 'asc' ? 'desc' : 'asc'; }
+  else { _actSort = key; _actDir = (key === 'when') ? 'desc' : 'asc'; }
+  loadActivityLog(1);
+}
+// Friendly labels for the request-body keys stored in `details`. Extends the
+// lot-field labels with the common keys seen across invoices / buyers / sellers
+// / users / settings. Anything unmapped falls back to a prettified key.
+const _ACT_DETAIL_LABELS = Object.assign({}, (typeof LOT_FIELD_LABELS !== 'undefined' ? LOT_FIELD_LABELS : {}), {
+  ids:'Lots', id:'ID', invo:'Invoice #', ano:'Trade #', auction_id:'Trade',
+  days:'Days', value:'Value', role:'Role', username:'Username', status:'Status',
+  no_ti:'No transport/insurance', distance_km:'Distance (km)', lorry_no:'Lorry #',
+  sale_type:'Sale type', saleType:'Sale type', from:'From', to:'To',
+});
+function _actPrettyKey(k){
+  return String(k).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+// Turn the redacted-JSON `details` blob into readable "Label: value" chips.
+// Falls back to the request path when details isn't a JSON object (e.g. plain
+// GET-style rows). The raw JSON stays available on hover via the title attr.
+function _actReadableDetails(it){
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const raw = it.details;
+  let obj = null;
+  if (raw && typeof raw === 'string' && raw.trim().startsWith('{')) {
+    try { obj = JSON.parse(raw); } catch (_) { obj = null; }
+  }
+  if (!obj || typeof obj !== 'object' || !Object.keys(obj).length) {
+    const fallback = (raw && String(raw).trim()) || it.path || '';
+    return fallback
+      ? '<span style="font-size:11px;color:var(--text3)">' + _esc(fallback) + '</span>'
+      : '<span style="color:var(--text3)">—</span>';
+  }
+  const parts = Object.keys(obj).map(k => {
+    const label = _ACT_DETAIL_LABELS[k] || _actPrettyKey(k);
+    let v = obj[k];
+    if (v === '***') v = '••• (hidden)';
+    else if (Array.isArray(v)) v = '[' + v.length + ']';
+    else v = String(v);
+    return '<span style="display:inline-block;margin:1px 0;white-space:normal">' +
+      '<b style="color:var(--text2)">' + _esc(label) + ':</b> ' + _esc(v) + '</span>';
+  });
+  return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text);display:flex;flex-wrap:wrap;gap:2px 10px">' +
+    parts.join('') + '</div>';
 }
 function _actSeedFacets(facets){
   const seed = (id, vals) => {
@@ -19725,6 +19808,7 @@ async function loadInvoices(opts){
   if (typeof showSkeleton === 'function') showSkeleton('invoices-list', 8);
   const aid=document.getElementById('inv-auction')?.value;
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-invoices');
+  if (typeof regenRefreshBanner === 'function') regenRefreshBanner(aid, '#tc-invoices', 'invoices', 'invoices');
   if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(aid, '#tc-invoices', ['invoices']);
   // Sale-type filter — empty means no filter. Read live each load so a
   // dropdown change re-fires loadInvoices() and the URL picks up the
@@ -20748,6 +20832,7 @@ async function loadPurchases(opts){
   if (!opts || !opts.keepPage) _purchasesPager.page = 1;
   const aid=document.getElementById('pur-auction')?.value;
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-purchases');
+  if (typeof regenRefreshBanner === 'function') regenRefreshBanner(aid, '#tc-purchases', 'purchases', 'purchase invoices');
   if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(aid, '#tc-purchases', ['purchases']);
   // Sale-type filter for purchases — same pattern as invoices.
   // Server derives the type from the row's GST columns since
@@ -23456,6 +23541,7 @@ async function loadBills(opts){
   if (!opts || !opts.keepPage) _billsPager.page = 1;
   const __billAid = document.getElementById('bill-auction')?.value;
   if (typeof pcRefreshGate === 'function') pcRefreshGate(__billAid, '#tc-bills');
+  if (typeof regenRefreshBanner === 'function') regenRefreshBanner(__billAid, '#tc-bills', 'bills', 'bills');
   if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(__billAid, '#tc-bills', ['bills']);
   // Populate the branch dropdown from Settings → Branches & Contacts so
   // every configured branch shows up (even ones with no bills yet).
@@ -23625,6 +23711,7 @@ async function loadDebitNotes(opts){
   if (!opts || !opts.keepPage) _debitPager.page = 1;
   const aid = document.getElementById('dn-auction')?.value || '';
   if (typeof pcRefreshGate === 'function') pcRefreshGate(aid, '#tc-debit');
+  if (typeof regenRefreshBanner === 'function') regenRefreshBanner(aid, '#tc-debit', 'debit', 'debit notes');
   if (typeof refreshGenerationLocks === 'function') refreshGenerationLocks(aid, '#tc-debit', ['debit_notes']);
   // Search filters within the currently-selected trade. The trade
   // filter still applies client-side (debit_notes has no auction_id
@@ -27186,6 +27273,41 @@ async function pcRefreshGate(auctionId, tabScope){
   _pcApplyDisable('.needs-price-check', tabScope, state, reason);
   _pcRenderStaleBanner(tabScope, state);
   return state === 'clean' || state === 'stale';
+}
+
+// Red banner shown at the top of a transaction module (Invoices / Purchases /
+// Bills / Debit Notes) when a lot's price/value changed AFTER its documents
+// were generated — prompting the operator to regenerate so the documents
+// reflect the actual prices. Independent of the price-check gate. Cleared
+// automatically once the docs are regenerated (their created_at becomes newer
+// than the last price change). `docKey` = invoices|purchases|bills|debit.
+async function regenRefreshBanner(auctionId, tabScope, docKey, label){
+  const scope = tabScope ? document.querySelector(tabScope) : null;
+  if (!scope) return;
+  const existing = scope.querySelector(':scope > .regen-stale-banner');
+  let stale = false;
+  if (auctionId) {
+    try {
+      const d = await j('/api/auctions/' + auctionId + '/doc-freshness');
+      stale = !!(d && d.docs && d.docs[docKey] && d.docs[docKey].stale);
+    } catch (_) { stale = false; }
+  }
+  if (!stale) { if (existing) existing.remove(); return; }
+  if (existing) return;   // already rendered
+  const banner = document.createElement('div');
+  banner.className = 'regen-stale-banner';
+  banner.style.cssText = [
+    'display:flex','align-items:center','gap:12px',
+    'margin:0 0 12px 0','padding:10px 14px',
+    'background:#FEE2E2','border:1px solid #EF4444',
+    'border-radius:8px','color:#7F1D1D',
+    'font-size:13px','line-height:1.5',
+  ].join(';');
+  banner.innerHTML =
+    '<span style="font-size:18px;line-height:1">⚠</span>'+
+    '<span style="flex:1"><b>Prices changed after these ' + esc(label) + ' were generated.</b> '+
+    'The generated ' + esc(label) + ' may be showing old prices — please regenerate them so they reflect the actual prices.</span>';
+  scope.insertBefore(banner, scope.firstChild);
 }
 
 // Re-run pcRefreshGate against every gated tab scope that is currently

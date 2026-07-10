@@ -299,7 +299,13 @@ async function initDb() {
     -- for PRICE IMPORT (auctions/import mode='price'). Auto-cleared by any
     -- endpoint that inserts/edits/deletes a lot, so re-validation is
     -- required after every change. Gated by the flag_lot_validation flag.
-    lots_validated_at TEXT DEFAULT ''
+    lots_validated_at TEXT DEFAULT '',
+    -- Stamped whenever a lot's price/amount (or a value-affecting field)
+    -- changes. Compared against each transaction doc's latest created_at so
+    -- the Invoices / Purchases / Bills / Debit Notes modules can warn
+    -- "prices changed after generation — regenerate". Set by
+    -- _markPricesChanged() at every price-change site.
+    prices_changed_at TEXT DEFAULT ''
   )`);
 
   // ── GENERATION OVERRIDES ──────────────────────────────────────
@@ -774,6 +780,7 @@ async function initDb() {
     // Lot-validation gate timestamp — see auctions CREATE TABLE for
     // semantics. Existing DBs need the ALTER; ignored on fresh installs.
     "ALTER TABLE auctions ADD COLUMN lots_validated_at TEXT DEFAULT ''",
+    "ALTER TABLE auctions ADD COLUMN prices_changed_at TEXT DEFAULT ''",
     'ALTER TABLE purchases ADD COLUMN auction_id INTEGER',
     'ALTER TABLE invoices ADD COLUMN auction_id INTEGER',
     'ALTER TABLE bills ADD COLUMN auction_id INTEGER',
