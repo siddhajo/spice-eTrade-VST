@@ -5552,6 +5552,28 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
         pickedCode: picked ? (picked.code || '') : '',
       };
     });
+  // Lot-wise view (one entry per unresolved lot) — powers the lot-level
+  // picker. Reuses each name's match (status / candidates / auto-pick).
+  const _nameByKey = new Map();
+  names.forEach(n => _nameByKey.set(n.name.toUpperCase(), n));
+  const lots = unresolved.map(u => {
+    const nm = _nameByKey.get(u.name.toUpperCase()) || {};
+    return {
+      lotId: u.lotId,
+      lot_no: u.lot_no,
+      name: u.name,
+      status: nm.status || 'unmatched',
+      candidates: nm.candidates || [],
+      pickedBuyerId: nm.pickedBuyerId || null,
+      pickedCode: nm.pickedCode || '',
+    };
+  });
+  lots.sort((a, b) => {
+    const na = parseInt((String(a.lot_no).match(/\d+/) || ['0'])[0], 10);
+    const nb = parseInt((String(b.lot_no).match(/\d+/) || ['0'])[0], 10);
+    if (na !== nb) return na - nb;
+    return String(a.lot_no).localeCompare(String(b.lot_no));
+  });
   res.json({
     auctionId: id, ano: auc.ano, date: auc.date,
     summary: {
@@ -5562,6 +5584,7 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
       lotsUnresolved: unresolved.length,
     },
     names,
+    lots,
   });
 });
 
@@ -5630,6 +5653,29 @@ app.post('/api/auctions/:id/resolve-buyers', requireLotWrite, (req, res) => {
     );
     resolvedNames++;
     updatedLots += ids.length;
+  }
+  // Lot-level picks (from the lot-wise picker): body { lotPicks: [{lotId, buyerId}] }.
+  // Assign a specific unresolved lot to a chosen buyer. Restricted to this
+  // trade's still-unresolved lot ids so a stale/forged id can't be written.
+  const lotPicks = Array.isArray(req.body && req.body.lotPicks) ? req.body.lotPicks : [];
+  if (lotPicks.length) {
+    const unresolvedIds = new Set(unresolved.map(u => u.lotId));
+    const byBuyer = new Map(); // buyerId -> [lotId,...]
+    for (const lp of lotPicks) {
+      const lotId = lp && lp.lotId ? parseInt(lp.lotId, 10) : null;
+      const buyerId = lp && lp.buyerId ? parseInt(lp.buyerId, 10) : null;
+      if (!lotId || !buyerId || !unresolvedIds.has(lotId)) continue;
+      if (!byBuyer.has(buyerId)) byBuyer.set(buyerId, []);
+      byBuyer.get(buyerId).push(lotId);
+    }
+    for (const [buyerId, ids] of byBuyer) {
+      const b = db.get('SELECT buyer, buyer1, code, sale FROM buyers WHERE id = ?', [buyerId]);
+      if (!b) { skipped.push({ buyerId, reason: 'buyer not found' }); continue; }
+      const ph = ids.map(() => '?').join(',');
+      db.run(`UPDATE lots SET buyer = ?, buyer1 = ?, code = ?, sale = ? WHERE id IN (${ph})`,
+        [b.buyer || '', b.buyer1 || '', b.code || '', b.sale || 'L', ...ids]);
+      updatedLots += ids.length;
+    }
   }
   res.json({ success: true, resolvedNames, updatedLots, skipped });
 });

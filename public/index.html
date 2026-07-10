@@ -8154,7 +8154,7 @@ async function rbLoad(){
     if (applyBtn) applyBtn.style.display='none';
     return;
   }
-  if (!d.names || !d.names.length){
+  if (!d.lots || !d.lots.length){
     host.innerHTML = '<div style="padding:20px;text-align:center;color:#065f46;font-weight:600">✓ Nothing to resolve — every lot on this trade already has a buyer code.</div>';
     if (applyBtn) applyBtn.style.display='none';
     return;
@@ -8162,6 +8162,7 @@ async function rbLoad(){
   if (applyBtn) applyBtn.style.display='';
   const s = d.summary||{};
   window._rbNames = d.names;
+  window._rbLots = d.lots;   // lot-wise rows (one per unresolved lot)
   // Buyers master (id + code + trade name) for the bulk "map CODE to
   // selected" toolbar — same source the file-mode picker uses.
   if (!window._plBuyers) {
@@ -8197,7 +8198,7 @@ async function rbLoad(){
     '<div class="fg" style="margin:0;min-width:190px">'+
       '<label style="font-size:11px">Find &amp; select lots</label>'+
       '<input id="rb-lot-find" placeholder="Lot nos e.g. 5, 12, 40-60" onkeydown="if(event.key===\'Enter\'){event.preventDefault();rbSelectByLots();}" '+
-        'title="Type comma-separated lot numbers (ranges like 40-60 work), press Enter — buyer-name rows covering those lots are ticked and moved to the top" '+
+        'title="Type comma-separated lot numbers (ranges like 40-60 work), press Enter — matching lot rows are ticked and moved to the top" '+
         'style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:170px">'+
     '</div>'+
     '<div class="fg" style="margin:0;min-width:220px">'+
@@ -8213,20 +8214,22 @@ async function rbLoad(){
   html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
     '<th style="text-align:center;padding:4px 6px;border:1px solid #ddd;width:28px"><input type="checkbox" id="rb-sel-all" onclick="rbToggleAllSel(this.checked)" title="Select / clear all" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></th>'+
+    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lot</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Buyer name (from trade)</th>'+
-    '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lots</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Status</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Picked CODE</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Candidates</th>'+
     '</tr></thead><tbody>';
-  d.names.forEach((n, i)=>{
+  // One row PER LOT (lot-wise), so codes can be assigned per lot. Lots that
+  // share a buyer name show the same status / candidates / picked code.
+  d.lots.forEach((n, i)=>{
     const bg = n.status === 'unmatched' ? '#fef2f2'
              : n.status === 'ambiguous' ? '#fff7ed'
              : '#fff';
     const badge = _plStatusBadge(n.status);
     const isAmb = n.status === 'ambiguous';
-    // Candidate badges. On ambiguous names they're clickable — clicking one
-    // picks its buyer (mirrors the dropdown in the Picked CODE column).
+    // Candidate badges. On ambiguous lots they're clickable — clicking one
+    // picks its buyer for THIS lot (mirrors the Picked CODE dropdown).
     const cands = (n.candidates || []).map(c => {
       const lbl = '<b>'+escAttr(c.code||'(no code)')+'</b>'+
         ' · '+escAttr(c.buyer||'')+
@@ -8234,14 +8237,14 @@ async function rbLoad(){
       if (isAmb) {
         const on = Number(c.id) === Number(n.pickedBuyerId);
         return '<span data-rb-cand-idx="'+i+'" data-rb-cand-bid="'+Number(c.id)+'" onclick="rbPickEl(this)" '+
-          'title="Click to pick this buyer" '+
+          'title="Click to pick this buyer for this lot" '+
           'style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;cursor:pointer;font-size:11px;'+
           'background:'+(on?'#dcfce7':'#fafafa')+';outline:'+(on?'2px solid #15803d':'none')+'">'+lbl+'</span>';
       }
       return '<span style="display:inline-block;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid #ddd;border-radius:10px;background:#fafafa;font-size:11px">'+lbl+'</span>';
     }).join('');
-    // Picked CODE cell: a dropdown for ambiguous names so the operator can
-    // choose which buyer is assigned to those lots; plain text otherwise.
+    // Picked CODE cell: a dropdown for ambiguous lots so the operator can
+    // choose which buyer is assigned to THIS lot; plain text otherwise.
     let pickedCell;
     if (isAmb) {
       const opts = (n.candidates || []).map(c =>
@@ -8255,9 +8258,9 @@ async function rbLoad(){
         escAttr(n.pickedCode || '— none —')+'</span>';
     }
     html += '<tr id="rb-row-'+i+'" style="background:'+bg+'">'+
-      '<td style="text-align:center;padding:3px 6px;border:1px solid #f0f0f0"><input type="checkbox" class="rb-sel-cb" data-rb-idx="'+i+'" data-rb-lots="'+escAttr((n.lot_nos||[]).join(','))+'" onclick="rbSelSync()" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:600">'+escAttr(n.name)+'</td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+n.lots+'</td>'+
+      '<td style="text-align:center;padding:3px 6px;border:1px solid #f0f0f0"><input type="checkbox" class="rb-sel-cb" data-rb-idx="'+i+'" data-rb-lots="'+escAttr(n.lot_no||'')+'" onclick="rbSelSync()" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace;font-weight:600">'+escAttr(n.lot_no||'')+'</td>'+
+      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(n.name)+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
       '<td id="rb-picked-'+i+'" style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
@@ -8281,7 +8284,7 @@ async function rbLoad(){
 // reads the mutated pickedBuyerId straight off it, so no other wiring needed.
 function rbPick(idx, buyerId){
   idx = parseInt(idx, 10);
-  const n = (window._rbNames || [])[idx];
+  const n = (window._rbLots || [])[idx];
   if (!n) return;
   buyerId = buyerId ? parseInt(buyerId, 10) : null;
   const c = (n.candidates || []).find(x => Number(x.id) === buyerId);
@@ -8303,19 +8306,20 @@ function rbPickEl(el){
 async function rbApply(){
   const foot = document.getElementById('pl-rb-foot');
   const btn = document.getElementById('pl-rb-apply-btn');
-  // Assign the auto-picked code for every matched/ambiguous name (same
-  // first-candidate rule the file preview uses). Unmatched are skipped.
-  const picks = (window._rbNames||[])
-    .filter(n => n.pickedBuyerId)
-    .map(n => ({ name: n.name, buyerId: n.pickedBuyerId }));
-  if (!picks.length){ if(foot){foot.style.color='#991b1b';foot.textContent='Nothing to assign — no names matched a buyer.';} return; }
+  // Assign every LOT that has a picked buyer (matched auto-picks, ambiguous
+  // dropdown choices, and manual bulk-mapped codes). Unmatched lots — no
+  // picked buyer — are skipped.
+  const lotPicks = (window._rbLots || [])
+    .filter(n => n.pickedBuyerId && n.lotId)
+    .map(n => ({ lotId: n.lotId, buyerId: n.pickedBuyerId }));
+  if (!lotPicks.length){ if(foot){foot.style.color='#991b1b';foot.textContent='Nothing to assign — no lots have a picked buyer.';} return; }
   if (btn) btn.disabled = true;
   if (foot){ foot.style.color='var(--text3)'; foot.textContent='Assigning buyers…'; }
   try {
-    const d = await j('/api/auctions/'+window._rbAuctionId+'/resolve-buyers', { method:'POST', body: JSON.stringify({ picks }) });
-    if (foot){ foot.style.color='#065f46'; foot.textContent=`✓ Assigned ${d.resolvedNames} buyer(s) across ${d.updatedLots} lot(s).`; }
+    const d = await j('/api/auctions/'+window._rbAuctionId+'/resolve-buyers', { method:'POST', body: JSON.stringify({ lotPicks }) });
+    if (foot){ foot.style.color='#065f46'; foot.textContent=`✓ Assigned buyers to ${d.updatedLots} lot(s).`; }
     if (typeof loadAuctions==='function') loadAuctions();
-    rbLoad(); // refresh — resolved names drop off the list
+    rbLoad(); // refresh — resolved lots drop off the list
   } catch(e){
     if (foot){ foot.style.color='#991b1b'; foot.textContent = 'Error: '+(e.message||e); }
   } finally { if (btn) btn.disabled = false; }
@@ -8367,7 +8371,7 @@ function rbBulkApply(){
   if (!ticked.length) return;
   ticked.forEach(cb => {
     const idx = parseInt(cb.getAttribute('data-rb-idx'), 10);
-    const n = (window._rbNames || [])[idx];
+    const n = (window._rbLots || [])[idx];
     if (!n) return;
     // Assign the chosen buyer to this name — overrides the candidate-based
     // pick. rbApply reads pickedBuyerId straight off _rbNames.
@@ -8388,7 +8392,7 @@ function rbBulkApply(){
   rbSelSync();
   if (input) input.value = '';
   if (prev) prev.innerHTML = '';
-  if (typeof toast === 'function') toast('Mapped CODE '+code+' to '+ticked.length+' name'+(ticked.length===1?'':'s')+' — click Assign Buyers to save');
+  if (typeof toast === 'function') toast('Mapped CODE '+code+' to '+ticked.length+' lot'+(ticked.length===1?'':'s')+' — click Assign Buyers to save');
 }
 
 async function login(){
