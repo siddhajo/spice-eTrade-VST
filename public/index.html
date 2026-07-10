@@ -4120,6 +4120,10 @@ input[type="search"]:focus{
           <span style="font-weight:700;font-size:14px;color:var(--spice-cardamom-dk)">Activity Log — this trade</span>
           <span id="le-activity-count" style="font-weight:400;color:var(--spice-cardamom-dk);opacity:.7;font-size:12px;margin-left:4px"></span>
           <span style="flex:1"></span>
+          <!-- Filter the feed to one lot's full history (create + every edit). -->
+          <input type="search" id="le-activity-lot-filter" placeholder="🔍 Lot # history" title="Show the full history of a single lot — who created it and who edited which fields"
+                 onclick="event.stopPropagation()" oninput="leActivityLotFilter(this.value)"
+                 style="height:30px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:12.5px;width:130px;color:var(--text)">
           <button type="button" onclick="event.stopPropagation();leLoadActivity(1)" class="le-toolbar-btn le-tb-ghost" title="Refresh the activity log">↻ Refresh</button>
           <button type="button" onclick="event.stopPropagation();leActivityClearAll()" class="le-toolbar-btn le-tb-ghost" title="Delete the entire activity log for this trade" style="color:var(--spice-chili)">🗑 Clear All</button>
         </div><!-- /le-collapse-head -->
@@ -4129,6 +4133,7 @@ input[type="search"]:focus{
               <thead><tr style="position:sticky;top:0;background:var(--green-bg);z-index:1;color:var(--spice-cardamom-dk)">
                 <th style="text-align:left;padding:8px 10px;white-space:nowrap">When</th>
                 <th style="text-align:left;padding:8px 10px">User</th>
+                <th style="text-align:left;padding:8px 10px">Device</th>
                 <th style="text-align:left;padding:8px 10px">Action</th>
                 <th style="text-align:left;padding:8px 10px">Lot</th>
                 <th style="text-align:left;padding:8px 10px">Seller</th>
@@ -10938,7 +10943,15 @@ function leRestoreCollapseState(){
 // trade. Paginated server-side; the table body scrolls within a fixed
 // height. Refreshed automatically after every create / edit / delete and
 // whenever the operator switches trades, plus a manual ↻ Refresh button.
-const _leAct = { page: 1, pageSize: 20, total: 0 };
+const _leAct = { page: 1, pageSize: 20, total: 0, lotNo: '' };
+// Debounced "Lot # history" filter — scopes the feed to one lot so the
+// operator sees who created it and who edited which fields, oldest→newest.
+let _leActLotTimer = null;
+function leActivityLotFilter(v){
+  _leAct.lotNo = String(v || '').trim();
+  clearTimeout(_leActLotTimer);
+  _leActLotTimer = setTimeout(() => leLoadActivity(1), 250);
+}
 async function leLoadActivity(page){
   const listEl = document.getElementById('le-activity-list');
   if (!listEl) return;
@@ -10948,19 +10961,48 @@ async function leLoadActivity(page){
   const cntEl = document.getElementById('le-activity-count');
   const pager = document.getElementById('le-activity-pager');
   if (!aid) {
-    listEl.innerHTML = '<tr><td colspan="6" style="padding:14px;color:var(--text3)">Select a trade to see its activity.</td></tr>';
+    listEl.innerHTML = '<tr><td colspan="7" style="padding:14px;color:var(--text3)">Select a trade to see its activity.</td></tr>';
     if (cntEl) cntEl.textContent = '';
     if (pager) pager.style.display = 'none';
     return;
   }
+  const lotParam = _leAct.lotNo ? `&lotNo=${encodeURIComponent(_leAct.lotNo)}` : '';
   try {
-    const data = await j(`/api/lot-activity?auctionId=${encodeURIComponent(aid)}&page=${_leAct.page}&pageSize=${_leAct.pageSize}`);
+    const data = await j(`/api/lot-activity?auctionId=${encodeURIComponent(aid)}&page=${_leAct.page}&pageSize=${_leAct.pageSize}${lotParam}`);
     _leAct.total = data.total || 0;
     renderLeActivity(data.items || []);
   } catch(e) {
-    listEl.innerHTML = `<tr><td colspan="6" style="padding:14px;color:#991B1B">Failed to load activity: ${esc((e&&e.message)||String(e))}</td></tr>`;
+    listEl.innerHTML = `<tr><td colspan="7" style="padding:14px;color:#991B1B">Failed to load activity: ${esc((e&&e.message)||String(e))}</td></tr>`;
     if (pager) pager.style.display = 'none';
   }
+}
+// Friendly labels for the lot columns shown in the "Changed" cell.
+const LOT_FIELD_LABELS = {
+  lot_no:'Lot #', name:'Seller', trader_id:'Seller', bags:'Bags', qty:'Qty',
+  gross_wt:'Gross wt', sample_wt:'Sample wt', weight_with_gunny:'Wt w/ gunny',
+  moisture:'Moisture', litre:'Litre', price:'Price', amount:'Amount',
+  reserved_price:'Reserved price', crop_receipt_no:'Crop receipt',
+  code:'Code', buyer:'Buyer code', buyer1:'Buyer name', sale:'Sale',
+  grade:'Grade', branch:'Branch', crop:'Crop', crpt:'Crop type',
+  cr:'GSTIN', pan:'PAN', tel:'Phone', prate:'P.Rate', puramt:'Pur amt', balance:'Payable',
+};
+function leActVal(v){
+  if (v === null || v === undefined || String(v).trim() === '') return '(empty)';
+  return String(v);
+}
+// Render the field-level change list for one activity row.
+function leActChanges(it){
+  if (Array.isArray(it.changes) && it.changes.length){
+    return it.changes.map(c => {
+      const lbl = LOT_FIELD_LABELS[c.f] || c.f;
+      return `<div style="white-space:nowrap"><b>${esc(lbl)}</b> ${esc(leActVal(c.from))} <span style="color:var(--text3)">→</span> <b>${esc(leActVal(c.to))}</b></div>`;
+    }).join('');
+  }
+  // Legacy rows (before field-level diffs) only stored the field names.
+  if (Array.isArray(it.fields) && it.fields.length){
+    return esc(it.fields.map(f => LOT_FIELD_LABELS[f] || f).join(', '));
+  }
+  return '';
 }
 function renderLeActivity(items){
   const listEl = document.getElementById('le-activity-list');
@@ -10968,7 +11010,10 @@ function renderLeActivity(items){
   const pager  = document.getElementById('le-activity-pager');
   if (cntEl) cntEl.textContent = _leAct.total ? `(${_leAct.total})` : '';
   if (!items.length) {
-    listEl.innerHTML = '<tr><td colspan="6" style="padding:14px;color:var(--text3)">No activity recorded yet for this trade.</td></tr>';
+    const msg = _leAct.lotNo
+      ? `No activity for lot #${esc(_leAct.lotNo)} in this trade.`
+      : 'No activity recorded yet for this trade.';
+    listEl.innerHTML = `<tr><td colspan="7" style="padding:14px;color:var(--text3)">${msg}</td></tr>`;
   } else {
     const badge = (a) => {
       const map = { create:['Entered','#065f46','#d1fae5'], update:['Edited','#92400e','#fef3c7'], delete:['Deleted','#991b1b','#fee2e2'] };
@@ -10976,14 +11021,16 @@ function renderLeActivity(items){
       return `<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;color:${m[1]};background:${m[2]}">${esc(m[0])}</span>`;
     };
     listEl.innerHTML = items.map(it => {
-      const changed = (it.fields && it.fields.length) ? esc(it.fields.join(', ')) : '';
-      return `<tr style="border-top:1px solid var(--border)">
+      const device = it.ua ? (typeof detectDevice === 'function' ? detectDevice(it.ua) : '') : '';
+      const deviceTitle = [it.ua, it.ip ? ('IP ' + it.ip) : ''].filter(Boolean).join('\n');
+      return `<tr style="border-top:1px solid var(--border);vertical-align:top">
         <td style="padding:7px 10px;white-space:nowrap">${esc(leFmtActWhen(it.created_at))}</td>
         <td style="padding:7px 10px">${esc(it.user||'')}</td>
+        <td style="padding:7px 10px;white-space:nowrap" title="${esc(deviceTitle)}">${device ? esc(device) : '<span style="color:var(--text3)">—</span>'}</td>
         <td style="padding:7px 10px">${badge(it.action)}</td>
         <td style="padding:7px 10px">${esc(it.lot_no||'')}</td>
         <td style="padding:7px 10px">${esc(it.name||'')}</td>
-        <td style="padding:7px 10px;color:var(--text2)">${changed}</td>
+        <td style="padding:7px 10px;color:var(--text2)">${leActChanges(it)}</td>
       </tr>`;
     }).join('');
   }

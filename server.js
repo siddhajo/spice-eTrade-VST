@@ -5493,9 +5493,17 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
 function logLotActivity(db, req, action, lotId, details) {
   try {
     const user = (req && req.user && req.user.username) || 'unknown';
+    // Stamp the device (user-agent) + client IP onto every entry so the Lot
+    // Entry activity log can show WHERE each change came from. auction_id MUST
+    // stay the FIRST json key — the feed filters trades via a LIKE prefix.
+    const ua = (req && req.headers && String(req.headers['user-agent'] || '').slice(0, 250)) || '';
+    const fwd = req && req.headers && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const ip = String(fwd || (req && req.ip) || '').replace(/^::ffff:/, '').slice(0, 60);
+    const src = details || {};
+    const d = { auction_id: src.auction_id, ...src, _ua: ua, _ip: ip };
     db.run(
       'INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES (?,?,?,?,?)',
-      [String(user), action, 'lot', lotId != null ? Number(lotId) : null, JSON.stringify(details || {})]
+      [String(user), action, 'lot', lotId != null ? Number(lotId) : null, JSON.stringify(d)]
     );
   } catch (e) { /* best-effort audit; ignore */ }
 }
@@ -5665,7 +5673,8 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   // duplicate validation that POST /api/lots applies. Skipping these
   // on edit was a previous gap that let users move a lot outside its
   // branch's range or collide with another lot's number.
-  const current = db.get('SELECT auction_id, lot_no, branch, locked_at FROM lots WHERE id = ?', [lotId]);
+  // Full pre-edit row so the activity log can diff every field (before → after).
+  const current = db.get('SELECT * FROM lots WHERE id = ?', [lotId]);
   // Lock guard — admins always pass; non-admins are blocked the moment
   // the row is marked locked, regardless of which fields they're trying
   // to change. Returning 423 (Locked) so the client can show a tailored
@@ -5737,9 +5746,26 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   // before the next calculate/invoice/etc.
   if (current && current.auction_id) { pcClearGate(db, current.auction_id); lvClearGate(db, current.auction_id); }
   if (current) {
-    const changedFields = Object.keys(l).filter(k => LOT_UPDATE_COLUMNS.has(k));
     const newLotNo = (l.lot_no != null) ? String(l.lot_no).trim() : current.lot_no;
-    logLotActivity(db, req, 'update', lotId, { auction_id: current.auction_id, lot_no: newLotNo, name: l.name, fields: changedFields });
+    // Field-level diff: only columns whose value ACTUALLY changed, each with
+    // its before → after value, so the activity log reads "Bags 12 → 10",
+    // "Seller A → B", etc. Numeric-looking values compare numerically so a
+    // 10 vs "10.0" round-trip isn't flagged as a change.
+    const _same = (a, b) => {
+      const na = Number(a), nb = Number(b);
+      if (a !== '' && b !== '' && a != null && b != null && !isNaN(na) && !isNaN(nb)) return na === nb;
+      return String(a ?? '').trim() === String(b ?? '').trim();
+    };
+    const changes = [];
+    for (const [k, v] of Object.entries(l)) {
+      if (!LOT_UPDATE_COLUMNS.has(k)) continue;
+      if (!_same(current[k], v)) changes.push({ f: k, from: current[k], to: v });
+    }
+    logLotActivity(db, req, 'update', lotId, {
+      auction_id: current.auction_id, lot_no: newLotNo,
+      name: (l.name != null ? l.name : current.name),
+      fields: changes.map(c => c.f), changes,
+    });
   }
   res.json({ success: true });
 });
@@ -5770,6 +5796,14 @@ app.get('/api/lot-activity', requireAuth, (req, res) => {
     let where = "entity = 'lot'";
     const params = [];
     if (auctionId) { where += ' AND details LIKE ?'; params.push(`{"auction_id":${auctionId},%`); }
+    // Filter to a single lot's history (create + every edit + delete) by its
+    // stored lot_no. Matches the exact JSON token "lot_no":"<n>" so lot "5"
+    // doesn't collide with "55"; %/_ in the value are escaped for LIKE.
+    const lotNo = req.query.lotNo != null ? String(req.query.lotNo).trim() : '';
+    if (lotNo) {
+      where += " AND details LIKE ? ESCAPE '\\'";
+      params.push('%"lot_no":"' + lotNo.replace(/([%_\\])/g, '\\$1') + '"%');
+    }
     const totalRow = db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE ${where}`, params);
     const total = (totalRow && totalRow.n) || 0;
     const rows = db.all(
@@ -5785,6 +5819,8 @@ app.get('/api/lot-activity', requireAuth, (req, res) => {
         id: r.id, user: r.user_id, action: r.action, lot_id: r.entity_id,
         lot_no: d.lot_no || '', name: d.name || '',
         fields: Array.isArray(d.fields) ? d.fields : null,
+        changes: Array.isArray(d.changes) ? d.changes : null,
+        ua: d._ua || '', ip: d._ip || '',
         auction_id: d.auction_id || null, created_at: r.created_at,
       };
     });
