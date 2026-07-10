@@ -980,55 +980,53 @@ function getTradeReportData(db, auctionId) {
     ORDER BY UPPER(COALESCE(b.buyer1, l.buyer1, l.code)), l.code
   `, [auctionId]);
 
-  // INV.AMOUNT is COMPUTED per buyer from their aggregated lots + the
-  // configured rates — NOT read from the invoices table — so the report
-  // shows the invoice value even before sales invoices are generated. The
-  // math mirrors the sales-invoice calc (calculations.js buildSalesInvoice),
-  // including its rounding and its transport/insurance flags:
-  //   cardamomGunny = Σ amount + Σ bags × gunny_rate
-  //   transport     = round2(Σ qty × transport_rate)                    (Inter-state only *)
-  //   insurance     = round2(cardamomGunny × (1 + gst%) / 1000 × insurance_rate) (Inter-state only *)
-  //   GST           = per-component round2 (CGST+SGST intra, or IGST inter)
-  //   INV.AMOUNT    = round0(cardamomGunny + transport + insurance + GST) → nearest ₹
-  //   * transport + insurance apply ONLY to inter-state lots (sale 'I'), and
-  //     only when the matching flag (flag_inter_transport /
-  //     flag_inter_insurance) is ON. Local (intra-state) lots carry neither.
-  // "Inter-state" = buyer state ≠ auction state (sale 'I').
-  const cfg = _loadSettings(db);
-  const _num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
-  // round2 / round0 replicated from calculations.js so the components + total
-  // round EXACTLY like the invoice does (string-shift rounding).
-  const _round2 = (n) => { const x = Number(n); if (!isFinite(x) || x === 0) return 0; const s = x < 0 ? -1 : 1; return s * Number(Math.round(Number(Math.abs(x) + 'e2')) + 'e-2'); };
-  const _round0 = (n) => { const x = Number(n); if (!isFinite(x) || x === 0) return 0; return (x < 0 ? -1 : 1) * Math.round(Math.abs(x)); };
-  const _flagOn = (k) => { const v = cfg[k]; if (v === undefined || v === null || v === '') return true; return v === true || String(v).toLowerCase() === 'true'; };
-  const gunnyRate     = _num(cfg.gunny_rate, 165);
-  const gstGoods      = _num(cfg.gst_goods, 5);
-  const halfRate      = gstGoods / 2;
-  // Inter-state transport / insurance rates — forced to 0 when their flag is
-  // off. They apply ONLY to inter-state lots (see below); local lots get 0.
-  const transportRate = _flagOn('flag_inter_transport') ? _num(cfg.transport, 2.5) : 0;
-  const insuranceRate = _flagOn('flag_inter_insurance') ? _num(cfg.insurance, 0.75) : 0;
-
+  // ── INV.AMOUNT — TEMPORARILY SET TO 0 ──────────────────────────
+  // Per request, INV.AMOUNT is put to 0 for now, pending a correction to the
+  // formula. The full computed calculation is preserved (disabled) in the
+  // block comment just below — re-enable it once the formula is finalised.
+  // We still classify each row as inter/intra ('I'/'L') here because the
+  // state grouping + subtotals further down depend on r.sale.
   const auctionState = String(auction.state || '').trim().toUpperCase();
   rows.forEach(r => {
     const buyerSt = String(r.state || '').trim().toUpperCase();
     // Inter-state if buyer state ≠ auction state. Empty buyer state defaults
     // to intra-state (matches the FoxPro fallback).
     r.sale = (buyerSt && buyerSt !== auctionState) ? 'I' : 'L';
+    r.inv_amount = 0;   // TODO: restore the computed INV.AMOUNT (see disabled block below)
+  });
+
+  /* ── INV.AMOUNT calculation — DISABLED (restore when the formula is fixed) ──
+     Computed per buyer from aggregated lots + configured rates, mirroring the
+     sales-invoice calc (rounding + inter-state-only transport/insurance):
+       cardamomGunny = Σ amount + Σ bags × gunny_rate
+       transport     = round2(Σ qty × transport_rate)                                  (Inter-state only *)
+       insurance     = round2(((cardamomGunny + cardamomGunny × gst%) / 1000) × insurance_rate) (Inter-state only *)
+       GST           = per-component round2 (CGST+SGST intra, or IGST inter)
+       INV.AMOUNT    = round0(cardamomGunny + transport + insurance + GST) → nearest ₹
+       * transport + insurance apply ONLY to inter-state lots (sale 'I'), and only
+         when flag_inter_transport / flag_inter_insurance is ON.
+
+  const cfg = _loadSettings(db);
+  const _num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
+  const _round2 = (n) => { const x = Number(n); if (!isFinite(x) || x === 0) return 0; const s = x < 0 ? -1 : 1; return s * Number(Math.round(Number(Math.abs(x) + 'e2')) + 'e-2'); };
+  const _round0 = (n) => { const x = Number(n); if (!isFinite(x) || x === 0) return 0; return (x < 0 ? -1 : 1) * Math.round(Math.abs(x)); };
+  const _flagOn = (k) => { const v = cfg[k]; if (v === undefined || v === null || v === '') return true; return v === true || String(v).toLowerCase() === 'true'; };
+  const gunnyRate     = _num(cfg.gunny_rate, 165);
+  const gstGoods      = _num(cfg.gst_goods, 5);
+  const halfRate      = gstGoods / 2;
+  const transportRate = _flagOn('flag_inter_transport') ? _num(cfg.transport, 2.5) : 0;
+  const insuranceRate = _flagOn('flag_inter_insurance') ? _num(cfg.insurance, 0.75) : 0;
+  rows.forEach(r => {
     const isInter = r.sale === 'I';
     const sumAmount = Number(r.amount) || 0;
     const sumBags   = Number(r.bag) || 0;
     const sumQty    = Number(r.qty) || 0;
     const gunnyCost     = sumBags * gunnyRate;
-    const cardamomGunny = sumAmount + gunnyCost;               // = invoice subtotalGoods
-    // Transport + insurance apply ONLY to inter-state lots; local lots get 0.
+    const cardamomGunny = sumAmount + gunnyCost;
     const transport = isInter ? _round2(sumQty * transportRate) : 0;
     const gstOnGoods = cardamomGunny * gstGoods / 100;
     const insurance = isInter ? _round2((cardamomGunny + gstOnGoods) / 1000 * insuranceRate) : 0;
     const taxable = cardamomGunny + transport + insurance;
-    // GST: tax each component (cardamom / gunny / transport / insurance)
-    // with round2, then sum — same order the invoice uses. Intra = CGST+SGST
-    // (each = round2(Σ half-rate component tax)); inter = single IGST line.
     let gst;
     if (isInter) {
       gst = _round2(
@@ -1044,10 +1042,11 @@ function getTradeReportData(db, auctionId) {
         _round2(transport * halfRate / 100) +
         _round2(insurance * halfRate / 100)
       );
-      gst = half * 2;   // CGST + SGST
+      gst = half * 2;
     }
     r.inv_amount = _round0(taxable + gst);
   });
+  ─────────────────────────────────────────────────────────────────────────── */
 
   // Group by buyer-state (column on the report). Within each state, split into
   // inter-state vs intra-state sub-buckets for the section subtotals.
