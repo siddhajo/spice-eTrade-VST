@@ -8156,6 +8156,11 @@ async function rbLoad(){
   if (applyBtn) applyBtn.style.display='';
   const s = d.summary||{};
   window._rbNames = d.names;
+  // Buyers master (id + code + trade name) for the bulk "map CODE to
+  // selected" toolbar — same source the file-mode picker uses.
+  if (!window._plBuyers) {
+    try { window._plBuyers = await j('/api/buyers') || []; } catch (_) { window._plBuyers = []; }
+  }
   // Mirror the "From a file" preview layout: summary cards + bordered
   // table with MATCHED/AMBIGUOUS/UNMATCHED badges and tinted rows. The
   // action column keeps an interactive dropdown (trade mode writes the
@@ -8172,8 +8177,36 @@ async function rbLoad(){
     card('Unmatched',   s.unmatched||0, '#c00')+
     card('Lots',        s.lotsUnresolved||0, '#0369a1')+
     '</div>';
+  // Bulk toolbar — tick names below, type/pick one CODE, apply to all ticked.
+  // Mirrors the file-mode picker (#pl-bulk-bar) and the Lots-table bulk action.
+  const _rbByCode = new Map();
+  for (const b of (window._plBuyers || [])) {
+    const c = String(b.code == null ? '' : b.code).trim();
+    if (c && !_rbByCode.has(c.toUpperCase())) _rbByCode.set(c.toUpperCase(), b);
+  }
+  const rbCodeOpts = Array.from(_rbByCode.values())
+    .map(b => '<option value="'+escAttr(b.code)+'">'+escAttr(b.buyer1 || b.buyer || '')+'</option>')
+    .join('');
+  html += '<div id="rb-bulk-bar" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;border:1px solid var(--spice-line);border-radius:8px;background:#f8fafc">'+
+    '<div class="fg" style="margin:0;min-width:190px">'+
+      '<label style="font-size:11px">Find &amp; select lots</label>'+
+      '<input id="rb-lot-find" placeholder="Lot nos e.g. 5, 12, 40-60" onkeydown="if(event.key===\'Enter\'){event.preventDefault();rbSelectByLots();}" '+
+        'title="Type comma-separated lot numbers (ranges like 40-60 work), press Enter — buyer-name rows covering those lots are ticked and moved to the top" '+
+        'style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:170px">'+
+    '</div>'+
+    '<div class="fg" style="margin:0;min-width:220px">'+
+      '<label style="font-size:11px">Map CODE to selected lots</label>'+
+      '<input id="rb-bulk-code" list="rb-bulk-codes" placeholder="Type or pick a CODE…" autocomplete="off" '+
+        'oninput="rbBulkPreview()" onkeydown="if(event.key===\'Enter\'){event.preventDefault();rbBulkApply();}" '+
+        'style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:200px">'+
+      '<datalist id="rb-bulk-codes">'+rbCodeOpts+'</datalist>'+
+    '</div>'+
+    '<button class="btn btn-g" id="rb-bulk-apply" onclick="rbBulkApply()" disabled>Apply to <span id="rb-bulk-count">0</span> selected</button>'+
+    '<span id="rb-bulk-preview" style="font-size:12px;color:var(--text2);flex:1;min-width:160px;padding-bottom:6px"></span>'+
+  '</div>';
   html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f4f4f4;position:sticky;top:0">'+
+    '<th style="text-align:center;padding:4px 6px;border:1px solid #ddd;width:28px"><input type="checkbox" id="rb-sel-all" onclick="rbToggleAllSel(this.checked)" title="Select / clear all" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Buyer name (from trade)</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Lots</th>'+
     '<th style="text-align:left;padding:4px 8px;border:1px solid #ddd">Status</th>'+
@@ -8215,11 +8248,12 @@ async function rbLoad(){
       pickedCell = '<span style="font-weight:'+(n.pickedCode?'700':'400')+';color:'+(n.pickedCode?'#15803d':'#c00')+'">'+
         escAttr(n.pickedCode || '— none —')+'</span>';
     }
-    html += '<tr style="background:'+bg+'">'+
+    html += '<tr id="rb-row-'+i+'" style="background:'+bg+'">'+
+      '<td style="text-align:center;padding:3px 6px;border:1px solid #f0f0f0"><input type="checkbox" class="rb-sel-cb" data-rb-idx="'+i+'" data-rb-lots="'+escAttr((n.lot_nos||[]).join(','))+'" onclick="rbSelSync()" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-weight:600">'+escAttr(n.name)+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+n.lots+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;white-space:nowrap">'+badge+'</td>'+
-      '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
+      '<td id="rb-picked-'+i+'" style="padding:3px 8px;border:1px solid #f0f0f0">'+pickedCell+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+(cands || '<span style="color:#c00;font-style:italic">No buyer matches this trade name. Add it in the Buyers tab.</span>')+'</td>'+
     '</tr>';
   });
@@ -8279,6 +8313,76 @@ async function rbApply(){
   } catch(e){
     if (foot){ foot.style.color='#991b1b'; foot.textContent = 'Error: '+(e.message||e); }
   } finally { if (btn) btn.disabled = false; }
+}
+
+// ── Trade-mode bulk "map CODE to selected lots" ──────────────────
+// Mirrors the file-mode picker (plBulkApply) and the Lots-table bulk buyer
+// action: tick any buyer-name rows, type/pick one CODE, and it's assigned
+// to every ticked name (their lots get that buyer on the next Assign).
+function rbSelCbs(){ return Array.prototype.slice.call(document.querySelectorAll('.rb-sel-cb')); }
+function rbToggleAllSel(on){ rbSelCbs().forEach(cb => { cb.checked = !!on; }); rbSelSync(); }
+function rbSelSync(){
+  const cbs = rbSelCbs();
+  const ticked = cbs.filter(cb => cb.checked);
+  const countEl = document.getElementById('rb-bulk-count');
+  const applyEl = document.getElementById('rb-bulk-apply');
+  const allEl   = document.getElementById('rb-sel-all');
+  if (countEl) countEl.textContent = String(ticked.length);
+  if (applyEl) applyEl.disabled = ticked.length === 0;
+  if (allEl) {
+    allEl.checked = cbs.length > 0 && ticked.length === cbs.length;
+    allEl.indeterminate = ticked.length > 0 && ticked.length < cbs.length;
+  }
+}
+// Resolve the typed CODE against the Buyers master and show its trade name.
+function rbBulkPreview(){
+  const input = document.getElementById('rb-bulk-code');
+  const prev  = document.getElementById('rb-bulk-preview');
+  if (!input || !prev) return;
+  const code = String(input.value || '').trim().toUpperCase();
+  if (!code) { prev.innerHTML = ''; return; }
+  const b = (window._plBuyers || []).find(x => String(x.code || '').trim().toUpperCase() === code);
+  if (b) {
+    prev.innerHTML = '→ <strong style="color:var(--spice-cardamom)">'+esc(b.buyer1 || b.buyer || '(no trade name)')+'</strong>'+
+      '<span style="color:var(--text3)"> · CODE '+esc(b.code)+'</span>';
+  } else {
+    prev.innerHTML = '<span style="color:var(--spice-chili)">No buyer has CODE "'+esc(code)+'". Add it in the Buyers tab first.</span>';
+  }
+}
+function rbBulkApply(){
+  const input = document.getElementById('rb-bulk-code');
+  const prev  = document.getElementById('rb-bulk-preview');
+  const raw   = String((input && input.value) || '').trim();
+  if (!raw) { if (prev) prev.innerHTML = '<span style="color:var(--spice-chili)">Enter a CODE first.</span>'; return; }
+  const b = (window._plBuyers || []).find(x => String(x.code || '').trim().toUpperCase() === raw.toUpperCase());
+  if (!b) { if (prev) prev.innerHTML = '<span style="color:var(--spice-chili)">No buyer has CODE "'+esc(raw)+'". Add it in the Buyers tab first.</span>'; return; }
+  const code = String(b.code).trim();
+  const ticked = rbSelCbs().filter(cb => cb.checked);
+  if (!ticked.length) return;
+  ticked.forEach(cb => {
+    const idx = parseInt(cb.getAttribute('data-rb-idx'), 10);
+    const n = (window._rbNames || [])[idx];
+    if (!n) return;
+    // Assign the chosen buyer to this name — overrides the candidate-based
+    // pick. rbApply reads pickedBuyerId straight off _rbNames.
+    n.pickedBuyerId = b.id;
+    n.pickedCode = code;
+    const cell = document.getElementById('rb-picked-'+idx);
+    if (cell) cell.innerHTML = '<span style="font-weight:700;color:#15803d">'+esc(code)+'</span>'+
+      ' <span style="font-size:10px;color:#64748b">(manual)</span>';
+    const tr = document.getElementById('rb-row-'+idx);
+    if (tr) tr.style.background = '#f0fdf4';
+    document.querySelectorAll('[data-rb-cand-idx="'+idx+'"]').forEach(el => {
+      const on = Number(el.getAttribute('data-rb-cand-bid')) === Number(b.id);
+      el.style.background = on ? '#dcfce7' : '#fafafa';
+      el.style.outline = on ? '2px solid #15803d' : 'none';
+    });
+    cb.checked = false;
+  });
+  rbSelSync();
+  if (input) input.value = '';
+  if (prev) prev.innerHTML = '';
+  if (typeof toast === 'function') toast('Mapped CODE '+code+' to '+ticked.length+' name'+(ticked.length===1?'':'s')+' — click Assign Buyers to save');
 }
 
 async function login(){
@@ -26144,6 +26248,12 @@ function _plRenderPreview(data){
     .map(b => '<option value="'+escAttr(b.code)+'">'+escAttr(b.buyer1 || b.buyer || '')+'</option>')
     .join('');
   html += '<div id="pl-bulk-bar" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;border:1px solid var(--spice-line);border-radius:8px;background:#f8fafc">'+
+    '<div class="fg" style="margin:0;min-width:190px">'+
+      '<label style="font-size:11px">Find &amp; select lots</label>'+
+      '<input id="pl-lot-find" placeholder="Lot nos e.g. 5, 12, 40-60" onkeydown="if(event.key===\'Enter\'){event.preventDefault();plSelectByLots();}" '+
+        'title="Type comma-separated lot numbers (ranges like 40-60 work), press Enter — matching rows are ticked and moved to the top" '+
+        'style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:170px">'+
+    '</div>'+
     '<div class="fg" style="margin:0;min-width:220px">'+
       '<label style="font-size:11px">Map CODE to selected lots</label>'+
       '<input id="pl-bulk-code" list="pl-bulk-codes" placeholder="Type or pick a CODE…" autocomplete="off" '+
@@ -26205,7 +26315,7 @@ function _plRenderPreview(data){
         escAttr(rw.pickedCode || '— none —')+'</span>';
     }
     html += '<tr id="pl-row-'+rw.row+'" style="background:'+bg+'">'+
-      '<td style="text-align:center;padding:3px 6px;border:1px solid #f0f0f0"><input type="checkbox" class="pl-sel-cb" data-pl-row="'+rw.row+'" onclick="plSelSync()" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></td>'+
+      '<td style="text-align:center;padding:3px 6px;border:1px solid #f0f0f0"><input type="checkbox" class="pl-sel-cb" data-pl-row="'+rw.row+'" data-pl-lot="'+escAttr(rw.lot||'')+'" onclick="plSelSync()" style="cursor:pointer;width:15px;height:15px;vertical-align:middle;accent-color:var(--green)"></td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+rw.row+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0;font-family:monospace">'+escAttr(rw.lot||'')+'</td>'+
       '<td style="padding:3px 8px;border:1px solid #f0f0f0">'+escAttr(rw.tradeName||'')+'</td>'+
@@ -26280,6 +26390,55 @@ function plSelSync(){
     allEl.indeterminate = ticked.length > 0 && ticked.length < cbs.length;
   }
 }
+// ── "Find & select lots" — type comma-separated lot numbers (ranges like
+// 40-60 supported), press Enter; matching rows are ticked AND moved to the
+// top of the table so they're quick to act on. Shared by both Price List
+// Mapping modes (file = one lot per row; trade = a buyer name covering many
+// lots, matched if ANY of its lots is typed).
+function _plParseLotQuery(str){
+  const nums = new Set(); const literals = new Set();
+  String(str || '').split(',').forEach(tok => {
+    tok = tok.trim(); if (!tok) return;
+    const rg = tok.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rg) { let a = +rg[1], b = +rg[2]; if (a > b) { const t = a; a = b; b = t; } for (let n = a; n <= b && nums.size < 5000; n++) nums.add(n); return; }
+    literals.add(tok.toUpperCase());
+    if (/^\d+$/.test(tok)) nums.add(parseInt(tok, 10));
+  });
+  return { nums, literals };
+}
+// A lot matches if its raw string is typed, OR its numeric part is in the set
+// (so "5" matches "005" / "A5", and ranges work regardless of zero-padding).
+function _plLotMatches(lot, q){
+  const s = String(lot == null ? '' : lot).trim().toUpperCase();
+  if (!s) return false;
+  if (q.literals.has(s)) return true;
+  const m = s.match(/(\d+)/);
+  return !!(m && q.nums.has(parseInt(m[1], 10)));
+}
+function _plSelectByLots(inputId, cbSelector, lotsAttr, syncFn){
+  const inp = document.getElementById(inputId);
+  const q = _plParseLotQuery(inp ? inp.value : '');
+  if (!q.nums.size && !q.literals.size) return;
+  const cbs = Array.prototype.slice.call(document.querySelectorAll(cbSelector));
+  const tbody = cbs.length ? cbs[0].closest('tbody') : null;
+  const toMove = [];
+  cbs.forEach(cb => {
+    const lots = String(cb.getAttribute(lotsAttr) || '').split(',');
+    if (lots.some(l => _plLotMatches(l, q))) {
+      cb.checked = true;
+      const tr = cb.closest('tr'); if (tr) toMove.push(tr);
+    }
+  });
+  // Move matched rows to the top, preserving their relative order.
+  if (tbody) for (let i = toMove.length - 1; i >= 0; i--) tbody.insertBefore(toMove[i], tbody.firstChild);
+  if (typeof syncFn === 'function') syncFn();
+  if (typeof toast === 'function') toast(toMove.length
+    ? ('Selected ' + toMove.length + ' row' + (toMove.length === 1 ? '' : 's') + ' — moved to top')
+    : 'No rows matched those lot numbers');
+}
+function plSelectByLots(){ _plSelectByLots('pl-lot-find', '.pl-sel-cb', 'data-pl-lot', plSelSync); }
+function rbSelectByLots(){ _plSelectByLots('rb-lot-find', '.rb-sel-cb', 'data-rb-lots', rbSelSync); }
+
 // Resolve the typed CODE against the Buyers master (by the CODE column, which
 // is what the file's CODE cell holds) and show the trade name — same feedback
 // idiom as the Lots-table bulk buyer picker.

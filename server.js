@@ -5389,7 +5389,7 @@ function _collectUnresolvedBuyers(db, auctionId) {
     db.all("SELECT DISTINCT UPPER(TRIM(buyer)) AS c FROM buyers WHERE TRIM(COALESCE(buyer,'')) <> ''").map(r => r.c)
   );
   const lots = db.all(
-    "SELECT id, TRIM(COALESCE(buyer,'')) AS buyer, TRIM(COALESCE(buyer1,'')) AS buyer1 FROM lots WHERE auction_id = ?",
+    "SELECT id, lot_no, TRIM(COALESCE(buyer,'')) AS buyer, TRIM(COALESCE(buyer1,'')) AS buyer1 FROM lots WHERE auction_id = ?",
     [auctionId]
   );
   const unresolved = [];
@@ -5398,7 +5398,7 @@ function _collectUnresolvedBuyers(db, auctionId) {
     if (resolved) continue;
     const name = l.buyer1 || l.buyer;   // prefer the name field
     if (!name) continue;                // nothing to name-match on
-    unresolved.push({ lotId: l.id, name });
+    unresolved.push({ lotId: l.id, lot_no: l.lot_no, name });
   }
   return { unresolved, validCodes };
 }
@@ -5412,11 +5412,15 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
   if (!auc) return res.status(404).json({ error: 'auction not found' });
 
   const { unresolved } = _collectUnresolvedBuyers(db, id);
-  const groups = new Map(); // UPPER(name) -> { name, lots }
+  const groups = new Map(); // UPPER(name) -> { name, lots, lot_nos }
   for (const u of unresolved) {
     const key = u.name.toUpperCase();
-    if (!groups.has(key)) groups.set(key, { name: u.name, lots: 0 });
-    groups.get(key).lots++;
+    if (!groups.has(key)) groups.set(key, { name: u.name, lots: 0, lot_nos: [] });
+    const g = groups.get(key);
+    g.lots++;
+    // Lot numbers under this name — powers the "find & select lots" box in
+    // the Price List Mapping trade-mode picker.
+    if (u.lot_no != null && String(u.lot_no).trim() !== '') g.lot_nos.push(String(u.lot_no).trim());
   }
   const idx = _buildBuyerNameIndex(db);   // match on trade name (buyer1) only
   const names = Array.from(groups.values())
@@ -5433,6 +5437,7 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
       return {
         name: g.name,
         lots: g.lots,
+        lot_nos: g.lot_nos,
         status,
         candidates: cands.map(b => ({ id: b.id, code: b.code, buyer: b.buyer, buyer1: b.buyer1, sale: b.sale, gstin: b.gstin })),
         pickedBuyerId: picked ? picked.id : null,
