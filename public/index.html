@@ -3761,6 +3761,7 @@ input[type="search"]:focus{
                  style="padding:0 12px;height:38px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;min-width:200px"
                  title="Enter lot numbers separated by comma / space / newline. Press Enter or click Tick to check them.">
           <button type="button" class="btn btn-o" onclick="lotApplyPickLots()" style="height:38px;padding:0 14px;font-weight:600">Tick</button>
+          <button type="button" class="btn btn-o" onclick="lotUntickAll()" style="height:38px;padding:0 14px;font-weight:600" title="Untick every lot — including previously ticked ones no longer on this page — so you can start a fresh selection.">Untick All</button>
 
           <!-- Branch filter — populated from the lots actually present in the
                selected auction (deduplicated). Filtering is server-side
@@ -8209,6 +8210,7 @@ async function rbLoad(){
       '<datalist id="rb-bulk-codes">'+rbCodeOpts+'</datalist>'+
     '</div>'+
     '<button class="btn btn-g" id="rb-bulk-apply" onclick="rbBulkApply()" disabled>Apply to <span id="rb-bulk-count">0</span> selected</button>'+
+    '<button class="btn btn-o" id="rb-bulk-clear" onclick="rbClearBulk()" title="Clear the lot-nos box, the CODE box and untick every row">Clear</button>'+
     '<span id="rb-bulk-preview" style="font-size:12px;color:var(--text2);flex:1;min-width:160px;padding-bottom:6px"></span>'+
   '</div>';
   html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
@@ -8331,6 +8333,13 @@ async function rbApply(){
 // to every ticked name (their lots get that buyer on the next Assign).
 function rbSelCbs(){ return Array.prototype.slice.call(document.querySelectorAll('.rb-sel-cb')); }
 function rbToggleAllSel(on){ rbSelCbs().forEach(cb => { cb.checked = !!on; }); rbSelSync(); }
+function rbClearBulk(){
+  const f = document.getElementById('rb-lot-find'); if (f) f.value = '';
+  const c = document.getElementById('rb-bulk-code'); if (c) c.value = '';
+  const pv = document.getElementById('rb-bulk-preview'); if (pv) pv.textContent = '';
+  const allEl = document.getElementById('rb-sel-all'); if (allEl) allEl.checked = false;
+  rbToggleAllSel(false); // untick every row + resync count / apply button
+}
 function rbSelSync(){
   const cbs = rbSelCbs();
   const ticked = cbs.filter(cb => cb.checked);
@@ -19022,6 +19031,20 @@ async function lotApplyPickLots() {
   toast(parts.join(' · '));
 }
 
+// Clear the ENTIRE lot selection — both the rendered checkboxes and the
+// persistent _lotsTickedIds set that survives re-renders. The header
+// "select all" only unticks the rows currently visible; ticks carried
+// over from an earlier page/filter would silently linger and get mixed
+// in with a fresh selection. This wipes everything so the operator can
+// start clean. No re-render needed — we just uncheck in place and resync
+// the master checkbox + bulk-button visibility.
+function lotUntickAll(){
+  _lotsTickedIds.clear();
+  document.querySelectorAll('.lot-select-cb').forEach(cb => { cb.checked = false; });
+  if (window.BulkActions && typeof BulkActions._sync === 'function') BulkActions._sync('lot');
+  const inp = document.getElementById('lot-pick-lots'); if (inp) inp.value = '';
+}
+
 function gotoLotsPage(p){
   const max = _lotsPager.totalPages || 1;
   _lotsPager.page = Math.max(1, Math.min(max, p|0));
@@ -26375,6 +26398,7 @@ function _plRenderPreview(data){
       '<datalist id="pl-bulk-codes">'+codeOpts+'</datalist>'+
     '</div>'+
     '<button class="btn btn-g" id="pl-bulk-apply" onclick="plBulkApply()" disabled>Apply to <span id="pl-bulk-count">0</span> selected</button>'+
+    '<button class="btn btn-o" id="pl-bulk-clear" onclick="plClearBulk()" title="Clear the lot-nos box, the CODE box and untick every row">Clear</button>'+
     '<span id="pl-bulk-preview" style="font-size:12px;color:var(--text2);flex:1;min-width:160px;padding-bottom:6px"></span>'+
   '</div>';
   html += '<div style="overflow:auto;max-height:520px;border:1px solid var(--border);border-radius:6px">';
@@ -26489,6 +26513,13 @@ function _plSelCbs(){ return Array.prototype.slice.call(document.querySelectorAl
 function plToggleAllSel(on){
   _plSelCbs().forEach(cb => { cb.checked = !!on; });
   plSelSync();
+}
+function plClearBulk(){
+  const f = document.getElementById('pl-lot-find'); if (f) f.value = '';
+  const c = document.getElementById('pl-bulk-code'); if (c) c.value = '';
+  const pv = document.getElementById('pl-bulk-preview'); if (pv) pv.textContent = '';
+  const allEl = document.getElementById('pl-sel-all'); if (allEl) allEl.checked = false;
+  plToggleAllSel(false); // untick every row + resync count / apply button
 }
 function plSelSync(){
   const cbs = _plSelCbs();
