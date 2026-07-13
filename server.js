@@ -11732,6 +11732,120 @@ app.delete('/api/expenses/:id', requireDelete, (req, res) => {
   res.json({ success: true });
 });
 
+// ── EXPENSE DEFAULTS (reusable template lines) ─────────────────
+// The recurring particulars every trade shares. Maintained once, then
+// applied to a trade so the operator only edits amounts. Same shape as
+// expenses but without auction_id / total (total is derived on apply).
+
+// List the template lines in the operator's arranged order.
+app.get('/api/expense-defaults', requireView, (req, res) => {
+  const db = getDb();
+  const rows = db.all('SELECT * FROM expense_defaults ORDER BY sort_order ASC, id ASC');
+  res.json({ rows });
+});
+
+// Add one template line. amount defaults to wages × persons when both are
+// given and no amount is sent. New lines sort after the current last one.
+app.post('/api/expense-defaults', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const wages   = _expNum(b.wages);
+  const persons = _expNum(b.persons);
+  const amount  = (b.amount !== undefined && b.amount !== '')
+    ? _expNum(b.amount)
+    : (wages > 0 && persons > 0 ? wages * persons : 0);
+  const nextOrder = (Number((db.get('SELECT COALESCE(MAX(sort_order),0) AS m FROM expense_defaults') || {}).m) || 0) + 1;
+  db.run(
+    `INSERT INTO expense_defaults (particulars, wages, persons, amount, gst, pay_name, sort_order)
+     VALUES (?,?,?,?,?,?,?)`,
+    [String(b.particulars || '').trim(), wages, persons, amount, _expNum(b.gst),
+     String(b.pay_name || '').trim(), nextOrder]
+  );
+  const id = (db.get('SELECT last_insert_rowid() AS id') || {}).id;
+  res.json({ success: true, id });
+});
+
+app.put('/api/expense-defaults/:id', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id);
+  const row = db.get('SELECT * FROM expense_defaults WHERE id = ?', [id]);
+  if (!row) return res.status(404).json({ error: 'Default not found' });
+  const b = req.body || {};
+  const particulars = b.particulars !== undefined ? String(b.particulars).trim() : row.particulars;
+  const pay_name    = b.pay_name    !== undefined ? String(b.pay_name).trim()    : row.pay_name;
+  const wages   = b.wages   !== undefined ? _expNum(b.wages)   : Number(row.wages)   || 0;
+  const persons = b.persons !== undefined ? _expNum(b.persons) : Number(row.persons) || 0;
+  const amount  = (b.amount !== undefined && b.amount !== '')
+    ? _expNum(b.amount)
+    : (wages > 0 && persons > 0 ? wages * persons : (Number(row.amount) || 0));
+  const gst = b.gst !== undefined ? _expNum(b.gst) : Number(row.gst) || 0;
+  db.run(
+    'UPDATE expense_defaults SET particulars=?, wages=?, persons=?, amount=?, gst=?, pay_name=? WHERE id=?',
+    [particulars, wages, persons, amount, gst, pay_name, id]
+  );
+  res.json({ success: true });
+});
+
+app.delete('/api/expense-defaults/:id', requireDelete, (req, res) => {
+  const db = getDb();
+  db.run('DELETE FROM expense_defaults WHERE id = ?', [parseInt(req.params.id)]);
+  res.json({ success: true });
+});
+
+// Copy the template lines into a trade. Idempotent: a default whose
+// particulars already exist on the trade (case-insensitive) is skipped,
+// so re-applying — or the auto-fill on first open — never duplicates
+// lines. Returns how many were added.
+app.post('/api/expenses/apply-defaults/:auctionId', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const aid = parseInt(req.params.auctionId);
+  if (!aid) return res.status(400).json({ error: 'auction_id is required' });
+  const defaults = db.all('SELECT * FROM expense_defaults ORDER BY sort_order ASC, id ASC');
+  const existing = new Set(
+    db.all('SELECT particulars FROM expenses WHERE auction_id = ?', [aid])
+      .map(r => String(r.particulars || '').trim().toLowerCase())
+  );
+  let added = 0;
+  for (const d of defaults) {
+    const key = String(d.particulars || '').trim().toLowerCase();
+    // Skip blank templates and any particulars already on the trade.
+    if (!key || existing.has(key)) continue;
+    const amount = Number(d.amount) || 0;
+    const gst    = Number(d.gst) || 0;
+    db.run(
+      `INSERT INTO expenses (auction_id, particulars, wages, persons, amount, gst, total, pay_name)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [aid, d.particulars, Number(d.wages) || 0, Number(d.persons) || 0, amount, gst, amount + gst, d.pay_name || '']
+    );
+    existing.add(key);
+    added++;
+  }
+  res.json({ success: true, added });
+});
+
+// Replace the whole template set with a trade's current expense lines —
+// "make this trade's list the default". Skips blank-particulars rows.
+app.post('/api/expense-defaults/from-trade/:auctionId', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const aid = parseInt(req.params.auctionId);
+  if (!aid) return res.status(400).json({ error: 'auction_id is required' });
+  const rows = db.all('SELECT * FROM expenses WHERE auction_id = ? ORDER BY id ASC', [aid]);
+  db.run('DELETE FROM expense_defaults');
+  let order = 0, saved = 0;
+  for (const r of rows) {
+    if (!String(r.particulars || '').trim()) continue;
+    order++;
+    db.run(
+      `INSERT INTO expense_defaults (particulars, wages, persons, amount, gst, pay_name, sort_order)
+       VALUES (?,?,?,?,?,?,?)`,
+      [r.particulars, Number(r.wages) || 0, Number(r.persons) || 0, Number(r.amount) || 0,
+       Number(r.gst) || 0, r.pay_name || '', order]
+    );
+    saved++;
+  }
+  res.json({ success: true, saved });
+});
+
 // ══════════════════════════════════════════════════════════════
 // SUMMARY STATS
 // ══════════════════════════════════════════════════════════════

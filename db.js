@@ -511,6 +511,25 @@ async function initDb() {
   )`);
   wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_expenses_auction ON expenses(auction_id)`);
 
+  // ── EXPENSE DEFAULTS (reusable template lines) ─────────────
+  // The recurring expense particulars every trade shares (loading, wages,
+  // batta, rent, software, food, etc.). Maintained once on the Expenses
+  // screen, then copied into a trade so the operator only edits the
+  // amounts instead of re-typing every line for every trade. `sort_order`
+  // preserves the order the operator arranged them in; no `total` column —
+  // it's derived (amount + gst) when the line is applied to a trade.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS expense_defaults (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    particulars TEXT DEFAULT '',
+    wages REAL DEFAULT 0,
+    persons REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    gst REAL DEFAULT 0,
+    pay_name TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
   // ── ROUTE DISTANCES (e-way bill <DISTANCE> field) ──────────
   // Saved per (from_pin, to_pin) pair, normalised so the smaller PIN
   // is always stored first — that way A↔B and B↔A share one row. Used

@@ -3133,9 +3133,11 @@ input[type="search"]:focus{
         color:var(--spice-text-main);caret-color:var(--spice-cardamom)}
       #tc-expenses .exp-in:focus{outline:none;border-color:var(--spice-cardamom);
         box-shadow:0 0 0 2px rgba(46,125,50,.16)}
-      #tc-expenses #exp-table td{padding:6px 10px;vertical-align:middle}
-      #tc-expenses #exp-table th{padding:10px;font-size:12px;color:var(--spice-text-hint);
-        border-bottom:1px solid var(--spice-line)}
+      #tc-expenses #exp-table td, #tc-expenses #expd-table td{padding:6px 10px;vertical-align:middle}
+      #tc-expenses #exp-table th, #tc-expenses #expd-table th{padding:10px;font-size:12px;
+        color:var(--spice-text-hint);border-bottom:1px solid var(--spice-line)}
+      #tc-expenses #exp-defaults-box[open] > summary{margin-bottom:6px}
+      #tc-expenses #exp-defaults-box summary::-webkit-details-marker{display:none}
       #tc-expenses .exp-del{background:none;border:none;cursor:pointer;color:var(--spice-chili);
         font-size:18px;line-height:1;padding:2px 6px;border-radius:6px}
       #tc-expenses .exp-del:hover{background:rgba(198,40,40,.10)}
@@ -3149,9 +3151,15 @@ input[type="search"]:focus{
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <select id="exp-auction" onchange="loadExpenseRows()"
             style="background:#fff;border:1px solid var(--spice-line);border-radius:8px;padding:8px 12px;font-size:14px;font-weight:600;color:var(--spice-text-main);cursor:pointer;font-family:inherit"></select>
+          <button class="btn btn-o" onclick="expApplyDefaults()" title="Copy the default particulars into this trade (existing lines are kept)">↧ Apply defaults</button>
           <button class="btn btn-a" onclick="expAddRow()">+ Add Expense</button>
         </div>
       </div>
+
+      <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--spice-text-main);margin:0 2px 12px;cursor:pointer">
+        <input type="checkbox" id="exp-autofill" onchange="expToggleAutofill(this.checked)" style="width:16px;height:16px;cursor:pointer">
+        Auto-fill new trades with the default particulars (just edit the amounts)
+      </label>
 
       <div class="card" style="padding:0;overflow-x:auto">
         <table style="width:100%;min-width:820px" id="exp-table">
@@ -3183,6 +3191,41 @@ input[type="search"]:focus{
       <p style="color:var(--spice-text-hint);font-size:12px;margin:12px 2px">
         Tip: enter Wages and No.of person and Amount fills in automatically (Wages × No.of person). Total = Amount + GST. Rows save when you leave a field.
       </p>
+
+      <!-- Default expenses — the reusable template. Maintain the recurring
+           particulars once here; they auto-fill each new trade (or apply on
+           demand) so only the amounts change per trade. -->
+      <details id="exp-defaults-box" style="margin-top:18px" ontoggle="if(this.open)loadExpenseDefaults()">
+        <summary style="cursor:pointer;font-weight:700;font-size:15px;color:var(--spice-text-main);padding:8px 2px;list-style:none;display:flex;align-items:center;gap:8px">
+          <span style="color:var(--spice-cardamom)">⚙</span> Default expenses (template)
+          <span style="font-weight:400;font-size:12px;color:var(--spice-text-hint)">— set the recurring particulars once</span>
+        </summary>
+        <div style="padding:6px 2px 2px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+            <button class="btn btn-a" onclick="expdAddRow()">+ Add default line</button>
+            <button class="btn btn-o" onclick="expSaveTradeAsDefaults()" title="Replace the template with the lines currently on the selected trade">⇪ Use this trade's list as defaults</button>
+          </div>
+          <div class="card" style="padding:0;overflow-x:auto">
+            <table style="width:100%;min-width:760px" id="expd-table">
+              <thead>
+                <tr>
+                  <th style="text-align:left">Particulars</th>
+                  <th class="num" style="width:96px">Wages</th>
+                  <th class="num" style="width:80px">No.of person</th>
+                  <th class="num" style="width:120px">Amount</th>
+                  <th class="num" style="width:110px">GST</th>
+                  <th style="text-align:left;width:140px">Pay Name</th>
+                  <th style="width:46px"></th>
+                </tr>
+              </thead>
+              <tbody id="expd-rows"></tbody>
+            </table>
+          </div>
+          <p style="color:var(--spice-text-hint);font-size:12px;margin:12px 2px">
+            These are just templates — the amounts here are the starting values each trade gets. Applying defaults never overwrites lines a trade already has.
+          </p>
+        </div>
+      </details>
     </div>
 
     <!-- INSIGHTS — detailed per-trade × per-branch analytics. Driven
@@ -9957,7 +10000,12 @@ async function loadStats(auctionId){
 // and re-renders; each field auto-saves on change; Amount auto-fills from
 // Wages × No.of person and Total = Amount + GST as you type. The Dashboard
 // reads the per-trade total via /api/stats → Net Profit card.
+// Auto-fill new trades with the default template? On by default; the
+// operator can turn it off with the checkbox (persists per browser).
+function _expAutofillOn(){ return localStorage.getItem('expAutoDefault') !== '0'; }
 function loadExpenses(){
+  const cb = document.getElementById('exp-autofill');
+  if (cb) cb.checked = _expAutofillOn();
   return fillAucSelect('exp-auction').then(() => loadExpenseRows());
 }
 function _expAid(){ return parseInt(document.getElementById('exp-auction')?.value) || 0; }
@@ -9977,14 +10025,29 @@ async function loadExpenseRows(){
   let data;
   try { data = await j(`/api/expenses/${aid}`); }
   catch(e){ tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--spice-chili);padding:20px">Failed to load: ${esc(e.message)}</td></tr>`; return; }
-  const rows = (data && data.rows) || [];
-  if (!rows.length){
-    tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--spice-text-hint);padding:24px">No expenses yet. Click “+ Add Expense”.</td></tr>`;
-    _expSetFoot(0, 0, 0); return;
+  let rows = (data && data.rows) || [];
+  // First open of a trade with no expenses yet: auto-fill from the default
+  // template so the operator only edits amounts. `_expAutoTried` guards
+  // against re-applying within one render (e.g. if the template is empty).
+  if (!rows.length && _expAutofillOn() && !_expAutoTried){
+    _expAutoTried = true;
+    try {
+      const r = await j(`/api/expenses/apply-defaults/${aid}`, { method: 'POST', body: '{}' });
+      if (r && r.added > 0){
+        toast(`Added ${r.added} default expense line${r.added === 1 ? '' : 's'} — just update the amounts.`);
+        return loadExpenseRows();
+      }
+    } catch(_){ /* no defaults / offline — fall through to empty state */ }
   }
+  if (!rows.length){
+    tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--spice-text-hint);padding:24px">No expenses yet. Click “+ Add Expense”, or set up a <b>Default expenses</b> template below.</td></tr>`;
+    _expSetFoot(0, 0, 0); _expAutoTried = false; return;
+  }
+  _expAutoTried = false;
   tb.innerHTML = rows.map(_expRowHTML).join('');
   _expFooterFromRows(rows);
 }
+let _expAutoTried = false;
 
 function _expRowHTML(r){
   const inp = (f, val, extra='') =>
@@ -10070,6 +10133,109 @@ function _expFooterFromDom(){
     t += _expEn((_expField(id, 'total') || {}).value);
   });
   _expSetFoot(a, g, t);
+}
+
+// ── EXPENSE DEFAULTS (reusable template) ───────────────────────
+// Persist the auto-fill preference and apply the template on demand.
+function expToggleAutofill(on){
+  localStorage.setItem('expAutoDefault', on ? '1' : '0');
+  // Turning it on for a trade that's still empty applies immediately.
+  if (on){ _expAutoTried = false; loadExpenseRows(); }
+}
+
+async function expApplyDefaults(){
+  const aid = _expAid();
+  if (!aid){ toast('Pick a ' + termAuction(false, true) + ' first'); return; }
+  let r;
+  try { r = await j(`/api/expenses/apply-defaults/${aid}`, { method: 'POST', body: '{}' }); }
+  catch(e){ toast('Could not apply defaults: ' + (e.message || e)); return; }
+  const n = (r && r.added) || 0;
+  toast(n ? `Added ${n} default line${n === 1 ? '' : 's'}.` : 'Nothing to add — either the template is empty or every default is already on this trade.');
+  if (n) await loadExpenseRows();
+}
+
+async function expSaveTradeAsDefaults(){
+  const aid = _expAid();
+  if (!aid){ toast('Pick a ' + termAuction(false, true) + ' first'); return; }
+  if (!confirm("Replace the default template with this trade's current expense lines?")) return;
+  let r;
+  try { r = await j(`/api/expense-defaults/from-trade/${aid}`, { method: 'POST', body: '{}' }); }
+  catch(e){ toast('Could not save defaults: ' + (e.message || e)); return; }
+  toast(`Saved ${(r && r.saved) || 0} line${((r && r.saved) === 1) ? '' : 's'} as the default template.`);
+  loadExpenseDefaults();
+}
+
+// Defaults table (template editor) — mirrors the trade table but has no
+// Total column and no auction scope. Distinct expd* namespace.
+function _expdField(id, f){ return document.querySelector(`#expd-rows .exp-in[data-id="${id}"][data-f="${f}"]`); }
+
+async function loadExpenseDefaults(){
+  const tb = document.getElementById('expd-rows');
+  if (!tb) return;
+  let data;
+  try { data = await j('/api/expense-defaults'); }
+  catch(e){ tb.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--spice-chili);padding:20px">Failed to load: ${esc(e.message)}</td></tr>`; return; }
+  const rows = (data && data.rows) || [];
+  if (!rows.length){
+    tb.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--spice-text-hint);padding:20px">No default lines yet. Click “+ Add default line”, or build one trade and use “Use this trade's list as defaults”.</td></tr>`;
+    return;
+  }
+  tb.innerHTML = rows.map(_expdRowHTML).join('');
+}
+
+function _expdRowHTML(r){
+  const inp = (f, val, extra='') =>
+    `<input class="exp-in" data-id="${r.id}" data-f="${f}" value="${val == null ? '' : esc(String(val))}" oninput="expdOnInput(this)" onchange="expdSaveRow(${r.id})" ${extra}>`;
+  const numAttr = 'inputmode="decimal" style="text-align:right"';
+  const numVal = v => (Number(v) ? _expNumStr(v) : '');
+  return `<tr data-id="${r.id}">
+    <td>${inp('particulars', r.particulars)}</td>
+    <td class="num">${inp('wages', numVal(r.wages), numAttr)}</td>
+    <td class="num">${inp('persons', numVal(r.persons), numAttr)}</td>
+    <td class="num">${inp('amount', numVal(r.amount), numAttr)}</td>
+    <td class="num">${inp('gst', numVal(r.gst), numAttr)}</td>
+    <td>${inp('pay_name', r.pay_name)}</td>
+    <td style="text-align:center"><button class="exp-del" title="Delete this default" onclick="expdDeleteRow(${r.id})">×</button></td>
+  </tr>`;
+}
+
+function expdOnInput(el){
+  const id = el.dataset.id, f = el.dataset.f;
+  if (f === 'wages' || f === 'persons'){
+    const g = ff => _expEn((_expdField(id, ff) || {}).value);
+    const w = g('wages'), p = g('persons');
+    if (w > 0 && p > 0){ const ai = _expdField(id, 'amount'); if (ai) ai.value = _expNumStr(w * p); }
+  }
+}
+
+async function expdSaveRow(id){
+  const g = f => (_expdField(id, f) || {}).value || '';
+  const body = {
+    particulars: g('particulars'),
+    wages:   _expEn(g('wages')),
+    persons: _expEn(g('persons')),
+    amount:  _expEn(g('amount')),
+    gst:     _expEn(g('gst')),
+    pay_name: g('pay_name'),
+  };
+  try { await j(`/api/expense-defaults/${id}`, { method: 'PUT', body: JSON.stringify(body) }); }
+  catch(e){ toast('Save failed: ' + (e.message || e)); }
+}
+
+async function expdAddRow(){
+  try { await j('/api/expense-defaults', { method: 'POST', body: '{}' }); }
+  catch(e){ toast('Could not add: ' + (e.message || e)); return; }
+  await loadExpenseDefaults();
+  const rows = document.querySelectorAll('#expd-rows tr[data-id]');
+  const first = rows.length && rows[rows.length - 1].querySelector('.exp-in');
+  if (first) first.focus();
+}
+
+async function expdDeleteRow(id){
+  if (!confirm('Delete this default line?')) return;
+  try { await j(`/api/expense-defaults/${id}`, { method: 'DELETE' }); }
+  catch(e){ toast('Delete failed: ' + (e.message || e)); return; }
+  await loadExpenseDefaults();
 }
 
 // Range tracker for the revenue-trend chart. Default 7 days; changed by
