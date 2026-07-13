@@ -1116,10 +1116,10 @@ body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{
    to the "Lots → Set Buyer (bulk action)" toggle). Two gates stack:
    flag_lot_set_buyer must be ON AND at least one lot must be ticked. */
 body:not([data-feat-lot-set-buyer="1"]) .feat-lot-set-buyer{display:none !important}
-/* "Discount In Payments" (flag_sample) gates the Payments summary tab —
-   sidebar entry + dashboard quick action. Replaces the old Kerala=ASP
-   heuristic (.asp-only) so a single company with no ASP/ISP split
-   controls the screen explicitly via the flag. Hidden when the flag is OFF. */
+/* "Discount In Payments" (flag_sample) no longer hides the Payments tab —
+   the flag only controls whether the discount is CALCULATED. This rule is
+   kept (inert unless the class is applied) for optional per-column styling;
+   the Payments sidebar entry + dashboard quick action are always visible. */
 body:not([data-feat-discount-in-payments="1"]) .feat-discount-in-payments{display:none !important}
 /* ASP-only surfaces (e.g. the Payments menu + dashboard quick action).
    Hidden in ISP context (Tamil Nadu / non-Kerala) — applyAspContextVisibility()
@@ -3027,7 +3027,7 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h2M12 15h2"/></svg>
           Debit Notes
         </button>
-        <button class="side-item feat-discount-in-payments" data-tab="payments" onclick="go('payments')">
+        <button class="side-item" data-tab="payments" onclick="go('payments')">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>
           Payments
         </button>
@@ -8639,15 +8639,15 @@ async function applyFeatureFlags() {
   const lsbOn = cfg && (cfg.flag_lot_set_buyer === true
     || String(cfg.flag_lot_set_buyer || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-lot-set-buyer', lsbOn ? '1' : '0');
-  // flag_sample ("Discount In Payments") gates the Payments summary tab
-  // (sidebar entry + dashboard quick action). Formerly shown via the
-  // Kerala=ASP heuristic; now the flag controls it directly. Default OFF.
+  // flag_sample ("Discount In Payments") controls ONLY whether the e-Trade
+  // discount is calculated (buildSalesInvoice / getPaymentSummary). The
+  // Payments screen itself is ALWAYS accessible — when the flag is OFF the
+  // Discount / GST-on-discount columns simply come through as 0 and the full
+  // amount flows to Payable. The body attribute is kept for optional column-
+  // level styling but no longer hides the tab or bounces the operator off it.
   const dinpOn = cfg && (cfg.flag_sample === true
     || String(cfg.flag_sample || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-discount-in-payments', dinpOn ? '1' : '0');
-  // Don't strand the operator on the (now-hidden) Payments tab if they
-  // turn the flag off while sitting on it.
-  if (!dinpOn && window._currentTab === 'payments' && typeof go === 'function') go('dash');
   // flag_price_check — when ON the Reports → Price Check tab appears,
   // gate banners render, and pcRefreshGate disables Calculate/Invoice/
   // Purchase/Bill/DN buttons until verify clears for the active auction.
@@ -9972,7 +9972,7 @@ async function loadStats(auctionId){
               <div class="qa-label">Generate Bills of Supply</div>
               <div class="qa-sub">For agri sellers</div>
             </button>
-            <button class="qa feat-discount-in-payments" onclick="go('payments')">
+            <button class="qa" onclick="go('payments')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
               <div class="qa-label">View payments</div>
               <div class="qa-sub">Check pending dues</div>
