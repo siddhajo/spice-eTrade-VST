@@ -1116,6 +1116,11 @@ body:not([data-feat-print-selected-purchase="1"]) .feat-print-selected-purchase{
    to the "Lots → Set Buyer (bulk action)" toggle). Two gates stack:
    flag_lot_set_buyer must be ON AND at least one lot must be ticked. */
 body:not([data-feat-lot-set-buyer="1"]) .feat-lot-set-buyer{display:none !important}
+/* "Discount In Payments" (flag_sample) gates the Payments summary tab —
+   sidebar entry + dashboard quick action. Replaces the old Kerala=ASP
+   heuristic (.asp-only) so a single company with no ASP/ISP split
+   controls the screen explicitly via the flag. Hidden when the flag is OFF. */
+body:not([data-feat-discount-in-payments="1"]) .feat-discount-in-payments{display:none !important}
 /* ASP-only surfaces (e.g. the Payments menu + dashboard quick action).
    Hidden in ISP context (Tamil Nadu / non-Kerala) — applyAspContextVisibility()
    sets body[data-biz-asp] to "1" (ASP = Kerala + e-Trade) or "0" (ISP). */
@@ -2936,6 +2941,16 @@ input[type="search"]:focus{
       <button class="sb-collapse-btn" onclick="toggleSidebarCollapse()" title="Collapse / expand sidebar" aria-label="Toggle sidebar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
+      <!-- Help / how-to guide. Opens the static /help.html in an isolated
+           overlay iframe (not a routed tab) so its styles never touch the
+           app and it can't break the go() router. -->
+      <div class="side-group">
+        <div class="side-group-lbl">Help</div>
+        <button class="side-item" onclick="var o=document.getElementById('help-ov');var f=o.querySelector('iframe');if(!f.getAttribute('src'))f.setAttribute('src','/help.html');o.style.display='flex'">
+          <svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          How-to Guide
+        </button>
+      </div>
       <div class="side-group">
         <div class="side-group-lbl">Overview</div>
         <button class="side-item active" data-tab="dash" onclick="go('dash')">
@@ -3012,7 +3027,7 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h2M12 15h2"/></svg>
           Debit Notes
         </button>
-        <button class="side-item asp-only" data-tab="payments" onclick="go('payments')">
+        <button class="side-item feat-discount-in-payments" data-tab="payments" onclick="go('payments')">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>
           Payments
         </button>
@@ -8512,6 +8527,15 @@ async function applyFeatureFlags() {
   const lsbOn = cfg && (cfg.flag_lot_set_buyer === true
     || String(cfg.flag_lot_set_buyer || '').toLowerCase() === 'true');
   document.body.setAttribute('data-feat-lot-set-buyer', lsbOn ? '1' : '0');
+  // flag_sample ("Discount In Payments") gates the Payments summary tab
+  // (sidebar entry + dashboard quick action). Formerly shown via the
+  // Kerala=ASP heuristic; now the flag controls it directly. Default OFF.
+  const dinpOn = cfg && (cfg.flag_sample === true
+    || String(cfg.flag_sample || '').toLowerCase() === 'true');
+  document.body.setAttribute('data-feat-discount-in-payments', dinpOn ? '1' : '0');
+  // Don't strand the operator on the (now-hidden) Payments tab if they
+  // turn the flag off while sitting on it.
+  if (!dinpOn && window._currentTab === 'payments' && typeof go === 'function') go('dash');
   // flag_price_check — when ON the Reports → Price Check tab appears,
   // gate banners render, and pcRefreshGate disables Calculate/Invoice/
   // Purchase/Bill/DN buttons until verify clears for the active auction.
@@ -9812,7 +9836,7 @@ async function loadStats(auctionId){
               <div class="qa-label">Generate Bills of Supply</div>
               <div class="qa-sub">For agri sellers</div>
             </button>
-            <button class="qa" onclick="go('payments')">
+            <button class="qa feat-discount-in-payments" onclick="go('payments')">
               <div class="qa-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
               <div class="qa-label">View payments</div>
               <div class="qa-sub">Check pending dues</div>
@@ -14852,12 +14876,9 @@ function applyAspContextVisibility(){
   // Flag the body so CSS can hide ASP-only surfaces (.asp-only) in ISP
   // context — currently the Payments sidebar menu + dashboard quick action.
   document.body.setAttribute('data-biz-asp', isASP ? '1' : '0');
-  // If the operator is sitting on the (now-hidden) Payments tab when the
-  // context flips to ISP, bounce them to the dashboard so they aren't
-  // stranded on a screen the menu no longer exposes.
-  if (!isASP && window._currentTab === 'payments' && typeof go === 'function') {
-    go('dash');
-  }
+  // Payments tab visibility no longer follows ASP context — it's gated by
+  // the "Discount In Payments" flag (flag_sample) in applyFeatureFlags(),
+  // which also handles bouncing off the tab when the flag is turned off.
   const btn = document.getElementById('btn-print-asp-purchase');
   if (!btn) return;
   // Two-gate visibility: ASP-context AND at least one ticked invoice.
@@ -27714,5 +27735,16 @@ async function pcDownload(){
 }
 
 </script>
+
+<!-- In-app how-to guide overlay. Self-contained (no app JS deps); loads the
+     static /help.html in an isolated iframe. Placed at end of <body> so no
+     sidebar transform can clip its position:fixed. -->
+<div id="help-ov" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(9,20,14,.55);flex-direction:column">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 18px;background:#137a4d;color:#fff;font-weight:700;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">
+    <span>📖 How-to Guide — auction day, in order</span>
+    <button type="button" onclick="document.getElementById('help-ov').style.display='none'" style="background:rgba(255,255,255,.22);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;padding:7px 16px;cursor:pointer">✕ Close</button>
+  </div>
+  <iframe title="How-to Guide" style="flex:1;width:100%;border:0;background:#fff"></iframe>
+</div>
 </body>
 </html>

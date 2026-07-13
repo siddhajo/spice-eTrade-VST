@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How-to — Spice e-Trade</title>
+<style>
+  :root{
+    --paper:#F3F6F1; --card:#FFFFFF; --ink:#132019; --muted:#5a6c62; --line:#dbe4dc;
+    --green:#137a4d; --green-deep:#0e5e3b; --green-soft:#e7f3ec; --blue:#2463a6; --blue-soft:#e6eff8;
+    --amber:#d98a1f; --amber-soft:#fbefd8;
+    --red:#c0392b; --red-line:#EF4444; --red-soft:#FEE2E2; --red-ink:#7F1D1D;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:var(--sans);color:var(--ink);background:var(--paper);-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 18px 56px}
+
+  h1{font-size:1.55rem;margin:0 0 2px;font-weight:800;letter-spacing:-.01em}
+  .tagline{margin:0 0 20px;color:var(--muted);font-weight:600}
+
+  /* golden rule ribbon */
+  .rule{display:flex;align-items:center;gap:16px;background:linear-gradient(120deg,#0e5e3b,#137a4d);color:#fff;
+    border-radius:16px;padding:16px 20px;margin-bottom:12px}
+  .rule .k{flex:0 0 auto;font-size:1.9rem}
+  .rule b{display:block;font-size:1.25rem;line-height:1.15}
+  .rule span{color:#d3ecdd;font-size:.95rem;font-weight:600}
+
+  /* flow chips */
+  .flow{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:26px}
+  .fchip{display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:7px 12px;font-weight:700;font-size:.92rem}
+  .fchip .n{width:22px;height:22px;border-radius:6px;background:var(--green);color:#fff;font-weight:800;display:grid;place-items:center;font-size:.76rem}
+  .fchip.blue .n{background:var(--blue)}
+  .arw{color:#9fb3a6;font-weight:800}
+
+  .grp-lbl{font-size:.74rem;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:var(--green-deep);margin:26px 0 10px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:11px}
+  .tile{text-align:left;cursor:pointer;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 15px;
+    display:flex;gap:12px;align-items:flex-start;font-family:inherit;transition:border-color .12s,transform .06s}
+  .tile:hover{border-color:var(--green);transform:translateY(-1px)}
+  .tile:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+  .tile .ic{flex:0 0 auto;font-size:1.5rem;line-height:1}
+  .tile b{display:block;font-size:1.02rem;margin-bottom:2px}
+  .tile span{color:var(--muted);font-size:.86rem;font-weight:600;line-height:1.3}
+  .tile.hot{border-color:var(--red-line);background:linear-gradient(180deg,#fff6f5,#fff)}
+  .tile.hot:hover{border-color:var(--red)}
+
+  /* poster (detail) */
+  #poster{display:none;max-width:640px;margin:0 auto}
+  .back{display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:9px 15px;font-weight:700;font-size:.95rem;color:var(--ink);cursor:pointer;font-family:inherit;margin-bottom:18px}
+  .back:hover{border-color:var(--green)}
+  .p-head{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+  .p-head .ic{font-size:2.3rem}
+  .p-head h2{margin:0;font-size:1.55rem;font-weight:800}
+  .p-purpose{margin:0 0 20px;color:var(--muted);font-size:1.05rem;font-weight:600}
+  .pstep{display:flex;align-items:center;gap:15px;background:var(--card);border:1px solid var(--line);border-radius:15px;
+    padding:14px 17px;margin-bottom:10px}
+  .pstep .num{flex:0 0 auto;width:42px;height:42px;border-radius:11px;background:var(--green);color:#fff;font-weight:800;
+    font-size:1.5rem;display:grid;place-items:center;font-variant-numeric:tabular-nums;box-shadow:0 3px 0 var(--green-deep)}
+  .pstep .si{flex:0 0 auto;font-size:1.6rem;width:38px;text-align:center}
+  .pstep b{font-size:1.15rem;font-weight:800}
+  .warn{display:flex;align-items:flex-start;gap:11px;background:var(--red-soft);border:1px solid var(--red-line);border-radius:13px;
+    padding:14px 16px;margin-top:6px;color:var(--red-ink);font-weight:700;font-size:1rem}
+  .warn .w{font-size:1.35rem;line-height:1}
+  .banner-demo{display:flex;align-items:center;gap:11px;background:var(--red-soft);border:1px solid var(--red-line);border-radius:11px;
+    padding:11px 14px;margin-bottom:14px;color:var(--red-ink);font-weight:700}
+  .banner-demo .w{font-size:1.3rem}
+
+  .foot{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:.82rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ===== HOME (tile list) ===== -->
+  <div id="home">
+    <h1>How-to Guide</h1>
+    <p class="tagline">Tap the screen you're on. Each one shows a few simple steps.</p>
+
+    <div class="rule">
+      <span class="k">🔒</span>
+      <div>
+        <b>Prices first. Invoices last.</b>
+        <span>Never change a price after the invoice is made — unless you make the invoice again.</span>
+      </div>
+    </div>
+    <div class="flow">
+      <div class="fchip"><span class="n">1</span>Enter lots</div><span class="arw">→</span>
+      <div class="fchip"><span class="n">2</span>Set prices</div><span class="arw">→</span>
+      <div class="fchip"><span class="n">3</span>Set buyers</div><span class="arw">→</span>
+      <div class="fchip blue"><span class="n">4</span>Generate invoices</div><span class="arw">→</span>
+      <div class="fchip blue"><span class="n">5</span>Print</div><span class="arw">→</span>
+      <div class="fchip blue"><span class="n">6</span>Pay sellers</div>
+    </div>
+
+    <div id="tilewrap"></div>
+
+    <div class="foot">Spice e-Trade · pick a screen above · prices first, invoices last</div>
+  </div>
+
+  <!-- ===== POSTER (detail) ===== -->
+  <div id="poster">
+    <button class="back" onclick="showHome()">← All screens</button>
+    <div id="poster-body"></div>
+    <div class="foot" style="margin-top:26px">Spice e-Trade · <a href="#" onclick="showHome();return false" style="color:var(--green-deep);font-weight:700">back to all screens</a></div>
+  </div>
+
+</div>
+
+<script>
+// Each screen = a mini poster. steps: [icon, short label]. warn optional.
+// banner:true renders the real red "prices changed" banner at the top.
+const GROUPS = [
+  ['⭐ Start here', 'start'],
+  ['Overview', 'overview'],
+  ['Sellers, buyers & trades', 'master'],
+  ['Trade operations', 'ops'],
+  ['Bills & invoices', 'txn'],
+  ['Reports & exports', 'reports'],
+  ['Settings & admin', 'admin'],
+];
+const S = [
+  // ---------- Start here ----------
+  { id:'flow', g:'start', ic:'🗺️', name:'The right order', hot:false,
+    purpose:'Do every trade day in this order.',
+    steps:[['📦','Enter lots — Lots / Lot Entry'],['🏷️','Set prices — Lots'],['👤','Set buyers — Lots'],['🧾','Generate invoices'],['🖨️','Print invoices'],['💰','Pay sellers']],
+    warn:'Finish the prices before you make invoices.' },
+  { id:'fixprice', g:'start', ic:'⚠️', name:'Wrong price after invoice?', hot:true,
+    purpose:'You changed a price after the invoice was made. Fix it in 3 steps.',
+    banner:true,
+    steps:[['↩️','Revert the invoice'],['⚡','Generate it again'],['✅','Red banner gone = correct']],
+    warn:'Can’t generate again? An admin taps 🔓 Allow regeneration, or just use Revert.' },
+
+  // ---------- Overview ----------
+  { id:'dash', g:'overview', ic:'📊', name:'Dashboard',
+    purpose:'See today’s numbers at a glance.',
+    steps:[['🔢','See totals — trades, lots, sold, value'],['📈','Switch chart: 7 / 14 / 30 days'],['🏢','Check each branch card']],
+    warn:'Numbers only refresh when you reload the page.' },
+  { id:'insights', g:'overview', ic:'📈', name:'Insights',
+    purpose:'Study performance by date, branch and buyer.',
+    steps:[['📅','Set From–To dates → Apply'],['⚡','Or tap 7 Days / This Month / Year'],['🔽','Open a section to see the detail']] },
+
+  // ---------- Master ----------
+  { id:'traders', g:'master', ic:'👤', name:'Sellers',
+    purpose:'Add and manage sellers.',
+    steps:[['➕','+ Add Seller'],['🔍','Search the list'],['📥','Import XLS/XLSX'],['🗑️','Tick → Delete Selected']],
+    warn:'For import, use Download Template first — wrong columns get skipped.' },
+  { id:'buyers', g:'master', ic:'🧑‍💼', name:'Buyers',
+    purpose:'Add and manage buyers.',
+    steps:[['➕','+ Add Buyer'],['🔍','Search the list'],['📥','Import XLS/XLSX'],['🗑️','Tick → Delete Selected']],
+    warn:'For import, use Download Template first.' },
+  { id:'auctions', g:'master', ic:'📅', name:'Trades',
+    purpose:'Create and open a trade.',
+    steps:[['➕','+ New Trade'],['🔍','Search by number'],['📥','Import Lots from XLS/XLSX'],['📡','Trade Fair — sync prices']],
+    warn:'Import lots BEFORE setting prices — re-importing overwrites prices.' },
+
+  // ---------- Trade operations ----------
+  { id:'lots', g:'ops', ic:'📦', name:'Lots',
+    purpose:'Price, assign buyers and finalise lots.',
+    steps:[['📥','Price Import (or Calculate All)'],['👤','Set Buyer'],['✅','Validate'],['🔒','Lock Selected']],
+    warn:'Get prices & buyers right before you Lock.' },
+  { id:'lotentry', g:'ops', ic:'⌨️', name:'Lot Entry',
+    purpose:'Type lots fast at the desk.',
+    steps:[['🔽','Pick Trade + Branch'],['✍️','Fill the lot fields'],['⏭️','Save & Next'],['✅','Validate Lots']],
+    warn:'Save & Next keeps the seller — tap Clear to switch seller.' },
+  { id:'plmap', g:'ops', ic:'🏷️', name:'Price List Mapping',
+    purpose:'Fill buyer codes on a price sheet.',
+    steps:[['📄','Pick a file (or a trade)'],['📊','Choose the .xlsx'],['1️⃣','Preview Mapping'],['2️⃣','Download Updated File']],
+    warn:'File needs both CODE and TRADE NAME columns.' },
+  { id:'pricecheck', g:'ops', ic:'✔️', name:'Price Check',
+    purpose:'Check a price sheet matches the app.',
+    steps:[['🔽','Pick trade (optional)'],['📊','Choose the .xlsx'],['1️⃣','Verify Prices'],['2️⃣','Download Annotated File']],
+    warn:'File needs a LOT column and a price column.' },
+  { id:'extralotreqs', g:'ops', ic:'📨', name:'Extra-Lot Requests',
+    purpose:'Approve staff asking for more lot numbers.',
+    steps:[['📋','Filter Pending'],['👀','Review the request'],['✅','Approve or Reject'],['🔄','Refresh']],
+    warn:'Approve adds the numbers at once — check for overlaps.' },
+
+  // ---------- Transactions ----------
+  { id:'invoices', g:'txn', ic:'🧾', name:'Sales Invoices',
+    purpose:'Make and print buyer invoices.',
+    steps:[['🔽','Pick the trade'],['⚡','Generate for All Buyers'],['🖨️','Print Selected'],['↩️','Revert to redo one']],
+    warn:'RED banner = a price changed. Revert, then Generate again.' },
+  { id:'purchases', g:'txn', ic:'📥', name:'Purchases',
+    purpose:'Record purchases from dealers.',
+    steps:[['🔽','Pick the trade'],['⚡','Generate for All Dealers'],['🖨️','Print Selected'],['📱','WhatsApp Selected']] },
+  { id:'bills', g:'txn', ic:'📄', name:'Bills of Supply',
+    purpose:'Bills for sellers without GST.',
+    steps:[['🔽','Pick the trade'],['⚡','Generate for All Agri Sellers'],['🖨️','Print Selected']] },
+  { id:'debit', g:'txn', ic:'➖', name:'Debit Notes',
+    purpose:'Adjustment notes against purchases.',
+    steps:[['🔽','Pick the trade'],['⚡','Generate All'],['🖨️','Print Selected']] },
+  { id:'payments', g:'txn', ic:'💰', name:'Payment Summary',
+    purpose:'Pay the sellers.',
+    steps:[['🔽','Pick the trade'],['📤','Export All → Bank Payment file'],['🧾','Payment Voucher'],['🖨️','Print / WhatsApp']],
+    warn:'A seller shows "Paid" only after BOTH bank file and voucher are exported.' },
+
+  // ---------- Reports & exports ----------
+  { id:'reports', g:'reports', ic:'📊', name:'Reports Hub',
+    purpose:'Open trade summaries and jump to reports.',
+    steps:[['🔽','Pick a trade'],['📄','Open PDF — Trade Summary'],['🧭','Tap a tile: Journals / Tally / Exports']],
+    warn:'Pick a trade first, or the PDF button stays off.' },
+  { id:'exports', g:'reports', ic:'⬇️', name:'Exports',
+    purpose:'Download reports as Excel / PDF / DBF.',
+    steps:[['🔽','Pick a trade'],['🔽','Open a section'],['📊','Preview → Excel / PDF / Print'],['🗄️','DBF: pick Module → download']],
+    warn:'Pre-trade exports unlock only after Price Import.' },
+  { id:'lorry', g:'reports', ic:'🚚', name:'Lorry',
+    purpose:'Lorry & lot-slip reports for the floor.',
+    steps:[['🔽','Pick a trade'],['🔽','Pick the Report'],['📊','Preview → Excel / PDF / Print']] },
+  { id:'tds', g:'reports', ic:'🧮', name:'TDS Returns',
+    purpose:'TDS data for tax filing.',
+    steps:[['📅','Pick From–To dates'],['🔄','Load'],['📊','Export XLSX / Export PDF']] },
+  { id:'journals', g:'reports', ic:'📓', name:'Journals',
+    purpose:'Sales & purchase registers.',
+    steps:[['🔽','Pick Journal Type'],['🔽','Pick a trade'],['🔄','Load'],['📊','Export XLSX']] },
+  { id:'registers', g:'reports', ic:'📗', name:'Registers',
+    purpose:'Lot-wise / invoice-wise summaries.',
+    steps:[['🔽','Pick Register Type'],['🔽','Pick a trade or dates'],['🔄','Load'],['📊','Export XLSX / PDF']],
+    warn:'A picked trade overrides the date range.' },
+  { id:'tally', g:'reports', ic:'🔁', name:'To Tally',
+    purpose:'Make Tally import files (XML).',
+    steps:[['🔽','Pick a trade'],['📚','Download Ledgers XML — first'],['🧾','Then Download Vouchers XML']],
+    warn:'Import ledgers into Tally BEFORE vouchers.' },
+
+  // ---------- Admin ----------
+  { id:'settings', g:'admin', ic:'⚙️', name:'Settings',
+    purpose:'Company details, rates and features.',
+    steps:[['🔍','Search settings'],['🗂️','Pick a category'],['✍️','Edit the fields'],['💾','Save Changes']],
+    warn:'Nothing saves until you click Save Changes.' },
+  { id:'users', g:'admin', ic:'👥', name:'Users',
+    purpose:'Staff logins and roles.',
+    steps:[['➕','+ Add User'],['🎚️','Set Username / Password / Role → Create User'],['🔑','Change Role / Reset Password']],
+    warn:'Reset Password signs that user out everywhere.' },
+  { id:'backup', g:'admin', ic:'💾', name:'Backup',
+    purpose:'Back up or restore all data.',
+    steps:[['⬇️','Download Backup'],['⏱️','Turn on Auto Backup'],['⬆️','Restore from File… (careful)'],['📜','View activity log']],
+    warn:'Restore replaces ALL data — download a backup first.' },
+  { id:'importold', g:'admin', ic:'📤', name:'Import Old Data',
+    purpose:'Load data from old files.',
+    steps:[['🔽','Pick Module'],['📎','Upload the file'],['1️⃣','Preview'],['2️⃣','Verify'],['3️⃣','Run Import']],
+    warn:'Untick "Dry-run" when you’re ready to actually import.' },
+];
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function renderTiles(){
+  const wrap = document.getElementById('tilewrap');
+  let html = '';
+  for(const [label,gid] of GROUPS){
+    const items = S.filter(s=>s.g===gid);
+    if(!items.length) continue;
+    html += '<div class="grp-lbl">'+esc(label)+'</div><div class="tiles">';
+    for(const s of items){
+      html += '<button class="tile'+(s.hot?' hot':'')+'" onclick="openPoster(\''+s.id+'\')">'
+            + '<span class="ic">'+s.ic+'</span>'
+            + '<span><b>'+esc(s.name)+'</b><span>'+esc(s.purpose)+'</span></span></button>';
+    }
+    html += '</div>';
+  }
+  wrap.innerHTML = html;
+}
+
+function openPoster(id){
+  const s = S.find(x=>x.id===id); if(!s) return;
+  let html = '<div class="p-head"><span class="ic">'+s.ic+'</span><h2>'+esc(s.name)+'</h2></div>'
+           + '<p class="p-purpose">'+esc(s.purpose)+'</p>';
+  if(s.banner){
+    html += '<div class="banner-demo"><span class="w">⚠</span><span>Prices changed after these invoices were generated — please regenerate them.</span></div>';
+  }
+  s.steps.forEach((st,i)=>{
+    html += '<div class="pstep"><div class="num">'+(i+1)+'</div><span class="si">'+st[0]+'</span><b>'+esc(st[1])+'</b></div>';
+  });
+  if(s.warn){
+    html += '<div class="warn"><span class="w">⚠</span><span>'+esc(s.warn)+'</span></div>';
+  }
+  document.getElementById('poster-body').innerHTML = html;
+  document.getElementById('home').style.display='none';
+  document.getElementById('poster').style.display='block';
+  window.scrollTo(0,0);
+}
+function showHome(){
+  document.getElementById('poster').style.display='none';
+  document.getElementById('home').style.display='block';
+  window.scrollTo(0,0);
+}
+renderTiles();
+</script>
+</body>
+</html>

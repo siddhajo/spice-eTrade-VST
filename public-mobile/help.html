@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Enter a lot — 6 steps</title>
+<style>
+  :root{
+    --paper:#F3F6F1; --card:#FFFFFF; --ink:#132019; --muted:#5a6c62;
+    --green:#137a4d; --green-deep:#0e5e3b; --green-soft:#e7f3ec;
+    --blue:#2463a6; --line:#dbe4dc;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:var(--sans);color:var(--ink);background:var(--paper);-webkit-font-smoothing:antialiased}
+  .wrap{max-width:560px;margin:0 auto;padding:20px 16px 40px}
+  h1{font-size:1.5rem;margin:6px 0 2px;font-weight:800;letter-spacing:-.01em}
+  .sub{margin:0 0 18px;color:var(--muted);font-size:1rem;font-weight:600}
+  .sub b{color:var(--green-deep)}
+
+  .step{display:flex;align-items:center;gap:16px;background:var(--card);border:1px solid var(--line);
+    border-radius:16px;padding:16px 18px;margin-bottom:12px;box-shadow:0 1px 2px rgba(19,32,25,.05)}
+  .num{flex:0 0 auto;width:46px;height:46px;border-radius:12px;background:var(--green);color:#fff;
+    font-weight:800;font-size:1.7rem;display:grid;place-items:center;font-variant-numeric:tabular-nums;box-shadow:0 3px 0 var(--green-deep)}
+  .ic{flex:0 0 auto;font-size:2rem;width:44px;text-align:center}
+  .txt{flex:1}
+  .txt b{display:block;font-size:1.25rem;line-height:1.15;font-weight:800}
+  .txt span{color:var(--muted);font-size:.95rem;font-weight:600}
+  .pill{flex:0 0 auto;color:#fff;font-weight:800;font-size:.95rem;padding:8px 14px;border-radius:10px}
+  .pill.green{background:var(--green)} .pill.blue{background:var(--blue)}
+
+  .foot{margin-top:22px;background:var(--green-soft);border:1px solid #bfe0cd;border-radius:14px;
+    padding:14px 16px;font-size:1rem;font-weight:700;color:var(--green-deep);display:flex;align-items:center;gap:10px}
+  .foot .k{font-size:1.4rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Enter a lot</h1>
+  <p class="sub">Do these <b>6 steps</b> for every lot 👇</p>
+
+  <div class="step">
+    <div class="num">1</div><div class="ic">🔢</div>
+    <div class="txt"><b>Pick the lot number</b><span>Under SELECT LOT</span></div>
+  </div>
+  <div class="step">
+    <div class="num">2</div><div class="ic">👤</div>
+    <div class="txt"><b>Pick the seller</b><span>Type the name, then tap it</span></div>
+  </div>
+  <div class="step">
+    <div class="num">3</div><div class="ic">⚖️</div>
+    <div class="txt"><b>Type the weights</b><span>Bags · Litre Wt · W/ Gunny</span></div>
+  </div>
+  <div class="step">
+    <div class="num">4</div><div class="ic">✅</div>
+    <div class="txt"><b>Check NET WT</b><span>The big green number</span></div>
+  </div>
+  <div class="step">
+    <div class="num">5</div><div class="ic">💾</div>
+    <div class="txt"><b>Save</b><span>Green button</span></div>
+    <div class="pill green">Save</div>
+  </div>
+  <div class="step">
+    <div class="num">6</div><div class="ic">🖨️</div>
+    <div class="txt"><b>Print</b><span>Blue button</span></div>
+    <div class="pill blue">This Lot</div>
+  </div>
+
+  <div class="foot"><span class="k">🔁</span><span>Then do it again for the next lot.</span></div>
+
+  <h1 style="margin-top:34px">My Lots tab</h1>
+  <p class="sub">See and reprint what you saved 👇</p>
+
+  <div class="step">
+    <div class="num">A</div><div class="ic">🔍</div>
+    <div class="txt"><b>Find a seller</b><span>Type the name in search</span></div>
+  </div>
+  <div class="step">
+    <div class="num">B</div><div class="ic">🖨️</div>
+    <div class="txt"><b>Print all by seller</b><span>One slip for that seller</span></div>
+    <div class="pill blue">Print</div>
+  </div>
+  <div class="step">
+    <div class="num">C</div><div class="ic">🗑️</div>
+    <div class="txt"><b>Delete a wrong lot</b><span>Tick it → Delete Selected</span></div>
+  </div>
+</div>
+</body>
+</html>

@@ -393,6 +393,7 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
   </div>
 
 <div class="mo" id="menu" onclick="toggleMenu()"><div class="md" onclick="event.stopPropagation()">
+    <div class="mi" onclick="toggleMenu();var o=document.getElementById('help-ov');var f=o.querySelector('iframe');if(!f.getAttribute('src'))f.setAttribute('src','/mobile/help.html');o.style.display='flex'">📖 How to enter a lot</div>
     <div class="mi" onclick="toggleDarkMode()"><span id="dm-icon">🌙</span> <span id="dm-label">Dark Mode</span></div>
     <div class="mi" id="menu-undo" style="display:none" onclick="showUndoHistory()">↩ Undo History</div>
     <div class="mi" onclick="togglePrintFormat()">🖨 Print format: <span id="pf-label">Full</span></div>
@@ -401,6 +402,17 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
     <div class="mi" onclick="changeSession()">Change session</div>
     <div class="mi dg" onclick="doLogout()">Logout</div>
   </div></div>
+
+<!-- In-app help/guide overlay. Self-contained (no app JS deps); loads the
+     static /mobile/help.html in an isolated iframe so its styles never
+     collide with the app. -->
+<div id="help-ov" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(9,20,14,.55);flex-direction:column">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#137a4d;color:#fff;font-weight:700">
+    <span>📖 How to enter a lot</span>
+    <button type="button" onclick="document.getElementById('help-ov').style.display='none'" style="background:rgba(255,255,255,.22);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;padding:6px 14px;cursor:pointer">✕ Close</button>
+  </div>
+  <iframe title="How to enter a lot" style="flex:1;width:100%;border:0;background:#fff"></iframe>
+</div>
 
 <div class="screen" id="s-mylots">
   <div class="appbar"><h1 id="ml-title"><img class="appbar-logo" src="" style="display:none"><span id="ml-title-text">My Lots</span></h1><span class="badge" id="ml-user"></span><button class="btn-icon" onclick="refreshConfig();loadMyLots();toast('Refreshed',false)" title="Refresh">🔄</button><button class="btn-icon" onclick="toggleMenu()" title="Open menu">&#x22EE;</button></div>
