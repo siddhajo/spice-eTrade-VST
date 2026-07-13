@@ -6434,6 +6434,50 @@ app.post('/api/lots/calculate/:auctionId',
   res.json({ success: true, calculated: count });
 });
 
+// ── Admin: recalc ALL lots for ONE trade, INCLUDING locked ones ──────
+// "Calculate All" above skips locked (finalised) lots so a settings change
+// never silently rewrites already-billed trade values. But when a policy
+// flag like "Discount In Payments" (flag_sample) is toggled, the operator
+// may deliberately want finalised lots re-stamped too, so the discount is
+// dropped at SOURCE and the Payments screen + bank/voucher exports agree
+// without relying on per-read gates.
+//
+// This is SAFE for issued documents: invoices / purchases / bills /
+// debit_notes each store their OWN amount snapshot, so re-stamping the
+// lots' planter columns never alters a generated document — it only
+// refreshes the working figures that Payments and the exports read from
+// the lots table. `calculateLot` recomputes from each lot's unchanged
+// price × qty + current settings, so the sale amount is unchanged; only
+// the flag-/rate-dependent discount, GST-on-discount and payable move.
+//
+// Admin-only and always explicit (never automatic) precisely because it
+// touches finalised rows — the operator triggers it deliberately per trade.
+app.post('/api/lots/recalc-including-locked/:auctionId', requireAdmin, (req, res) => {
+  const db = getDb(); const cfg = getSettingsFlat(db);
+  const auctionId = parseInt(req.params.auctionId, 10);
+  if (!auctionId) return res.status(400).json({ error: 'Invalid auction id' });
+  // Same row filter as Calculate All, but WITHOUT the `locked_at IS NULL`
+  // guard so finalised lots are included.
+  const lots = db.all(
+    `SELECT * FROM lots
+       WHERE auction_id = ?
+         AND ( amount > 0
+               OR (qty > 0 AND price > 0)
+               OR puramt > 0 OR prate > 0
+               OR cgst > 0 OR sgst > 0 OR igst > 0 )`,
+    [auctionId]
+  );
+  let count = 0, locked = 0;
+  for (const lot of lots) {
+    const calc = calculateLot(lot, cfg);
+    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
+      [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
+    if (lot.locked_at) locked++;
+    count++;
+  }
+  res.json({ success: true, calculated: count, locked });
+});
+
 // Recalculate every lot in every auction with the CURRENT business
 // settings. Used by the client when business_state changes — calculations
 // like CGST/SGST/IGST and prate are state-sensitive (intra vs inter), so

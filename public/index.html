@@ -3901,6 +3901,7 @@ input[type="search"]:focus{
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line);margin-left:4px">
             <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="refreshLots(this)" title="Reload the lots table from the server">🔄 Refresh</button>
             <button class="needs-lot-write btn btn-a needs-price-check" id="btn-calculate-all" style="height:38px;padding:0 16px;font-weight:600" onclick="calculateAll()">Calculate All</button>
+            <button class="needs-admin btn btn-o" id="btn-recalc-locked" style="height:38px;padding:0 16px;font-weight:600;border-color:#F59E0B;color:#7C2D12" onclick="recalcIncludingLocked()" title="Admin: recalculate EVERY lot in this trade, INCLUDING locked / finalised ones, using the current Settings & flags. Use after toggling a policy flag (e.g. Discount In Payments) so finalised lots are re-stamped at source. Safe for issued documents — invoices/bills/DNs keep their own saved amounts.">↻ Recalc incl. locked</button>
             <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="validateLots()">Validate</button>
           </div>
 
@@ -20186,6 +20187,24 @@ async function calculateAll(){
   await withBusy(btn, async () => {
     const d=await j(`/api/lots/calculate/${aid}`,{method:'POST'});
     toast(`Calculated ${d.calculated} lots`);
+    await loadLots();
+  });
+}
+// Admin-only: recalc EVERY lot in the selected trade, including locked
+// (finalised) ones, with the current Settings/flags. Deliberate action —
+// used after toggling a policy flag (e.g. Discount In Payments) so locked
+// lots are re-stamped at source and the Payments screen + bank/voucher
+// exports agree without per-read gates. Safe for issued documents:
+// invoices/purchases/bills/DNs keep their own stored amount snapshots.
+async function recalcIncludingLocked(){
+  const sel = document.getElementById('lot-auction');
+  const aid = sel && sel.value; if(!aid){ toast('Select a trade first'); return; }
+  const label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : ('trade '+aid);
+  if(!confirm(`Recalculate ALL lots for ${label}, INCLUDING locked / finalised lots, using the current Settings & flags?\n\nThis re-stamps the working figures (discount, GST-on-discount, payable) so the Payments screen and bank/voucher exports match. Already-generated invoices, bills and debit notes are NOT changed — they keep their own saved amounts.`)) return;
+  const btn = document.getElementById('btn-recalc-locked');
+  await withBusy(btn, async () => {
+    const d = await j(`/api/lots/recalc-including-locked/${aid}`, { method:'POST' });
+    toast(`Recalculated ${d.calculated} lot${d.calculated===1?'':'s'}${d.locked?` (incl. ${d.locked} locked)`:''}`);
     await loadLots();
   });
 }

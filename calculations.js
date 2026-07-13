@@ -731,6 +731,15 @@ function getPaymentSummary(db, auctionId, state, cfg) {
   // screen as a doubled (or otherwise wrong) GST column even though
   // the Discount value was current. Live derivation keeps tax in
   // lockstep with discount and the DN totals.
+  // "Discount In Payments" master switch (flag_sample). When OFF the Payments
+  // screen must show NO discount even if lots.refund / debit_notes still carry
+  // amounts stamped while the flag was ON (or before it was turned off) — the
+  // discount simply isn't applied, so Discount + GST-on-discount read 0 and the
+  // full PurAmt (less TDS) is Payable. This mirrors computeLotFinancials, which
+  // already zeroes refund at source for freshly calculated lots; here we gate
+  // the READ so stale stamps don't leak onto the screen without a recalc.
+  const discountEnabled = cfg.flag_sample === true
+    || String(cfg.flag_sample || '').toLowerCase() === 'true';
   const flagDiscGst = String(cfg.flag_disc_gst || '').toLowerCase() === 'true' || cfg.flag_disc_gst === true;
   const discGstRate = Number(cfg.discount_gst);
   const discRate = Number.isFinite(discGstRate) && discGstRate >= 0
@@ -755,7 +764,8 @@ function getPaymentSummary(db, auctionId, state, cfg) {
     const lotDisc = Number(s.lot_discount) || 0;
     const manualDisc = Number(debitMap[s.name]) || 0;
     // Authoritative discount: DN total when present, otherwise lot total.
-    const totalDiscount = manualDisc > 0 ? manualDisc : lotDisc;
+    // Forced to 0 when the "Discount In Payments" flag is off.
+    const totalDiscount = discountEnabled ? (manualDisc > 0 ? manualDisc : lotDisc) : 0;
     // Live GST on the discount. Intra/inter classification mirrors the
     // seller's own GSTIN state (cr) — same rule the DN generator uses.
     let cgst = 0, sgst = 0, igst = 0;
@@ -791,9 +801,14 @@ function getPaymentSummary(db, auctionId, state, cfg) {
       //     adjust by the delta so payable reflects the current DN
       //   - When no DNs → balance is already correct
       // Then subtract TDS so Payable = PurAmt − Discount − GST 5% − TDS.
-      total_payable: payRound((manualDisc > 0
-        ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
-        : (Number(s.total_payable) || 0)) - tdsCtx.share(s.name, s.total_puramt)),
+      // When the discount flag is off there is no discount / GST-on-discount
+      // to deduct — the stamped lots.balance still carries the old deduction,
+      // so payable is rebuilt from the gross PurAmt (less TDS) instead.
+      total_payable: payRound((discountEnabled
+        ? (manualDisc > 0
+            ? (Number(s.total_payable) || 0) - (manualDisc - lotDisc)
+            : (Number(s.total_payable) || 0))
+        : (Number(s.total_puramt) || 0)) - tdsCtx.share(s.name, s.total_puramt)),
       // True when this seller's lots point at more than one bank account
       // (or a mix of tagged + untagged AND the seller has >1 account on
       // file). Drives the "multiple banks" badge on the Payments table so
@@ -918,6 +933,15 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
 
   const auction = db.get('SELECT * FROM auctions WHERE id = ?', [auctionId]);
   const roundAmounts = cfg.flag_round;
+  // "Discount In Payments" master switch (flag_sample). When OFF, the NEFT/
+  // voucher amount must not carry a discount deduction even if lots.balance was
+  // stamped with one while the flag was ON (or on a locked/finalised lot the
+  // settings recalc can't safely re-stamp). In that case pay the full PurAmt
+  // (less TDS) — same rule getPaymentSummary applies to the Payments screen, so
+  // the exported file matches what the operator sees. 'before' mode already
+  // pays gross PurAmt, so it's unaffected.
+  const discountEnabled = cfg.flag_sample === true
+    || String(cfg.flag_sample || '').toLowerCase() === 'true';
   // Same stamped-purchase-TDS source the Payments tab uses, so the NEFT amount
   // matches the screen exactly.
   const tdsCtx = paymentTdsContext(db, auctionId);
@@ -928,7 +952,10 @@ function getBankPaymentData(db, auctionId, cfg, opts) {
     // payable = puramt − discount − GST − TDS, netted by the SAME purchase-
     // invoice TDS the Payments tab shows so the NEFT amount matches the screen.
     const tds = useBefore ? 0 : tdsCtx.share(p.name, p.puramt);
-    const rawAmount = (useBefore ? (p.puramt || 0) : (p.payable || 0)) - tds;
+    // 'after' payable base: the stamped balance normally, but the gross PurAmt
+    // when the discount flag is off (no discount/GST-on-discount was applied).
+    const afterBase = discountEnabled ? (p.payable || 0) : (p.puramt || 0);
+    const rawAmount = (useBefore ? (p.puramt || 0) : afterBase) - tds;
     const amount = roundAmounts ? round0(rawAmount) : rawAmount;
     const tb = p.trader_id != null ? bankByTraderId[p.trader_id] : null;
     // Per-lot bank routing. Distinct non-null bank_ids tagged on this
