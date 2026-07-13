@@ -3031,6 +3031,12 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>
           Payments
         </button>
+        <!-- Expenses — per-trade running-cost sheet (loading, wages, batta,
+             rent, food, etc.). Backs the Dashboard's Net Profit card. -->
+        <button class="side-item" data-tab="expenses" onclick="go('expenses')">
+          <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="12" cy="14.5" r="1.5"/></svg>
+          Expenses
+        </button>
       </div>
       <div class="side-group">
         <div class="side-group-lbl">Reports &amp; Exports</div>
@@ -3115,6 +3121,69 @@ input[type="search"]:focus{
 
     <!-- DASHBOARD -->
     <div class="tc active" id="tc-dash"><div class="stats" id="stats"></div></div>
+
+    <!-- EXPENSES — per-trade running-cost sheet. Pick a trade, enter/add
+         expense lines; the Dashboard reads the totals for Net Profit. -->
+    <style>
+      /* Explicit border + caret so the inline inputs always render a
+         visible focus ring on Windows/Electron (where bare inputs can
+         paint no caret or border). */
+      #tc-expenses .exp-in{width:100%;box-sizing:border-box;border:1px solid var(--spice-line);
+        border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;background:#fff;
+        color:var(--spice-text-main);caret-color:var(--spice-cardamom)}
+      #tc-expenses .exp-in:focus{outline:none;border-color:var(--spice-cardamom);
+        box-shadow:0 0 0 2px rgba(46,125,50,.16)}
+      #tc-expenses #exp-table td{padding:6px 10px;vertical-align:middle}
+      #tc-expenses #exp-table th{padding:10px;font-size:12px;color:var(--spice-text-hint);
+        border-bottom:1px solid var(--spice-line)}
+      #tc-expenses .exp-del{background:none;border:none;cursor:pointer;color:var(--spice-chili);
+        font-size:18px;line-height:1;padding:2px 6px;border-radius:6px}
+      #tc-expenses .exp-del:hover{background:rgba(198,40,40,.10)}
+    </style>
+    <div class="tc" id="tc-expenses">
+      <div class="greeting">
+        <div>
+          <h1>Expenses</h1>
+          <p>Record the running costs for a trade. The Dashboard shows Income − Expenses as Net Profit.</p>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <select id="exp-auction" onchange="loadExpenseRows()"
+            style="background:#fff;border:1px solid var(--spice-line);border-radius:8px;padding:8px 12px;font-size:14px;font-weight:600;color:var(--spice-text-main);cursor:pointer;font-family:inherit"></select>
+          <button class="btn btn-a" onclick="expAddRow()">+ Add Expense</button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table style="width:100%;min-width:820px" id="exp-table">
+          <thead>
+            <tr>
+              <th style="text-align:left">Particulars</th>
+              <th class="num" style="width:96px">Wages</th>
+              <th class="num" style="width:80px">No.of person</th>
+              <th class="num" style="width:120px">Amount</th>
+              <th class="num" style="width:110px">GST</th>
+              <th class="num" style="width:130px">Total</th>
+              <th style="text-align:left;width:140px">Pay Name</th>
+              <th style="width:46px"></th>
+            </tr>
+          </thead>
+          <tbody id="exp-rows"></tbody>
+          <tfoot>
+            <tr style="font-weight:700;border-top:2px solid var(--spice-line)">
+              <td>Total Expenses</td>
+              <td></td><td></td>
+              <td class="num" id="exp-foot-amount">₹0.00</td>
+              <td class="num" id="exp-foot-gst">₹0.00</td>
+              <td class="num" id="exp-foot-total">₹0.00</td>
+              <td></td><td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p style="color:var(--spice-text-hint);font-size:12px;margin:12px 2px">
+        Tip: enter Wages and No.of person and Amount fills in automatically (Wages × No.of person). Total = Amount + GST. Rows save when you leave a field.
+      </p>
+    </div>
 
     <!-- INSIGHTS — detailed per-trade × per-branch analytics. Driven
          entirely by loadInsights() which renders into #insights-host
@@ -9029,6 +9098,7 @@ function go(tab){
     extralotreqs:loadExtraLotRequests,
     auctions:loadAuctions,lots:loadLotAuctions,invoices:loadInvAuctions,purchases:loadPurAuctions,
     payments:loadPayAuctions,exports:loadExpAuctions,tds:()=>{},lorry:loadLorryAuctions,
+    expenses:loadExpenses,
     bills:loadBillAuctions,debit:loadDnAuctions,journals:loadJournalDefault,registers:loadRegisterDefault,tally:loadTallyAuctions,
     // Lazy-load the Delete All audit log when Backup opens so the
     // <details> drawer shows fresh data on first expand (loadDeleteLog
@@ -9801,6 +9871,27 @@ async function loadStats(auctionId){
 
   const uname = document.getElementById('user-lbl')?.textContent || 'there';
 
+  // ── Income / Expense / Net Profit strip ──
+  // Income = the firm's commission on sold value (same figure as the
+  // snapshot's "Income (commission)"). Expense = Σ trade-expense lines for
+  // this scope (from /api/stats → expenseTotal). Net Profit = the two
+  // netted. Scoped by the same picker as the rest of the dashboard.
+  const _plIncome  = Number(T.commission_income) || 0;
+  const _plExpense = Number(d.expenseTotal) || 0;
+  const _plProfit  = _plIncome - _plExpense;
+  const _plCard = (label, val, sub, bg, valColor) => `
+    <div style="flex:1;min-width:190px;background:${bg};border:1px solid var(--spice-line);border-radius:14px;padding:16px 18px">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--spice-text-hint)">${label}</div>
+      <div style="font-size:24px;font-weight:800;margin-top:6px;color:${valColor}">${val}</div>
+      <div style="font-size:12px;color:var(--spice-text-hint);margin-top:4px">${sub}</div>
+    </div>`;
+  const plHTML = `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">
+      ${_plCard('Total Income', inr2(_plIncome), 'Commission earned' + (isAllMode ? ' · all ' + termAuction(true) : ''), 'rgba(46,125,50,.06)', 'var(--spice-cardamom-dk)')}
+      ${_plCard('Total Expense', inr2(_plExpense), `<a onclick="go('expenses')" style="cursor:pointer;color:inherit;text-decoration:underline">Manage expenses →</a>`, 'rgba(198,40,40,.05)', 'var(--spice-chili)')}
+      ${_plCard('Net Profit', inr2(_plProfit), 'Income − Expenses', 'rgba(46,125,50,.10)', _plProfit < 0 ? 'var(--spice-chili)' : 'var(--spice-cardamom-dk)')}
+    </div>`;
+
   document.getElementById('tc-dash').innerHTML = `
     <div class="greeting">
       <div>
@@ -9812,6 +9903,8 @@ async function loadStats(auctionId){
         <button class="btn btn-a" onclick="go('auctions')">+ New ${termAuction()}</button>
       </div>
     </div>
+
+    ${plHTML}
 
     <div class="dash-row">
       ${aHTML}
@@ -9855,6 +9948,128 @@ async function loadStats(auctionId){
   ['planter', 'dealer', 'branch'].forEach(renderBdBody);
   // Decorate the breakdown column filters with a glass + clear (×) icon.
   enhanceDashSearch(document.getElementById('tc-dash'));
+}
+
+// ── EXPENSES ───────────────────────────────────────────────────
+// Per-trade running-cost sheet. loadExpenses() fills the trade picker
+// (reusing fillAucSelect); loadExpenseRows() renders the editable table
+// for the picked trade. "+ Add Expense" inserts a blank line server-side
+// and re-renders; each field auto-saves on change; Amount auto-fills from
+// Wages × No.of person and Total = Amount + GST as you type. The Dashboard
+// reads the per-trade total via /api/stats → Net Profit card.
+function loadExpenses(){
+  return fillAucSelect('exp-auction').then(() => loadExpenseRows());
+}
+function _expAid(){ return parseInt(document.getElementById('exp-auction')?.value) || 0; }
+function _expEn(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function _expNumStr(n){ n = Number(n) || 0; return (Math.round(n * 100) / 100).toString(); }
+const _expInr = n => '₹' + (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function _expField(id, f){ return document.querySelector(`#exp-rows .exp-in[data-id="${id}"][data-f="${f}"]`); }
+
+async function loadExpenseRows(){
+  const aid = _expAid();
+  const tb = document.getElementById('exp-rows');
+  if (!tb) return;
+  if (!aid){
+    tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--spice-text-hint);padding:24px">Create a ${termAuction(false, true)} first, then add expenses.</td></tr>`;
+    _expSetFoot(0, 0, 0); return;
+  }
+  let data;
+  try { data = await j(`/api/expenses/${aid}`); }
+  catch(e){ tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--spice-chili);padding:20px">Failed to load: ${esc(e.message)}</td></tr>`; return; }
+  const rows = (data && data.rows) || [];
+  if (!rows.length){
+    tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--spice-text-hint);padding:24px">No expenses yet. Click “+ Add Expense”.</td></tr>`;
+    _expSetFoot(0, 0, 0); return;
+  }
+  tb.innerHTML = rows.map(_expRowHTML).join('');
+  _expFooterFromRows(rows);
+}
+
+function _expRowHTML(r){
+  const inp = (f, val, extra='') =>
+    `<input class="exp-in" data-id="${r.id}" data-f="${f}" value="${val == null ? '' : esc(String(val))}" oninput="expOnInput(this)" onchange="expSaveRow(${r.id})" ${extra}>`;
+  const numAttr = 'inputmode="decimal" style="text-align:right"';
+  const numVal = v => (Number(v) ? _expNumStr(v) : '');
+  return `<tr data-id="${r.id}">
+    <td>${inp('particulars', r.particulars)}</td>
+    <td class="num">${inp('wages', numVal(r.wages), numAttr)}</td>
+    <td class="num">${inp('persons', numVal(r.persons), numAttr)}</td>
+    <td class="num">${inp('amount', numVal(r.amount), numAttr)}</td>
+    <td class="num">${inp('gst', numVal(r.gst), numAttr)}</td>
+    <td class="num">${inp('total', numVal(r.total), numAttr)}</td>
+    <td>${inp('pay_name', r.pay_name)}</td>
+    <td style="text-align:center"><button class="exp-del" title="Delete this line" onclick="expDeleteRow(${r.id})">×</button></td>
+  </tr>`;
+}
+
+// Live recompute as the user types — Amount from Wages×persons, Total from
+// Amount+GST. Manual edits to Amount/Total are respected (only the fields
+// downstream of what changed get recomputed).
+function expOnInput(el){
+  const id = el.dataset.id, f = el.dataset.f;
+  const g = ff => _expEn((_expField(id, ff) || {}).value);
+  if (f === 'wages' || f === 'persons'){
+    const w = g('wages'), p = g('persons');
+    if (w > 0 && p > 0){ const ai = _expField(id, 'amount'); if (ai) ai.value = _expNumStr(w * p); }
+  }
+  if (f === 'wages' || f === 'persons' || f === 'amount' || f === 'gst'){
+    const ti = _expField(id, 'total'); if (ti) ti.value = _expNumStr(g('amount') + g('gst'));
+  }
+  _expFooterFromDom();
+}
+
+async function expSaveRow(id){
+  const g = f => (_expField(id, f) || {}).value || '';
+  const body = {
+    particulars: g('particulars'),
+    wages:   _expEn(g('wages')),
+    persons: _expEn(g('persons')),
+    amount:  _expEn(g('amount')),
+    gst:     _expEn(g('gst')),
+    total:   _expEn(g('total')),
+    pay_name: g('pay_name'),
+  };
+  try { await j(`/api/expenses/${id}`, { method: 'PUT', body: JSON.stringify(body) }); }
+  catch(e){ toast('Save failed: ' + (e.message || e)); return; }
+  _expFooterFromDom();
+}
+
+async function expAddRow(){
+  const aid = _expAid();
+  if (!aid){ toast('Pick a ' + termAuction(false, true) + ' first'); return; }
+  try { await j('/api/expenses', { method: 'POST', body: JSON.stringify({ auction_id: aid }) }); }
+  catch(e){ toast('Could not add: ' + (e.message || e)); return; }
+  await loadExpenseRows();
+  const rows = document.querySelectorAll('#exp-rows tr[data-id]');
+  const first = rows.length && rows[rows.length - 1].querySelector('.exp-in');
+  if (first) first.focus();
+}
+
+async function expDeleteRow(id){
+  if (!confirm('Delete this expense line?')) return;
+  try { await j(`/api/expenses/${id}`, { method: 'DELETE' }); }
+  catch(e){ toast('Delete failed: ' + (e.message || e)); return; }
+  await loadExpenseRows();
+}
+
+function _expSetFoot(a, g, t){
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = _expInr(v); };
+  set('exp-foot-amount', a); set('exp-foot-gst', g); set('exp-foot-total', t);
+}
+function _expFooterFromRows(rows){
+  const sum = f => rows.reduce((a, r) => a + (Number(r[f]) || 0), 0);
+  _expSetFoot(sum('amount'), sum('gst'), sum('total'));
+}
+function _expFooterFromDom(){
+  let a = 0, g = 0, t = 0;
+  document.querySelectorAll('#exp-rows tr[data-id]').forEach(tr => {
+    const id = tr.dataset.id;
+    a += _expEn((_expField(id, 'amount') || {}).value);
+    g += _expEn((_expField(id, 'gst') || {}).value);
+    t += _expEn((_expField(id, 'total') || {}).value);
+  });
+  _expSetFoot(a, g, t);
 }
 
 // Range tracker for the revenue-trend chart. Default 7 days; changed by

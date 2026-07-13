@@ -11651,6 +11651,88 @@ app.post('/api/lot-receipt/pdf', requireViewOrLotEntry, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// TRADE EXPENSES  (per-auction P&L expense sheet)
+// ══════════════════════════════════════════════════════════════
+// Backs the Expenses screen (enter/add/edit expense lines for a trade)
+// and the Dashboard Net Profit card (Income − Σ expenses). Every line is
+// scoped to an auction_id; a blank/absent id is rejected so nothing goes
+// to an "orphan" bucket the dashboard would never scope to.
+function _expNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+
+// List every expense line for one trade, newest first, plus the running
+// total so the client can render the footer without a second round-trip.
+app.get('/api/expenses/:auctionId', requireView, (req, res) => {
+  const db = getDb();
+  const aid = parseInt(req.params.auctionId);
+  if (!aid) return res.json({ rows: [], total: 0 });
+  const rows = db.all(
+    'SELECT * FROM expenses WHERE auction_id = ? ORDER BY id ASC',
+    [aid]
+  );
+  const total = rows.reduce((a, r) => a + (Number(r.total) || 0), 0);
+  res.json({ rows, total });
+});
+
+// Create one expense line. Amount defaults to wages × persons when both
+// are supplied and no explicit amount is sent; total defaults to
+// amount + gst. Both can be overridden by sending them directly.
+app.post('/api/expenses', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const auction_id = parseInt(b.auction_id);
+  if (!auction_id) return res.status(400).json({ error: 'auction_id is required' });
+  const wages   = _expNum(b.wages);
+  const persons = _expNum(b.persons);
+  const amount  = (b.amount !== undefined && b.amount !== '')
+    ? _expNum(b.amount)
+    : (wages > 0 && persons > 0 ? wages * persons : 0);
+  const gst     = _expNum(b.gst);
+  const total   = (b.total !== undefined && b.total !== '')
+    ? _expNum(b.total)
+    : amount + gst;
+  db.run(
+    `INSERT INTO expenses (auction_id, particulars, wages, persons, amount, gst, total, pay_name)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [auction_id, String(b.particulars || '').trim(), wages, persons, amount, gst, total,
+     String(b.pay_name || '').trim()]
+  );
+  const id = (db.get('SELECT last_insert_rowid() AS id') || {}).id;
+  res.json({ success: true, id });
+});
+
+// Update one expense line. Only sent fields change; amount/total are
+// recomputed the same way as create when omitted but their inputs move.
+app.put('/api/expenses/:id', requireInvoiceWrite, (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id);
+  const row = db.get('SELECT * FROM expenses WHERE id = ?', [id]);
+  if (!row) return res.status(404).json({ error: 'Expense not found' });
+  const b = req.body || {};
+  const particulars = b.particulars !== undefined ? String(b.particulars).trim() : row.particulars;
+  const pay_name    = b.pay_name    !== undefined ? String(b.pay_name).trim()    : row.pay_name;
+  const wages   = b.wages   !== undefined ? _expNum(b.wages)   : Number(row.wages)   || 0;
+  const persons = b.persons !== undefined ? _expNum(b.persons) : Number(row.persons) || 0;
+  const amount  = (b.amount !== undefined && b.amount !== '')
+    ? _expNum(b.amount)
+    : (wages > 0 && persons > 0 ? wages * persons : (Number(row.amount) || 0));
+  const gst   = b.gst   !== undefined ? _expNum(b.gst) : Number(row.gst) || 0;
+  const total = (b.total !== undefined && b.total !== '')
+    ? _expNum(b.total)
+    : amount + gst;
+  db.run(
+    `UPDATE expenses SET particulars=?, wages=?, persons=?, amount=?, gst=?, total=?, pay_name=? WHERE id=?`,
+    [particulars, wages, persons, amount, gst, total, pay_name, id]
+  );
+  res.json({ success: true });
+});
+
+app.delete('/api/expenses/:id', requireDelete, (req, res) => {
+  const db = getDb();
+  db.run('DELETE FROM expenses WHERE id = ?', [parseInt(req.params.id)]);
+  res.json({ success: true });
+});
+
+// ══════════════════════════════════════════════════════════════
 // SUMMARY STATS
 // ══════════════════════════════════════════════════════════════
 app.get('/api/stats', requireView, (req, res) => {
@@ -11923,6 +12005,15 @@ app.get('/api/stats', requireView, (req, res) => {
   // "(unspecified)" bucket — that confused users into thinking the
   // dashboard was broken when really their lot data had typos.)
 
+  // Trade-expenses total for the Dashboard Net Profit card. Scoped to the
+  // selected trade, or summed across every trade in All-Trades mode — so
+  // the card lines up with whatever scope the picker shows.
+  const expenseTotal = isAllMode
+    ? Number((db.get('SELECT COALESCE(SUM(total),0) AS t FROM expenses') || {}).t) || 0
+    : (currentAuction
+        ? Number((db.get('SELECT COALESCE(SUM(total),0) AS t FROM expenses WHERE auction_id = ?', [currentAuction.id]) || {}).t) || 0
+        : 0);
+
   res.json({
     counts,
     cumulative,
@@ -11932,6 +12023,7 @@ app.get('/api/stats', requireView, (req, res) => {
     allAuctions,
     topSellers,
     recentInvoices,
+    expenseTotal,
     kpi: {
       todayQty, todayAmt,
       activeLots: auctionStats ? auctionStats.totalLots : 0,

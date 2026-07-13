@@ -489,6 +489,28 @@ async function initDb() {
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
+  // ── TRADE EXPENSES (per-auction P&L expense sheet) ─────────
+  // One row per expense line the operator enters for a trade — the
+  // trade-hall running costs (loading, wages, batta, rent, software,
+  // food, transport, etc.) that back the Dashboard's Net Profit card
+  // (Income − Expenses). Mirrors the printed expense sheet: Particulars,
+  // an optional Wages × No.of person → Amount, a GST column, a Total
+  // (Amount + GST) and who was paid (Pay Name). `amount`/`gst`/`total`
+  // are stored as entered so the sheet reconciles to the paper exactly.
+  wrapped.exec(`CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    auction_id INTEGER NOT NULL,
+    particulars TEXT DEFAULT '',
+    wages REAL DEFAULT 0,
+    persons REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    gst REAL DEFAULT 0,
+    total REAL DEFAULT 0,
+    pay_name TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  wrapped.exec(`CREATE INDEX IF NOT EXISTS idx_expenses_auction ON expenses(auction_id)`);
+
   // ── ROUTE DISTANCES (e-way bill <DISTANCE> field) ──────────
   // Saved per (from_pin, to_pin) pair, normalised so the smaller PIN
   // is always stored first — that way A↔B and B↔A share one row. Used
