@@ -8702,11 +8702,36 @@ async function loadFixData(){
       .fd-modal .fd-in:focus{outline:2px solid #2563eb;outline-offset:-1px}
       .fd-fromto table{font-size:15px}
       .fd-fromto td{padding:4px 16px 4px 0}
+      /* Advanced: read-only SQL query panel */
+      .fd-qpanel{margin-top:22px;border:1px solid var(--line,#e5e7eb);border-radius:12px;background:var(--card,#fff)}
+      .fd-qpanel>summary{cursor:pointer;padding:12px 16px;font-weight:700;font-size:14px;list-style:none;user-select:none;color:var(--text,#111)}
+      .fd-qpanel>summary::-webkit-details-marker{display:none}
+      .fd-qtag{display:inline-block;background:#6b7280;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;margin-right:8px;vertical-align:1px}
+      .fd-qbody{padding:0 16px 16px}
+      .fd-qhint{font-size:13px;color:var(--text3,#6b7280);margin-bottom:10px}
+      .fd-qsql{width:100%;box-sizing:border-box;min-height:88px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.5;padding:11px 13px;border:2px solid var(--fdc);border-radius:10px;background:var(--card,#fff);color:var(--text,#111);caret-color:var(--fdc)}
+      .fd-qsql:focus{outline:3px solid color-mix(in srgb,var(--fdc) 30%,transparent);outline-offset:0}
+      .fd-qactions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0}
+      .fd-qtables{font-size:12px;color:var(--text3,#9ca3af)}
+      .fd-qmeta{font-size:12.5px;color:var(--text3,#6b7280);margin:2px 0 6px}
+      .fd-qerr{color:#dc2626;font-size:13px;padding:8px 0}
     </style>
     <div style="margin-bottom:4px"><strong style="font-size:20px">Fix Data</strong></div>
     <div style="font-size:14px;color:var(--text3,#6b7280);margin-bottom:6px">Pick a section below to view your records. To change something, switch on <b>Edit mode</b> — you'll see exactly what will change and confirm before it's saved. Every change keeps an automatic backup.</div>
     <div id="fd-cards" class="fd-cards"></div>
-    <div id="fd-view"></div>`;
+    <div id="fd-view"></div>
+    <details id="fd-qpanel" class="fd-qpanel">
+      <summary><span class="fd-qtag">Advanced</span> Run a query (read-only)</summary>
+      <div class="fd-qbody">
+        <div class="fd-qhint">Type a <b>SELECT</b> to look things up across any section — e.g. every lot with a blank price, or a count by state. This can only <b>read</b> your data; nothing here can change or delete anything.</div>
+        <textarea id="fd-qsql" class="fd-qsql" spellcheck="false" placeholder="SELECT lot_no, price FROM lots WHERE price IS NULL" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();fdRunQuery();}"></textarea>
+        <div class="fd-qactions">
+          <button class="fd-btn-add" onclick="fdRunQuery()">▷ Run query</button>
+          <span class="fd-qtables">Ctrl/⌘+Enter to run · tables: traders (sellers), buyers, auctions, lots, invoices, purchases, bills, debit_notes</span>
+        </div>
+        <div id="fd-qresult"></div>
+      </div>
+    </details>`;
   await fdLoadCatalog();
   if(FD.entity) await fdRender();
 }
@@ -8936,6 +8961,29 @@ async function fdDelete(rid){
     await j(`/api/data/${encodeURIComponent(FD.entity)}/${rid}`, { method:'DELETE' });
     FD.undo = null; toast('Record deleted — backup saved'); fdLoadCatalog(); fdRender();
   }catch(e){ toast('Delete failed: '+(e.message||e)); }
+}
+
+// Advanced: run a read-only SELECT and show the results in the same grid.
+// Backed by /api/data/query (admin-only, write/DDL blocked server-side).
+async function fdRunQuery(){
+  const ta = document.getElementById('fd-qsql');
+  const out = document.getElementById('fd-qresult');
+  if(!ta||!out) return;
+  const sql = (ta.value||'').trim();
+  if(!sql){ out.innerHTML=''; ta.focus(); return; }
+  out.innerHTML = '<div class="fd-qmeta">Running…</div>';
+  let d;
+  try{ d = await j('/api/data/query', { method:'POST', body: JSON.stringify({ sql }) }); }
+  catch(e){ out.innerHTML = `<div class="fd-qerr">${esc(e.message||e)}</div>`; return; }
+  if(!d.rows.length){ out.innerHTML = '<div class="fd-qmeta">Query ran — no rows matched.</div>'; return; }
+  const cols = d.columns;
+  const head = cols.map(c=>`<th>${esc(c)}</th>`).join('');
+  const body = d.rows.map(r=>`<tr>${cols.map(c=>{const v=r[c];
+    return v==null?'<td class="fd-null">—</td>':`<td>${esc(String(v))}</td>`;}).join('')}</tr>`).join('');
+  const n = d.rows.length;
+  const meta = `${n} row${n===1?'':'s'}${d.truncated?` (showing the first ${d.cap} — more exist)`:''} · ${d.ms} ms`;
+  out.innerHTML = `<div class="fd-qmeta">${esc(meta)}</div>`+
+    `<div class="fd-scroll"><table class="fd-grid"><thead><tr class="fd-hrow">${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function go(tab){
@@ -9738,37 +9786,6 @@ async function loadStats(auctionId){
       <div style="display:flex;gap:10px">
         <button class="btn btn-o" onclick="go('lots')">Import data</button>
         <button class="btn btn-a" onclick="go('auctions')">+ New ${termAuction()}</button>
-      </div>
-    </div>
-
-    <div class="kpi-grid" id="dash-kpis">
-      <div class="kpi money">
-        <div class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M8 13v5M13 9v9M18 6v12"/></svg></div>
-        <div class="kpi-label">${isAllMode ? 'Total volume' : 'Trade volume'}</div>
-        <div class="kpi-value">${inr2(T.lots_amount != null ? T.lots_amount : (isAllMode ? (T.value!=null?T.value:CUM.amount) : (A ? A.totalAmt : 0)))}</div>
-        <span class="kpi-delta neutral">${isAllMode
-          ? `${CUM.auctions||0} ${termAuction(CUM.auctions!==1, true)}`
-          : (A ? `${kg(A.totalQty)} traded` : 'No ' + termAuction(false, true))}</span>
-      </div>
-      <div class="kpi structure">
-        <div class="kpi-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg></div>
-        <div class="kpi-label">Total lots</div>
-        <div class="kpi-value">${isAllMode ? (T.lots!=null?T.lots:(CUM.lots||0)) : (A ? A.totalLots||0 : 0)}</div>
-        <span class="kpi-delta neutral">${T.sold!=null ? `${T.sold} sold` : `${C.lots||0} total`}</span>
-      </div>
-      <div class="kpi action">
-        <div class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
-        <div class="kpi-label">Outstanding</div>
-        <div class="kpi-value">${inr2(T.outstanding_by_buyers)}</div>
-        <span class="kpi-delta ${(T.outstanding_by_buyers||0)>0?'down':'neutral'}">${(T.outstanding_by_buyers||0)>0 ? 'Due from buyers' : 'All settled'}</span>
-      </div>
-      <div class="kpi action">
-        <div class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg></div>
-        <div class="kpi-label">Pending invoices</div>
-        <div class="kpi-value">${K.pendingInvoices||0}</div>
-        <span class="kpi-delta ${K.pendingInvoices>0?'down':'neutral'}">${K.pendingInvoices>0
-          ? (isAllMode ? 'Across all ' + termAuction(true, true) : 'Buyers awaiting')
-          : 'All clear'}</span>
       </div>
     </div>
 

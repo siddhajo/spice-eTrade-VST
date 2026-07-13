@@ -7351,10 +7351,12 @@ app.delete('/api/invoices/:id', requireDelete, (req, res) => {
   // Clear sale/invo from the related lots so they're eligible again
   let lotsFreed = 0;
   if (inv.auction_id) {
-    const before = db.get('SELECT COUNT(*) as c FROM lots WHERE auction_id=? AND sale=? AND invo=? AND buyer=?',
-      [inv.auction_id, inv.sale, inv.invo, inv.buyer]).c;
-    db.run(`UPDATE lots SET sale='', invo='' WHERE auction_id=? AND sale=? AND invo=? AND buyer=?`,
-      [inv.auction_id, inv.sale, inv.invo, inv.buyer]);
+    // Match by (auction, invo, buyer) — not sale — so ASP/Kerala lots
+    // (whose `sale` column is empty) are freed. See the revert route.
+    const before = db.get('SELECT COUNT(*) as c FROM lots WHERE auction_id=? AND invo=? AND buyer=?',
+      [inv.auction_id, inv.invo, inv.buyer]).c;
+    db.run(`UPDATE lots SET sale='', invo='' WHERE auction_id=? AND invo=? AND buyer=?`,
+      [inv.auction_id, inv.invo, inv.buyer]);
     lotsFreed = before;
   }
   db.run('DELETE FROM invoices WHERE id=?', [req.params.id]);
@@ -7373,13 +7375,18 @@ app.post('/api/invoices/:id/revert', requireInvoiceRevert, (req, res) => {
   }
   let lotsFreed = 0;
   if (inv.auction_id) {
+    // Match lots by (auction, invo, buyer) — NOT sale. In ASP/Kerala
+    // business-state trades, lots are stamped with `invo` but their
+    // `sale` column is left empty (see invoice-create), while the
+    // invoice row stores sale='I'/'L'. Including `sale=?` here matched
+    // zero lots, so revert deleted the invoice but never freed its lots.
     const affected = db.all(
-      'SELECT lot_no FROM lots WHERE auction_id=? AND sale=? AND invo=? AND buyer=?',
-      [inv.auction_id, inv.sale, inv.invo, inv.buyer]
+      'SELECT lot_no FROM lots WHERE auction_id=? AND invo=? AND buyer=?',
+      [inv.auction_id, inv.invo, inv.buyer]
     );
     lotsFreed = affected.length;
-    db.run(`UPDATE lots SET sale='', invo='' WHERE auction_id=? AND sale=? AND invo=? AND buyer=?`,
-      [inv.auction_id, inv.sale, inv.invo, inv.buyer]);
+    db.run(`UPDATE lots SET sale='', invo='' WHERE auction_id=? AND invo=? AND buyer=?`,
+      [inv.auction_id, inv.invo, inv.buyer]);
     db.run('DELETE FROM invoices WHERE id=?', [req.params.id]);
     return res.json({
       success: true,
@@ -12991,6 +12998,52 @@ app.delete('/api/data/:entity/:rowid', requireAdmin, (req, res) => {
         [req.user.id, 'fixdata_delete', def.table, String(rowid), null]);
     } catch (_) {}
     res.json({ success: true, changes: info.changes });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Read-only SQL lookup for Fix Data. Lets the power user answer "show me…"
+// questions the row grid can't (cross-section joins, counts, blank-field
+// hunts) — but ONLY as a read. Hard-blocked: any write/DDL keyword, more
+// than one statement, and the sensitive tables (users / sessions /
+// license_state). Our db layer is sql.js, which can't mutate on a SELECT
+// anyway, but we validate the text too so a slip can never write.
+const DATA_QUERY_ROW_CAP = 1000;
+// Whole-word write/DDL/danger keywords — presence anywhere → rejected.
+const _QUERY_BLOCK_WORDS =
+  /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|ATTACH|DETACH|PRAGMA|VACUUM|REINDEX|TRIGGER|GRANT|RENAME|LOAD_EXTENSION)\b/i;
+// Sensitive tables — only blocked when actually referenced (after FROM/JOIN
+// etc.), so a WHERE name='users' string search isn't falsely rejected.
+const _QUERY_BLOCK_TABLES =
+  /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+["'`\[]?\s*(?:users|sessions|license_state)\b/i;
+function _stripSqlComments(sql) {
+  return sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+}
+app.post('/api/data/query', requireAdmin, (req, res) => {
+  try {
+    let sql = String(req.body.sql || '').trim();
+    if (!sql) return res.status(400).json({ error: 'Enter a query.' });
+    sql = sql.replace(/;\s*$/, '');                 // tolerate a single trailing ;
+    const bare = _stripSqlComments(sql);
+    if (bare.includes(';'))
+      return res.status(400).json({ error: 'Only one query at a time — remove the extra “;”.' });
+    if (!/^\s*(SELECT|WITH)\b/i.test(bare))
+      return res.status(400).json({ error: 'Only read-only queries are allowed here — start with SELECT.' });
+    if (_QUERY_BLOCK_WORDS.test(bare))
+      return res.status(400).json({ error: 'That query changes data. Only read-only SELECT is allowed here.' });
+    if (_QUERY_BLOCK_TABLES.test(bare))
+      return res.status(400).json({ error: 'That table is off-limits from here.' });
+    const db = getDb();
+    const t0 = Date.now();
+    let rows = db.all(sql);                          // sql.js: reads only, throws on bad SQL
+    const ms = Date.now() - t0;
+    const truncated = rows.length > DATA_QUERY_ROW_CAP;
+    if (truncated) rows = rows.slice(0, DATA_QUERY_ROW_CAP);
+    const columns = rows.length ? Object.keys(rows[0]) : [];
+    try {
+      db.run('INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES (?,?,?,?,?)',
+        [req.user.id, 'fixdata_query', null, null, sql.slice(0, 500)]);
+    } catch (_) {}
+    res.json({ columns, rows, truncated, cap: DATA_QUERY_ROW_CAP, ms });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
