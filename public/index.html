@@ -5422,6 +5422,29 @@ input[type="search"]:focus{
      that seller in the active trade with a checkbox so the operator can
      pick which lots to settle right now ("Print Selected"). Remaining
      lots stay payable and can be picked up in a later visit. -->
+<!-- Lorry report → WhatsApp. Enter a recipient number and send the
+     selected lorry report as a PDF (Cloud API if configured, else the
+     manual Web-Share / download-and-drag fallback). -->
+<div class="modal-bg" id="lorry-wa-modal"><div class="modal" style="max-width:420px">
+  <h2 style="display:flex;align-items:center;gap:10px">
+    <span style="width:32px;height:32px;border-radius:10px;background:#25D366;color:#fff;display:inline-flex;align-items:center;justify-content:center">📱</span>
+    Send Lorry Report
+  </h2>
+  <p style="font-size:13px;color:var(--text2);margin:6px 0 14px">
+    Sending <strong id="lorry-wa-report">—</strong> for <strong id="lorry-wa-trade">—</strong>. Enter the recipient's WhatsApp number.
+  </p>
+  <div class="fg"><label>Phone number</label>
+    <input type="tel" id="lorry-wa-phone" inputmode="numeric" autocomplete="off"
+      placeholder="10-digit mobile (e.g. 9876543210)"
+      style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);caret-color:#25D366"
+      onkeydown="if(event.key==='Enter')sendLorryWhatsapp()">
+  </div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('lorry-wa-modal')">Cancel</button>
+    <button class="btn btn-g" id="lorry-wa-send" onclick="sendLorryWhatsapp()">📱 Send</button>
+  </div>
+</div></div>
+
 <div class="modal-bg" id="pay-lots-modal"><div class="modal" style="max-width:900px">
   <h2 style="display:flex;align-items:center;gap:10px">
     <span style="width:32px;height:32px;border-radius:10px;background:var(--spice-turmeric-lt);display:inline-flex;align-items:center;justify-content:center">📋</span>
@@ -19125,7 +19148,11 @@ function lorryRenderButtons(){
   const host=document.getElementById('lorry-actions');
   if(!host) return;
   const b=(cls,label,act)=>`<button class="btn ${cls}" onclick="lorryPanelAction('${act}')" style="min-width:84px">${label}</button>`;
-  host.innerHTML = b('btn-a','Preview','preview')+b('btn-a','Excel','xlsx')+b('btn-a','PDF','pdf')+b('btn-o','Print','print');
+  // The WhatsApp send button is gated by feat-whatsapp (same as the
+  // Purchases / Payments WhatsApp buttons) — it appears only when
+  // WhatsApp is enabled in Settings.
+  const wa=`<button class="btn feat-whatsapp" onclick="openLorryWhatsapp()" title="Send this report as a PDF via WhatsApp" style="min-width:84px;background:#25D366;color:#fff;font-weight:600">📱 WhatsApp</button>`;
+  host.innerHTML = b('btn-a','Preview','preview')+b('btn-a','Excel','xlsx')+b('btn-a','PDF','pdf')+b('btn-o','Print','print')+wa;
   const pv=document.getElementById('lorry-preview'); if(pv) pv.innerHTML='';
 }
 // Run a Lorry panel action. Excel/PDF download via downloadLorry();
@@ -19186,6 +19213,46 @@ async function downloadLorry(type,format){
     a.download=filename;a.click();
     URL.revokeObjectURL(a.href);
   });
+}
+
+// Open the "send this lorry report via WhatsApp" modal for the currently
+// selected report + trade. A trade must be picked; the report type is
+// whatever the dropdown shows.
+function openLorryWhatsapp(){
+  const type=document.getElementById('lorry-report-select')?.value||'';
+  const aidSel=document.getElementById('lorry-auction');
+  const aid=aidSel?.value;
+  if(!aid){alert('Select a trade first');return}
+  if(!type){alert('Select a report first');return}
+  document.getElementById('lorry-wa-report').textContent=LORRY_LABELS[type]||type;
+  document.getElementById('lorry-wa-trade').textContent=(aidSel.selectedOptions[0]?.textContent||('Trade '+aid)).trim();
+  const ph=document.getElementById('lorry-wa-phone'); if(ph) ph.value='';
+  showModal('lorry-wa-modal');
+  setTimeout(()=>{ const f=document.getElementById('lorry-wa-phone'); if(f) f.focus(); },60);
+}
+
+// Fetch the selected lorry report as a PDF and hand it to _waSendDocument:
+// Cloud API auto-send when configured (+ a phone is given), otherwise the
+// Web-Share / download-and-drag fallback. Mirrors whatsappPurchase().
+async function sendLorryWhatsapp(){
+  const type=document.getElementById('lorry-report-select')?.value||'';
+  const aid=document.getElementById('lorry-auction')?.value;
+  const phone=(document.getElementById('lorry-wa-phone')?.value||'').trim();
+  if(!aid||!type) return;
+  if(!phone){ toast('Enter a phone number'); const f=document.getElementById('lorry-wa-phone'); if(f) f.focus(); return; }
+  const label=LORRY_LABELS[type]||type;
+  const btn=document.getElementById('lorry-wa-send');
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  try{
+    const blob=await withOverlay(`Preparing ${label}…`, ()=>_fetchPdfBlob(`/api/lorry-reports/${type}/${aid}?format=pdf`));
+    const [company, ano]=await Promise.all([_getCompanyName(), _getAuctionAno(aid)]);
+    const summary=`the ${label} report${ano?` for Trade ${ano}`:''} is attached.`;
+    const msg=`${ano?ano+' ':''}${label} ${company}`.trim();
+    const filename=`${label.replace(/[^\w]+/g,'')}_${ano||aid}.pdf`;
+    await _waSendDocument({ blob, filename, phone, params:[label, summary, company], message: msg });
+    hideModal('lorry-wa-modal');
+  }catch(e){ showError(e); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='📱 Send'; } }
 }
 
 // ── DBF Export Helpers ────────────────────────────────────
