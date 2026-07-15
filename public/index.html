@@ -9746,7 +9746,7 @@ async function loadStats(auctionId){
     : (A ? { tag: '#'+esc(A.ano), t1: `${termAuction()} #${esc(A.ano)}${A.crop_type?' — '+esc(A.crop_type):''}`, t2: fmtD(A.date) }
          : { tag: '—', t1: 'No '+termAuction(false, true)+' selected', t2: '' });
   const aHTML = (isAllMode || A) ? `
-    <div class="card dash-snap">
+    <div class="card dash-snap" id="dash-snap-card">
       <div class="dash-snap-hd">
         <div class="dash-snap-who">
           <div class="dash-snap-tag">${snapWho.tag}</div>
@@ -9755,7 +9755,10 @@ async function loadStats(auctionId){
             <div class="dash-snap-t2">${snapWho.t2}</div>
           </div>
         </div>
-        ${picker}
+        <div style="display:flex;align-items:center;gap:8px">
+          ${picker}
+          <button class="btn btn-o btn-sm" onclick="printDashWidget('#dash-snap-card','Trade Snapshot')" title="Print this snapshot table — or 'Save as PDF' in the dialog">🖨 PDF</button>
+        </div>
       </div>
       <div class="dash-snap-matrix">
         <table>
@@ -9798,13 +9801,16 @@ async function loadStats(auctionId){
   _bdFilt = { planter: {}, dealer: {}, branch: {} };
 
   const breakdownHTML = `
-    <div class="card" style="margin-bottom:20px">
+    <div class="card" id="dash-breakdown-card" style="margin-bottom:20px">
       <div style="padding:15px 22px 13px;border-bottom:1px solid var(--spice-line);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Breakdown</h2>
-        <div class="bd-tabs" role="tablist" aria-label="Breakdown by">
-          <button class="on" role="tab" aria-selected="true" onclick="dashBreakdownTab('planter',this)">Seller-wise</button>
-          <button role="tab" aria-selected="false" onclick="dashBreakdownTab('dealer',this)">Buyer-wise</button>
-          <button role="tab" aria-selected="false" onclick="dashBreakdownTab('branch',this)">Branch-wise</button>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="bd-tabs" role="tablist" aria-label="Breakdown by">
+            <button class="on" role="tab" aria-selected="true" onclick="dashBreakdownTab('planter',this)">Seller-wise</button>
+            <button role="tab" aria-selected="false" onclick="dashBreakdownTab('dealer',this)">Buyer-wise</button>
+            <button role="tab" aria-selected="false" onclick="dashBreakdownTab('branch',this)">Branch-wise</button>
+          </div>
+          <button class="btn btn-o btn-sm" onclick="printDashWidget('#dash-breakdown-card','Breakdown — '+dashBreakdownActiveLabel())" title="Print the breakdown tab you're viewing — or 'Save as PDF'">🖨 PDF</button>
         </div>
       </div>
       <div class="bd-pane on" id="dash-bd-planter">${bdPaneShell('planter')}</div>
@@ -9824,10 +9830,13 @@ async function loadStats(auctionId){
     : '<span style="color:var(--spice-text-hint)">—</span>';
 
   const ptHTML = PT.length ? `
-    <div class="card" style="padding:0;margin-bottom:20px">
-      <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center">
+    <div class="card" id="dash-pertrade-card" style="padding:0;margin-bottom:20px">
+      <div style="padding:18px 22px 12px;border-bottom:1px solid var(--spice-line);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
         <h2 style="font-size:17px;font-weight:700;margin:0;color:var(--spice-text-main)">Per-${termAuction(false, true)} breakdown</h2>
-        <span style="font-size:12px;color:var(--spice-text-hint)">${PT.length} trade${PT.length===1?'':'s'}${isAllMode ? ' · click a row to drill in' : ' · click the selected row to clear'}</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:12px;color:var(--spice-text-hint)">${PT.length} trade${PT.length===1?'':'s'}${isAllMode ? ' · click a row to drill in' : ' · click the selected row to clear'}</span>
+          <button class="btn btn-o btn-sm" onclick="printDashWidget('#dash-pertrade-card','Per-Trade Breakdown')" title="Print this table — or 'Save as PDF' in the dialog">🖨 PDF</button>
+        </div>
       </div>
       <div class="dash-pt-scroll">
         <table style="width:100%">
@@ -9971,7 +9980,7 @@ async function loadStats(auctionId){
         <p>Here's what's happening today, ${today}</p>
       </div>
       <div style="display:flex;gap:10px">
-        <button class="btn btn-o" onclick="printDashboardReport()" title="Print the dashboard tables — or choose 'Save as PDF' in the dialog">🖨 Print / PDF</button>
+        <button class="btn btn-o" onclick="printDashboardReport()" title="Print ALL dashboard tables at once — or choose 'Save as PDF'. Each widget also has its own 🖨 button.">🖨 Print all</button>
         <button class="btn btn-o" onclick="go('lots')">Import data</button>
         <button class="btn btn-a" onclick="go('auctions')">+ New ${termAuction()}</button>
       </div>
@@ -21035,6 +21044,17 @@ function printDashboardReport(){
   const picker = document.querySelector('#tc-dash select');
   const scope = picker ? (picker.selectedOptions[0]?.textContent || '').trim() : '';
   printReportView({ title: 'Dashboard Report', subtitle: scope, container: '#tc-dash' });
+}
+// Per-widget print — each dashboard card carries its own 🖨 button so the
+// user can print just that table instead of the whole dashboard.
+function printDashWidget(containerSel, title){
+  const picker = document.querySelector('#tc-dash select');
+  const scope = picker ? (picker.selectedOptions[0]?.textContent || '').trim() : '';
+  printReportView({ title, subtitle: scope, container: containerSel });
+}
+function dashBreakdownActiveLabel(){
+  const on = document.querySelector('#dash-breakdown-card .bd-tabs button.on');
+  return on ? (on.textContent || '').trim() : '';
 }
 function printInsightsReport(){
   let sub = '';
