@@ -3149,7 +3149,7 @@ input[type="search"]:focus{
           <p>Record the running costs for a trade. The Dashboard shows Income − Expenses as Net Profit.</p>
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <select id="exp-auction" onchange="loadExpenseRows()"
+          <select id="expenses-auction" onchange="loadExpenseRows()"
             style="background:#fff;border:1px solid var(--spice-line);border-radius:8px;padding:8px 12px;font-size:14px;font-weight:600;color:var(--spice-text-main);cursor:pointer;font-family:inherit"></select>
           <button class="btn btn-o" onclick="expApplyDefaults()" title="Copy the default particulars into this trade (existing lines are kept)">↧ Apply defaults</button>
           <button class="btn btn-a" onclick="expAddRow()">+ Add Expense</button>
@@ -3232,6 +3232,9 @@ input[type="search"]:focus{
          entirely by loadInsights() which renders into #insights-host
          from a single /api/insights fetch. -->
     <div class="tc" id="tc-insights">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+        <button class="btn btn-o" onclick="printInsightsReport()" title="Print the Insights tables — or choose 'Save as PDF' in the dialog">🖨 Print / PDF</button>
+      </div>
       <div id="insights-host">
         <div style="padding:32px;text-align:center;color:var(--text3)">Loading insights…</div>
       </div>
@@ -4806,6 +4809,7 @@ input[type="search"]:focus{
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <h2 style="margin:0;flex:1">Branch Comparison (Lifetime)</h2>
           <span id="rep-branch-stamp" style="font-size:11.5px;color:var(--spice-text-hint)"></span>
+          <button class="btn btn-sm" onclick="printBranchComparison()" title="Print the branch table — or 'Save as PDF' in the dialog">🖨 Print / PDF</button>
           <button class="btn btn-sm" onclick="loadBranchComparison()">↻ Refresh</button>
         </div>
         <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 16px">How each branch has performed across every auction in the database.</p>
@@ -5375,6 +5379,7 @@ input[type="search"]:focus{
           </div>
           <button class="btn btn-g" onclick="loadJournal()">Load</button>
           <button class="btn btn-a" onclick="exportJournal()">Export XLSX</button>
+          <button class="btn btn-orange" onclick="printJournalReport()" title="Print the journal — or 'Save as PDF' in the dialog">🖨 Print / PDF</button>
         </div>
         <div style="overflow-x:auto;max-height:500px"><table id="jr-table"><thead id="jr-head"></thead><tbody id="jr-body"></tbody></table></div>
       </div>
@@ -9966,6 +9971,7 @@ async function loadStats(auctionId){
         <p>Here's what's happening today, ${today}</p>
       </div>
       <div style="display:flex;gap:10px">
+        <button class="btn btn-o" onclick="printDashboardReport()" title="Print the dashboard tables — or choose 'Save as PDF' in the dialog">🖨 Print / PDF</button>
         <button class="btn btn-o" onclick="go('lots')">Import data</button>
         <button class="btn btn-a" onclick="go('auctions')">+ New ${termAuction()}</button>
       </div>
@@ -10030,9 +10036,9 @@ function _expAutofillOn(){ return localStorage.getItem('expAutoDefault') !== '0'
 function loadExpenses(){
   const cb = document.getElementById('exp-autofill');
   if (cb) cb.checked = _expAutofillOn();
-  return fillAucSelect('exp-auction').then(() => loadExpenseRows());
+  return fillAucSelect('expenses-auction').then(() => loadExpenseRows());
 }
-function _expAid(){ return parseInt(document.getElementById('exp-auction')?.value) || 0; }
+function _expAid(){ return parseInt(document.getElementById('expenses-auction')?.value) || 0; }
 function _expEn(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function _expNumStr(n){ n = Number(n) || 0; return (Math.round(n * 100) / 100).toString(); }
 const _expInr = n => '₹' + (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -20947,6 +20953,106 @@ async function fetchAndPrint(endpoint, fallbackName, postBody) {
   } catch (e) {
     showError(e);
   }
+}
+
+// ── On-screen report → Print / Save-as-PDF (Approach A) ────────
+// Opens a clean, print-styled window containing the report's DATA TABLES
+// only. KPI tiles (divs) and charts (<canvas>/<svg>) are excluded by
+// design — we collect <table> elements exclusively. The browser's print
+// dialog covers BOTH "Print" and "Save as PDF", so one button does both.
+function _rpEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Gather printable tables from a container. `includeHidden` pulls in
+// collapsed/hidden tables too (used where a report table sits behind a
+// "show data" toggle). Each table is cloned and stripped of interactive
+// controls / inline chart nodes so it prints clean.
+function _collectReportTables(container, includeHidden){
+  if (!container) return [];
+  const nodes = [];
+  if (container.matches && container.matches('table')) nodes.push(container);
+  container.querySelectorAll('table').forEach(t => nodes.push(t));
+  const out = [], seen = new Set();
+  nodes.forEach(tbl => {
+    if (seen.has(tbl)) return; seen.add(tbl);
+    if (!includeHidden && tbl.offsetParent === null) return; // hidden / collapsed
+    if (!tbl.querySelector('td')) return;                     // header-only / empty
+    const clone = tbl.cloneNode(true);
+    clone.querySelectorAll('input,select,button,svg,canvas').forEach(n => n.remove());
+    let heading = '';
+    const card = tbl.closest('.card, .ins-section, .bd-pane, .dash-snap');
+    const h = (card || container).querySelector('h1,h2,h3');
+    if (h) heading = (h.textContent || '').trim();
+    out.push({ heading, html: clone.outerHTML });
+  });
+  return out;
+}
+
+async function printReportView({ title, subtitle, container, includeHidden }){
+  const el = typeof container === 'string' ? document.querySelector(container) : container;
+  const tables = _collectReportTables(el, includeHidden);
+  if (!tables.length){ toast('Nothing to print here yet — load the report first.'); return; }
+  let company = '';
+  try { company = await _getCompanyName(); } catch(_){}
+  const stamp = new Date().toLocaleString('en-GB', { timeZone:'Asia/Kolkata', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const body = tables.map(t =>
+    `${t.heading ? `<h2 class="rp-sec">${_rpEsc(t.heading)}</h2>` : ''}<div class="rp-tblwrap">${t.html}</div>`
+  ).join('');
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${_rpEsc(title)}</title><style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px}
+    .rp-head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #2e7d32;padding-bottom:8px;margin-bottom:16px}
+    .rp-co{font-size:20px;font-weight:800;color:#1b5e20}
+    .rp-title{font-size:15px;font-weight:700;margin-top:2px}
+    .rp-sub{font-size:12px;color:#555;margin-top:2px}
+    .rp-stamp{font-size:11px;color:#666;text-align:right;white-space:nowrap}
+    h2.rp-sec{font-size:14px;margin:18px 0 6px;color:#1b5e20;page-break-after:avoid}
+    .rp-tblwrap{width:100%;overflow:visible;margin-bottom:6px}
+    table{width:100%;border-collapse:collapse;font-size:11px}
+    th,td{border:1px solid #cfcfcf;padding:4px 7px;text-align:left;vertical-align:middle}
+    thead th{background:#e8f5e9;font-weight:700}
+    .num,td[style*="right"],th[style*="right"]{text-align:right}
+    tr{page-break-inside:avoid}
+    @media print{ body{margin:8mm} }
+  </style></head><body>
+    <div class="rp-head">
+      <div>
+        <div class="rp-co">${_rpEsc(company||'')}</div>
+        <div class="rp-title">${_rpEsc(title)}</div>
+        ${subtitle ? `<div class="rp-sub">${_rpEsc(subtitle)}</div>` : ''}
+      </div>
+      <div class="rp-stamp">Printed: ${_rpEsc(stamp)}</div>
+    </div>
+    ${body}
+    <script>window.onload=function(){setTimeout(function(){try{window.focus();window.print();}catch(e){}},250);};<\/script>
+  </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w){ toast('Allow pop-ups to print or save the report as PDF.'); return; }
+  w.document.open(); w.document.write(doc); w.document.close();
+}
+
+// Screen-specific wrappers.
+function printDashboardReport(){
+  const picker = document.querySelector('#tc-dash select');
+  const scope = picker ? (picker.selectedOptions[0]?.textContent || '').trim() : '';
+  printReportView({ title: 'Dashboard Report', subtitle: scope, container: '#tc-dash' });
+}
+function printInsightsReport(){
+  let sub = '';
+  if (window._insightsRange) sub = `${_insightsRange.from} to ${_insightsRange.to}`;
+  printReportView({ title: 'Insights Report', subtitle: sub, container: '#insights-host' });
+}
+function printBranchComparison(){
+  // The data table can sit behind a "show data" toggle → includeHidden.
+  printReportView({ title: 'Branch Comparison (Lifetime)', container: '#rep-branch-body', includeHidden: true });
+}
+function printJournalReport(){
+  const body = document.getElementById('jr-body');
+  if (!body || !body.querySelector('tr')){ toast('Load a journal first.'); return; }
+  const typeSel = document.getElementById('jr-type');
+  const typeLbl = typeSel ? (typeSel.selectedOptions[0]?.textContent || '') : '';
+  const aucSel = document.getElementById('jr-auction');
+  const aucLbl = aucSel ? (aucSel.selectedOptions[0]?.textContent || '') : '';
+  printReportView({ title: `Journal — ${typeLbl}`.trim(), subtitle: aucLbl, container: '#jr-table' });
 }
 
 // Prompt for "Dispatched through" before printing a sales invoice.
