@@ -665,6 +665,25 @@ const COLS = {
     { header: 'BAGS',  key: 'bags',  width: 6  },
     { header: 'QTY',   key: 'qty',   width: 12 },
   ],
+  // Party-wise dealer list — one row per dealer, grouped by state with a
+  // "<STATE> TOTAL" subtotal (label lands in the NAME column).
+  dealer_list_partywise: [
+    { header: 'NAME',  key: 'name',  width: 34 },
+    { header: 'GSTIN', key: 'gstin', width: 18 },
+    { header: 'LOTS',  key: 'lots',  width: 8  },
+    { header: 'BAGS',  key: 'bags',  width: 8  },
+    { header: 'QTY',   key: 'qty',   width: 12 },
+  ],
+  // Consolidated pooler list — one aggregated row per pooler, grouped by
+  // state. PRICE/PRATE omitted (a party spans many rates).
+  pooler_list_consolidated: [
+    { header: 'POOLER NAME', key: 'poolername', width: 34 },
+    { header: 'LOTS',   key: 'lots',   width: 8  },
+    { header: 'QTY',    key: 'qty',    width: 12 },
+    { header: 'AMOUNT', key: 'amount', width: 16 },
+    { header: 'PQTY',   key: 'pqty',   width: 12 },
+    { header: 'PURAMT', key: 'puramt', width: 16 },
+  ],
   sales_taxes: [
     { header: 'STATE', key: 'state', width: 10 }, { header: 'SALE', key: 'sale', width: 6 },
     { header: 'INVO', key: 'invo', width: 8 }, { header: 'TRADERNAME', key: 'tradername', width: 22 },
@@ -782,6 +801,8 @@ const TOTAL_KEYS = {
   full_file:       ['bags', 'qty', 'amount', 'pqty', 'puramt', 'cgst', 'sgst', 'igst', 'advance', 'balance'],
   collection:      ['bag', 'qty'],
   dealer_list:     ['lots', 'bags', 'qty'],
+  dealer_list_partywise: ['lots', 'bags', 'qty'],
+  pooler_list_consolidated: ['lots', 'qty', 'amount', 'pqty', 'puramt'],
   sales_taxes:     ['bag', 'qty', 'cardamom_cost', 'gunny_cost', 'cgst', 'sgst', 'igst', 'tcs', 'transport', 'insurance', 'total'],
   payment:         ['bag', 'qty', 'amount', 'pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'],
   payment_partywise: ['pqty', 'puramt', 'discount', 'gst5', 'tds', 'payable'],
@@ -807,6 +828,8 @@ const TITLES = {
   full_file:       'Full File',
   collection:      'Collection / Lorry',
   dealer_list:     'Dealer List',
+  dealer_list_partywise: 'Dealer List - Party wise',
+  pooler_list_consolidated: 'Pooler List Consolidated - Party wise',
   sales_taxes:     'Sales & Taxes',
   payment:         'Payment Summary',
   payment_partywise: 'Payment Summary - Party wise',
@@ -853,6 +876,20 @@ const ROW_PREPROCESS = {
   // Dealer list — flat sequential serial (no grouping).
   dealer_list: {
     serialKey: '_sn',
+  },
+  // Dealer list party-wise — group by state, subtotal each state. No serial
+  // column; the subtotal label ("KERALA TOTAL") lands in the NAME column.
+  dealer_list_partywise: {
+    groupByKey: 'state',
+    subtotalKeys: ['lots', 'bags', 'qty'],
+    subtotalLabelKey: 'name',
+  },
+  // Pooler list consolidated — group by state, subtotal each state; the
+  // subtotal label lands in the POOLER NAME column.
+  pooler_list_consolidated: {
+    groupByKey: 'state',
+    subtotalKeys: ['lots', 'qty', 'amount', 'pqty', 'puramt'],
+    subtotalLabelKey: 'poolername',
   },
   // Payment summary — serial restarts per pooler name; subtotal of bag, qty,
   // amount, pqty, puramt, discount, payable at the end of each pooler's rows.
@@ -992,6 +1029,41 @@ async function getRowsForType(db, type, auctionId, cfg, extra) {
            FROM cleaned
           WHERE LENGTH(gstin) = 15
           GROUP BY state, name, gstin
+          ORDER BY state, name`, [auctionId]);
+
+    case 'dealer_list_partywise':
+      // Same aggregated dealer set as dealer_list; ROW_PREPROCESS groups by
+      // state and inserts the per-state subtotal rows.
+      return db.all(
+        `WITH cleaned AS (
+           SELECT state, name, lot_no, bags, qty,
+                  UPPER(TRIM(
+                    CASE
+                      WHEN LOWER(SUBSTR(TRIM(cr),1,5)) = 'gstin'
+                        THEN LTRIM(SUBSTR(TRIM(cr),6), '. :-')
+                      ELSE TRIM(cr)
+                    END
+                  )) AS gstin
+             FROM lots
+            WHERE auction_id = ?
+         )
+         SELECT state, name, gstin,
+                COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty
+           FROM cleaned
+          WHERE LENGTH(gstin) = 15
+          GROUP BY state, name, gstin
+          ORDER BY state, name`, [auctionId]);
+
+    case 'pooler_list_consolidated':
+      // One aggregated row per pooler (non-withdrawn lots), grouped by
+      // state via ROW_PREPROCESS. PRICE/PRATE omitted (party spans rates).
+      return db.all(
+        `SELECT state, name as poolername,
+                COUNT(lot_no) as lots, SUM(qty) as qty, SUM(amount) as amount,
+                SUM(pqty) as pqty, SUM(puramt) as puramt
+           FROM lots
+          WHERE auction_id = ? AND UPPER(TRIM(COALESCE(code,''))) != 'WD'
+          GROUP BY state, name
           ORDER BY state, name`, [auctionId]);
 
     case 'sales_taxes':

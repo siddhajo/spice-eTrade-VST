@@ -1667,6 +1667,122 @@ async function exportLotPayment(db, auctionId) {
   });
 }
 
+// ── Export: Dealer List — Party wise ─────────────────────────
+// Same registered-dealer set as Dealer List (sellers whose `cr` resolves
+// to a clean 15-char GSTIN), but presented PARTY-WISE: one row per dealer,
+// grouped under each STATE with a per-state subtotal and a grand total.
+// Mirrors exportPaymentPartywise's presentation (state header line +
+// "<STATE> TOTAL" subtotal + GRAND TOTAL).
+async function exportDealerListPartywise(db, auctionId) {
+  const rows = db.all(
+    `WITH cleaned AS (
+       SELECT state, name, lot_no, bags, qty,
+              UPPER(TRIM(
+                CASE
+                  WHEN LOWER(SUBSTR(TRIM(cr),1,5)) = 'gstin'
+                    THEN LTRIM(SUBSTR(TRIM(cr),6), '. :-')
+                  ELSE TRIM(cr)
+                END
+              )) AS gstin
+         FROM lots
+        WHERE auction_id = ?
+     )
+     SELECT state, name, gstin,
+            COUNT(lot_no) as lots, SUM(bags) as bags, SUM(qty) as qty
+       FROM cleaned
+      WHERE LENGTH(gstin) = 15
+      GROUP BY state, name, gstin
+      ORDER BY state, name`, [auctionId]
+  );
+  const SUB_KEYS = ['lots', 'bags', 'qty'];
+  const out = [];
+  let curState = null, acc = null;
+  const flush = () => {
+    if (!acc || curState == null) return;
+    const sub = { _isSubtotal: true, name: `${curState} TOTAL` };
+    SUB_KEYS.forEach(k => { sub[k] = acc[k] || 0; });
+    out.push(sub);
+  };
+  for (const r of rows) {
+    const st = r.state || '';
+    if (st !== curState) {
+      flush();
+      curState = st;
+      acc = Object.fromEntries(SUB_KEYS.map(k => [k, 0]));
+      out.push({ name: st });   // state header line
+    }
+    SUB_KEYS.forEach(k => { acc[k] += Number(r[k]) || 0; });
+    out.push(r);
+  }
+  flush();
+  const cols = [
+    { header: 'NAME',  key: 'name',  width: 34 },
+    { header: 'GSTIN', key: 'gstin', width: 18 },
+    { header: 'LOTS',  key: 'lots',  width: 8 },
+    { header: 'BAGS',  key: 'bags',  width: 8 },
+    { header: 'QTY',   key: 'qty',   width: 12, numFmt: '#,##0.000' },
+  ];
+  const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const grandTotal = { label: 'GRAND TOTAL', values: { lots: sum('lots'), bags: sum('bags'), qty: sum('qty') } };
+  return createExcelBuffer('DealerListPartywise', cols, out, {
+    db, title: 'Dealer List - Party wise', metaLines: auctionMeta(db, auctionId), grandTotal,
+  });
+}
+
+// ── Export: Pooler List Consolidated — Party wise ────────────
+// Consolidates the Pooler Register (one row per lot) into one aggregated
+// row PER POOLER, grouped by STATE with a per-state subtotal + grand total.
+// PRICE / PRATE are intentionally omitted — a party spans many lots at
+// different rates, so a party-level rate is meaningless. Non-withdrawn
+// lots only (matches the Pooler Register's `code != 'WD'` filter).
+async function exportPoolerListConsolidated(db, auctionId) {
+  const rows = db.all(
+    `SELECT state, name as poolername,
+            COUNT(lot_no) as lots, SUM(qty) as qty, SUM(amount) as amount,
+            SUM(pqty) as pqty, SUM(puramt) as puramt
+       FROM lots
+      WHERE auction_id = ? AND UPPER(TRIM(COALESCE(code,''))) != 'WD'
+      GROUP BY state, name
+      ORDER BY state, name`, [auctionId]
+  );
+  const SUB_KEYS = ['lots', 'qty', 'amount', 'pqty', 'puramt'];
+  const out = [];
+  let curState = null, acc = null;
+  const flush = () => {
+    if (!acc || curState == null) return;
+    const sub = { _isSubtotal: true, poolername: `${curState} TOTAL` };
+    SUB_KEYS.forEach(k => { sub[k] = acc[k] || 0; });
+    out.push(sub);
+  };
+  for (const r of rows) {
+    const st = r.state || '';
+    if (st !== curState) {
+      flush();
+      curState = st;
+      acc = Object.fromEntries(SUB_KEYS.map(k => [k, 0]));
+      out.push({ poolername: st });   // state header line
+    }
+    SUB_KEYS.forEach(k => { acc[k] += Number(r[k]) || 0; });
+    out.push(r);
+  }
+  flush();
+  const cols = [
+    { header: 'POOLER NAME', key: 'poolername', width: 34 },
+    { header: 'LOTS',   key: 'lots',   width: 8 },
+    { header: 'QTY',    key: 'qty',    width: 12, numFmt: '#,##0.000' },
+    { header: 'AMOUNT', key: 'amount', width: 16, numFmt: '#,##0.00' },
+    { header: 'PQTY',   key: 'pqty',   width: 12, numFmt: '#,##0.000' },
+    { header: 'PURAMT', key: 'puramt', width: 16, numFmt: '#,##0.00' },
+  ];
+  const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const grandTotal = { label: 'GRAND TOTAL', values: {
+    lots: sum('lots'), qty: sum('qty'), amount: sum('amount'), pqty: sum('pqty'), puramt: sum('puramt'),
+  } };
+  return createExcelBuffer('PoolerListConsolidated', cols, out, {
+    db, title: 'Pooler List Consolidated - Party wise', metaLines: auctionMeta(db, auctionId), grandTotal,
+  });
+}
+
 // ── Export router ────────────────────────────────────────────
 const EXPORT_TYPES = {
   lot_slip:           { fn: exportLotSlip,           name: 'LotSlip' },
@@ -1681,10 +1797,12 @@ const EXPORT_TYPES = {
   bank_payment:       { fn: exportBankPayment,       name: 'BankPayment',       needsCfg: true },
   voucher_payment:    { fn: exportVoucherPayment,    name: 'VoucherPayment',    needsCfg: true },
   pooler_register:    { fn: exportPoolerRegister,    name: 'PoolerRegister' },
+  pooler_list_consolidated: { fn: exportPoolerListConsolidated, name: 'PoolerListConsolidated' },
   full_file:          { fn: exportFullFile,          name: 'FullFile' },
   collection:         { fn: exportCollection,        name: 'Collection' },
   trade_report:       { fn: exportTradeReport,       name: 'TradeReport' },
   dealer_list:        { fn: exportDealerList,        name: 'DealerList' },
+  dealer_list_partywise: { fn: exportDealerListPartywise, name: 'DealerListPartywise' },
   sales_taxes:        { fn: exportSalesTaxes,        name: 'SalesTaxes' },
   payment:            { fn: exportPaymentSummary,    name: 'Payment',           needsCfg: true },
   payment_partywise:  { fn: exportPaymentPartywise,  name: 'PaymentPartywise',  needsCfg: true },
@@ -1700,7 +1818,8 @@ module.exports = {
   exportLotSlip, exportLotSlipAfter, exportLotBuyer, exportLotName, exportLotPayment,
   exportPramanCSV, exportPriceList, exportPriceListBefore,
   exportBankPayment, exportBankPaymentBefore, exportVoucherPayment,
-  exportPoolerRegister, exportFullFile, exportCollection, exportTradeReport, exportDealerList,
+  exportPoolerRegister, exportPoolerListConsolidated, exportFullFile, exportCollection, exportTradeReport,
+  exportDealerList, exportDealerListPartywise,
   exportSalesTaxes, exportPaymentSummary, exportPaymentPartywise, exportTDSReturn, exportTallyPurchase,
   exportSalesJournal, exportPurchaseJournal,
   exportPurchaseRegister, exportSalesRegister,
