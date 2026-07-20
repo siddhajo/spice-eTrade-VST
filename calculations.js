@@ -354,9 +354,13 @@ function buildSalesInvoice(db, auctionId, buyerCode, saleType, cfg, opts) {
   // be picked up into a new invoice. The corresponding stamping UPDATE
   // in server.js also carries `AND locked_at IS NULL` as a belt-and-
   // braces guard against any caller that bypasses this helper.
+  //   opts.includeLocked — the read-only Pre-Invoice preview passes this so
+  //   it can also show what an ALREADY-generated (locked) buyer's invoice
+  //   looks like. It never writes, so lifting the lock filter is safe there.
+  const lockClause = (opts && opts.includeLocked) ? '' : 'AND locked_at IS NULL';
   const lots = db.all(
     `SELECT * FROM lots WHERE auction_id = ? AND buyer = ? AND amount > 0
-     AND locked_at IS NULL
+     ${lockClause}
      AND (sale IS NULL OR sale = '' OR sale = ?) ORDER BY lot_no`,
     [auctionId, buyerCode, saleType]
   );

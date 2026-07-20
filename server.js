@@ -10044,7 +10044,9 @@ app.post('/api/invoices/preview-pdf/:auctionId', requireView, async (req, res) =
         [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
     }
 
-    const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg, { noTI });
+    // includeLocked — the Pre-Invoice PDF is read-only, so it can also render
+    // an already-generated (locked) buyer's invoice for verification.
+    const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg, { noTI, includeLocked: true });
     if (!invoice) return res.status(404).json({ error: `No lots found for buyer "${buyerCode}" in this auction.` });
     const auction = db.get('SELECT * FROM auctions WHERE id = ?', [req.params.auctionId]);
     const invoiceDate = (auction && auction.date) || new Date().toISOString().slice(0, 10);
@@ -10093,9 +10095,11 @@ app.get('/api/invoices/preview-all/:auctionId', requireView, (req, res) => {
       buyers.push({ code, name: (bRow && bRow.buyer1) || code, buyerCode: (bRow && bRow.code) || '', saleType: eff });
     }
 
-    // Decide which buyers to fully build a preview for.
+    // Decide which buyers to fully build a preview for. Match the requested
+    // buyer tolerant of surrounding whitespace on either side (some buyer
+    // codes carry trailing spaces from old imports).
     const toBuild = buyerParam
-      ? buyers.filter(b => b.code === buyerParam)
+      ? buyers.filter(b => String(b.code).trim() === buyerParam)
       : (wantAll ? buyers : []);
 
     const previews = [];
@@ -10109,7 +10113,9 @@ app.get('/api/invoices/preview-all/:auctionId', requireView, (req, res) => {
           [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
       }
       for (const b of toBuild) {
-        const inv = buildSalesInvoice(db, aid, b.code, b.saleType, cfg, { noTI });
+        // includeLocked — preview even already-generated (locked) invoices;
+        // this endpoint is read-only.
+        const inv = buildSalesInvoice(db, aid, b.code, b.saleType, cfg, { noTI, includeLocked: true });
         if (!inv) continue;
         previews.push({ buyerCode: b.code, saleType: b.saleType, buyer: inv.buyer, summary: inv.summary, lineItems: inv.lineItems });
       }
