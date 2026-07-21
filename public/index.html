@@ -18471,11 +18471,20 @@ async function piPretradeAction(action){
   }
   const pv=document.getElementById('pi-pretrade-preview');
   const label=EXP_LABELS[type]||type;
+  const tablePreview = EXP_XLSX_ONLY.has(type);
   await withOverlay(`Preparing ${label}…`, async () => {
-    const r=await fetch(B+`/api/exports/${type}/${aid}?format=pdf`,{headers:{'Authorization':'Bearer '+T}});
+    const fmt = tablePreview ? 'html' : 'pdf';
+    const r=await fetch(B+`/api/exports/${type}/${aid}?format=${fmt}`,{headers:{'Authorization':'Bearer '+T}});
     if(!r.ok){
       const e=await r.json().catch(()=>({}));
       alert(`Could not ${action} ${label}: ${e.error||('HTTP '+r.status)}`);
+      return;
+    }
+    if(action==='preview' && tablePreview){
+      const html = await r.text();
+      if(pv) pv.innerHTML=
+        `<div style="margin-bottom:6px"><span style="font-size:12px;color:#7C2D12;font-weight:600">Preview · ${esc(label)} <span style="font-weight:400">(spreadsheet — no PDF)</span></span></div>
+         <div style="max-height:440px;overflow:auto;border:1px solid #FDE68A;border-radius:8px;background:#fff;padding:8px">${html}</div>`;
       return;
     }
     const url=URL.createObjectURL(await r.blob());
@@ -24187,8 +24196,11 @@ const EXP_LABELS={lot_slip:'Lot Slip',lot_slip_after:'Lot Slip (After)',
 // Export types that only support a specific format (no XLSX/PDF choice).
 // e.g., Praman is a CSV-only upload format for the Praman auction platform.
 const EXP_CSV_ONLY = new Set(['praman_csv']);
-// Full File has too many columns to fit any printable PDF page — only XLSX.
-const EXP_XLSX_ONLY = new Set(['full_file', 'voucher_payment']);
+// Reports with NO PDF renderer — spreadsheet only. Their "Preview" shows an
+// HTML table (via ?format=html) instead of an inline PDF, and they offer no
+// PDF/Print buttons. Full File is too wide for a page; Voucher Payment and
+// Bank Payment (Before) are bespoke bank-file layouts with no PDF builder.
+const EXP_XLSX_ONLY = new Set(['full_file', 'voucher_payment', 'bank_payment_before']);
 // Reports that capture the pre-trade lot state. Rendered into the
 // "Pre-trade Exports" collapsible section above the main Export Center
 // AND surfaced as quick-download buttons inside the Price Import
@@ -24224,11 +24236,15 @@ function renderExportBtns(){
   expRenderButtons('pretrade');
   expRenderButtons('center');
 }
-// Which actions a report supports. CSV-only and XLSX-only reports have no
-// PDF pipeline, so they can't Preview/Print — surface just their one format.
+// Which actions a report supports.
+//   • CSV-only (Praman): just the CSV download — no Preview/Print.
+//   • XLSX-only (no PDF renderer): Preview shows an HTML TABLE, plus the
+//     Excel download. No PDF/Print (there's no PDF to render).
+//   • Everything else: Preview shows the inline PDF, plus Excel/PDF/Print.
+// `tablePreview` tells the action handler which kind of Preview to render.
 function expTypeCaps(k){
   if (EXP_CSV_ONLY.has(k))  return { csv:true };
-  if (EXP_XLSX_ONLY.has(k)) return { xlsx:true };
+  if (EXP_XLSX_ONLY.has(k)) return { preview:true, tablePreview:true, xlsx:true };
   return { preview:true, xlsx:true, pdf:true, print:true };
 }
 // Paint the action buttons for the selected report and clear any stale
@@ -24250,8 +24266,9 @@ function expRenderButtons(panel){
   if (pv) pv.innerHTML = '';
 }
 // Run a panel action. Excel/PDF/CSV download via the existing exportType
-// pipeline; Preview renders the report's PDF inline in an <iframe>; Print
-// loads that PDF in a hidden iframe and fires the browser print dialog.
+// pipeline; Preview renders the report inline — an <iframe> PDF for reports
+// that have a PDF, or an HTML table for XLSX-only reports (no PDF). Print
+// loads the PDF in a hidden iframe and fires the browser print dialog.
 async function expPanelAction(panel, action){
   const sel = document.getElementById('exp-'+panel+'-select');
   if (!sel) return;
@@ -24263,11 +24280,23 @@ async function expPanelAction(panel, action){
   }
   const pv = document.getElementById('exp-'+panel+'-preview');
   const label = EXP_LABELS[type] || type;
+  // XLSX-only reports have no PDF — preview them as an HTML table.
+  const tablePreview = EXP_XLSX_ONLY.has(type);
   await withOverlay(`Preparing ${label}…`, async () => {
-    const r = await fetch(B+`/api/exports/${type}/${aid}?format=pdf`, { headers:{ 'Authorization':'Bearer '+T } });
+    const fmt = tablePreview ? 'html' : 'pdf';
+    const r = await fetch(B+`/api/exports/${type}/${aid}?format=${fmt}`, { headers:{ 'Authorization':'Bearer '+T } });
     if (!r.ok){
       const e = await r.json().catch(()=>({}));
       alert(`Could not ${action} ${label}: ${e.error || ('HTTP '+r.status)}`);
+      return;
+    }
+    if (action === 'preview' && tablePreview){
+      const html = await r.text();
+      if (pv) pv.innerHTML =
+        `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+           <span style="font-size:12px;color:var(--text2)">Preview · ${esc(label)} <span style="color:var(--text3)">(spreadsheet — no PDF)</span></span>
+         </div>
+         <div style="max-height:640px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:#fff;padding:8px">${html}</div>`;
       return;
     }
     const url = URL.createObjectURL(await r.blob());

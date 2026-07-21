@@ -1783,6 +1783,48 @@ async function exportPoolerListConsolidated(db, auctionId) {
   });
 }
 
+// Render an already-built XLSX buffer as a simple HTML table. Used by the
+// Reports "Preview" action for XLSX-ONLY reports (the ones with no PDF
+// renderer — Full File, Voucher Payment, Bank Payment Before) so the
+// operator still gets an on-screen look. It reads the exact cells the
+// download contains, so the preview matches the file faithfully — including
+// any header/brand bands the generator added.
+async function xlsxBufferToHtml(buffer) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+  const ws = wb.worksheets[0];
+  if (!ws) return '<div style="padding:16px;color:#666">Nothing to preview.</div>';
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cellText = (cell) => {
+    const v = cell.value;
+    if (v == null) return '';
+    if (typeof v !== 'object') return String(v);
+    if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join('');
+    if (v.text != null) return String(v.text);
+    if (v.result != null) return String(v.result);
+    if (v.hyperlink != null) return String(v.hyperlink);
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    return '';
+  };
+  const maxCol = ws.columnCount || 1;
+  let html = '<table style="border-collapse:collapse;width:100%;font-size:12px;font-family:Arial,Helvetica,sans-serif">';
+  ws.eachRow({ includeEmpty: false }, (row) => {
+    html += '<tr>';
+    for (let c = 1; c <= maxCol; c++) {
+      const cell = row.getCell(c);
+      const text = cellText(cell);
+      const bold = !!(cell.font && cell.font.bold);
+      const num = typeof cell.value === 'number';
+      const align = (cell.alignment && cell.alignment.horizontal) || (num ? 'right' : 'left');
+      html += `<td style="border:1px solid #d5d5d5;padding:3px 7px;text-align:${align};${bold ? 'font-weight:700;' : ''}white-space:nowrap">${esc(text)}</td>`;
+    }
+    html += '</tr>';
+  });
+  html += '</table>';
+  return html;
+}
+
 // ── Export router ────────────────────────────────────────────
 const EXPORT_TYPES = {
   lot_slip:           { fn: exportLotSlip,           name: 'LotSlip' },
@@ -1815,6 +1857,7 @@ module.exports = {
   // can route through the same standardized brand band + column-header
   // styling instead of building their own ExcelJS workbook.
   createExcelBuffer,
+  xlsxBufferToHtml,
   exportLotSlip, exportLotSlipAfter, exportLotBuyer, exportLotName, exportLotPayment,
   exportPramanCSV, exportPriceList, exportPriceListBefore,
   exportBankPayment, exportBankPaymentBefore, exportVoucherPayment,

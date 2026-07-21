@@ -33,7 +33,7 @@ const tradeFair = require('./trade-fair');
 const { initCompanySettings, CATEGORIES, getSetting, getAllSettings, updateSettings, getSettingsFlat, getGSTRates } = require('./company-config');
 const { calculateLot, buildSalesInvoice, buildPurchaseInvoice, buildAgriBill, listAgriSellers, getPaymentSummary, getBankPaymentData, getTDSReturnData, getSalesJournal, getPurchaseJournal, round2, round0, distributeRoundedPayable } = require('./calculations');
 const { generatePurchaseInvoicePDF, generateCropReceiptPDF, generateLotReceiptPDF, generateAgriBillPDF, generateSalesInvoicePDF, generateSalesInvoicesBatchPDF, generatePurchaseInvoicesBatchPDF, generateAgriBillsBatchPDF } = require('./invoice-pdf');
-const { EXPORT_TYPES, createExcelBuffer } = require('./exports');
+const { EXPORT_TYPES, createExcelBuffer, xlsxBufferToHtml } = require('./exports');
 const { getCompanyHeader, writeXlsxCompanyHeader } = require('./report-formatters');
 const { exportPdf: exportAnyPdf } = require('./exports-pdf');
 const { DBF_EXPORTS, exportDbf, exportXlsx } = require('./dbf-exports');
@@ -10543,6 +10543,18 @@ app.get('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
       buffer = await exportDef.fn(db, auctionId, cfg, req.query.state, opts);
     } else {
       buffer = await exportDef.fn(db, auctionId, req.query.state, opts);
+    }
+    // HTML table preview — used by the Reports "Preview" action for
+    // XLSX-ONLY reports (no PDF renderer). We build the workbook exactly as
+    // for download, then render its cells as an HTML table so the preview
+    // is faithful to the file. Only valid for spreadsheet exports (not CSV).
+    if (format === 'html') {
+      if ((exportDef.ext || 'xlsx') !== 'xlsx') {
+        return res.status(400).json({ error: 'HTML preview is only available for spreadsheet reports.' });
+      }
+      const html = await xlsxBufferToHtml(Buffer.from(buffer));
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
     }
     // Per-export-type content-type/extension override (defaults to xlsx).
     // CSV exports like Praman use ext:'csv', mime:'text/csv'.
