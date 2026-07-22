@@ -3208,8 +3208,11 @@ input[type="search"]:focus{
           </tfoot>
         </table>
       </div>
+      <div style="display:flex;justify-content:center;margin:14px 0 0">
+        <button class="btn btn-a" onclick="expAddRow()" style="min-width:220px;font-weight:600">+ Add Expense</button>
+      </div>
       <p style="color:var(--spice-text-hint);font-size:12px;margin:12px 2px">
-        Tip: enter Wages and No.of person and Amount fills in automatically (Wages × No.of person). Total = Amount + GST. Rows save when you leave a field.
+        Tip: press <b>Enter</b> to jump to the next box, and <b>Enter</b> on the last box (Pay Name) of the last line to start a fresh line — no need to scroll up to the button. <b>↑</b>/<b>↓</b> move between lines. Enter Wages and No.of person and Amount fills in automatically (Wages × No.of person); Total = Amount + GST. Rows save when you leave a box.
       </p>
 
       <!-- Default expenses — the reusable template. Maintain the recurring
@@ -10168,7 +10171,7 @@ let _expAutoTried = false;
 
 function _expRowHTML(r){
   const inp = (f, val, extra='') =>
-    `<input class="exp-in" data-id="${r.id}" data-f="${f}" value="${val == null ? '' : esc(String(val))}" oninput="expOnInput(this)" onchange="expSaveRow(${r.id})" ${extra}>`;
+    `<input class="exp-in" data-id="${r.id}" data-f="${f}" value="${val == null ? '' : esc(String(val))}" oninput="expOnInput(this)" onchange="expSaveRow(${r.id})" onkeydown="expKeyNav(event,this)" ${extra}>`;
   const numAttr = 'inputmode="decimal" style="text-align:right"';
   const numVal = v => (Number(v) ? _expNumStr(v) : '');
   return `<tr data-id="${r.id}">
@@ -10215,15 +10218,67 @@ async function expSaveRow(id){
   _expFooterFromDom();
 }
 
+// Keyboard navigation order across the entry fields. `total` is left out on
+// purpose — it's fully derived (Amount + GST), so there's nothing to type
+// there; the user tabs through the fields they actually fill.
+const EXP_NAV = ['particulars', 'wages', 'persons', 'amount', 'gst', 'pay_name'];
+// Spreadsheet-style keyboard nav for both expense grids (#exp-rows and the
+// defaults template #expd-rows). Enter walks left→right through EXP_NAV and
+// drops to the next row's first field; Enter on the LAST field of the LAST
+// row adds a fresh line and lands on it — so the user never has to scroll up
+// to the "+ Add Expense" button while keying a sheet. Arrow Up/Down jump the
+// same column between rows. Shift+Enter steps backwards.
+async function expKeyNav(e, el){
+  const key = e.key;
+  if (key !== 'Enter' && key !== 'ArrowUp' && key !== 'ArrowDown') return;
+  const scope = el.closest('tbody'); if (!scope) return;
+  const isDefaults = scope.id === 'expd-rows';
+  const tr = el.closest('tr');
+  const rowsEls = Array.from(scope.querySelectorAll('tr[data-id]'));
+  const rowIdx = rowsEls.indexOf(tr);
+  const fieldIdx = EXP_NAV.indexOf(el.dataset.f);
+  if (fieldIdx < 0) return;
+  const focusField = (rowEl, name) => {
+    const t = rowEl && rowEl.querySelector(`.exp-in[data-f="${name}"]`);
+    if (t){ t.focus(); if (t.select) t.select(); }
+    return !!t;
+  };
+  if (key === 'ArrowUp' || key === 'ArrowDown'){
+    e.preventDefault();
+    focusField(rowsEls[rowIdx + (key === 'ArrowDown' ? 1 : -1)], el.dataset.f);
+    return;
+  }
+  // Enter
+  e.preventDefault();
+  if (e.shiftKey){
+    if (fieldIdx > 0) focusField(tr, EXP_NAV[fieldIdx - 1]);
+    else if (rowIdx > 0) focusField(rowsEls[rowIdx - 1], EXP_NAV[EXP_NAV.length - 1]);
+    return;
+  }
+  if (fieldIdx < EXP_NAV.length - 1){ focusField(tr, EXP_NAV[fieldIdx + 1]); return; }
+  if (rowIdx < rowsEls.length - 1){ focusField(rowsEls[rowIdx + 1], EXP_NAV[0]); return; }
+  // Last field of the last row → save what was typed, then add a new line.
+  const id = el.dataset.id;
+  if (isDefaults){ await expdSaveRow(id); await expdAddRow(); }
+  else { await expSaveRow(id); await expAddRow(); }
+}
+
 async function expAddRow(){
   const aid = _expAid();
   if (!aid){ toast('Pick a ' + termAuction(false, true) + ' first'); return; }
-  try { await j('/api/expenses', { method: 'POST', body: JSON.stringify({ auction_id: aid }) }); }
+  // Pre-fill the new line's Pay Name from the last row — trade expenses
+  // usually go to the same payee, so this saves re-typing it each line.
+  const lastRow = [...document.querySelectorAll('#exp-rows tr[data-id]')].pop();
+  const payName = lastRow ? (lastRow.querySelector('.exp-in[data-f="pay_name"]')?.value || '').trim() : '';
+  const body = { auction_id: aid };
+  if (payName) body.pay_name = payName;
+  try { await j('/api/expenses', { method: 'POST', body: JSON.stringify(body) }); }
   catch(e){ toast('Could not add: ' + (e.message || e)); return; }
   await loadExpenseRows();
   const rows = document.querySelectorAll('#exp-rows tr[data-id]');
-  const first = rows.length && rows[rows.length - 1].querySelector('.exp-in');
-  if (first) first.focus();
+  const last = rows.length && rows[rows.length - 1];
+  const firstField = last && last.querySelector('.exp-in[data-f="particulars"]');
+  if (firstField){ firstField.focus(); if (firstField.select) firstField.select(); }
 }
 
 async function expDeleteRow(id){
@@ -10302,7 +10357,7 @@ async function loadExpenseDefaults(){
 
 function _expdRowHTML(r){
   const inp = (f, val, extra='') =>
-    `<input class="exp-in" data-id="${r.id}" data-f="${f}" value="${val == null ? '' : esc(String(val))}" oninput="expdOnInput(this)" onchange="expdSaveRow(${r.id})" ${extra}>`;
+    `<input class="exp-in" data-id="${r.id}" data-f="${f}" value="${val == null ? '' : esc(String(val))}" oninput="expdOnInput(this)" onchange="expdSaveRow(${r.id})" onkeydown="expKeyNav(event,this)" ${extra}>`;
   const numAttr = 'inputmode="decimal" style="text-align:right"';
   const numVal = v => (Number(v) ? _expNumStr(v) : '');
   return `<tr data-id="${r.id}">
@@ -27602,6 +27657,8 @@ let _pe = { aid: null, lots: [], dirty: {} };
 // Price Check flag is surfaced on <body data-feat-price-check> when settings load.
 function _peFlagPriceCheck(){ return document.body.getAttribute('data-feat-price-check') === '1'; }
 function _peFmt(n){ return (Number(n)||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// Bags are counted in whole units — show them as integers, no decimals.
+function _peInt(n){ return (Math.round(Number(n)||0)).toLocaleString('en-IN'); }
 
 function loadPriceEntry(){
   const note = document.getElementById('pe-pc-note');
@@ -27642,9 +27699,9 @@ function renderPriceEntryGrid(){
       <td style="padding:6px 8px;white-space:nowrap;font-weight:600">${esc(l.lot_no)}</td>
       <td style="padding:6px 8px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(l.name||'')}</td>
       <td style="padding:6px 8px;text-align:right">${esc(l.branch||'')}</td>
-      <td style="padding:6px 8px;text-align:right">${_peFmt(l.bags)}</td>
+      <td style="padding:6px 8px;text-align:right">${_peInt(l.bags)}</td>
       <td style="padding:6px 8px;text-align:right">${_peFmt(l.qty)}</td>
-      <td style="padding:6px 8px;text-align:right"><input type="number" step="0.01" min="0" inputmode="decimal" data-peprice="${i}" value="${isWD ? '' : (l.price ? Number(l.price) : '')}" placeholder="${isWD ? '—' : '0.00'}" ${readonly ? `disabled title="${isWD ? 'Withdrawn lot — carries no price' : 'Locked lot — edit via the Lots tab'}"` : ''} onkeydown="pePriceKey(event,${i})" oninput="pePriceInput(${i})" onblur="pePriceSave(${i})" style="width:110px;text-align:right;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:13px${readonly ? ';background:#f3f4f6;color:var(--text3)' : ''}"></td>
+      <td style="padding:6px 8px;text-align:right"><input type="number" step="0.01" min="0" inputmode="decimal" data-peprice="${i}" value="${isWD ? '' : (l.price ? Number(l.price).toFixed(2) : '')}" placeholder="${isWD ? '—' : '0.00'}" ${readonly ? `disabled title="${isWD ? 'Withdrawn lot — carries no price' : 'Locked lot — edit via the Lots tab'}"` : ''} onkeydown="pePriceKey(event,${i})" oninput="pePriceInput(${i})" onblur="pePriceSave(${i})" style="width:110px;text-align:right;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:13px${readonly ? ';background:#f3f4f6;color:var(--text3)' : ''}"></td>
       <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums" data-peamt="${i}">${_peFmt(amt)}</td>
       <td data-pestatus="${i}" style="padding:6px 4px;width:26px;text-align:center;color:var(--text3)">${isWD ? '<span title="Withdrawn" style="color:#b91c1c;font-weight:700;font-size:10px">WD</span>' : (locked ? '🔒' : '')}</td>
     </tr>`;
