@@ -965,6 +965,19 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
   background:var(--spice-turmeric);border-radius:0 3px 3px 0
 }
 .side-item.active svg{color:var(--spice-turmeric)}
+/* ── Guided-flow stage locks ──────────────────────────────────────
+   A menu whose trade hasn't reached its stage is dimmed with a 🔒 and a
+   tooltip; a capture-phase click handler shows the reason as a toast
+   instead of navigating. Kept subordinate to the display:none gates
+   above (feature flags, roles, permissions) — a hidden item stays
+   hidden; locking only dims a visible one. */
+.side-item.locked{opacity:.4;cursor:not-allowed}
+.side-item.locked:hover{background:none;color:rgba(255,255,255,.85)}
+.side-item.locked svg{opacity:.5}
+.side-item.locked::after{content:"🔒";margin-left:auto;font-size:11px;opacity:.8;padding-left:8px}
+/* "Show all menus" admin escape hatch — only for user-manage roles. */
+.topbar-showall{display:none}
+body[data-perm-user-manage="1"] .topbar-showall{display:inline-flex !important}
 .side-item svg{width:18px;height:18px;flex-shrink:0;stroke-width:2;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;color:rgba(255,255,255,.65)}
 
 /* ─────── Collapsed sidebar (icons-only) ───────
@@ -2912,6 +2925,11 @@ input[type="search"]:focus{
         <span style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Trade</span>
         <select id="topbar-trade" onchange="setSharedAuctionId(this.value, 'topbar')" title="Selected trade — applies to every tab that reads a trade" style="height:32px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:13px;font-weight:600;min-width:200px"></select>
       </div>
+      <!-- Admin escape hatch — reveal every menu regardless of the selected
+           trade's stage. Only shown to user-manage roles (CSS .topbar-showall). -->
+      <label class="topbar-showall" title="Reveal every menu regardless of the trade's stage" style="align-items:center;gap:5px;margin-left:14px;font-size:11.5px;font-weight:600;color:var(--text3);cursor:pointer;white-space:nowrap">
+        <input type="checkbox" id="topbar-showall" onchange="onTradeShowAll(this.checked)" style="cursor:pointer"> Show all menus
+      </label>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
       <span id="sync-indicator" class="sync-pill sync-ok" title="Last successful sync"></span>
@@ -2975,30 +2993,30 @@ input[type="search"]:focus{
       </div>
       <div class="side-group">
         <div class="side-group-lbl">Trade Operations</div>
-        <button class="side-item" data-tab="lots" onclick="go('lots')">
+        <button class="side-item" data-tab="lots" data-min-stage="2" data-req-validated="1" onclick="go('lots')">
           <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           Lots
         </button>
         <!-- Lot Entry — fast desktop entry form for the auction-hall workflow.
              Visible to lot_entry, operator, manager, admin roles. -->
-        <button class="side-item needs-lot-entry-view" data-tab="lotentry" onclick="go('lotentry')">
+        <button class="side-item needs-lot-entry-view" data-tab="lotentry" data-min-stage="1" onclick="go('lotentry')">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
           Lot Entry
         </button>
         <!-- Price List Mapping — fills the CODE column on a Price List sheet
              from TRADE NAME values. Behind flag_price_list_mapping. -->
-        <button class="side-item feat-price-list-mapping" data-tab="plmap" onclick="go('plmap')">
+        <button class="side-item feat-price-list-mapping" data-tab="plmap" data-min-stage="2" onclick="go('plmap')">
           <svg viewBox="0 0 24 24"><path d="M9 11H5a2 2 0 0 0-2 2v7h7v-9z"/><path d="M21 11h-4v9h4a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2z"/><path d="M14 4l-4 4 4 4"/></svg>
           Price List Mapping
         </button>
         <!-- Price Check — reconciles an external price sheet against lots. -->
-        <button class="side-item feat-price-check" data-tab="pricecheck" onclick="go('pricecheck')">
+        <button class="side-item feat-price-check" data-tab="pricecheck" data-min-stage="2" onclick="go('pricecheck')">
           <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           Price Check
         </button>
         <!-- Price Entry — fast price-only editable grid; a focused alternative
              to opening the Edit Lot modal per lot. -->
-        <button class="side-item needs-lot-write" data-tab="priceentry" onclick="go('priceentry')">
+        <button class="side-item needs-lot-write" data-tab="priceentry" data-min-stage="2" onclick="go('priceentry')">
           <svg viewBox="0 0 24 24"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
           Price Entry
         </button>
@@ -3017,27 +3035,27 @@ input[type="search"]:focus{
              be generated (bill-to, ship-to, amounts) + exact-PDF preview.
              Nothing is generated or numbered from here. Placed above Sales
              Invoices as the natural "preview before you generate" step. -->
-        <button class="side-item" data-tab="preinvoice" onclick="go('preinvoice')">
+        <button class="side-item" data-tab="preinvoice" data-min-stage="3" onclick="go('preinvoice')">
           <svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
           Pre-Invoice
         </button>
-        <button class="side-item" data-tab="invoices" onclick="go('invoices')">
+        <button class="side-item" data-tab="invoices" data-min-stage="3" onclick="go('invoices')">
           <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
           Sales Invoices
         </button>
-        <button class="side-item" data-tab="purchases" onclick="go('purchases')">
+        <button class="side-item" data-tab="purchases" data-min-stage="3" onclick="go('purchases')">
           <svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg>
           Purchases
         </button>
-        <button class="side-item feat-bills" data-tab="bills" onclick="go('bills')">
+        <button class="side-item feat-bills" data-tab="bills" data-min-stage="3" onclick="go('bills')">
           <svg viewBox="0 0 24 24"><path d="M20 14v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8z"/><path d="M14 2v6h6M9 15h4M9 18h6M9 12h2"/></svg>
           Bills of Supply
         </button>
-        <button class="side-item feat-debit-notes" data-tab="debit" onclick="go('debit')">
+        <button class="side-item feat-debit-notes" data-tab="debit" data-min-stage="3" onclick="go('debit')">
           <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h2M12 15h2"/></svg>
           Debit Notes
         </button>
-        <button class="side-item" data-tab="payments" onclick="go('payments')">
+        <button class="side-item" data-tab="payments" data-min-stage="2" onclick="go('payments')">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>
           Payments
         </button>
@@ -3056,27 +3074,27 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
           Reports Hub
         </button>
-        <button class="side-item" data-tab="exports" onclick="go('exports')">
+        <button class="side-item" data-tab="exports" data-min-stage="2" onclick="go('exports')">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           Exports
         </button>
-        <button class="side-item" data-tab="lorry" onclick="go('lorry')">
+        <button class="side-item" data-tab="lorry" data-min-stage="4" onclick="go('lorry')">
           <svg viewBox="0 0 24 24"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7zM5.5 18.5a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM18.5 18.5a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>
           Lorry
         </button>
-        <button class="side-item" data-tab="tds" onclick="go('tds')">
+        <button class="side-item" data-tab="tds" data-min-stage="4" onclick="go('tds')">
           <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           TDS Returns
         </button>
-        <button class="side-item" data-tab="journals" onclick="go('journals')">
+        <button class="side-item" data-tab="journals" data-min-stage="4" onclick="go('journals')">
           <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           Journals
         </button>
-        <button class="side-item" data-tab="registers" onclick="go('registers')">
+        <button class="side-item" data-tab="registers" data-min-stage="4" onclick="go('registers')">
           <svg viewBox="0 0 24 24"><path d="M3 3h18v4H3zM3 10h18v4H3zM3 17h18v4H3z"/></svg>
           Registers
         </button>
-        <button class="side-item" data-tab="tally" onclick="go('tally')">
+        <button class="side-item" data-tab="tally" data-min-stage="4" onclick="go('tally')">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           To Tally
         </button>
@@ -9281,6 +9299,9 @@ function go(tab){
       toast(`Failed to load ${tab}: ${err.message||err}`);
     }
   }
+  // Re-evaluate the guided-flow sidebar gate on every tab change (force a
+  // fresh stage lookup so an item that just unlocked reflects immediately).
+  if(typeof refreshTradeStage==='function'){ try{ refreshTradeStage(true); }catch(_){} }
   // Auto-close sidebar on mobile after selection
   if(window.innerWidth<=900){const sb=document.getElementById('sidebar');const ov=document.getElementById('sb-overlay');if(sb)sb.classList.remove('open');if(ov)ov.classList.remove('open')}
 }
@@ -12427,6 +12448,9 @@ async function leSaveLot(){
     setTimeout(() => document.getElementById('le-lotno').focus(), 50);
     await loadLeRecent();
     leLoadActivity(1);
+    // First lot for this trade advances it to stage 2 — proactively un-dim
+    // the newly-unlocked sidebar menus (Price Entry, Payments, …).
+    if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch(_){} }
     // After a successful create (not edit), auto-suggest the next lot
     // number for this branch so the user can hit Save again immediately.
     if (!wasEditing) leAutoSuggestLotNo();
@@ -18945,6 +18969,96 @@ function getSharedAuctionId(){
   try { return sessionStorage.getItem('spice.sharedAucId') || ''; }
   catch(_) { return ''; }
 }
+
+// ══════════════════════════════════════════════════════════════
+// GUIDED-FLOW STAGE GATE — progressively reveal sidebar menus as the
+// selected trade advances. A trade climbs stages 1→4:
+//   1  trade exists · 2  ≥1 lot entered · 3  ≥1 lot priced · 4  ≥1 doc
+// Each .side-item[data-min-stage] locks (dim + 🔒 + tooltip) until the
+// selected trade reaches its stage; Lots also needs Validate Lots to
+// have passed (data-req-validated). Fails OPEN on any lookup error so a
+// transient failure never hides a menu (the server still enforces the
+// real gates). lot_entry role and the admin "Show all menus" toggle
+// bypass entirely. See /api/auctions/:id/stage.
+window._tradeStage = 0;
+window._tradeSignals = {};
+let _stagedTradeId;
+const TRADE_STAGE_MSG = {
+  1: 'Create or select a trade to unlock this.',
+  2: 'Enter at least one lot for this trade to unlock this.',
+  3: 'Enter a price for at least one lot to unlock this.',
+  4: 'Generate a transaction (invoice / purchase) to unlock this.',
+};
+const TRADE_VALIDATE_MSG = "Validate this trade's lots (Lot Entry → Validate Lots) to unlock this.";
+function _tradeShowAll(){ try { return localStorage.getItem('tradeStageShowAll') === '1'; } catch(_) { return false; } }
+
+// Fetch + apply the selected trade's stage. `force` re-fetches even when
+// the trade id is unchanged (used after actions that can advance a stage).
+async function refreshTradeStage(force){
+  const id = (typeof getSharedAuctionId === 'function' ? getSharedAuctionId() : '') || '';
+  if (!force && id === _stagedTradeId) { applyTradeStageLocks(); return; }
+  _stagedTradeId = id;
+  let stage = 0, signals = {};
+  if (id) {
+    try {
+      const d = await j(`/api/auctions/${id}/stage`);
+      // Ignore a stale response after a rapid trade switch.
+      if (((typeof getSharedAuctionId === 'function' ? getSharedAuctionId() : '') || '') !== id) return;
+      stage = Number(d && d.stage) || 1;
+      signals = (d && d.signals) || {};
+    } catch(_) { stage = 1; signals = { lotsValidated: true }; }   // fail open
+  }
+  window._tradeStage = stage;
+  window._tradeSignals = signals;
+  document.body.setAttribute('data-trade-stage', String(stage));
+  applyTradeStageLocks();
+}
+
+// Toggle `.locked` on every stage-tagged item against the current stage.
+function applyTradeStageLocks(){
+  const bypass = _tradeShowAll() || window._userRole === 'lot_entry';
+  const stage = bypass ? Infinity : (window._tradeStage || 0);
+  const sig = window._tradeSignals || {};
+  const validated = bypass ? true : (sig.lotsValidated !== false);   // fail open
+  document.querySelectorAll('.side-item[data-min-stage]').forEach(it => {
+    const need = Number(it.dataset.minStage) || 0;
+    let locked = false, msg = '';
+    if (need > stage) {
+      locked = true; msg = TRADE_STAGE_MSG[need] || 'Not available yet.';
+    } else if (it.dataset.reqValidated === '1' && !validated) {
+      locked = true; msg = TRADE_VALIDATE_MSG;
+    }
+    it.classList.toggle('locked', locked);
+    if (locked) it.setAttribute('title', msg); else it.removeAttribute('title');
+  });
+}
+
+// Admin escape hatch — reveal every menu regardless of trade stage.
+function onTradeShowAll(on){
+  try { localStorage.setItem('tradeStageShowAll', on ? '1' : '0'); } catch(_){}
+  applyTradeStageLocks();
+}
+
+// Capture-phase interceptor: a click on a locked menu re-checks the stage
+// first (in case a recent action advanced it without an explicit refresh) —
+// if it has since unlocked, navigate through; otherwise explain what unlocks
+// it via a toast instead of navigating. Runs BEFORE the inline go().
+document.addEventListener('click', function(e){
+  const it = e.target.closest && e.target.closest('.side-item.locked');
+  if (!it) return;
+  e.preventDefault(); e.stopPropagation();
+  const tab = it.dataset.tab;
+  Promise.resolve(typeof refreshTradeStage === 'function' ? refreshTradeStage(true) : null).then(() => {
+    if (!it.classList.contains('locked')) {
+      if (tab && typeof go === 'function') go(tab);   // unlocked in the meantime
+    } else {
+      const msg = it.getAttribute('title') || 'Not available yet.';
+      if (typeof toast === 'function') toast('🔒 ' + msg);
+    }
+  });
+}, true);
+// Restore the "Show all menus" checkbox from localStorage on load.
+(function(){ const cb = document.getElementById('topbar-showall'); if (cb) cb.checked = _tradeShowAll(); })();
 function setSharedAuctionId(id, source){
   // source = 'topbar' | the per-tab select element | a select-id string —
   // used to skip echoing the change back to the originator (avoids change-event loops).
@@ -18971,6 +19085,9 @@ function setSharedAuctionId(id, source){
       }
     }
   }
+  // The guided-flow sidebar gate follows the selected trade — re-evaluate
+  // whenever it changes (from the topbar or any per-tab select).
+  if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(); } catch(_){} }
 }
 // Set of select elements that should mirror the shared state.
 const _wiredAuctionSelects = new Set();

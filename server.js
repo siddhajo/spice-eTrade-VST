@@ -4008,6 +4008,56 @@ app.delete('/api/auctions/:id', requireDelete, (req, res) => {
   res.json({ success: true, deleted: removed });
 });
 
+// ── GUIDED-FLOW TRADE STAGE ────────────────────────────────────
+// Returns the workflow "stage" (1–4) of one trade so the sidebar can
+// progressively reveal menus as the trade advances. Monotonic — each
+// stage requires all the ones below it:
+//   1  trade exists
+//   2  ≥1 lot entered
+//   3  ≥1 lot has a price (> 0)
+//   4  ≥1 transaction generated (invoice / purchase / bill / debit note)
+// `signals` carries the raw facts (incl. lotsValidated) so the client can
+// apply the extra "Lots needs Validate Lots" gate. The client fails OPEN
+// on any error — the server still enforces the real per-action gates.
+app.get('/api/auctions/:id/stage', requireViewOrLotEntry, (req, res) => {
+  const db = getDb();
+  const aid = parseInt(req.params.id, 10);
+  if (!aid) return res.status(400).json({ error: 'Invalid trade id' });
+  const auction = db.get('SELECT id, ano FROM auctions WHERE id = ?', [aid]);
+  if (!auction) return res.status(404).json({ error: 'Trade not found' });
+  const ano = String(auction.ano || '').trim();
+  const cnt = (sql, params) => { try { const r = db.get(sql, params); return Number(r && r.c) || 0; } catch (_) { return 0; } };
+
+  const lotCount     = cnt('SELECT COUNT(*) AS c FROM lots WHERE auction_id = ?', [aid]);
+  const hasPricedLot = cnt('SELECT COUNT(*) AS c FROM lots WHERE auction_id = ? AND COALESCE(price,0) > 0', [aid]) > 0;
+  // Doc linkage mirrors the trade-delete cascade: invoices/purchases/bills
+  // key by auction_id OR ano; debit_notes key by ano only.
+  const hasDocs =
+       cnt('SELECT COUNT(*) AS c FROM invoices    WHERE auction_id = ? OR ano = ?', [aid, ano]) > 0
+    || cnt('SELECT COUNT(*) AS c FROM purchases   WHERE auction_id = ? OR ano = ?', [aid, ano]) > 0
+    || cnt('SELECT COUNT(*) AS c FROM bills       WHERE auction_id = ? OR ano = ?', [aid, ano]) > 0
+    || cnt('SELECT COUNT(*) AS c FROM debit_notes WHERE ano = ?',                  [ano]) > 0;
+
+  // Lot-validation gate: 'clean' (validated) and 'off' (feature disabled)
+  // both satisfy the extra Lots requirement; 'never' keeps Lots locked.
+  const lvState = lvGateState(db, aid);
+  const lotsValidated = lvState === 'clean' || lvState === 'off';
+  // Price Check ever run (or feature off) — informational signal only.
+  const priceCheckedEver = pcGateState(db, aid) !== 'never';
+
+  let stage = 1;                                 // trade exists
+  if (lotCount > 0)                     stage = 2;
+  if (stage >= 2 && hasPricedLot)       stage = 3;
+  if (stage >= 3 && hasDocs)            stage = 4;
+
+  res.json({
+    auctionId: aid,
+    ano: auction.ano,
+    stage,
+    signals: { lotCount, lotsValidated, priceCheckedEver, hasPricedLot, hasDocs },
+  });
+});
+
 // ══════════════════════════════════════════════════════════════
 // LOT ALLOCATIONS — per-trade, per-branch lot-number ranges
 // ══════════════════════════════════════════════════════════════
