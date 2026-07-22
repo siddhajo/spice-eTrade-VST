@@ -705,6 +705,9 @@ app.get('/api/branding', (req, res) => {
       // and finally to 'emerald').
       theme: cfg.theme || '',
       themeCustomColor: cfg.theme_custom_color || '',
+      // Accent style — user-chosen button/card personality (classic/soft/
+      // sharp/playful/minimal). Independent of the admin preset bundle.
+      themeAccent: cfg.theme_accent || '',
       // Preset bundle. preset is the named slug (e.g. 'bluehill');
       // presetConfig is the full {theme, density, font, hideAppearance}
       // payload the frontend applies at boot.
@@ -712,7 +715,7 @@ app.get('/api/branding', (req, res) => {
       presetConfig,
     });
   } catch (e) {
-    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '', preset: '', presetConfig: null });
+    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '', themeAccent: '', preset: '', presetConfig: null });
   }
 });
 
@@ -731,11 +734,16 @@ app.put('/api/branding', requireSettingsWrite, (req, res) => {
     const allowed = {};
     if (typeof body.theme === 'string') {
       // Validate against the same theme list the frontend uses
-      const THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','custom'];
+      const THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','sunset','neon','tropical','berry','custom'];
       if (THEMES.includes(body.theme)) allowed.theme = body.theme;
     }
     if (typeof body.themeCustomColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(body.themeCustomColor)) {
       allowed.theme_custom_color = body.themeCustomColor;
+    }
+    if (typeof body.themeAccent === 'string') {
+      // Accent style = button/card personality. Matches _ACCENTS in the frontend.
+      const ACCENTS = ['classic','soft','sharp','playful','minimal'];
+      if (ACCENTS.includes(body.themeAccent)) allowed.theme_accent = body.themeAccent;
     }
     if (!Object.keys(allowed).length) {
       return res.status(400).json({ error: 'No valid branding fields supplied' });
@@ -749,7 +757,7 @@ app.put('/api/branding', requireSettingsWrite, (req, res) => {
        VALUES (?, ?, 'branding', ?, 'text')
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     );
-    const labels = { theme: 'Theme', theme_custom_color: 'Custom primary color' };
+    const labels = { theme: 'Theme', theme_custom_color: 'Custom primary color', theme_accent: 'Accent style' };
     for (const [k, v] of Object.entries(allowed)) {
       stmt.run(k, String(v), labels[k] || k);
     }
@@ -875,7 +883,7 @@ app.get('/admin/branding', (req, res) => {
   const cFont     = c.font || 'jakarta';
   const cHide     = c.hideAppearance !== false; // default true
 
-  const themeOpts = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','custom']
+  const themeOpts = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','sunset','neon','tropical','berry','custom']
     .map(t => `<option value="${t}" ${t === cTheme ? 'selected' : ''}>${t}</option>`).join('');
   const densityOpts = TENANT_DENSITIES.map(d => `<option value="${d}" ${d === cDensity ? 'selected' : ''}>${d}</option>`).join('');
   const fontOpts = TENANT_FONTS.map(f => `<option value="${f}" ${f === cFont ? 'selected' : ''}>${f}</option>`).join('');
