@@ -3173,7 +3173,11 @@ input[type="search"]:focus{
         box-shadow:0 0 0 2px rgba(46,125,50,.16)}
       #tc-expenses #exp-table td, #tc-expenses #expd-table td{padding:6px 10px;vertical-align:middle}
       #tc-expenses #exp-table th, #tc-expenses #expd-table th{padding:10px;font-size:12px;
-        color:var(--spice-text-hint);border-bottom:1px solid var(--spice-line)}
+        font-weight:600;letter-spacing:.3px;background:var(--spice-cardamom);color:#fff;
+        border-bottom:none}
+      /* Round the top corners so the coloured header sits cleanly on the card. */
+      #tc-expenses #exp-table th:first-child, #tc-expenses #expd-table th:first-child{border-top-left-radius:8px}
+      #tc-expenses #exp-table th:last-child, #tc-expenses #expd-table th:last-child{border-top-right-radius:8px}
       #tc-expenses #exp-defaults-box[open] > summary{margin-bottom:6px}
       #tc-expenses #exp-defaults-box summary::-webkit-details-marker{display:none}
       #tc-expenses .exp-del{background:none;border:none;cursor:pointer;color:var(--spice-chili);
