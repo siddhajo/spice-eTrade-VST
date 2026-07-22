@@ -285,6 +285,18 @@ const S = [
   ],
   warn:'**Save & Next** keeps the **same seller** for the next lot — tap **Clear** when you switch to a different seller.' },
 
+{ id:'priceentry', g:'ops', ic:'🔢', name:'Price Entry', purpose:'Type prices straight onto the lots, one after another.',
+  mock:{ title:'Price Entry',
+    toolbar:[sel('Auction 12',{pin:1}),chip('🔄 Refresh'),chip('💾 Save & Calculate All',{green:1,pin:4})],
+    body:{table:{head:['Lot','Seller','Qty','Price ₹/kg','Amount'],rows:[['12','R MURUGAN','640','410','₹2,62,400'],['13','K STORES','520','—','—']]}} },
+  steps:[
+    'Pick the **Auction** at the top — its lots load in a grid.',
+    'Click the **Price** box on a lot, type the rate, and press **Enter** (or Tab) to save it and jump to the next lot.',
+    'Only the **Price** column can be edited — every other field is read-only, so nothing else changes by mistake.',
+    'When every lot is priced, click **💾 Save & Calculate All** to compute commission, tax and payable for the whole auction.',
+  ],
+  warn:'A faster alternative to **Price Import** when you\'re keying prices by hand. If **Price Check** is ON, you still re-verify prices before generating invoices.' },
+
 { id:'plmap', g:'ops', ic:'🏷️', name:'Price List Mapping', hot:true, flag:1,
   purpose:'Fill in the buyer CODE for each lot — pick the right one when it\'s unclear.',
   mock:{ title:'Price List Mapping',

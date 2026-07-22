@@ -1159,6 +1159,12 @@ th{
 td{padding:12px 14px;border-bottom:1px solid var(--spice-line);font-size:13px;color:var(--spice-text-main)}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:var(--spice-cream)}
+/* Price Entry grid — coloured header (overrides the element-level th{}
+   background/colour above, which would otherwise paint each cell cream). */
+.pe-grid-table thead th{
+  background:var(--spice-cardamom);color:#fff;
+  padding:8px;font-size:11px;letter-spacing:.4px;border-bottom:none
+}
 .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
 
 /* ── Stat Cards ──────────────────────────────────────────── */
@@ -3000,6 +3006,12 @@ input[type="search"]:focus{
           <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           Price Check
         </button>
+        <!-- Price Entry — fast price-only editable grid; a focused alternative
+             to opening the Edit Lot modal per lot. -->
+        <button class="side-item needs-lot-write" data-tab="priceentry" onclick="go('priceentry')">
+          <svg viewBox="0 0 24 24"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Price Entry
+        </button>
         <!-- Extra-Lot Requests — mobile operators asking the admin to append
              more lot numbers to their branch's allocation. Only visible to
              auction-write roles (the approvers). Badge via pollExtraLotReqBadge(). -->
@@ -3816,6 +3828,29 @@ input[type="search"]:focus{
         <div style="overflow-x:auto"><table><thead><tr><th style="width:32px"></th><th>Trade No</th><th>Date</th><th>Type</th><th>Lots</th><th>Actions</th></tr></thead><tbody id="auctions-list"></tbody></table></div>
         <div id="auctions-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
       </div>
+    </div>
+
+    <!-- PRICE ENTRY — fast on-screen price typing (Price-only editable grid).
+         Type a price, Enter jumps to the next lot; one Save & Calculate at the
+         end. A focused alternative to opening the Edit modal per lot. -->
+    <div class="tc" id="tc-priceentry">
+      <div class="card" style="padding:14px 18px">
+        <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+          <div class="fg" style="max-width:300px;margin:0"><label>Select Auction</label>
+            <select id="pe-auction" onchange="loadPriceEntryGrid()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
+          </div>
+          <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
+            <button class="btn btn-o" style="height:38px;padding:0 14px;font-weight:600" onclick="loadPriceEntryGrid()" title="Reload lots from the server">🔄 Refresh</button>
+            <button id="pe-save-calc" class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="peSaveAndCalculate()">💾 Save &amp; Calculate All</button>
+          </div>
+        </div>
+        <div style="font-size:12.5px;color:var(--text2);margin-top:8px;line-height:1.5">
+          Type a price and press <b>Enter</b> (or Tab) to save it and jump to the next lot. Only the <b>Price</b> column is editable — every other field is read-only, so there's no risk of changing the wrong thing. When you're done, click <b>Save &amp; Calculate All</b> to compute commission, tax and payable for the whole trade.
+          <span id="pe-pc-note" style="display:none;color:#a16207"> Price Check is ON for this install — you'll need to re-verify prices before generating invoices.</span>
+        </div>
+        <div id="pe-summary" style="font-size:12px;color:var(--text3);margin-top:6px"></div>
+      </div>
+      <div class="card"><div id="pe-grid" style="overflow-x:auto"></div></div>
     </div>
 
     <!-- LOTS -->
@@ -9225,7 +9260,9 @@ function go(tab){
     plmap: () => { if (typeof plSetMode === 'function' && window._plMode !== 'trade') plSetMode('file'); if (typeof plInit === 'function') plInit(); },
     // Price Check — populate the auction dropdown so the operator can
     // pre-pick an auction. File upload is the only other input.
-    pricecheck: loadPriceCheckAuctions};
+    pricecheck: loadPriceCheckAuctions,
+    // Price Entry — populate the auction dropdown and render the price-only grid.
+    priceentry: loadPriceEntry};
   if(loaders[tab]){
     try{
       const r=loaders[tab]();
@@ -27554,6 +27591,136 @@ let _pcLastSummary = null;
 // overwrite lots.price.
 const _pcKeepDb = new Set();
 const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
+
+// ── PRICE ENTRY — fast, price-only editable grid ──────────────────
+// A focused alternative to opening the Edit modal per lot: every lot listed
+// with ONLY the Price column editable. Type a price + Enter → saves that lot
+// and jumps to the next. Read-only everywhere else, so there's no risk of
+// changing the wrong field. One "Save & Calculate All" at the end recomputes
+// commission/tax/payable and (when Price Check is on) nudges a re-verify.
+let _pe = { aid: null, lots: [], dirty: {} };
+// Price Check flag is surfaced on <body data-feat-price-check> when settings load.
+function _peFlagPriceCheck(){ return document.body.getAttribute('data-feat-price-check') === '1'; }
+function _peFmt(n){ return (Number(n)||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+
+function loadPriceEntry(){
+  const note = document.getElementById('pe-pc-note');
+  if (note) note.style.display = _peFlagPriceCheck() ? 'inline' : 'none';
+  fillAucSelect('pe-auction').then(() => loadPriceEntryGrid());
+}
+async function loadPriceEntryGrid(){
+  const aid = document.getElementById('pe-auction').value;
+  _pe.aid = aid; _pe.dirty = {};
+  const grid = document.getElementById('pe-grid');
+  const sumEl = document.getElementById('pe-summary');
+  if (!aid) { grid.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Select a trade to price its lots.</div>'; if (sumEl) sumEl.textContent = ''; return; }
+  grid.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3)">Loading…</div>';
+  let lots;
+  try { lots = await j(`/api/lots/${aid}`); }
+  catch (e) { grid.innerHTML = '<div style="padding:24px;color:#b91c1c">Failed to load lots.</div>'; return; }
+  // Reserved (held) lots aren't in the auction yet, so stay hidden. Withdrawn
+  // (WD) lots ARE shown — they're part of the trade record and appear in the
+  // registers — but render as read-only zero-price rows below (withdrawal
+  // forces price/amount to 0, so there's nothing to enter).
+  _pe.lots = (Array.isArray(lots) ? lots : []).filter(l => !Number(l.reserved));
+  renderPriceEntryGrid();
+}
+function renderPriceEntryGrid(){
+  const grid = document.getElementById('pe-grid');
+  const sumEl = document.getElementById('pe-summary');
+  if (!_pe.lots.length) {
+    grid.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">No lots to price in this trade yet. Enter lots first — reserved (held) lots are hidden here.</div>';
+    if (sumEl) sumEl.textContent = '';
+    return;
+  }
+  const rows = _pe.lots.map((l, i) => {
+    const isWD = String(l.code||'').trim().toUpperCase() === 'WD';
+    const amt = isWD ? 0 : (Number(l.qty)||0) * (Number(l.price)||0);
+    const locked = !!(l.locked_at);   // locked lots are edited by admins in the modal only
+    const readonly = locked || isWD;  // WD lots carry no price — visible but not editable
+    return `<tr data-row="${i}"${isWD ? ' style="opacity:.55"' : ''}>
+      <td style="padding:6px 8px;white-space:nowrap;font-weight:600">${esc(l.lot_no)}</td>
+      <td style="padding:6px 8px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(l.name||'')}</td>
+      <td style="padding:6px 8px;text-align:right">${esc(l.branch||'')}</td>
+      <td style="padding:6px 8px;text-align:right">${_peFmt(l.bags)}</td>
+      <td style="padding:6px 8px;text-align:right">${_peFmt(l.qty)}</td>
+      <td style="padding:6px 8px;text-align:right"><input type="number" step="0.01" min="0" inputmode="decimal" data-peprice="${i}" value="${isWD ? '' : (l.price ? Number(l.price) : '')}" placeholder="${isWD ? '—' : '0.00'}" ${readonly ? `disabled title="${isWD ? 'Withdrawn lot — carries no price' : 'Locked lot — edit via the Lots tab'}"` : ''} onkeydown="pePriceKey(event,${i})" oninput="pePriceInput(${i})" onblur="pePriceSave(${i})" style="width:110px;text-align:right;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:13px${readonly ? ';background:#f3f4f6;color:var(--text3)' : ''}"></td>
+      <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums" data-peamt="${i}">${_peFmt(amt)}</td>
+      <td data-pestatus="${i}" style="padding:6px 4px;width:26px;text-align:center;color:var(--text3)">${isWD ? '<span title="Withdrawn" style="color:#b91c1c;font-weight:700;font-size:10px">WD</span>' : (locked ? '🔒' : '')}</td>
+    </tr>`;
+  }).join('');
+  grid.innerHTML = `<table class="pe-grid-table" style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr>
+      <th style="border-top-left-radius:6px">Lot</th><th>Seller</th><th style="text-align:right">Branch</th>
+      <th style="text-align:right">Bags</th><th style="text-align:right">Qty</th>
+      <th style="text-align:right">Price ₹/kg</th><th style="text-align:right">Amount</th><th style="border-top-right-radius:6px"></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  _peRenderSummary();
+}
+function _peRenderSummary(){
+  const sumEl = document.getElementById('pe-summary'); if (!sumEl) return;
+  // WD lots are shown but can't be priced, so keep them out of the priced/total
+  // ratio — otherwise it could never read "all priced".
+  const sellable = _pe.lots.filter(l => String(l.code||'').trim().toUpperCase() !== 'WD');
+  const total = sellable.length;
+  const priced = sellable.filter(l => Number(l.price) > 0).length;
+  const dirty = Object.keys(_pe.dirty).length;
+  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : ''));
+}
+function pePriceInput(i){
+  const inp = document.querySelector(`[data-peprice="${i}"]`); if (!inp) return;
+  const price = parseFloat(inp.value);
+  const l = _pe.lots[i];
+  const amt = (Number(l.qty)||0) * (Number.isFinite(price) ? price : 0);
+  const amtEl = document.querySelector(`[data-peamt="${i}"]`); if (amtEl) amtEl.textContent = _peFmt(amt);
+  _pe.dirty[i] = true;
+  const st = document.querySelector(`[data-pestatus="${i}"]`); if (st && !_pe.lots[i].locked_at) { st.textContent = '•'; st.style.color = '#a16207'; }
+  _peRenderSummary();
+}
+function pePriceKey(e, i){
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    // Advance focus immediately (no wait on the network). Focusing the next
+    // input blurs this one, whose onblur=pePriceSave(i) does the single save.
+    const nx = document.querySelector(`[data-peprice="${i+1}"]`);
+    if (nx && !nx.disabled) { nx.focus(); if (nx.select) nx.select(); }
+    else pePriceSave(i);   // last row — nothing to blur into, so save here
+  }
+}
+async function pePriceSave(i){
+  if (!_pe.dirty[i]) return;   // nothing changed since last save
+  const inp = document.querySelector(`[data-peprice="${i}"]`); if (!inp) return;
+  const l = _pe.lots[i];
+  const raw = inp.value.trim();
+  const price = raw === '' ? 0 : parseFloat(raw);
+  const st = document.querySelector(`[data-pestatus="${i}"]`);
+  if (!Number.isFinite(price) || price < 0) { if (st) { st.textContent = '✕'; st.style.color = '#b91c1c'; } return; }
+  const amount = (Number(l.qty)||0) * price;
+  try {
+    await j(`/api/lots/${l.id}`, { method: 'PUT', body: JSON.stringify({ price, amount }) });
+    l.price = price; l.amount = amount; delete _pe.dirty[i];
+    if (st) { st.textContent = '✓'; st.style.color = 'var(--green)'; }
+    _peRenderSummary();
+  } catch (e) {
+    if (st) { st.textContent = '✕'; st.style.color = '#b91c1c'; }
+    toast((e && e.message) || 'Save failed');
+  }
+}
+// Save any unsaved rows, then Calculate All for the whole trade.
+async function peSaveAndCalculate(){
+  if (!_pe.aid) { toast('Select a trade first'); return; }
+  const btn = document.getElementById('pe-save-calc');
+  try {
+    await withBusy(btn, async () => {
+      for (const k of Object.keys(_pe.dirty)) { await pePriceSave(Number(k)); }
+      const d = await j(`/api/lots/calculate/${_pe.aid}`, { method: 'POST' });
+      toast(`Saved prices · calculated ${d.calculated} lots`);
+      await loadPriceEntryGrid();
+      if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch (_) {} }
+      if (_peFlagPriceCheck()) toast('Prices changed — re-verify in Price Check before generating invoices.');
+    });
+  } catch (e) { showError(e); }
+}
 
 async function loadPriceCheckAuctions(){
   const sel = document.getElementById('pc-auction');
