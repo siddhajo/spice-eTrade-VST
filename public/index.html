@@ -561,23 +561,6 @@ body[data-theme="custom"]{
   position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;
   border:none;padding:0;background:none
 }
-/* ─────── Accent-style chips (button-shape personality picker) ───────
-   Small pill buttons in the Appearance card. Active chip fills with the
-   theme's primary color. Preview their own shape so "Sharp" reads square
-   and "Soft"/"Playful" read rounded even before you click. */
-.accent-chip{
-  height:30px;padding:0 13px;font-size:12px;font-weight:600;cursor:pointer;
-  background:var(--card);color:var(--text2);border:1.5px solid var(--border);
-  border-radius:8px;transition:transform .12s, border-color .12s, background .12s, color .12s;
-  outline:none;line-height:1
-}
-.accent-chip:hover{transform:translateY(-1px);border-color:var(--spice-saffron)}
-.accent-chip.active{
-  background:var(--spice-saffron);color:#fff;border-color:var(--spice-saffron);
-  box-shadow:0 2px 8px rgba(0,0,0,.12)
-}
-.accent-chip[data-a="soft"],.accent-chip[data-a="playful"]{border-radius:999px}
-.accent-chip[data-a="sharp"]{border-radius:3px}
 body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
 
 /* ── Login (modernized) ───────────────────────────────────────
@@ -3406,11 +3389,6 @@ input[type="search"]:focus{
             <span class="theme-swatch" data-t="indigo"   title="Indigo (deep)"     onclick="setTheme('indigo')"   style="background:#4F46E5"></span>
             <span class="theme-swatch" data-t="teal"     title="Teal (calm)"       onclick="setTheme('teal')"     style="background:#0D9488"></span>
             <span class="theme-swatch" data-t="slate"    title="Slate (neutral)"   onclick="setTheme('slate')"    style="background:#64748B"></span>
-            <!-- ── Vibrant additions ── -->
-            <span class="theme-swatch" data-t="sunset"   title="Sunset (fiery orange)"  onclick="setTheme('sunset')"   style="background:linear-gradient(135deg,#F97316,#EC4899)"></span>
-            <span class="theme-swatch" data-t="neon"     title="Neon (electric lime)"   onclick="setTheme('neon')"     style="background:linear-gradient(135deg,#84CC16,#D946EF)"></span>
-            <span class="theme-swatch" data-t="tropical" title="Tropical (turquoise)"   onclick="setTheme('tropical')" style="background:linear-gradient(135deg,#06B6D4,#FB7185)"></span>
-            <span class="theme-swatch" data-t="berry"    title="Berry (vivid fuchsia)"  onclick="setTheme('berry')"    style="background:linear-gradient(135deg,#C026D3,#F59E0B)"></span>
             <!-- Divider before the custom picker -->
             <span style="display:inline-block;width:1px;height:24px;background:var(--border)"></span>
             <!-- Custom color: the conic-gradient swatch hides a native color input. -->
@@ -3418,39 +3396,17 @@ input[type="search"]:focus{
               <input type="color" id="custom-color-input" oninput="setCustomColor(this.value)" value="#166534">
             </span>
           </div>
-          <!-- Surprise me — shuffles a random vibrant theme + accent combo -->
-          <button class="btn btn-o" onclick="surpriseBranding()" title="Shuffle a random vibrant theme + accent" style="height:36px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:12px;flex-shrink:0">
-            <span>🎲</span><span>Surprise me</span>
-          </button>
           <!-- Dark mode toggle (compact icon button on the right) -->
           <button class="btn btn-o" onclick="toggleDark()" id="dark-mode-toggle" title="Toggle dark mode" style="height:36px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:12px;flex-shrink:0">
             <span id="dark-mode-icon">🌓</span>
             <span id="dark-mode-label">Dark</span>
           </button>
         </div>
-        <!-- ── Accent style row — button shape / shadow personality.
-             Reuses the built-in body[data-preset] personality CSS so the
-             whole app (buttons, cards, sidebar, modals) changes character,
-             not just color. Free to expose here because a locked white-label
-             preset hides this entire card at boot. -->
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;color:var(--text);margin-right:6px">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--spice-saffron)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8H20l-4.9 3.6 1.9 5.8L12 14.6 6.9 18.2l1.9-5.8L4 8.8h6.1z"/></svg>
-            Accent
-          </div>
-          <div id="settings-accent-chips" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-            <button type="button" class="accent-chip" data-a="classic" onclick="setAccent('classic')">Classic</button>
-            <button type="button" class="accent-chip" data-a="soft"    onclick="setAccent('soft')">Soft</button>
-            <button type="button" class="accent-chip" data-a="sharp"   onclick="setAccent('sharp')">Sharp</button>
-            <button type="button" class="accent-chip" data-a="playful" onclick="setAccent('playful')">Playful</button>
-            <button type="button" class="accent-chip" data-a="minimal" onclick="setAccent('minimal')">Minimal</button>
-          </div>
-        </div>
         <!-- Help line — clarifies that the chosen theme is saved with this
              installation (not just this browser), so every device using
              this install shows the same branding. -->
         <div style="margin-top:10px;font-size:11.5px;color:var(--text3);line-height:1.5">
-          Pick a colour theme (or your own primary colour) and an accent style — Soft, Sharp and Playful reshape buttons and cards across the whole app. Hit 🎲 Surprise me to shuffle a fresh look. Your choice is saved with this installation, so every staff member sees the same look on every device.
+          Pick a theme or your own primary color. Your choice is saved with this installation, so every staff member sees the same colors on every device.
         </div>
       </div>
 
@@ -26538,11 +26494,6 @@ function renderPreview(inv,type){
 // a network round trip to see their click take effect. Errors are
 // swallowed: localStorage still has the value, so we won't lose it.
 const _THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','sunset','neon','tropical','berry','custom'];
-// Accent style = button-shape / shadow personality. Each maps to a
-// body[data-preset] value that drives the built-in personality CSS.
-// 'classic' clears the attribute (the app's plain default look).
-const _ACCENTS = ['classic','soft','sharp','playful','minimal'];
-const _ACCENT_PRESET = { classic:'', soft:'western-ghats', sharp:'bluehill', playful:'marigold', minimal:'slate' };
 function _persistBrandingSetting(payload){
   if (!T) return; // Not logged in yet — will be saved on next click after login
   try {
@@ -26577,37 +26528,6 @@ function setCustomColor(hex){
   _persistBrandingSetting({ themeCustomColor: hex, theme: 'custom' });
   setTheme('custom');
 }
-
-// Accent style — sets body[data-preset] to swap the whole app's button /
-// card / sidebar personality (pill vs square vs soft). Persisted the same
-// two ways as theme: localStorage for instant apply + server for install-wide.
-function setAccent(a){
-  if (!_ACCENTS.includes(a)) a = 'classic';
-  const preset = _ACCENT_PRESET[a];
-  if (preset) document.body.setAttribute('data-preset', preset);
-  else document.body.removeAttribute('data-preset');
-  try { localStorage.setItem('themeAccent', a); } catch(e){}
-  _persistBrandingSetting({ themeAccent: a });
-  document.querySelectorAll('.accent-chip').forEach(c=>{
-    c.classList.toggle('active', c.dataset.a === a);
-  });
-}
-
-// Surprise me — shuffle a random vibrant theme + accent so users can
-// discover the new looks without clicking through every swatch. Biased
-// toward the punchy themes (skips the muted/neutral ones and 'custom').
-function surpriseBranding(){
-  const vibrant = ['emerald','coral','violet','sunshine','electric','ocean','rose','indigo','teal','sunset','neon','tropical','berry'];
-  const cur = document.body.getAttribute('data-theme');
-  let pick = cur;
-  // Avoid landing on the same theme twice in a row.
-  for (let i = 0; i < 8 && pick === cur; i++) {
-    pick = vibrant[Math.floor(Math.random() * vibrant.length)];
-  }
-  const accent = _ACCENTS[Math.floor(Math.random() * _ACCENTS.length)];
-  setTheme(pick);
-  setAccent(accent);
-}
 // Apply saved theme on load (including custom color if previously set).
 // Order: localStorage first for instant visual feedback (no flash of
 // default theme), then re-apply from /api/branding once it returns so
@@ -26616,21 +26536,14 @@ function surpriseBranding(){
 (function(){
   let saved = 'emerald';
   let custom = null;
-  let accent = null;
   try {
     saved = localStorage.getItem('theme') || 'emerald';
     custom = localStorage.getItem('themeCustomColor');
-    accent = localStorage.getItem('themeAccent');
   } catch(e){}
   if (custom && /^#[0-9a-fA-F]{6}$/.test(custom)) {
     document.body.style.setProperty('--spice-custom-base', custom);
   }
   document.body.setAttribute('data-theme', saved);
-  // Accent personality (button/card shape) — apply instantly from
-  // localStorage so there's no flash of the default look on reload.
-  if (accent && _ACCENTS.includes(accent) && _ACCENT_PRESET[accent]) {
-    document.body.setAttribute('data-preset', _ACCENT_PRESET[accent]);
-  }
 
   // Async: pull server-side branding and override localStorage if the
   // install's admin has picked a different theme. Runs in parallel with
@@ -26666,11 +26579,14 @@ function surpriseBranding(){
         // Font — sets data-font attr; body[data-font="..."] CSS picks
         // which of the @import'd web fonts is active.
         if (p.font) document.body.setAttribute('data-font', p.font);
-        // Preset slug — drives the Option B "personality" CSS that
+        // Preset personality — drives the Option B "personality" CSS that
         // gives each preset distinct character beyond density+color
-        // (e.g. Bluehill gets square buttons + uppercase labels;
-        // Western-Ghats gets pill buttons + soft shadows).
-        document.body.setAttribute('data-preset', d.preset);
+        // (e.g. Bluehill gets square buttons; Western-Ghats gets pill
+        // buttons + soft shadows). An explicit `accent` in the config wins
+        // over the slug, so a 'custom' preset (which has no CSS of its own)
+        // can still borrow any personality — and any preset can mix a colour
+        // with a different personality.
+        document.body.setAttribute('data-preset', p.accent || d.preset);
         // Hide-appearance — wipe the entire Appearance card from Settings.
         // The end user never knows it existed. Hidden via inline style
         // so it's gone even before tab transition CSS runs.
@@ -26700,18 +26616,6 @@ function surpriseBranding(){
           c.classList.toggle('active', c.dataset.t === srvTheme);
         });
       }
-      // Accent personality — install-wide choice wins over localStorage so
-      // every device shows the same look. Empty/'classic' clears the preset.
-      const srvAccent = String(d.themeAccent || '').trim();
-      if (srvAccent && _ACCENTS.includes(srvAccent)) {
-        const p = _ACCENT_PRESET[srvAccent];
-        if (p) document.body.setAttribute('data-preset', p);
-        else document.body.removeAttribute('data-preset');
-        try { localStorage.setItem('themeAccent', srvAccent); } catch(_){}
-        document.querySelectorAll('.accent-chip').forEach(c=>{
-          c.classList.toggle('active', c.dataset.a === srvAccent);
-        });
-      }
     })
     .catch(()=>{}); // network failure is fine — localStorage already applied
 })();
@@ -26722,13 +26626,6 @@ function syncAppearanceUI(){
   const t = document.body.getAttribute('data-theme') || 'emerald';
   document.querySelectorAll('.theme-swatch').forEach(c=>{
     c.classList.toggle('active', c.dataset.t === t);
-  });
-  // Reflect the active accent style (default 'classic' when none saved).
-  let accent = 'classic';
-  try { accent = localStorage.getItem('themeAccent') || 'classic'; } catch(e){}
-  if (!_ACCENTS.includes(accent)) accent = 'classic';
-  document.querySelectorAll('.accent-chip').forEach(c=>{
-    c.classList.toggle('active', c.dataset.a === accent);
   });
   // Reflect saved custom color in the picker so it shows the user's
   // last choice when they re-open Settings.

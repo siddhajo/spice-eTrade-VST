@@ -705,9 +705,6 @@ app.get('/api/branding', (req, res) => {
       // and finally to 'emerald').
       theme: cfg.theme || '',
       themeCustomColor: cfg.theme_custom_color || '',
-      // Accent style — user-chosen button/card personality (classic/soft/
-      // sharp/playful/minimal). Independent of the admin preset bundle.
-      themeAccent: cfg.theme_accent || '',
       // Preset bundle. preset is the named slug (e.g. 'bluehill');
       // presetConfig is the full {theme, density, font, hideAppearance}
       // payload the frontend applies at boot.
@@ -715,7 +712,7 @@ app.get('/api/branding', (req, res) => {
       presetConfig,
     });
   } catch (e) {
-    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '', themeAccent: '', preset: '', presetConfig: null });
+    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '', preset: '', presetConfig: null });
   }
 });
 
@@ -733,17 +730,15 @@ app.put('/api/branding', requireSettingsWrite, (req, res) => {
     const body = req.body || {};
     const allowed = {};
     if (typeof body.theme === 'string') {
-      // Validate against the same theme list the frontend uses
-      const THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','sunset','neon','tropical','berry','custom'];
+      // Validate against the same theme list the frontend uses. The
+      // extra-vibrant themes (sunset/neon/tropical/berry) are white-label
+      // only — set via the admin preset panel, not end-user self-service —
+      // so they're intentionally NOT in this list.
+      const THEMES = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','custom'];
       if (THEMES.includes(body.theme)) allowed.theme = body.theme;
     }
     if (typeof body.themeCustomColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(body.themeCustomColor)) {
       allowed.theme_custom_color = body.themeCustomColor;
-    }
-    if (typeof body.themeAccent === 'string') {
-      // Accent style = button/card personality. Matches _ACCENTS in the frontend.
-      const ACCENTS = ['classic','soft','sharp','playful','minimal'];
-      if (ACCENTS.includes(body.themeAccent)) allowed.theme_accent = body.themeAccent;
     }
     if (!Object.keys(allowed).length) {
       return res.status(400).json({ error: 'No valid branding fields supplied' });
@@ -757,7 +752,7 @@ app.put('/api/branding', requireSettingsWrite, (req, res) => {
        VALUES (?, ?, 'branding', ?, 'text')
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     );
-    const labels = { theme: 'Theme', theme_custom_color: 'Custom primary color', theme_accent: 'Accent style' };
+    const labels = { theme: 'Theme', theme_custom_color: 'Custom primary color' };
     for (const [k, v] of Object.entries(allowed)) {
       stmt.run(k, String(v), labels[k] || k);
     }
@@ -842,6 +837,22 @@ const TENANT_FONTS = ['jakarta', 'inter', 'outfit', 'system'];
 // + CSS rules that adjust padding / corner radius / row heights.
 const TENANT_DENSITIES = ['compact', 'roomy', 'spacious'];
 
+// Accent / personality options — each maps to a body[data-preset] value
+// whose CSS reshapes buttons, cards, sidebar and modals (shape, shadow,
+// weight) independently of colour. '' = match the preset slug / none.
+// Used by the custom preset so an install can mix any colour with any
+// personality (e.g. a berry theme with soft pill buttons).
+const TENANT_ACCENTS = [
+  { value: '',               label: 'Auto (match preset — none for custom)' },
+  { value: 'cardamom',       label: 'Classic (subtle shadow, medium radius)' },
+  { value: 'bluehill',       label: 'Sharp (corporate, tight 6px corners)' },
+  { value: 'western-ghats',  label: 'Soft (pill buttons, gentle shadows)' },
+  { value: 'marigold',       label: 'Playful (bold, big rounded corners)' },
+  { value: 'slate',          label: 'Minimal (flat, hairline borders)' },
+  { value: 'ocean',          label: 'Cool (calm blue-tinted shadows)' },
+];
+const TENANT_ACCENT_VALUES = TENANT_ACCENTS.map(a => a.value);
+
 // Gatekeeper. Compares against ADMIN_BRANDING_KEY env var, falling back
 // to 'change-me' so an unsecured deploy is loud — running ?key=change-me
 // in production logs is a clear signal to set the env var.
@@ -881,12 +892,14 @@ app.get('/admin/branding', (req, res) => {
   const cColor    = c.customColor || '';
   const cDensity  = c.density || 'roomy';
   const cFont     = c.font || 'jakarta';
+  const cAccent   = c.accent || '';
   const cHide     = c.hideAppearance !== false; // default true
 
   const themeOpts = ['emerald','coral','violet','sunshine','electric','ocean','tech','minimal','trust','rose','indigo','teal','slate','sunset','neon','tropical','berry','custom']
     .map(t => `<option value="${t}" ${t === cTheme ? 'selected' : ''}>${t}</option>`).join('');
   const densityOpts = TENANT_DENSITIES.map(d => `<option value="${d}" ${d === cDensity ? 'selected' : ''}>${d}</option>`).join('');
   const fontOpts = TENANT_FONTS.map(f => `<option value="${f}" ${f === cFont ? 'selected' : ''}>${f}</option>`).join('');
+  const accentOpts = TENANT_ACCENTS.map(a => `<option value="${a.value}" ${a.value === cAccent ? 'selected' : ''}>${a.label}</option>`).join('');
 
   const keyEsc = String(req.query.key).replace(/[<>'"&]/g, '');
 
@@ -954,6 +967,10 @@ app.get('/admin/branding', (req, res) => {
         <label>Font</label>
         <select id="custom-font">${fontOpts}</select>
       </div>
+      <div style="grid-column: 1 / -1;">
+        <label>Accent / personality</label>
+        <select id="custom-accent">${accentOpts}</select>
+      </div>
     </div>
     <label style="margin-top: 16px;">
       <input type="checkbox" id="custom-hide" ${cHide ? 'checked' : ''}>
@@ -984,6 +1001,7 @@ app.get('/admin/branding', (req, res) => {
           customColor: document.getElementById('custom-color').value,
           density: document.getElementById('custom-density').value,
           font: document.getElementById('custom-font').value,
+          accent: document.getElementById('custom-accent').value,
           hideAppearance: document.getElementById('custom-hide').checked,
         };
       }
@@ -1041,6 +1059,7 @@ app.post('/api/admin/preset', (req, res) => {
       customColor: /^#[0-9a-fA-F]{6}$/.test(config.customColor || '') ? config.customColor : '',
       density: TENANT_DENSITIES.includes(config.density) ? config.density : 'roomy',
       font: TENANT_FONTS.includes(config.font) ? config.font : 'jakarta',
+      accent: TENANT_ACCENT_VALUES.includes(config.accent) ? config.accent : '',
       hideAppearance: !!config.hideAppearance,
     };
   } else if (TENANT_PRESETS[slug]) {
