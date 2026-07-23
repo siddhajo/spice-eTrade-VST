@@ -1761,7 +1761,7 @@ app.get('/api/admin/activity-log', requireDeleteAll, (req, res) => {
       params.push(like, like, like, like);
     }
     const page = Math.max(1, parseInt(q.page, 10) || 1);
-    const pageSize = Math.min(200, Math.max(1, parseInt(q.pageSize, 10) || 50));
+    const pageSize = Math.min(500, Math.max(1, parseInt(q.pageSize, 10) || 50));
     const totalRow = db.get(`SELECT COUNT(*) AS n FROM activity_log WHERE ${where}`, params);
     const total = (totalRow && totalRow.n) || 0;
     // Sortable columns (whitelisted — the key is never interpolated raw).
@@ -5878,7 +5878,7 @@ app.get('/api/lots/:auctionId', requireViewOrLotEntry, (req, res) => {
   // ORDER BY lot_no DESC for the recent panel — newest entries first;
   // existing flat-list callers keep ascending order.
   if (paginated === '1') {
-    const lim = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 200);
+    const lim = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 500);
     const off = Math.max(parseInt(offset, 10) || 0, 0);
     // Total count — needed so the client can show "Showing X of Y" and
     // know when to hide "Load more". Cheap because the WHERE clause is
@@ -6248,7 +6248,7 @@ app.get('/api/lot-activity', requireAuth, (req, res) => {
     const db = getDb();
     const auctionId = req.query.auctionId ? parseInt(req.query.auctionId, 10) : null;
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
     let where = "entity = 'lot'";
     const params = [];
     if (auctionId) { where += ' AND details LIKE ?'; params.push(`{"auction_id":${auctionId},%`); }

@@ -6297,7 +6297,7 @@ input[type="search"]:focus{
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <label style="font-size:12.5px;color:var(--text2)">Show recent
       <select id="tf-sync-limit" onchange="tfLoadHistory()" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;margin-left:4px">
-        <option>25</option><option selected>50</option><option>100</option><option>200</option>
+        <option>25</option><option selected>50</option><option>100</option><option>200</option><option>500</option>
       </select>
     </label>
     <button class="btn btn-o" onclick="tfLoadHistory()">↻ Refresh</button>
@@ -7328,7 +7328,7 @@ function iconBtn(kind,title,onclick){
 
 const DataTable = (function(){
   const PAGE_SIZE = 100;       // rows shown per load / default page size
-  const PAGE_SIZE_OPTS = [10, 20, 50, 100, 200];  // pager size dropdown
+  const PAGE_SIZE_OPTS = [10, 20, 50, 100, 200, 500];  // pager size dropdown
   const state = {}; // keyed by tbodyId: { data, cols, sort, search, visible }
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -11648,7 +11648,7 @@ const _le = {
   recentTotal: 0,          // total rows matching current filter (from server)
   recentPage: 1,           // 1-based current page in the recent-entries panel
   recentPageSize: (function(){
-    try { const v = parseInt(localStorage.getItem('le_recent_page_size'), 10); return [10,20,50,100,200].includes(v) ? v : 50; }
+    try { const v = parseInt(localStorage.getItem('le_recent_page_size'), 10); return [10,20,50,100,200,500].includes(v) ? v : 50; }
     catch(_) { return 50; }
   })(),      // rows per page (persisted across reloads via localStorage)
   recentSearch: '',        // active seller filter (LIKE on lots.name via API)
@@ -12903,7 +12903,7 @@ function leGotoRecentPage(p){
 // no longer meaningful once the window size changes.
 function leSetRecentPageSize(v){
   const n = parseInt(v, 10);
-  if (![10, 20, 50, 100, 200].includes(n)) return;
+  if (![10, 20, 50, 100, 200, 500].includes(n)) return;
   if (n === _le.recentPageSize) return;
   _le.recentPageSize = n;
   _le.recentPage = 1;
@@ -13266,7 +13266,7 @@ function renderLeRecent(){
     // Page-size selector — matches the page-size widget used in other
     // listing screens. Persisted via localStorage so the operator's
     // choice survives reloads.
-    const sizeOpts = [10, 20, 50, 100, 200].map(n =>
+    const sizeOpts = [10, 20, 50, 100, 200, 500].map(n =>
       `<option value="${n}"${n === pageSize ? ' selected' : ''}>${n} / page</option>`
     ).join('');
     const pageSizeCtrl =
@@ -16746,7 +16746,7 @@ const T_IDS={name:'t-name',cr:'t-cr',pan:'t-pan',tel:'t-tel',aadhar:'t-aadhar',p
 // renderPager emits. Covers "tiny preview" through "fit everything on
 // one page". Any persisted localStorage value outside this list is
 // ignored on hydrate so an old/invalid value can't poison the UI.
-const _PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200];
+const _PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200, 500];
 
 // Registry: hostId → { state, gotoFn }. Populated by renderPager on
 // every render so the dropdown's inline onchange handler can find the
