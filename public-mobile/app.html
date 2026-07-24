@@ -156,6 +156,18 @@ body:not([data-feat-whatsapp="1"]) .feat-whatsapp{display:none !important}
 .sx-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--text3);font-size:12px;font-weight:700;width:20px;height:20px;display:none;align-items:center;justify-content:center;border-radius:50%;background:var(--border);border:none;padding:0;line-height:1;font-family:inherit}
 .sx-clear.show{display:flex}
 .sx-clear:hover{background:var(--border2);color:var(--text2)}
+/* Per-field clear (✕) buttons on the Lot Entry form. The label (.elb) sits
+   ABOVE each input, so the button is pinned to the input's right edge and
+   vertically centred on the 34px-tall field (bottom:7px = (34-20)/2). Shown
+   only when the field holds a value (JS toggles .show). */
+.fx-cell{position:relative}
+#s-lots input.ein.has-clear{padding-right:30px}
+.fx-clear{position:absolute;right:7px;bottom:7px;width:20px;height:20px;display:none;
+  align-items:center;justify-content:center;border-radius:50%;background:var(--border);
+  border:none;padding:0;line-height:1;cursor:pointer;color:var(--text3);font-size:12px;
+  font-weight:700;font-family:inherit;-webkit-appearance:none}
+.fx-clear.show{display:flex}
+.fx-clear:active{background:var(--border2);color:var(--text2)}
 .le-progress{flex-shrink:0;background:var(--stat-bg);color:#fff;padding:11px 14px;font-size:12px;box-shadow:0 -3px 12px rgba(13,124,95,.25);position:relative;overflow:hidden}
 .le-progress::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent)}
 .le-progress.over{background:linear-gradient(135deg,#c0392b 0%,#962d22 50%,#7a241b 100%);box-shadow:0 -3px 12px rgba(192,57,43,.35)}
@@ -1236,7 +1248,43 @@ document.addEventListener('DOMContentLoaded', function(){
   attachSearchClear('le-name', function(){document.getElementById('le-res').style.display='none'});
   attachSearchClear('ml-search');
   attachSearchClear('ed-seller-input', function(){var r=document.getElementById('ed-seller-res');if(r)r.style.display='none'});
+  attachFieldClears();
 });
+
+// Add a tappable ✕ clear button to every EDITABLE field on the Lot Entry form.
+// Skips the read-only auto-derived fields (Gunny Wt, Sample, Gross, Receipt #)
+// and the seller search (which has its own sx-clear). The ✕ shows only when
+// the field holds a value; tapping clears it, re-fires `input` so dependent
+// calcs (net weight, a/c match, IFSC lookup…) update, then refocuses the field
+// for fast re-entry. One reusable enhancer — no per-field markup to maintain.
+var _fieldClearSyncs=[];
+function attachFieldClears(){
+  var scope=document.getElementById('s-lots'); if(!scope)return;
+  var inputs=scope.querySelectorAll('input.ein');
+  for(var k=0;k<inputs.length;k++){(function(inp){
+    if(inp.readOnly||inp.disabled||inp.dataset.fxWired)return;
+    inp.dataset.fxWired='1';
+    var cell=inp.parentElement; if(!cell)return;
+    cell.classList.add('fx-cell');
+    inp.classList.add('has-clear');
+    var btn=document.createElement('button');
+    btn.type='button'; btn.className='fx-clear'; btn.setAttribute('aria-label','Clear field'); btn.textContent='✕';
+    var sync=function(){btn.classList.toggle('show', !!inp.value)};
+    inp.addEventListener('input', sync);
+    btn.addEventListener('click', function(e){
+      e.preventDefault();
+      inp.value='';
+      inp.dispatchEvent(new Event('input',{bubbles:true}));   // update dependent calcs
+      sync(); inp.focus();
+    });
+    cell.appendChild(btn);
+    _fieldClearSyncs.push(sync);
+    sync();
+  })(inputs[k]);}
+}
+// Re-run every ✕ toggle — used after programmatic form changes (clearEntryForm,
+// edit-populate) that set input.value directly and so don't fire `input`.
+function resyncFieldClears(){for(var i=0;i<_fieldClearSyncs.length;i++){try{_fieldClearSyncs[i]();}catch(_){}}}
 
 var sellerBookingsReq=0;
 function hideSellerBookings(){sellerBookingsReq++;var el=document.getElementById('le-seller-lots');if(el)el.style.display='none';var b=document.getElementById('le-seller-lots-body');if(b)b.innerHTML=''}
@@ -1929,6 +1977,7 @@ function clearEntryForm(){
   renderLotGrid();
   selectNextAvailableLot();
   showSaveBtn();
+  if(typeof resyncFieldClears==='function')resyncFieldClears();
   toast('Form cleared',false);
 }
 

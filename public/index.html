@@ -1243,6 +1243,18 @@ tr:hover td{background:var(--spice-cream)}
   padding:8px;font-size:11px;letter-spacing:.4px;border-bottom:none
 }
 .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+/* Per-field clear (✕) buttons on the desktop Lot Entry form. Each field is a
+   cell with the label ABOVE the 40px input, so the ✕ is pinned to the input's
+   right edge and vertically centred (bottom:9px = (40-22)/2). Shown only when
+   the field holds a value (JS toggles .show). */
+#tc-lotentry .lefx-cell{position:relative}
+#tc-lotentry input.lefx-has-clear{padding-right:34px !important}
+.lefx-clear{position:absolute;right:8px;bottom:9px;width:22px;height:22px;display:none;
+  align-items:center;justify-content:center;border-radius:50%;background:var(--border);
+  border:none;padding:0;line-height:1;cursor:pointer;color:var(--text3);font-size:13px;
+  font-weight:700;font-family:inherit}
+.lefx-clear.show{display:flex}
+.lefx-clear:hover{background:var(--border2);color:var(--text2)}
 
 /* ── Stat Cards ──────────────────────────────────────────── */
 /* ── Dashboard: KPI tiles + hero + quick actions ──────── */
@@ -11929,6 +11941,9 @@ async function leActivityClearAll(){
 }
 
 async function loadLotEntry(){
+  // Wire the per-field ✕ clear buttons (idempotent) and sync them to any
+  // values already in the form when the tab opens.
+  attachLeFieldClears(); resyncLeFieldClears();
   // Populate the auction picker with active trades. The latest open
   // trade is pre-selected so the field user lands directly on the entry
   // form for today's trade — picking from the dropdown is reserved for
@@ -12394,6 +12409,41 @@ function leShowError(msg){
   setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
+// Per-field clear (✕) buttons on the desktop Lot Entry form — mirrors the
+// mobile app. Only the EDITABLE lot fields; Grade/Branch are dropdowns and
+// Sample/Gross/Gunny Wt/Receipt are auto-derived (read-only), so they're left
+// out. The ✕ shows only when the field holds a value; clicking it clears the
+// field, re-fires `input` so dependent calcs (net weight, gross) update, then
+// refocuses for fast entry. One reusable enhancer — no per-field markup.
+var _leFieldClearSyncs = [];
+function attachLeFieldClears(){
+  const ids = ['le-lotno','le-bags','le-litre','le-wwg','le-qty','le-reserved-price','le-moisture'];
+  ids.forEach(id => {
+    const inp = document.getElementById(id);
+    if (!inp || inp.readOnly || inp.disabled || inp.dataset.lefxWired) return;
+    inp.dataset.lefxWired = '1';
+    const cell = inp.parentElement; if (!cell) return;
+    cell.classList.add('lefx-cell');
+    inp.classList.add('lefx-has-clear');
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'lefx-clear'; btn.setAttribute('aria-label', 'Clear field'); btn.textContent = '✕';
+    const sync = () => btn.classList.toggle('show', !!inp.value);
+    inp.addEventListener('input', sync);
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));   // update dependent calcs
+      sync(); inp.focus();
+    });
+    cell.appendChild(btn);
+    _leFieldClearSyncs.push(sync);
+    sync();
+  });
+}
+// Re-run every ✕ toggle — after programmatic value changes (form reset on save,
+// leEditLot populate) that set input.value directly and so don't fire `input`.
+function resyncLeFieldClears(){ for (const s of _leFieldClearSyncs) { try { s(); } catch (_) {} } }
+
 async function leSaveLot(){
   const aid = document.getElementById('le-auction').value;
   if (!aid) { leShowError('Select a trade first'); return; }
@@ -12519,6 +12569,9 @@ async function leSaveLot(){
     // First lot for this trade advances it to stage 2 — proactively un-dim
     // the newly-unlocked sidebar menus (Price Entry, Payments, …).
     if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch(_){} }
+    // Fields were reset above (direct .value writes fire no `input`) — hide
+    // the ✕ buttons that were showing before the save.
+    if (typeof resyncLeFieldClears === 'function') resyncLeFieldClears();
     // After a successful create (not edit), auto-suggest the next lot
     // number for this branch so the user can hit Save again immediately.
     if (!wasEditing) leAutoSuggestLotNo();
@@ -12553,6 +12606,8 @@ function leResetForm(){
   _le.editingLotId = null;
   document.getElementById('le-edit-banner').style.display = 'none';
   document.getElementById('le-save-btn-label').textContent = 'Save & Next';
+  // Fields were wiped by direct .value writes (no `input` event) — hide the ✕.
+  if (typeof resyncLeFieldClears === 'function') resyncLeFieldClears();
 }
 
 // Begin editing an existing lot. Loads the lot into the form, picks the
@@ -12633,6 +12688,9 @@ async function leEditLot(lotId){
   if (reservedEl) reservedEl.value = (lot.reserved_price != null && Number(lot.reserved_price) > 0) ? Number(lot.reserved_price).toFixed(2) : '';
   if (cropEl)     cropEl.value     = lot.crop_receipt_no ?? '';
   leCalcGross();
+  // Fields were just populated with the lot's values — show the ✕ on the
+  // ones that now hold a value.
+  if (typeof resyncLeFieldClears === 'function') resyncLeFieldClears();
   // Branch may differ from the toolbar — pre-fill so the user sees what
   // this lot's branch is. Don't overwrite the toolbar branch input
   // because the user may want to keep entering for their own branch.
@@ -16220,11 +16278,20 @@ function fld(f){
     ['first2last2', 'Show first 2 and last 2 digits'],
     MASK_OPTS[MASK_OPTS.length - 1],
   ];
+  // Bank Payment file layouts. [key, label] pairs — the key is stored in the
+  // `bank_format` setting and resolved server-side by bank-formats.js. KEEP
+  // THIS LIST IN SYNC with BANK_FORMATS there (the client can't require() it).
+  const BANK_FORMAT_OPTS = [
+    ['default_12col',      'Standard (12-column · RTGS / NEFT / IFT)'],
+    ['compact_neft',       'Compact NEFT (name · account · IFSC · amount · narration)'],
+    ['rtgs_account_first', 'RTGS (account-first · no remarks)'],
+  ];
   const FIELD_OPTIONS = {
     date_format: ['DD/MM/YYYY', 'DD-MM-YYYY', 'YYYY-MM-DD'],
     mask_acct:  MASK_OPTS,
     mask_ifsc:  MASK_OPTS,
     mask_phone: PHONE_MASK_OPTS,
+    bank_format: BANK_FORMAT_OPTS,
   };
   if (FIELD_OPTIONS[f.key]) {
     const tip = FIELD_HELP[f.key] ? helpTip(FIELD_HELP[f.key]) : '';
