@@ -7856,6 +7856,82 @@ app.post('/api/invoices/pdf-bulk', requireView, async (req, res) => {
   }
 });
 
+// Export Selected sales invoices as a compact summary list — Excel or PDF.
+// Body: { ids: [...], format: 'xlsx' | 'pdf' }. Columns: Sale | Inv No |
+// Trade Name | GSTIN | Bags | Qty | Bill Amount. This is a summary register
+// of the ticked invoices (NOT the full invoice documents — that's /pdf-bulk),
+// mirroring the register exports. Downloads a file.
+app.post('/api/invoices/export-selected', requireView, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ error: 'No invoices selected' });
+    const format = String(req.body?.format || 'xlsx').toLowerCase() === 'pdf' ? 'pdf' : 'xlsx';
+    const db = getDb();
+    // Fetch the ticked invoices. Order by numeric invoice no so the summary
+    // reads like the printed register. Parameterised IN-list.
+    const ph = ids.map(() => '?').join(',');
+    const invoices = db.all(
+      `SELECT sale, invo, buyer, buyer1, gstin, bag, qty, tot
+         FROM invoices WHERE id IN (${ph})
+        ORDER BY CAST(invo AS INTEGER), invo`, ids
+    );
+    if (!invoices.length) return res.status(404).json({ error: 'No invoices found for the selected IDs' });
+
+    // One column set drives both outputs. Headers are chosen so the shared
+    // header→number-format detector right-aligns/format Bags, Qty and the
+    // amount (see xlsxNumFmtForHeader). `key` matches the row objects below.
+    const columns = [
+      { header: 'SALE',        key: 'sale',   width: 8  },
+      { header: 'INV.NO',      key: 'invno',  width: 12 },
+      { header: 'TRADE NAME',  key: 'name',   width: 40 },
+      { header: 'GSTIN',       key: 'gstin',  width: 22 },
+      { header: 'BAGS',        key: 'bag',    width: 8  },
+      { header: 'QTY',         key: 'qty',    width: 12 },
+      { header: 'INV.AMOUNT',  key: 'tot',    width: 16 },
+    ];
+    const rows = invoices.map(iv => ({
+      sale:  iv.sale || '',
+      invno: iv.invo || '',
+      name:  iv.buyer1 || iv.buyer || '',
+      gstin: iv.gstin || '',
+      bag:   Number(iv.bag) || 0,
+      qty:   Number(iv.qty) || 0,
+      tot:   Number(iv.tot) || 0,
+    }));
+    // Grand-total row: sum bags, qty, amount.
+    const totals = rows.reduce((t, r) => {
+      t.bag += r.bag; t.qty += r.qty; t.tot += r.tot; return t;
+    }, { bag: 0, qty: 0, tot: 0 });
+
+    if (format === 'pdf') {
+      const { renderTablePdf } = require('./exports-pdf');
+      const totalsRow = { name: 'TOTAL', bag: totals.bag, qty: totals.qty, tot: totals.tot };
+      const pdf = await renderTablePdf({
+        title: 'Selected Sales Invoices',
+        subtitle: `${rows.length} invoice${rows.length === 1 ? '' : 's'}`,
+        columns, rows, totals: totalsRow,
+        companyHeader: getCompanyHeader(db),
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="SalesInvoices.pdf"');
+      return res.send(pdf);
+    }
+
+    const buf = await createExcelBuffer('SalesInvoices', columns, rows, {
+      db,
+      title: 'Selected Sales Invoices',
+      metaLines: [`${rows.length} invoice${rows.length === 1 ? '' : 's'}`],
+      grandTotal: { label: 'TOTAL', values: { bag: totals.bag, qty: totals.qty, tot: totals.tot } },
+    });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="SalesInvoices.xlsx"');
+    return res.send(buf);
+  } catch (e) {
+    console.error('Export selected invoices error:', e);
+    res.status(500).json({ error: 'Export failed: ' + e.message });
+  }
+});
+
 // Bulk Purchase-View PDF — like /pdf-bulk but renders each invoice with
 // variant='purchase' so the buyer (ISPL) appears as the issuing company
 // and the active ASP company appears as the seller. ASP context only.

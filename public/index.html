@@ -4679,6 +4679,8 @@ input[type="search"]:focus{
           <!-- Print group -->
           <div style="display:flex;gap:6px;padding:0 4px;border-left:2px solid var(--spice-line)">
             <button id="inv-bulk-print" class="btn" style="display:none;height:38px;padding:0 16px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(16,185,129,.28)" onclick="printSelectedInvoices()" title="Print all ticked invoices">🖨 Print Selected</button>
+            <button id="inv-bulk-xls" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-cardamom);color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(22,101,52,.22)" onclick="exportSelectedInvoices('xlsx')" title="Export ticked invoices to Excel — Sale, Inv No, Trade Name, GSTIN, Bags, Qty, Bill Amount">📊 Export Excel</button>
+            <button id="inv-bulk-pdf" class="btn" style="display:none;height:38px;padding:0 14px;background:var(--spice-saffron);color:#fff;font-weight:600;box-shadow:0 2px 6px color-mix(in srgb, var(--spice-saffron) 28%, transparent)" onclick="exportSelectedInvoices('pdf')" title="Export ticked invoices to PDF — Sale, Inv No, Trade Name, GSTIN, Bags, Qty, Bill Amount">📄 Export PDF</button>
             <button id="inv-bulk-del" class="needs-delete btn" style="display:none !important;height:38px;padding:0 14px;background:#c0392b;color:#fff;font-weight:600" onclick="deleteSelectedInvoices()" title="Delete all ticked invoices">🗑 Delete Selected <span id="inv-sel-count" style="margin-left:4px;background:rgba(255,255,255,.25);padding:1px 6px;border-radius:10px;font-size:11px"></span></button>
             <!-- ASP-only: Print Selected Purchase. Hidden outside ASP context.
                  Visibility toggled by applyAspContextVisibility() at load + state switch.
@@ -21719,6 +21721,9 @@ function syncInvoiceMaster(){
   // Print Selected + Set Lorry No — same "show only when ticked" rule.
   _bulkBtnSetVisible(document.getElementById('inv-bulk-print'), ticked > 0);
   _bulkBtnSetVisible(document.getElementById('inv-bulk-lorry'), ticked > 0);
+  // Export Selected (Excel / PDF summary) — same rule.
+  _bulkBtnSetVisible(document.getElementById('inv-bulk-xls'), ticked > 0);
+  _bulkBtnSetVisible(document.getElementById('inv-bulk-pdf'), ticked > 0);
   // ASP Print Selected Purchase — visible only when (ASP context active)
   // AND (rows ticked). Delegate to applyAspContextVisibility, which
   // combines both gates.
@@ -21775,6 +21780,36 @@ async function printSelectedInvoices(){
     `Invoices_Batch_${ids.length}.pdf`,
     { ids, dispatchedThrough }
   );
+}
+
+// Export the ticked invoices as a compact SUMMARY list (Sale | Inv No | Trade
+// Name | GSTIN | Bags | Qty | Bill Amount) to Excel or PDF. Downloads the file
+// (not the full invoice documents — that's Print Selected). Server builds it
+// via /api/invoices/export-selected using the shared table exporters.
+async function exportSelectedInvoices(format){
+  const body=document.getElementById('invoices-list');
+  if(!body){alert('No invoice list found');return}
+  const checked=Array.from(body.querySelectorAll('.inv-select-cb:checked'));
+  if(!checked.length){toast('Tick one or more invoices first (use the checkbox column)');return}
+  const ids=checked.map(cb=>Number(cb.value)).filter(Boolean);
+  const isPdf = format==='pdf';
+  const name='SalesInvoices.'+(isPdf?'pdf':'xlsx');
+  try{
+    await withOverlay(`Exporting ${ids.length} invoice(s) to ${isPdf?'PDF':'Excel'}…`, async ()=>{
+      const r=await fetch(B+'/api/invoices/export-selected',{
+        method:'POST',
+        headers:{ 'Authorization':'Bearer '+T, 'Content-Type':'application/json' },
+        body: JSON.stringify({ ids, format: isPdf?'pdf':'xlsx' })
+      });
+      if(!r.ok){ let m='Export failed'; try{ const e=await r.json(); if(e.error) m=e.error; }catch(_){}
+        toast(m); return; }
+      const blob=await r.blob();
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download=name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+    });
+  }catch(e){ showError(e); }
 }
 
 // Bulk-set the lorry / vehicle number on ticked invoices. Stored in
