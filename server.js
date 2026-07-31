@@ -6639,6 +6639,56 @@ app.post('/api/lots/bulk-grade', requireLotWrite, (req, res) => {
 // trade name from the previous buyer, which breaks invoice generation
 // and Tally export party lookups. Match is case-insensitive on
 // `buyer` to tolerate uppercase/lowercase entries in legacy data.
+// /api/lots/price-import/parse — read an uploaded .xls/.xlsx and return its
+// column headers + row objects for CLIENT-side column mapping. This backs the
+// Price Entry "Import Prices from Excel" flow: the browser picks which columns
+// are Lot No / Price / Buyer Code, then applies via per-lot PUTs. Parse only —
+// nothing is written here. Mirrors runLotImport's sheet/header detection so a
+// trade-fair export (banner rows, narrow !ref) parses the same way.
+app.post('/api/lots/price-import/parse', requireLotWrite, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const workbook = XLSX.readFile(req.file.path);
+    const ws = workbook.Sheets[workbook.SheetNames[0]];
+    if (!ws) return res.status(400).json({ error: 'No worksheet found' });
+    // Repair a too-narrow declared range (same fix runLotImport applies) so
+    // every populated column is parsed, not just those inside a bogus !ref.
+    {
+      let maxC = -1, maxR = -1;
+      for (const k of Object.keys(ws)) {
+        if (k[0] === '!') continue;
+        const a = XLSX.utils.decode_cell(k);
+        if (a.c > maxC) maxC = a.c;
+        if (a.r > maxR) maxR = a.r;
+      }
+      if (maxC >= 0 && maxR >= 0) {
+        ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: maxC, r: maxR } });
+      }
+    }
+    const normKey = (s) => String(s == null ? '' : s).trim().toUpperCase().replace(/[\s_\-]+/g, ' ');
+    const LOT_HEADERS = new Set(['LOT', 'LOT NO', 'LOTNO', 'LOT NUMBER']);
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    // Skip any banner/title rows above the real header — find the first row
+    // (within the first 20) that carries a LOT-like column.
+    let headerRowIdx = 0;
+    for (let i = 0; i < Math.min(aoa.length, 20); i++) {
+      if ((aoa[i] || []).some(c => LOT_HEADERS.has(normKey(c)))) { headerRowIdx = i; break; }
+    }
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '', range: headerRowIdx });
+    // Header list = the row-object keys SheetJS produced (so the client's
+    // row[header] lookups always resolve). Drop blank-header columns.
+    const headers = rows.length
+      ? Object.keys(rows[0]).filter(h => h && !/^__EMPTY/.test(h))
+      : [];
+    fs.unlink(req.file.path, () => {});
+    return res.json({ headers, rows, rowCount: rows.length });
+  } catch (e) {
+    if (req.file) fs.unlink(req.file.path, () => {});
+    console.error('price-import parse error:', e);
+    return res.status(400).json({ error: 'Could not read the file: ' + (e.message || e) });
+  }
+});
+
 // /api/lots/bulk-set-buyer — flexible bulk update used by both the
 // generic "set buyer code" bulk action and the Price Check "Apply"
 // flow. Takes an `ids` array plus any combination of `code` / `buyer`

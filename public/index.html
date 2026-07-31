@@ -3942,6 +3942,7 @@ input[type="search"]:focus{
           </div>
           <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
             <button class="btn btn-o" style="height:38px;padding:0 14px;font-weight:600" onclick="loadPriceEntryGrid()" title="Reload lots from the server">🔄 Refresh</button>
+            <button id="pe-import-btn" class="btn btn-o" style="height:38px;padding:0 14px;font-weight:600" onclick="openPeImport()" title="Import prices (and optionally buyer codes) from an Excel file — you choose which columns map to what">📥 Import Prices from Excel</button>
             <button id="pe-save-calc" class="btn btn-a" style="height:38px;padding:0 16px;font-weight:600" onclick="peSaveAndCalculate()">💾 Save &amp; Calculate All</button>
           </div>
         </div>
@@ -3950,6 +3951,14 @@ input[type="search"]:focus{
           <span id="pe-pc-note" style="display:none;color:#a16207"> Price Check is ON for this install — you'll need to re-verify prices before generating invoices.</span>
         </div>
         <div id="pe-summary" style="font-size:12px;color:var(--text3);margin-top:6px"></div>
+        <!-- Bulk buyer-code bar — appears only when one or more lots are ticked
+             in the grid below. Set applies a buyer code (picked from the
+             searchable dropdown) to every ticked lot. -->
+        <div id="pe-action-bar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;background:var(--spice-cardamom-lt,#eef6f0);border:1px solid #C5E3D2;border-radius:8px">
+          <span style="font-weight:700;font-size:13px;color:var(--text)"><span id="pe-sel-count">0</span> lot(s) selected</span>
+          <button class="btn btn-a" style="height:34px;padding:0 12px;font-weight:600" onclick="openPeSetBuyerModal()">👤 Set Buyer Code</button>
+          <button class="btn btn-o" style="height:34px;padding:0 12px;font-weight:600;margin-left:auto" onclick="peClearSelection()" title="Untick all lots">Clear selection</button>
+        </div>
       </div>
       <div class="card"><div id="pe-grid" style="overflow-x:auto"></div></div>
     </div>
@@ -6232,6 +6241,79 @@ input[type="search"]:focus{
   <div class="actions">
     <button class="btn btn-o" onclick="hideModal('lot-bulk-buyer-modal')">Cancel</button>
     <button class="btn btn-g" id="lot-bulk-buyer-save" onclick="lotBulkBuyerApply()">Apply</button>
+  </div>
+</div></div>
+
+<!-- ═══ PRICE ENTRY — IMPORT PRICES FROM EXCEL ═══════════════
+     Two-step: pick a file → map its columns to Lot No / Price / Buyer Code.
+     Prices are matched to the selected trade's lots by lot number and saved
+     through the per-lot PUT. See openPeImport / peiApply. -->
+<div class="modal-bg" id="pe-import-modal"><div class="modal" style="max-width:640px">
+  <h2>Import Prices from Excel</h2>
+  <!-- STEP 1 — file picker -->
+  <div id="pei-step-file">
+    <p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;line-height:1.5">
+      Pick an <b>.xls</b> or <b>.xlsx</b> file. On the next step you'll choose which of its columns hold the <b>Lot No</b> and <b>Price</b> (and, optionally, the <b>Buyer Code</b>). Prices are matched to the lots of the trade selected in Price Entry — by lot number.
+    </p>
+    <div class="fg"><label>Select File (.xls or .xlsx)</label>
+      <input type="file" id="pei-file" accept=".xls,.xlsx" style="padding:6px" onchange="peiFilePicked()">
+    </div>
+    <div id="pei-file-status" style="font-size:12px;color:var(--text3);margin-top:6px"></div>
+  </div>
+  <!-- STEP 2 — column mapping -->
+  <div id="pei-step-map" style="display:none">
+    <div style="font-size:12.5px;color:var(--text2);margin:0 0 12px;line-height:1.5">
+      Found <b id="pei-rowcount">0</b> row(s). Match each field to a column from your file. <b style="color:#b45309">Lot No</b> and <b style="color:#b45309">Price</b> are required.
+    </div>
+    <div class="sgrid">
+      <div class="fg"><label>Lot No column <span style="color:#b45309">*</span></label>
+        <select id="pei-map-lot" onchange="peiRenderPreview()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
+      </div>
+      <div class="fg"><label>Price column <span style="color:#b45309">*</span></label>
+        <select id="pei-map-price" onchange="peiRenderPreview()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
+      </div>
+      <div class="fg"><label>Buyer Code column <span style="color:var(--text3);font-weight:400">— optional</span></label>
+        <select id="pei-map-code" onchange="peiRenderPreview()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></select>
+      </div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin:12px 0 4px">Preview <span style="font-weight:400;color:var(--text3)">— first few mapped rows</span></div>
+    <div id="pei-preview" style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;max-height:220px;overflow-y:auto"></div>
+    <div id="pei-map-note" style="font-size:12px;margin-top:8px;color:var(--text3)"></div>
+  </div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('pe-import-modal')">Cancel</button>
+    <button class="btn btn-o" id="pei-back" onclick="peiBackToFile()" style="display:none">← Back</button>
+    <button class="btn btn-g" id="pei-apply" onclick="peiApply()" style="display:none" disabled>Import Prices</button>
+  </div>
+</div></div>
+
+<!-- ═══ PRICE ENTRY — SET BUYER CODE (bulk) ══════════════════
+     Pick a buyer code (searchable). Its Buyer / Buyer Name / Sale Type from
+     the buyers master are written to every ticked lot. See openPeSetBuyerModal
+     / applyBulkSetBuyer → POST /api/lots/bulk-set-buyer. -->
+<div class="modal-bg" id="bulk-setbuyer-modal"><div class="modal" style="max-width:520px">
+  <h2>Set Buyer Code on <span id="bsb-count">0</span> lot(s)</h2>
+  <p style="font-size:12px;color:var(--text2);margin:0 0 14px;line-height:1.5">
+    Pick a buyer code below. The matching <b>Buyer</b>, <b>Buyer Name</b>, and <b>Sale Type</b> from the buyers master will be written to every selected lot.
+  </p>
+  <div class="fg">
+    <label>Buyer Code <span id="bsb-hint" style="margin-left:6px;font-weight:400;font-size:11px;color:var(--text3)"></span></label>
+    <div style="position:relative">
+      <input id="bsb-code" autocomplete="off" placeholder="Start typing — e.g. JP">
+      <div id="bsb-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;max-height:240px;overflow-y:auto;background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:12.5px"></div>
+    </div>
+  </div>
+  <div id="bsb-preview" style="margin-top:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text2);display:none">
+    <div style="display:grid;grid-template-columns:90px 1fr;gap:4px 10px">
+      <div>Buyer</div>      <div id="bsb-p-buyer" style="font-weight:600;color:var(--text)"></div>
+      <div>Buyer Name</div> <div id="bsb-p-buyer1" style="font-weight:600;color:var(--text)"></div>
+      <div>Sale Type</div>  <div id="bsb-p-sale" style="font-weight:600;color:var(--text)"></div>
+      <div>Place</div>      <div id="bsb-p-place"></div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn btn-o" onclick="hideModal('bulk-setbuyer-modal')">Cancel</button>
+    <button class="btn btn-g" id="bsb-apply" onclick="applyBulkSetBuyer()" disabled>Apply</button>
   </div>
 </div></div>
 
@@ -27943,7 +28025,22 @@ const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
 // and jumps to the next. Read-only everywhere else, so there's no risk of
 // changing the wrong field. One "Save & Calculate All" at the end recomputes
 // commission/tax/payable and (when Price Check is on) nudges a re-verify.
-let _pe = { aid: null, lots: [], dirty: {} };
+let _pe = { aid: null, lots: [], dirty: {}, sel: new Set() };
+// Normalise a lot number for matching: uppercase, strip leading zeros so a
+// file's "1" matches a stored "001" (empty → '', all-zeros → '0').
+function _peNormLot(v){
+  const s = String(v == null ? '' : v).trim().toUpperCase();
+  if (s === '') return '';
+  const stripped = s.replace(/^0+/, '');
+  return stripped === '' ? '0' : stripped;
+}
+// Price import (parse → map → apply) state and Set-Buyer modal state.
+let _pei = { headers: [], rows: [] };
+// NB: _lotBuyerCache is the shared buyers cache declared for the lot-edit code
+// picker; we reuse it here (same shape) rather than redeclaring.
+let _bsbSelected = null;               // resolved buyer { code, buyer, buyer1, sale, pla }
+let _bsbLotIds   = [];                 // lot ids captured when the modal opened
+let _bsbWired    = false;              // autocomplete handlers wired once
 // Price Check flag is surfaced on <body data-feat-price-check> when settings load.
 function _peFlagPriceCheck(){ return document.body.getAttribute('data-feat-price-check') === '1'; }
 function _peFmt(n){ return (Number(n)||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -27957,7 +28054,7 @@ function loadPriceEntry(){
 }
 async function loadPriceEntryGrid(){
   const aid = document.getElementById('pe-auction').value;
-  _pe.aid = aid; _pe.dirty = {};
+  _pe.aid = aid; _pe.dirty = {}; _pe.sel = new Set();
   const grid = document.getElementById('pe-grid');
   const sumEl = document.getElementById('pe-summary');
   if (!aid) { grid.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Select a trade to price its lots.</div>'; if (sumEl) sumEl.textContent = ''; return; }
@@ -27985,7 +28082,12 @@ function renderPriceEntryGrid(){
     const amt = isWD ? 0 : (Number(l.qty)||0) * (Number(l.price)||0);
     const locked = !!(l.locked_at);   // locked lots are edited by admins in the modal only
     const readonly = locked || isWD;  // WD lots carry no price — visible but not editable
+    // Selection checkbox drives the bulk Set-Buyer action. Locked/WD lots
+    // aren't selectable (locked → admin-only; WD → carries no buyer).
+    const selDisabled = locked || isWD;
+    const ticked = _pe.sel.has(l.id);
     return `<tr data-row="${i}"${isWD ? ' style="opacity:.55"' : ''}>
+      <td style="padding:6px 4px;width:28px;text-align:center"><input type="checkbox" class="pe-cb" data-pesel="${l.id}" ${selDisabled ? 'disabled' : ''} ${ticked ? 'checked' : ''} onchange="peToggleSel(${l.id}, this.checked)" style="width:15px;height:15px;cursor:pointer"></td>
       <td style="padding:6px 8px;white-space:nowrap;font-weight:600">${esc(l.lot_no)}</td>
       <td style="padding:6px 8px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(l.name||'')}</td>
       <td style="padding:6px 8px;text-align:right">${esc(l.branch||'')}</td>
@@ -27998,11 +28100,13 @@ function renderPriceEntryGrid(){
   }).join('');
   grid.innerHTML = `<table class="pe-grid-table" style="width:100%;border-collapse:collapse;font-size:13px">
     <thead><tr>
-      <th style="border-top-left-radius:6px">Lot</th><th>Seller</th><th style="text-align:right">Branch</th>
+      <th style="border-top-left-radius:6px;width:28px;text-align:center"><input type="checkbox" id="pe-selall" onchange="peToggleSelectAll(this.checked)" title="Select / clear all selectable lots" style="width:15px;height:15px;cursor:pointer"></th>
+      <th>Lot</th><th>Seller</th><th style="text-align:right">Branch</th>
       <th style="text-align:right">Bags</th><th style="text-align:right">Qty</th>
       <th style="text-align:right">Price ₹/kg</th><th style="text-align:right">Amount</th><th style="border-top-right-radius:6px"></th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   _peRenderSummary();
+  _peSyncSelectionUI();
 }
 function _peRenderSummary(){
   const sumEl = document.getElementById('pe-summary'); if (!sumEl) return;
@@ -28067,6 +28171,343 @@ async function peSaveAndCalculate(){
       if (_peFlagPriceCheck()) toast('Prices changed — re-verify in Price Check before generating invoices.');
     });
   } catch (e) { showError(e); }
+}
+
+// ── Price Entry: row selection (drives the bulk Set-Buyer action) ──
+function peToggleSel(id, checked){
+  if (checked) _pe.sel.add(id); else _pe.sel.delete(id);
+  _peSyncSelectionUI();
+}
+function peToggleSelectAll(checked){
+  document.querySelectorAll('#pe-grid .pe-cb').forEach(cb => {
+    if (cb.disabled) return;                       // skip locked / WD rows
+    const id = Number(cb.getAttribute('data-pesel'));
+    if (checked) _pe.sel.add(id); else _pe.sel.delete(id);
+    cb.checked = checked;
+  });
+  _peSyncSelectionUI();
+}
+function peClearSelection(){
+  _pe.sel = new Set();
+  document.querySelectorAll('#pe-grid .pe-cb').forEach(cb => { cb.checked = false; });
+  _peSyncSelectionUI();
+}
+// Reflect the selection count in the action bar + the select-all tri-state.
+function _peSyncSelectionUI(){
+  const n = _pe.sel.size;
+  const bar = document.getElementById('pe-action-bar');
+  if (bar) bar.style.display = n ? 'flex' : 'none';
+  const cnt = document.getElementById('pe-sel-count'); if (cnt) cnt.textContent = n;
+  const all = document.getElementById('pe-selall');
+  if (all) {
+    const cbs = Array.from(document.querySelectorAll('#pe-grid .pe-cb')).filter(cb => !cb.disabled);
+    const selVisible = cbs.filter(cb => _pe.sel.has(Number(cb.getAttribute('data-pesel')))).length;
+    all.checked = cbs.length > 0 && selVisible >= cbs.length;
+    all.indeterminate = selVisible > 0 && selVisible < cbs.length;
+  }
+}
+
+// ── Price Entry: Import Prices from Excel (parse → map → apply) ──
+function openPeImport(){
+  if (!_pe.aid) { toast('Select a trade first'); return; }
+  _pei = { headers: [], rows: [] };
+  const f = document.getElementById('pei-file'); if (f) f.value = '';
+  document.getElementById('pei-file-status').textContent = '';
+  document.getElementById('pei-step-file').style.display = '';
+  document.getElementById('pei-step-map').style.display = 'none';
+  document.getElementById('pei-back').style.display = 'none';
+  const applyBtn = document.getElementById('pei-apply');
+  applyBtn.style.display = 'none'; applyBtn.disabled = true;
+  showModal('pe-import-modal');
+}
+async function peiFilePicked(){
+  const input = document.getElementById('pei-file');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const status = document.getElementById('pei-file-status');
+  status.style.color = 'var(--text3)';
+  status.textContent = 'Reading file…';
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const r = await fetch(B + '/api/lots/price-import/parse', {
+      method: 'POST', headers: { 'Authorization': 'Bearer ' + T }, body: fd,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Could not read the file');
+    if (!d.rowCount) throw new Error('No data rows found in the file');
+    _pei.headers = d.headers || [];
+    _pei.rows = d.rows || [];
+    _peiBuildMapping();
+    document.getElementById('pei-rowcount').textContent = d.rowCount;
+    document.getElementById('pei-step-file').style.display = 'none';
+    document.getElementById('pei-step-map').style.display = '';
+    document.getElementById('pei-back').style.display = '';
+    document.getElementById('pei-apply').style.display = '';
+    status.textContent = '';
+  } catch (e) {
+    status.style.color = '#b91c1c';
+    status.textContent = (e && e.message) || 'Failed to read the file';
+  }
+}
+function peiBackToFile(){
+  document.getElementById('pei-step-map').style.display = 'none';
+  document.getElementById('pei-step-file').style.display = '';
+  document.getElementById('pei-back').style.display = 'none';
+  document.getElementById('pei-apply').style.display = 'none';
+}
+// Populate the three column dropdowns and auto-guess sensible defaults.
+function _peiBuildMapping(){
+  const guess = (...keywords) => {
+    for (const kw of keywords) { const hit = _pei.headers.find(h => h.toUpperCase() === kw); if (hit) return hit; }
+    for (const kw of keywords) { const hit = _pei.headers.find(h => h.toUpperCase().includes(kw)); if (hit) return hit; }
+    return '';
+  };
+  const opt = (includeBlank) => (includeBlank ? '<option value="">— none —</option>' : '')
+    + _pei.headers.map(h => `<option value="${escAttr(h)}">${esc(h)}</option>`).join('');
+  const lotSel = document.getElementById('pei-map-lot');
+  const priceSel = document.getElementById('pei-map-price');
+  const codeSel = document.getElementById('pei-map-code');
+  lotSel.innerHTML = opt(false);
+  priceSel.innerHTML = opt(false);
+  codeSel.innerHTML = opt(true);
+  lotSel.value = guess('LOT NO', 'LOTNO', 'LOT_NO', 'LOT', 'LOTNUMBER') || _pei.headers[0] || '';
+  priceSel.value = guess('PRICE', 'RATE', 'AMOUNT PER', 'PRICE/KG') || '';
+  // NOT matching bare "BUYER" — that would grab "NAME OF BUYER". Code stays optional.
+  codeSel.value = guess('BUYER CODE', 'BUYERCODE', 'CODE') || '';
+  peiRenderPreview();
+}
+function peiRenderPreview(){
+  const lotCol = document.getElementById('pei-map-lot').value;
+  const priceCol = document.getElementById('pei-map-price').value;
+  const codeCol = document.getElementById('pei-map-code').value;
+  const host = document.getElementById('pei-preview');
+  const note = document.getElementById('pei-map-note');
+  const applyBtn = document.getElementById('pei-apply');
+  const ready = lotCol && priceCol && lotCol !== priceCol;
+  applyBtn.disabled = !ready;
+  if (!ready) {
+    note.style.color = '#b45309';
+    note.textContent = !lotCol || !priceCol
+      ? 'Pick both a Lot No and a Price column to continue.'
+      : 'Lot No and Price must be different columns.';
+  } else {
+    note.style.color = 'var(--text3)';
+    note.textContent = codeCol ? 'Buyer codes from “' + codeCol + '” will also be written.' : 'Buyer codes will not be changed.';
+  }
+  const cols = [['Lot No', lotCol], ['Price', priceCol]];
+  if (codeCol) cols.push(['Buyer Code', codeCol]);
+  const head = cols.map(c => `<th style="padding:6px 10px;text-align:left;position:sticky;top:0;background:var(--bg,#f8f8f8);border-bottom:1px solid var(--border)">${esc(c[0])}</th>`).join('');
+  const body = _pei.rows.slice(0, 6).map(row => {
+    const tds = cols.map(c => `<td style="padding:5px 10px;border-bottom:1px solid var(--border)">${esc(String(row[c[1]] == null ? '' : row[c[1]]))}</td>`).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+  host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+// Match mapped rows to the trade's loaded lots (by lot number) and save each
+// changed lot through the existing per-lot PUT.
+async function peiApply(){
+  const lotCol = document.getElementById('pei-map-lot').value;
+  const priceCol = document.getElementById('pei-map-price').value;
+  const codeCol = document.getElementById('pei-map-code').value;
+  if (!lotCol || !priceCol) { toast('Map Lot No and Price first'); return; }
+  const byLot = new Map();
+  for (const l of _pe.lots) byLot.set(_peNormLot(l.lot_no), l);
+  const norm = (v) => String(v == null ? '' : v).trim();
+  const parsePrice = (v) => {
+    const s = norm(v).replace(/[₹,\s]/g, '');   // strip currency / commas / spaces
+    if (s === '') return NaN;
+    return Number(s);
+  };
+  const updates = [], unmatched = [], skipped = [], lockedHit = [];
+  for (const row of _pei.rows) {
+    const lotNo = norm(row[lotCol]);
+    if (!lotNo) continue;                          // blank lot cell — ignore
+    const lot = byLot.get(_peNormLot(lotNo));
+    if (!lot) { unmatched.push(lotNo); continue; }
+    if (lot.locked_at) { lockedHit.push(lotNo); continue; }
+    const price = parsePrice(row[priceCol]);
+    const codeVal = codeCol ? norm(row[codeCol]) : null;
+    const hasPrice = Number.isFinite(price) && price >= 0;
+    if (!hasPrice && !codeVal) { skipped.push(lotNo); continue; }
+    updates.push({ lot, price: hasPrice ? price : null, code: codeVal });
+  }
+  if (!updates.length) {
+    toast(unmatched.length ? 'No lot numbers matched this trade' : 'Nothing to import');
+    return;
+  }
+  const btn = document.getElementById('pei-apply');
+  let ok = 0, failed = 0;
+  await withBusy(btn, async () => {
+    for (const u of updates) {
+      const body = {};
+      if (u.price != null) { body.price = u.price; body.amount = (Number(u.lot.qty) || 0) * u.price; }
+      if (u.code != null) { body.code = u.code; }
+      try {
+        await j(`/api/lots/${u.lot.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        if (u.price != null) { u.lot.price = u.price; u.lot.amount = body.amount; }
+        if (u.code != null) { u.lot.code = u.code; }
+        ok++;
+      } catch (_) { failed++; }
+    }
+  });
+  hideModal('pe-import-modal');
+  _pe.sel = new Set();
+  await loadPriceEntryGrid();
+  if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch (_) {} }
+  const parts = [`Imported ${ok} lot(s)`];
+  if (failed) parts.push(`${failed} failed`);
+  if (unmatched.length) parts.push(`${unmatched.length} unmatched`);
+  if (skipped.length) parts.push(`${skipped.length} skipped`);
+  if (lockedHit.length) parts.push(`${lockedHit.length} locked`);
+  toast(parts.join(' · '));
+  if (unmatched.length) {
+    const preview = unmatched.slice(0, 12).join(', ');
+    console.warn('Price import — unmatched lot numbers:', unmatched);
+    alert(`${unmatched.length} lot number(s) in the file didn't match this trade and were skipped:\n\n${preview}${unmatched.length > 12 ? ', …' : ''}`);
+  }
+  if (_peFlagPriceCheck()) toast('Prices changed — re-verify in Price Check before generating invoices.');
+}
+
+// ── Price Entry: Set Buyer Code on the ticked lots ──
+async function openPeSetBuyerModal(){
+  const ids = Array.from(_pe.sel);
+  if (!ids.length) { toast('Tick one or more lots first'); return; }
+  _bsbLotIds = ids;
+  _bsbSelected = null;
+  const countEl = document.getElementById('bsb-count'); if (countEl) countEl.textContent = ids.length;
+  const codeEl = document.getElementById('bsb-code'); if (codeEl) codeEl.value = '';
+  _bsbRenderPreview();
+  // Refresh the buyer master so newly-added codes show up.
+  try {
+    const buyers = await j('/api/buyers?all=1');
+    const seen = new Set();
+    _lotBuyerCache = [];
+    for (const b of (Array.isArray(buyers) ? buyers : [])) {
+      const code = String(b.code || '').trim();
+      if (!code) continue;
+      const key = code.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      _lotBuyerCache.push({
+        code, codeUp: key,
+        buyer: b.buyer || '', buyer1: b.buyer1 || '',
+        sale: b.sale || '', pla: b.pla || '',
+        // Keep the same shape as the lot-edit picker's populate (shared cache).
+        gstin: b.gstin || '', cr: b.cr || '',
+      });
+    }
+    _lotBuyerCache.sort((a, b) => a.codeUp.localeCompare(b.codeUp));
+  } catch (_) { /* keep prior cache */ }
+  _bsbWireAutocomplete();
+  showModal('bulk-setbuyer-modal');
+  setTimeout(() => { try { codeEl && codeEl.focus(); } catch(_){} }, 50);
+}
+function _bsbRenderPreview(){
+  const host = document.getElementById('bsb-preview');
+  const btn  = document.getElementById('bsb-apply');
+  if (!_bsbSelected) {
+    if (host) host.style.display = 'none';
+    if (btn)  btn.disabled = true;
+    return;
+  }
+  if (host) {
+    host.style.display = '';
+    document.getElementById('bsb-p-buyer').textContent  = _bsbSelected.buyer  || '—';
+    document.getElementById('bsb-p-buyer1').textContent = _bsbSelected.buyer1 || '—';
+    document.getElementById('bsb-p-sale').textContent   = _bsbSelected.sale   || '—';
+    document.getElementById('bsb-p-place').textContent  = _bsbSelected.pla    || '—';
+  }
+  if (btn) btn.disabled = false;
+}
+function _bsbWireAutocomplete(){
+  const codeEl = document.getElementById('bsb-code');
+  const ddl    = document.getElementById('bsb-dropdown');
+  if (!codeEl || !ddl || _bsbWired) return;
+  _bsbWired = true;
+  let activeIdx = -1;
+  const render = () => {
+    const q = String(codeEl.value || '').trim().toUpperCase();
+    const starts = [], contains = [];
+    for (const b of _lotBuyerCache) {
+      if (!q) { starts.push(b); continue; }
+      if (b.codeUp.startsWith(q)) starts.push(b);
+      else if (b.codeUp.includes(q)) contains.push(b);
+    }
+    const matches = starts.concat(contains).slice(0, 50);
+    if (!matches.length) {
+      ddl.innerHTML = '<div style="padding:8px 12px;color:#888;font-style:italic">No code matches.</div>';
+      ddl.style.display = 'block'; activeIdx = -1; return;
+    }
+    activeIdx = 0;
+    ddl.innerHTML = matches.map((b, i) => {
+      const ctxParts = [b.buyer, b.sale ? '['+b.sale+']' : '', b.pla].filter(Boolean);
+      return '<div class="bsb-row" data-code="'+escAttr(b.code)+'" data-idx="'+i+'" '+
+        'style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f1f1f1;display:flex;gap:10px;align-items:baseline'+
+        (i === activeIdx ? ';background:#ecfdf5' : '')+'">'+
+        '<span style="font-weight:700;color:#15803d;min-width:60px">'+escAttr(b.code)+'</span>'+
+        '<span style="flex:1;color:#444">'+escAttr(ctxParts.join(' · '))+'</span>'+
+        '</div>';
+    }).join('');
+    ddl.style.display = 'block';
+  };
+  const hide = () => { ddl.style.display = 'none'; activeIdx = -1; };
+  const choose = (code) => {
+    if (code == null) return;
+    const up = String(code).trim().toUpperCase();
+    const match = _lotBuyerCache.find(b => b.codeUp === up);
+    if (!match) return;
+    codeEl.value = match.code; _bsbSelected = match; hide(); _bsbRenderPreview();
+  };
+  codeEl.addEventListener('focus', render);
+  codeEl.addEventListener('input', () => {
+    const up = String(codeEl.value || '').trim().toUpperCase();
+    _bsbSelected = _lotBuyerCache.find(b => b.codeUp === up) || null;
+    _bsbRenderPreview(); render();
+  });
+  codeEl.addEventListener('blur', () => setTimeout(hide, 150));
+  codeEl.addEventListener('keydown', (e) => {
+    if (ddl.style.display === 'none') return;
+    const rows = ddl.querySelectorAll('.bsb-row');
+    if (e.key === 'Escape') { hide(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!rows.length) return; activeIdx = (activeIdx + 1) % rows.length; }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (!rows.length) return; activeIdx = (activeIdx - 1 + rows.length) % rows.length; }
+    else if (e.key === 'Enter') { if (activeIdx >= 0 && rows[activeIdx]) { e.preventDefault(); choose(rows[activeIdx].getAttribute('data-code')); return; } }
+    else { return; }
+    rows.forEach((r, i) => { r.style.background = (i === activeIdx) ? '#ecfdf5' : ''; });
+    if (rows[activeIdx]) rows[activeIdx].scrollIntoView({ block: 'nearest' });
+  });
+  ddl.addEventListener('mousedown', (e) => {
+    const row = e.target.closest('.bsb-row'); if (!row) return;
+    e.preventDefault(); choose(row.getAttribute('data-code'));
+  });
+}
+async function applyBulkSetBuyer(){
+  if (!_bsbSelected) { toast('Pick a buyer code first'); return; }
+  if (!_bsbLotIds.length) { toast('No lots selected'); return; }
+  const btn = document.getElementById('bsb-apply');
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+  try {
+    const r = await fetch(B + '/api/lots/bulk-set-buyer', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + T, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ids: _bsbLotIds,
+        code: _bsbSelected.code, buyer: _bsbSelected.buyer,
+        buyer1: _bsbSelected.buyer1, sale: _bsbSelected.sale,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Bulk update failed');
+    toast('Set buyer ' + _bsbSelected.code + ' on ' + (d.updated || 0) + ' lot(s)');
+    hideModal('bulk-setbuyer-modal');
+    _pe.sel = new Set();
+    if (typeof loadPriceEntryGrid === 'function') loadPriceEntryGrid();
+    if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch (_) {} }
+  } catch (e) {
+    showError(e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply'; }
+  }
 }
 
 async function loadPriceCheckAuctions(){
