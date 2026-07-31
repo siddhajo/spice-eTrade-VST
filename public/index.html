@@ -3951,13 +3951,17 @@ input[type="search"]:focus{
           <span id="pe-pc-note" style="display:none;color:#a16207"> Price Check is ON for this install — you'll need to re-verify prices before generating invoices.</span>
         </div>
         <div id="pe-summary" style="font-size:12px;color:var(--text3);margin-top:6px"></div>
-        <!-- Bulk buyer-code bar — appears only when one or more lots are ticked
-             in the grid below. Set applies a buyer code (picked from the
-             searchable dropdown) to every ticked lot. -->
-        <div id="pe-action-bar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;background:var(--spice-cardamom-lt,#eef6f0);border:1px solid #C5E3D2;border-radius:8px">
-          <span style="font-weight:700;font-size:13px;color:var(--text)"><span id="pe-sel-count">0</span> lot(s) selected</span>
-          <button class="btn btn-a" style="height:34px;padding:0 12px;font-weight:600" onclick="openPeSetBuyerModal()">👤 Set Buyer Code</button>
-          <button class="btn btn-o" style="height:34px;padding:0 12px;font-weight:600;margin-left:auto" onclick="peClearSelection()" title="Untick all lots">Clear selection</button>
+        <!-- Assign-buyer bar (always visible). Tick lots by number (or use the
+             row checkboxes), type a buyer code, then Set Buyer to write it to
+             every ticked lot. The count on the Set Buyer button = ticked lots. -->
+        <div id="pe-assign-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;background:var(--spice-cardamom-lt,#eef6f0);border:1px solid #C5E3D2;border-radius:8px">
+          <span style="font-size:12px;font-weight:700;letter-spacing:.6px;color:var(--text2)">ASSIGN BUYER</span>
+          <input id="pe-lotno-input" placeholder="Tick lots: 12, 13, 15…" onkeydown="if(event.key==='Enter'){event.preventDefault();peSelectByLotNos();}" title="Type lot numbers (commas or ranges like 12-18) to tick them" style="width:180px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="peSelectByLotNos()">Tick</button>
+          <input id="pe-buyer-code" list="pe-buyer-codes" placeholder="Buyer code…" onkeydown="if(event.key==='Enter'){event.preventDefault();peSetBuyerInline();}" title="Buyer code from the Buyers master — Buyer / Name / Sale type auto-fill onto the ticked lots" style="width:180px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <datalist id="pe-buyer-codes"></datalist>
+          <button id="pe-setbuyer-btn" class="btn btn-g" style="height:38px;padding:0 16px;font-weight:600" onclick="peSetBuyerInline()">👤 Set Buyer <span id="pe-sel-count" style="margin-left:6px;background:rgba(255,255,255,.28);padding:1px 8px;border-radius:10px;font-size:12px;font-weight:700">0</span></button>
+          <button class="btn btn-o" style="height:38px;padding:0 16px;font-weight:600" onclick="peClearSelection()" title="Untick all lots">Clear</button>
         </div>
       </div>
       <div class="card"><div id="pe-grid" style="overflow-x:auto"></div></div>
@@ -6284,36 +6288,6 @@ input[type="search"]:focus{
     <button class="btn btn-o" onclick="hideModal('pe-import-modal')">Cancel</button>
     <button class="btn btn-o" id="pei-back" onclick="peiBackToFile()" style="display:none">← Back</button>
     <button class="btn btn-g" id="pei-apply" onclick="peiApply()" style="display:none" disabled>Import Prices</button>
-  </div>
-</div></div>
-
-<!-- ═══ PRICE ENTRY — SET BUYER CODE (bulk) ══════════════════
-     Pick a buyer code (searchable). Its Buyer / Buyer Name / Sale Type from
-     the buyers master are written to every ticked lot. See openPeSetBuyerModal
-     / applyBulkSetBuyer → POST /api/lots/bulk-set-buyer. -->
-<div class="modal-bg" id="bulk-setbuyer-modal"><div class="modal" style="max-width:520px">
-  <h2>Set Buyer Code on <span id="bsb-count">0</span> lot(s)</h2>
-  <p style="font-size:12px;color:var(--text2);margin:0 0 14px;line-height:1.5">
-    Pick a buyer code below. The matching <b>Buyer</b>, <b>Buyer Name</b>, and <b>Sale Type</b> from the buyers master will be written to every selected lot.
-  </p>
-  <div class="fg">
-    <label>Buyer Code <span id="bsb-hint" style="margin-left:6px;font-weight:400;font-size:11px;color:var(--text3)"></span></label>
-    <div style="position:relative">
-      <input id="bsb-code" autocomplete="off" placeholder="Start typing — e.g. JP">
-      <div id="bsb-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;max-height:240px;overflow-y:auto;background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:12.5px"></div>
-    </div>
-  </div>
-  <div id="bsb-preview" style="margin-top:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text2);display:none">
-    <div style="display:grid;grid-template-columns:90px 1fr;gap:4px 10px">
-      <div>Buyer</div>      <div id="bsb-p-buyer" style="font-weight:600;color:var(--text)"></div>
-      <div>Buyer Name</div> <div id="bsb-p-buyer1" style="font-weight:600;color:var(--text)"></div>
-      <div>Sale Type</div>  <div id="bsb-p-sale" style="font-weight:600;color:var(--text)"></div>
-      <div>Place</div>      <div id="bsb-p-place"></div>
-    </div>
-  </div>
-  <div class="actions">
-    <button class="btn btn-o" onclick="hideModal('bulk-setbuyer-modal')">Cancel</button>
-    <button class="btn btn-g" id="bsb-apply" onclick="applyBulkSetBuyer()" disabled>Apply</button>
   </div>
 </div></div>
 
@@ -28034,13 +28008,10 @@ function _peNormLot(v){
   const stripped = s.replace(/^0+/, '');
   return stripped === '' ? '0' : stripped;
 }
-// Price import (parse → map → apply) state and Set-Buyer modal state.
+// Price import (parse → map → apply) state.
 let _pei = { headers: [], rows: [] };
 // NB: _lotBuyerCache is the shared buyers cache declared for the lot-edit code
-// picker; we reuse it here (same shape) rather than redeclaring.
-let _bsbSelected = null;               // resolved buyer { code, buyer, buyer1, sale, pla }
-let _bsbLotIds   = [];                 // lot ids captured when the modal opened
-let _bsbWired    = false;              // autocomplete handlers wired once
+// picker; the inline "Set Buyer" reuses it (same shape) to resolve a code.
 // Price Check flag is surfaced on <body data-feat-price-check> when settings load.
 function _peFlagPriceCheck(){ return document.body.getAttribute('data-feat-price-check') === '1'; }
 function _peFmt(n){ return (Number(n)||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -28050,6 +28021,8 @@ function _peInt(n){ return (Math.round(Number(n)||0)).toLocaleString('en-IN'); }
 function loadPriceEntry(){
   const note = document.getElementById('pe-pc-note');
   if (note) note.style.display = _peFlagPriceCheck() ? 'inline' : 'none';
+  // Load the buyers master for the "Buyer code…" autocomplete + resolution.
+  _peLoadBuyerCache().then(_peFillBuyerDatalist);
   fillAucSelect('pe-auction').then(() => loadPriceEntryGrid());
 }
 async function loadPriceEntryGrid(){
@@ -28090,6 +28063,7 @@ function renderPriceEntryGrid(){
       <td style="padding:6px 4px;width:28px;text-align:center"><input type="checkbox" class="pe-cb" data-pesel="${l.id}" ${selDisabled ? 'disabled' : ''} ${ticked ? 'checked' : ''} onchange="peToggleSel(${l.id}, this.checked)" style="width:15px;height:15px;cursor:pointer"></td>
       <td style="padding:6px 8px;white-space:nowrap;font-weight:600">${esc(l.lot_no)}</td>
       <td style="padding:6px 8px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(l.name||'')}</td>
+      <td style="padding:6px 8px;white-space:nowrap;font-weight:600;color:var(--spice-cardamom-dk,#0f6e56)" title="${escAttr(l.buyer1||l.buyer||'')}">${l.code ? esc(l.code) : '<span style="color:var(--text3);font-weight:400">—</span>'}</td>
       <td style="padding:6px 8px;text-align:right">${esc(l.branch||'')}</td>
       <td style="padding:6px 8px;text-align:right">${_peInt(l.bags)}</td>
       <td style="padding:6px 8px;text-align:right">${_peFmt(l.qty)}</td>
@@ -28101,7 +28075,7 @@ function renderPriceEntryGrid(){
   grid.innerHTML = `<table class="pe-grid-table" style="width:100%;border-collapse:collapse;font-size:13px">
     <thead><tr>
       <th style="border-top-left-radius:6px;width:28px;text-align:center"><input type="checkbox" id="pe-selall" onchange="peToggleSelectAll(this.checked)" title="Select / clear all selectable lots" style="width:15px;height:15px;cursor:pointer"></th>
-      <th>Lot</th><th>Seller</th><th style="text-align:right">Branch</th>
+      <th>Lot</th><th>Seller</th><th>Buyer</th><th style="text-align:right">Branch</th>
       <th style="text-align:right">Bags</th><th style="text-align:right">Qty</th>
       <th style="text-align:right">Price ₹/kg</th><th style="text-align:right">Amount</th><th style="border-top-right-radius:6px"></th>
     </tr></thead><tbody>${rows}</tbody></table>`;
@@ -28192,11 +28166,10 @@ function peClearSelection(){
   document.querySelectorAll('#pe-grid .pe-cb').forEach(cb => { cb.checked = false; });
   _peSyncSelectionUI();
 }
-// Reflect the selection count in the action bar + the select-all tri-state.
+// Reflect the ticked count on the Set Buyer button + the select-all tri-state.
+// The ASSIGN BUYER bar itself stays visible at all times.
 function _peSyncSelectionUI(){
   const n = _pe.sel.size;
-  const bar = document.getElementById('pe-action-bar');
-  if (bar) bar.style.display = n ? 'flex' : 'none';
   const cnt = document.getElementById('pe-sel-count'); if (cnt) cnt.textContent = n;
   const all = document.getElementById('pe-selall');
   if (all) {
@@ -28205,6 +28178,98 @@ function _peSyncSelectionUI(){
     all.checked = cbs.length > 0 && selVisible >= cbs.length;
     all.indeterminate = selVisible > 0 && selVisible < cbs.length;
   }
+}
+
+// ── Price Entry: ASSIGN BUYER bar ──────────────────────────────
+// Tick lots by number ("12, 13, 15" or ranges "12-18"), then Set Buyer.
+// Load + cache the buyers master for the "Buyer code…" autocomplete and
+// for resolving a typed code → buyer / buyer1 / sale.
+async function _peLoadBuyerCache(){
+  if (_lotBuyerCache && _lotBuyerCache.length) return;   // already loaded
+  try {
+    const buyers = await j('/api/buyers?all=1');
+    const seen = new Set(); _lotBuyerCache = [];
+    for (const b of (Array.isArray(buyers) ? buyers : [])) {
+      const code = String(b.code || '').trim();
+      if (!code) continue;
+      const key = code.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      _lotBuyerCache.push({
+        code, codeUp: key,
+        buyer: b.buyer || '', buyer1: b.buyer1 || '',
+        sale: b.sale || '', pla: b.pla || '',
+        gstin: b.gstin || '', cr: b.cr || '',   // keep the shared-cache shape
+      });
+    }
+    _lotBuyerCache.sort((a, b) => a.codeUp.localeCompare(b.codeUp));
+  } catch (_) { /* leave cache as-is */ }
+}
+function _peFillBuyerDatalist(){
+  const dl = document.getElementById('pe-buyer-codes'); if (!dl) return;
+  dl.innerHTML = (_lotBuyerCache || []).map(b =>
+    `<option value="${escAttr(b.code)}">${esc(b.buyer1 || b.buyer || '')}${b.sale ? ' · ' + esc(b.sale) : ''}</option>`
+  ).join('');
+}
+// Tick every lot whose number appears in the input (commas / spaces; numeric
+// ranges like 12-18 expand). Leading zeros are ignored ("1" ticks "001").
+function peSelectByLotNos(){
+  if (!_pe.aid) { toast('Select a trade first'); return; }
+  const inp = document.getElementById('pe-lotno-input');
+  const raw = inp ? inp.value : '';
+  if (!raw.trim()) { toast('Type one or more lot numbers'); return; }
+  const wanted = [];   // { key, label }
+  for (const tok of raw.split(/[\s,]+/).filter(Boolean)) {
+    const m = tok.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      let a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+      if (a > b) { const t = a; a = b; b = t; }
+      for (let n = a; n <= b && (n - a) < 5000; n++) wanted.push({ key: _peNormLot(n), label: String(n) });
+    } else {
+      wanted.push({ key: _peNormLot(tok), label: tok });
+    }
+  }
+  const byLot = new Map();
+  for (const l of _pe.lots) byLot.set(_peNormLot(l.lot_no), l);
+  let matched = 0; const notFound = [], notSelectable = []; const seen = new Set();
+  for (const w of wanted) {
+    if (!w.key || seen.has(w.key)) continue;
+    seen.add(w.key);
+    const l = byLot.get(w.key);
+    if (!l) { notFound.push(w.label); continue; }
+    if (l.locked_at || String(l.code || '').trim().toUpperCase() === 'WD') { notSelectable.push(w.label); continue; }
+    _pe.sel.add(l.id); matched++;
+  }
+  renderPriceEntryGrid();   // re-render to reflect ticks (also syncs the count)
+  const msg = [`${matched} lot(s) ticked`];
+  if (notFound.length) msg.push(`${notFound.length} not found`);
+  if (notSelectable.length) msg.push(`${notSelectable.length} locked/WD`);
+  toast(msg.join(' · '));
+}
+// Resolve the typed buyer code against the buyers master and write it (with
+// its Buyer / Buyer Name / Sale type) onto every ticked lot.
+async function peSetBuyerInline(){
+  const ids = Array.from(_pe.sel);
+  if (!ids.length) { toast('Tick one or more lots first'); return; }
+  const codeEl = document.getElementById('pe-buyer-code');
+  const codeStr = String(codeEl ? codeEl.value : '').trim();
+  if (!codeStr) { toast('Enter a buyer code'); return; }
+  await _peLoadBuyerCache();
+  const match = (_lotBuyerCache || []).find(b => b.codeUp === codeStr.toUpperCase());
+  if (!match) { toast(`No buyer registered with code "${codeStr}" — add them in the Buyers tab first`); return; }
+  const btn = document.getElementById('pe-setbuyer-btn');
+  try {
+    await withBusy(btn, async () => {
+      const r = await j('/api/lots/bulk-set-buyer', { method: 'POST', body: JSON.stringify({
+        ids, code: match.code, buyer: match.buyer, buyer1: match.buyer1, sale: match.sale,
+      }) });
+      toast(`Set buyer ${match.code} on ${(r.updated || 0)} lot(s)`);
+      _pe.sel = new Set();
+      if (codeEl) codeEl.value = '';
+      await loadPriceEntryGrid();
+      if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch (_) {} }
+    });
+  } catch (e) { showError(e); }
 }
 
 // ── Price Entry: Import Prices from Excel (parse → map → apply) ──
@@ -28366,148 +28431,6 @@ async function peiApply(){
     alert(`${unmatched.length} lot number(s) in the file didn't match this trade and were skipped:\n\n${preview}${unmatched.length > 12 ? ', …' : ''}`);
   }
   if (_peFlagPriceCheck()) toast('Prices changed — re-verify in Price Check before generating invoices.');
-}
-
-// ── Price Entry: Set Buyer Code on the ticked lots ──
-async function openPeSetBuyerModal(){
-  const ids = Array.from(_pe.sel);
-  if (!ids.length) { toast('Tick one or more lots first'); return; }
-  _bsbLotIds = ids;
-  _bsbSelected = null;
-  const countEl = document.getElementById('bsb-count'); if (countEl) countEl.textContent = ids.length;
-  const codeEl = document.getElementById('bsb-code'); if (codeEl) codeEl.value = '';
-  _bsbRenderPreview();
-  // Refresh the buyer master so newly-added codes show up.
-  try {
-    const buyers = await j('/api/buyers?all=1');
-    const seen = new Set();
-    _lotBuyerCache = [];
-    for (const b of (Array.isArray(buyers) ? buyers : [])) {
-      const code = String(b.code || '').trim();
-      if (!code) continue;
-      const key = code.toUpperCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      _lotBuyerCache.push({
-        code, codeUp: key,
-        buyer: b.buyer || '', buyer1: b.buyer1 || '',
-        sale: b.sale || '', pla: b.pla || '',
-        // Keep the same shape as the lot-edit picker's populate (shared cache).
-        gstin: b.gstin || '', cr: b.cr || '',
-      });
-    }
-    _lotBuyerCache.sort((a, b) => a.codeUp.localeCompare(b.codeUp));
-  } catch (_) { /* keep prior cache */ }
-  _bsbWireAutocomplete();
-  showModal('bulk-setbuyer-modal');
-  setTimeout(() => { try { codeEl && codeEl.focus(); } catch(_){} }, 50);
-}
-function _bsbRenderPreview(){
-  const host = document.getElementById('bsb-preview');
-  const btn  = document.getElementById('bsb-apply');
-  if (!_bsbSelected) {
-    if (host) host.style.display = 'none';
-    if (btn)  btn.disabled = true;
-    return;
-  }
-  if (host) {
-    host.style.display = '';
-    document.getElementById('bsb-p-buyer').textContent  = _bsbSelected.buyer  || '—';
-    document.getElementById('bsb-p-buyer1').textContent = _bsbSelected.buyer1 || '—';
-    document.getElementById('bsb-p-sale').textContent   = _bsbSelected.sale   || '—';
-    document.getElementById('bsb-p-place').textContent  = _bsbSelected.pla    || '—';
-  }
-  if (btn) btn.disabled = false;
-}
-function _bsbWireAutocomplete(){
-  const codeEl = document.getElementById('bsb-code');
-  const ddl    = document.getElementById('bsb-dropdown');
-  if (!codeEl || !ddl || _bsbWired) return;
-  _bsbWired = true;
-  let activeIdx = -1;
-  const render = () => {
-    const q = String(codeEl.value || '').trim().toUpperCase();
-    const starts = [], contains = [];
-    for (const b of _lotBuyerCache) {
-      if (!q) { starts.push(b); continue; }
-      if (b.codeUp.startsWith(q)) starts.push(b);
-      else if (b.codeUp.includes(q)) contains.push(b);
-    }
-    const matches = starts.concat(contains).slice(0, 50);
-    if (!matches.length) {
-      ddl.innerHTML = '<div style="padding:8px 12px;color:#888;font-style:italic">No code matches.</div>';
-      ddl.style.display = 'block'; activeIdx = -1; return;
-    }
-    activeIdx = 0;
-    ddl.innerHTML = matches.map((b, i) => {
-      const ctxParts = [b.buyer, b.sale ? '['+b.sale+']' : '', b.pla].filter(Boolean);
-      return '<div class="bsb-row" data-code="'+escAttr(b.code)+'" data-idx="'+i+'" '+
-        'style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f1f1f1;display:flex;gap:10px;align-items:baseline'+
-        (i === activeIdx ? ';background:#ecfdf5' : '')+'">'+
-        '<span style="font-weight:700;color:#15803d;min-width:60px">'+escAttr(b.code)+'</span>'+
-        '<span style="flex:1;color:#444">'+escAttr(ctxParts.join(' · '))+'</span>'+
-        '</div>';
-    }).join('');
-    ddl.style.display = 'block';
-  };
-  const hide = () => { ddl.style.display = 'none'; activeIdx = -1; };
-  const choose = (code) => {
-    if (code == null) return;
-    const up = String(code).trim().toUpperCase();
-    const match = _lotBuyerCache.find(b => b.codeUp === up);
-    if (!match) return;
-    codeEl.value = match.code; _bsbSelected = match; hide(); _bsbRenderPreview();
-  };
-  codeEl.addEventListener('focus', render);
-  codeEl.addEventListener('input', () => {
-    const up = String(codeEl.value || '').trim().toUpperCase();
-    _bsbSelected = _lotBuyerCache.find(b => b.codeUp === up) || null;
-    _bsbRenderPreview(); render();
-  });
-  codeEl.addEventListener('blur', () => setTimeout(hide, 150));
-  codeEl.addEventListener('keydown', (e) => {
-    if (ddl.style.display === 'none') return;
-    const rows = ddl.querySelectorAll('.bsb-row');
-    if (e.key === 'Escape') { hide(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); if (!rows.length) return; activeIdx = (activeIdx + 1) % rows.length; }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); if (!rows.length) return; activeIdx = (activeIdx - 1 + rows.length) % rows.length; }
-    else if (e.key === 'Enter') { if (activeIdx >= 0 && rows[activeIdx]) { e.preventDefault(); choose(rows[activeIdx].getAttribute('data-code')); return; } }
-    else { return; }
-    rows.forEach((r, i) => { r.style.background = (i === activeIdx) ? '#ecfdf5' : ''; });
-    if (rows[activeIdx]) rows[activeIdx].scrollIntoView({ block: 'nearest' });
-  });
-  ddl.addEventListener('mousedown', (e) => {
-    const row = e.target.closest('.bsb-row'); if (!row) return;
-    e.preventDefault(); choose(row.getAttribute('data-code'));
-  });
-}
-async function applyBulkSetBuyer(){
-  if (!_bsbSelected) { toast('Pick a buyer code first'); return; }
-  if (!_bsbLotIds.length) { toast('No lots selected'); return; }
-  const btn = document.getElementById('bsb-apply');
-  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
-  try {
-    const r = await fetch(B + '/api/lots/bulk-set-buyer', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + T, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ids: _bsbLotIds,
-        code: _bsbSelected.code, buyer: _bsbSelected.buyer,
-        buyer1: _bsbSelected.buyer1, sale: _bsbSelected.sale,
-      }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Bulk update failed');
-    toast('Set buyer ' + _bsbSelected.code + ' on ' + (d.updated || 0) + ' lot(s)');
-    hideModal('bulk-setbuyer-modal');
-    _pe.sel = new Set();
-    if (typeof loadPriceEntryGrid === 'function') loadPriceEntryGrid();
-    if (typeof refreshTradeStage === 'function') { try { refreshTradeStage(true); } catch (_) {} }
-  } catch (e) {
-    showError(e);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Apply'; }
-  }
 }
 
 async function loadPriceCheckAuctions(){
