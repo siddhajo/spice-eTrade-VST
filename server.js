@@ -2119,6 +2119,32 @@ app.get('/api/gst-lookup/status', requireView, (req, res) => {
   }
 });
 
+// Build the best address line from a gstincheck.co.in `pradr` object.
+// The portal ships TWO representations: a pre-formatted flat string
+// `pradr.adr` (which carries the real door no / building / road) and a
+// structured `pradr.addr` object (which often DROPS those, leaving a
+// junk "0" bno). Prefer the flat string; only reconstruct from parts
+// when it's missing. We then:
+//   • split on commas, trim, drop empties
+//   • collapse consecutive duplicate segments (the portal repeats them,
+//     e.g. "CP/VII/532, CP/VII/532" / "Anakkara, Anakkara")
+//   • strip trailing district / state / PIN segments, since those are
+//     surfaced separately as place/state/pin and shouldn't be doubled
+//     inside the address line.
+function _gstBuildAddress(pradr) {
+  const addr = (pradr && pradr.addr) || {};
+  const flat = (pradr && pradr.adr) || '';
+  let segs = flat
+    ? flat.split(',').map(s => s.trim()).filter(Boolean)
+    : [addr.bno, addr.bnm, addr.st, addr.loc].map(s => (s || '').trim()).filter(Boolean);
+  // Collapse consecutive duplicates (case-insensitive).
+  segs = segs.filter((s, i) => i === 0 || s.toLowerCase() !== segs[i - 1].toLowerCase());
+  // Strip trailing district / state / PIN if they leak into the tail.
+  const tail = new Set([addr.dst, addr.stcd, addr.pncd].map(s => (s || '').trim().toLowerCase()).filter(Boolean));
+  while (segs.length && tail.has(segs[segs.length - 1].toLowerCase())) segs.pop();
+  return segs.join(', ');
+}
+
 app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
   const gstin = String(req.params.gstin || '').toUpperCase().trim();
   if (!GSTIN_RE.test(gstin)) {
@@ -2163,7 +2189,7 @@ app.get('/api/gst-lookup/:gstin', requireView, async (req, res) => {
         valid: true, gstin, pan, st_code: stCode,
         name:     d.lgnm || d.tradeNam || '',
         tradeName:d.tradeNam || d.lgnm || '',
-        address:  [addr.bno, addr.bnm, addr.st, addr.loc].filter(Boolean).join(', '),
+        address:  _gstBuildAddress(d.pradr),
         place:    addr.dst || addr.loc || '',
         pin:      addr.pncd || '',
         state:    addr.stcd || state,
