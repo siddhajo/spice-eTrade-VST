@@ -1,0 +1,13 @@
+# The native Android project is GENERATED — `npx cap add android` (or
+# build-release.sh / the CI workflow) recreates it from capacitor.config.json,
+# so the package name always follows the appId. Committing it just adds noise
+# and machine-specific SDK paths (android/local.properties).
+android/
+node_modules/
+
+# Signing material — NEVER commit these. The keystore lives on your machine
+# (and in CI as the ANDROID_KEYSTORE_BASE64 secret); losing it means you can
+# never ship an update to an already-installed app.
+*.keystore
+*.jks
+keystore.properties

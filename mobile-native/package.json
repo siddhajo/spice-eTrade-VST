@@ -1,0 +1,19 @@
+{
+  "name": "spice-etrade-native",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin native Android wrapper for the Spice eTrade mobile app. Adds direct Bluetooth Classic (SPP) ESC/POS printing so lot receipts print to a basic thermal printer without RawBT and without its free-version watermark.",
+  "scripts": {
+    "add:android": "cap add android",
+    "sync": "cap sync",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "cordova-plugin-bluetooth-serial": "^0.4.7"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}

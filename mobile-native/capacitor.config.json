@@ -1,0 +1,13 @@
+{
+  "appId": "app.vstl.spiceetrade",
+  "appName": "Spice eTrade",
+  "webDir": "www",
+  "server": {
+    "url": "https://REPLACE-ME.up.railway.app/mobile",
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
