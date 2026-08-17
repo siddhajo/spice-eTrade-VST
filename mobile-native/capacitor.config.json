@@ -3,7 +3,7 @@
   "appName": "Spice eTrade",
   "webDir": "www",
   "server": {
-    "url": "https://REPLACE-ME.up.railway.app/mobile",
+    "url": "https://vstl-etrade.up.railway.app/mobile",
     "androidScheme": "https",
     "cleartext": false
   },
