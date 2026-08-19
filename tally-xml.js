@@ -232,6 +232,54 @@ const _panFromGstin = (gstin) => {
   return s.slice(2, 12);
 };
 
+// Resolve a buyer row's Consignee / Ship-To block for the Tally voucher.
+//
+// Mirrors the invoice PDF's consignee logic (invoice-pdf.js) so the printed
+// invoice and the Tally voucher can never disagree about where the goods go:
+//   • The gate includes cpin, because a buyer may carry ONLY a ship-to PIN (a
+//     different delivery pincode for the same trade name — the e-way distance
+//     case) with no separate consignee name/address.
+//   • Every field then falls back to its bill-to counterpart INDIVIDUALLY, so
+//     a PIN-only consignee yields the bill-to name/address with the ship-to
+//     PIN, rather than an all-or-nothing switch that would drop the PIN.
+// `b` is the joined buyers row (may be undefined when no master row matched).
+const _shipToFrom = (b) => {
+  const s = (v) => String(v == null ? '' : v).trim();
+  b = b || {};
+  const billName = s(b.buyer1) || s(b.buyer) || '';
+  const billAddr = [s(b.add1), s(b.add2)].filter(Boolean).join(', ');
+  // Gate kept IDENTICAL to invoice-pdf.js's `hasConsignee` — deliberately
+  // NOT widened to cadd2/cstate. Those two are only ever meaningful next to
+  // a cadd1/cpla, and a buyer carrying nothing but a stray cstate must not
+  // make the Tally voucher claim a consignee the printed invoice doesn't
+  // show. (There is exactly such a buyer in the live master.) Once the gate
+  // IS open, cadd2 and cstate are used normally.
+  const hasConsignee = !!(s(b.cbuyer1) || s(b.cadd1) || s(b.cpla) ||
+                          s(b.cgstin) || s(b.cpin));
+  if (!hasConsignee) {
+    return {
+      has: false,
+      name: billName, address: billAddr, place: s(b.pla),
+      pin: s(b.pin), gstin: s(b.gstin),
+      state: '', stateCode: '',
+    };
+  }
+  const cAddr = [s(b.cadd1), s(b.cadd2)].filter(Boolean).join(', ');
+  return {
+    has: true,
+    name:    s(b.cbuyer1) || billName,
+    address: cAddr || billAddr,
+    place:   s(b.cpla)  || s(b.pla),
+    pin:     s(b.cpin)  || s(b.pin),
+    gstin:   s(b.cgstin) || s(b.gstin),
+    // Free-text consignee state wins; else the 2-digit state code is mapped
+    // through the same STATES table findState() uses. Blank means "no
+    // explicit ship-to state" — the caller falls back to the party state.
+    state:     s(b.cstate) || (s(b.cst_code) ? (STATES[s(b.cst_code)] || '') : ''),
+    stateCode: s(b.cst_code),
+  };
+};
+
 // Sale type letter ("L"/"I"/"E") → human label used in dispatch terms /
 // fallbacks. Currently unused but handy.
 const _saleLabel = (s) => {
@@ -352,7 +400,26 @@ function generSalesIspXML(rows, cfg, opts = {}) {
     const partyState  = xe(findState(row.partyGstin));
     const partyPin    = xe(row.pin || '');
     const partyPlace  = xe(row.place || '');
-    const consigneePAN = _panFromGstin(row.partyGstin);
+    // ── Consignee / Ship-To ──────────────────────────────────────────
+    // Every CONSIGNEE*/SHIPTO* tag below is driven by the buyer's
+    // Consignee (Ship-to) block, per-field falling back to bill-to when a
+    // consignee field is blank (see _shipToFrom). Rows built by an older
+    // caller carry no `shipTo`, so fall back to the party values — that
+    // keeps the previous behaviour instead of emitting empty tags.
+    const ship = row.shipTo || {
+      name: row.partyName, address: row.address, place: row.place,
+      pin: row.pin, gstin: row.partyGstin, state: '', stateCode: '',
+    };
+    const shipName  = xe(ship.name || row.partyName || '');
+    const shipPlace = xe(ship.place || '');
+    const shipPin   = xe(ship.pin || '');
+    const shipGstin = xe(ship.gstin || row.partyGstin || '');
+    // Explicit consignee state wins; else derive it from the consignee
+    // GSTIN; else fall back to the bill-to party's state.
+    const shipState = xe(ship.state || findState(ship.gstin) || findState(row.partyGstin));
+    const shipAddrLines = _addrLines(ship.address, ship.place);
+    // PAN is read off the CONSIGNEE's GSTIN so it matches CONSIGNEEGSTIN.
+    const consigneePAN = _panFromGstin(ship.gstin || row.partyGstin);
     const isIntra     = String(row.partyGstin || '').slice(0, 2) === String(intra);
     const sale        = String(row.sale || 'L').toUpperCase();
     const isExport    = sale === 'E';
@@ -375,8 +442,11 @@ function generSalesIspXML(rows, cfg, opts = {}) {
       : (isIntra ? 'Local Sales - Taxable' : 'Interstate Sales - Taxable');
     const gunnyLedger = isExport ? GunnyExport : (isIntra ? GunnyIntra : GunnyInter);
 
-    // Final destination defaults to buyer's place
-    const finalDest = xe(row.finalDestination || row.place || '');
+    // Final destination = where the goods actually end up, so it follows the
+    // consignee/ship-to place (falling back to the bill-to place when there is
+    // no separate consignee). Matches the invoice PDF's "Destination" cell,
+    // which reads `cpla || pla`.
+    const finalDest = xe(row.finalDestination || ship.place || row.place || '');
     const shippedBy = xe(row.shippedBy || '');
     const vehicleNo = xe(row.vehicleNo || '');
     const distance  = xe(row.distance || '');
@@ -434,11 +504,11 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
     }
 
     xml += `
-<SHIPTOPLACE>${partyPlace}</SHIPTOPLACE>
-<CONSIGNEEGSTIN>${partyGstin}</CONSIGNEEGSTIN>
-<CONSIGNEEMAILINGNAME>${partyName}</CONSIGNEEMAILINGNAME>
-<CONSIGNEEPINCODE>${partyPin}</CONSIGNEEPINCODE>
-<CONSIGNEESTATENAME>${partyState}</CONSIGNEESTATENAME>
+<SHIPTOPLACE>${shipPlace}</SHIPTOPLACE>
+<CONSIGNEEGSTIN>${shipGstin}</CONSIGNEEGSTIN>
+<CONSIGNEEMAILINGNAME>${shipName}</CONSIGNEEMAILINGNAME>
+<CONSIGNEEPINCODE>${shipPin}</CONSIGNEEPINCODE>
+<CONSIGNEESTATENAME>${shipState}</CONSIGNEESTATENAME>
 <CONSIGNEEPINNUMBER>${xe(consigneePAN)}</CONSIGNEEPINNUMBER>
 <CONSIGNEECOUNTRYNAME>India</CONSIGNEECOUNTRYNAME>`;
 
@@ -490,16 +560,16 @@ ${dispatchLines.map(l => `<DISPATCHFROMADDRESS>${xe(l)}</DISPATCHFROMADDRESS>`).
 <CONSIGNORADDRESS>${xe(consignorAddrFlat)}</CONSIGNORADDRESS>
 </CONSIGNORADDRESS.LIST>
 <CONSIGNEEADDRESS.LIST TYPE="String">
-<CONSIGNEEADDRESS>${xe(buyerAddrLines[0] || '')}</CONSIGNEEADDRESS>
+<CONSIGNEEADDRESS>${xe(shipAddrLines[0] || '')}</CONSIGNEEADDRESS>
 </CONSIGNEEADDRESS.LIST>
 <DOCUMENTTYPE>Tax Invoice</DOCUMENTTYPE>
 <SUBTYPE>Supply</SUBTYPE>
-<CONSIGNEEPINCODE>${partyPin}</CONSIGNEEPINCODE>
+<CONSIGNEEPINCODE>${shipPin}</CONSIGNEEPINCODE>
 <CONSIGNORPLACE>${xe(d_place)}</CONSIGNORPLACE>
 <CONSIGNORPINCODE>${xe(d_pin)}</CONSIGNORPINCODE>
 <SHIPPEDFROMSTATE>${xe(d_state)}</SHIPPEDFROMSTATE>
-<CONSIGNEEPLACE>${partyPlace}</CONSIGNEEPLACE>
-<SHIPPEDTOSTATE>${partyState}</SHIPPEDTOSTATE>
+<CONSIGNEEPLACE>${shipPlace}</CONSIGNEEPLACE>
+<SHIPPEDTOSTATE>${shipState}</SHIPPEDTOSTATE>
 <ISCANCELLED>No</ISCANCELLED>
 <TRANSPORTDETAILS.LIST>
 <TRANSPORTMODE>${transportMode}</TRANSPORTMODE>
@@ -2540,13 +2610,16 @@ const ASP_STATE_SQL = `UPPER(COALESCE(i.state,'')) = 'KERALA'`;
  * `aspInvo` is the matching ASP invoice number (for BASICORDERREF).
  */
 function buildSalesIspRows(db, auctionId, cfg) {
-  // `buyer_pin` is the SOURCE PINCODE for distance/route lookup.
-  // Resolution: ship-to (cpin) wins, bill-to (pin) is the fallback.
-  // Ship-to is where the goods are physically delivered — the correct
-  // origin for e-way bill distance calculation when a buyer maintains
-  // a separate consignee address. The address columns (add1/add2/pla)
-  // remain bill-to since `<BUYERPINCODE>` and `<BASICBUYERADDRESS>`
-  // in Tally are always the bill-to (buyer) block.
+  // Three PIN roles, deliberately kept separate — they used to be one
+  // column and that silently put the ship-to PIN in the bill-to tag:
+  //   buyer_billpin — bill-to PIN only. Feeds <PARTYPINCODE>.
+  //   buyer_pin     — ship-to (cpin) wins, bill-to is fallback. The SOURCE
+  //                   PINCODE for e-way distance/route lookup, because
+  //                   distance is measured to where goods are delivered.
+  //   c* columns    — the buyer's Consignee / Ship-To block, which now
+  //                   feeds every CONSIGNEE*/SHIPTO* tag (see below).
+  // The bill-to address columns (add1/add2/pla/pin) stay bill-to: in Tally
+  // <BASICBUYERADDRESS> and <PARTYPINCODE> are always the buyer block.
   // Sort vouchers by sale type FIRST so the generated XML groups all
   // 'L' (Local), 'I' (Inter-state), and 'E' (Export) vouchers together;
   // within each sale-type group, sort by numeric invoice number ascending.
@@ -2562,7 +2635,10 @@ function buildSalesIspRows(db, auctionId, cfg) {
   // address/PIN come from the right record and each invoice maps 1:1.
   const stmt = db.prepare(`
     SELECT i.*, b.add1, b.add2, b.pla AS buyer_pla,
-           COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin
+           TRIM(COALESCE(b.pin, '')) AS buyer_billpin,
+           COALESCE(NULLIF(TRIM(b.cpin), ''), TRIM(b.pin)) AS buyer_pin,
+           b.cbuyer1, b.cadd1, b.cadd2, b.cpla, b.cpin,
+           b.cstate, b.cst_code, b.cgstin
     FROM invoices i
     LEFT JOIN buyers b ON b.id = COALESCE(
       (SELECT x.id FROM buyers x
@@ -2675,8 +2751,22 @@ function buildSalesIspRows(db, auctionId, cfg) {
       partyName: r.buyer1 || r.buyer || '',
       address: [r.add1, r.add2].filter(Boolean).join(', '),
       place: r.place || r.buyer_pla || '',
-      pin: r.buyer_pin || '',
+      // Bill-to PIN. Was `buyer_pin` (which prefers the ship-to cpin), so a
+      // buyer with a separate delivery pincode had their SHIP-TO pin printed
+      // as the bill-to <PARTYPINCODE>. The ship-to pin now travels in
+      // shipTo.pin instead, where it belongs.
+      pin: r.buyer_billpin || '',
       partyGstin: r.gstin || '',
+      // Consignee / Ship-To block — feeds every CONSIGNEE*/SHIPTO* tag.
+      shipTo: _shipToFrom({
+        buyer1: r.buyer1, buyer: r.buyer,
+        // Bill-to fallbacks must match what the voucher itself prints as
+        // bill-to, so a partial consignee blends in seamlessly.
+        add1: r.add1, add2: r.add2, pla: r.place || r.buyer_pla,
+        pin: r.buyer_billpin, gstin: r.gstin,
+        cbuyer1: r.cbuyer1, cadd1: r.cadd1, cadd2: r.cadd2, cpla: r.cpla,
+        cpin: r.cpin, cstate: r.cstate, cst_code: r.cst_code, cgstin: r.cgstin,
+      }),
       // E-way bill vehicle number — pulled from invoices.lorry_no, set
       // via the Invoices tab "Set Lorry No" bulk action. The generator
       // emits this into both <VEHICLENUMBER> and <BASICSHIPVESSELNO>;
