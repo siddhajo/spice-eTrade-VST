@@ -466,8 +466,19 @@ ${buyerAddrLines.map(l => `<ADDRESS>${xe(l)}</ADDRESS>`).join('\n')}
 <PARTYPINCODE>${partyPin}</PARTYPINCODE>
 <BASICBUYERNAME>${partyName}</BASICBUYERNAME>
 <BASICBUYERADDRESS.LIST TYPE="String">
-${buyerAddrLines.map(l => `<BASICBUYERADDRESS>${xe(l)}</BASICBUYERADDRESS>`).join('\n')}
+${shipAddrLines.map(l => `<BASICBUYERADDRESS>${xe(l)}</BASICBUYERADDRESS>`).join('\n')}
 </BASICBUYERADDRESS.LIST>`;
+    // Two address blocks above, deliberately fed from different sources:
+    //   <ADDRESS.LIST>           → BILL-TO. The party/ledger address Tally
+    //                              files the voucher under, so it stays the
+    //                              buyer's registered billing address.
+    //   <BASICBUYERADDRESS.LIST> → SHIP-TO. The buyer block that prints on the
+    //                              invoice; it should show where the goods
+    //                              actually go. `shipAddrLines` already falls
+    //                              back to the bill-to address when the buyer
+    //                              has no consignee address, so a buyer with
+    //                              no ship-to details is byte-for-byte
+    //                              unchanged.
 
     if (dispatchEnabled) {
       // Dispatch-from address — 5 lines as in reference, blanks for unused
