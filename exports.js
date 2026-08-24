@@ -533,37 +533,45 @@ function buildBankPaymentSheet(db, auctionId, cfg, payments) {
       ].filter(Boolean).join(' | '),
       DEBIT_REM:   '',
       UCRN:        '',
+      // Convenience raw fields for custom bank formats (see bank-formats.js).
+      SELLER_NAME: p.name || '',
+      LOTS:        p.lots || '',
     };
   });
 
+  // Presentation is per-customer: the rows above are identical across every
+  // format; a format only picks which of their fields to emit, in what order,
+  // under what headers/widths. Resolve the active format from the `bank_format`
+  // company setting, falling back to the 12-column default when unset/unknown
+  // so existing installs are byte-for-byte unchanged. Adding a new customer's
+  // bank layout is a one-entry edit in bank-formats.js — never a code fork.
+  const { getBankFormat } = require('./bank-formats');
+  const fmt = getBankFormat(cfg && cfg.bank_format);
+  const cols = fmt.columns || [];
+
   // Build the sheet directly (bypass createExcelBuffer's brand-band).
-  // Column order/headers mirror the bank's upload template exactly.
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('BANK_PAYMENT');
-  const cols = [
-    { key: 'TRANS_TYPE',  header: 'Transaction Type',                 width: 14 },
-    { key: 'DEBIT_ACCT',  header: 'Debit Account Number',             width: 20 },
-    { key: 'AMOUNT',      header: 'Transaction Amount',               width: 16, numFmt: '#,##0.00' },
-    { key: 'VALUE_DATE',  header: 'Value Date',                       width: 12 },
-    { key: 'BENE_ACCT',   header: 'Beneficiary Account Number',       width: 22 },
-    { key: 'BENE_NAME',   header: 'Beneficiary Name',                 width: 34 },
-    { key: 'BENE_IFSC',   header: 'IFSC Code',                        width: 14 },
-    { key: 'BENE_EMAIL',  header: 'Beneficiary Email ID',             width: 24 },
-    { key: 'BENE_ID',     header: 'Beneficiary ID',                   width: 14 },
-    { key: 'CREDIT_REM',  header: 'Credit Remarks',                   width: 70 },
-    { key: 'DEBIT_REM',   header: 'Debit Remarks',                    width: 16 },
-    { key: 'UCRN',        header: 'Unique Customer Reference Number', width: 28 },
-  ];
-  ws.columns = cols.map(c => ({ key: c.key, width: c.width }));
+  const ws = wb.addWorksheet(fmt.sheetName || 'BANK_PAYMENT');
+  ws.columns = cols.map(c => ({ key: c.key, width: c.width || 15 }));
   cols.forEach((c, i) => {
-    if (c.numFmt) ws.getColumn(i + 1).numFmt = c.numFmt;
+    const col = ws.getColumn(i + 1);
+    if (c.numFmt) col.numFmt = c.numFmt;
+    if (c.align)  col.alignment = { horizontal: c.align };
   });
   // Header row 1 — plain bold, no fill (so bank importers don't choke).
   const head = ws.getRow(1);
   cols.forEach((c, i) => { head.getCell(i + 1).value = c.header; });
   head.font = { bold: true };
-  // Data rows from row 2.
-  rows.forEach(r => ws.addRow(r));
+  // Data rows from row 2 — emit only the format's columns, applying any
+  // per-cell transform. A string result forces a text cell; a number stays
+  // numeric (so numFmt applies).
+  rows.forEach(r => {
+    ws.addRow(cols.map(c => {
+      let v = r[c.key];
+      if (typeof c.format === 'function') v = c.format(v, r);
+      return (v === undefined || v === null) ? '' : v;
+    }));
+  });
   return wb.xlsx.writeBuffer();
 }
 
@@ -1565,9 +1573,14 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
     ].map(csvEscape).join(','));
   }
 
-  // CSV text → Buffer. Prefix with BOM so Excel on Windows opens with
-  // UTF-8 correctly (otherwise accented characters break).
-  return Buffer.from('\uFEFF' + lines.join('\r\n'), 'utf8');
+  // CSV text → Buffer. NO UTF-8 BOM: this file is uploaded to the Praman
+  // e-Trade portal, whose parser reads the BOM as part of the FIRST header
+  // cell ("\uFEFFLot Number" instead of "Lot Number"), so the Lot Number
+  // column fails to match and the upload is rejected. The BOM was only ever
+  // there so Excel on Windows picked UTF-8 for accented characters — the
+  // portal upload is what this export exists for, so it wins. (In Excel, use
+  // Data → From Text/CSV and pick UTF-8 if a seller name ever looks mangled.)
+  return Buffer.from(lines.join('\r\n'), 'utf8');
 }
 
 // ── Export Type 12: Trade Report (BUYERS LIST FOR VERIFICATION) ──
@@ -1860,7 +1873,7 @@ module.exports = {
   xlsxBufferToHtml,
   exportLotSlip, exportLotSlipAfter, exportLotBuyer, exportLotName, exportLotPayment,
   exportPramanCSV, exportPriceList, exportPriceListBefore,
-  exportBankPayment, exportBankPaymentBefore, exportVoucherPayment,
+  exportBankPayment, exportBankPaymentBefore, exportVoucherPayment, buildBankPaymentSheet,
   exportPoolerRegister, exportPoolerListConsolidated, exportFullFile, exportCollection, exportTradeReport,
   exportDealerList, exportDealerListPartywise,
   exportSalesTaxes, exportPaymentSummary, exportPaymentPartywise, exportTDSReturn, exportTallyPurchase,

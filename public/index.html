@@ -28232,7 +28232,7 @@ function _peRenderTotals(){
     + (t.noSale ? ` (incl. ${t.noSale} WD/NA)` : '');
   document.getElementById('pe-tot-bags').textContent = _peInt(t.bags);
   document.getElementById('pe-tot-qty').textContent  = _peFmt(t.qty);
-  document.getElementById('pe-tot-avg').textContent  = t.saleQty ? `avg ${_peFmt(t.amount / t.saleQty)}` : '';
+  document.getElementById('pe-tot-avg').textContent  = t.saleQty ? _peFmt(t.amount / t.saleQty) : '';
   document.getElementById('pe-tot-amt').textContent  = _peFmt(t.amount);
 }
 function _peRenderSummary(){
