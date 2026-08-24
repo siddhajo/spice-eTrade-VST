@@ -28185,7 +28185,7 @@ function renderPriceEntryGrid(){
       <td colspan="4" style="text-align:left" id="pe-tot-lots"></td>
       <td style="text-align:right" id="pe-tot-bags"></td>
       <td style="text-align:right" id="pe-tot-qty"></td>
-      <td style="text-align:right;font-weight:600" id="pe-tot-avg"></td>
+      <td></td><!-- Price ₹/kg — a per-kg rate doesn't total, so left blank -->
       <td style="text-align:right" id="pe-tot-amt"></td>
       <td colspan="4"></td>
     </tr></tfoot>` : '';
@@ -28208,9 +28208,9 @@ function renderPriceEntryGrid(){
 // Totals for the CURRENT view (filters narrow it). Prices are read from the
 // live inputs rather than l.price, so the Amount total moves as you type —
 // before the row is saved. WD/NA lots carry no sale value, so they're counted
-// in Bags/Qty (they're physically there) but never in Amount or the average.
+// in Bags/Qty (they're physically there) but never in Amount.
 function _peTotals(){
-  const t = { lots:0, bags:0, qty:0, saleQty:0, amount:0, noSale:0 };
+  const t = { lots:0, bags:0, qty:0, amount:0, noSale:0 };
   for (const l of (_pe.view || [])) {
     const qty = Number(l.qty) || 0;
     t.lots++; t.bags += Number(l.bags) || 0; t.qty += qty;
@@ -28221,7 +28221,7 @@ function _peTotals(){
     if (inp) { const raw = inp.value.trim(); price = raw === '' ? 0 : parseFloat(raw); }
     else price = Number(l.price) || 0;
     if (!Number.isFinite(price) || price < 0) price = 0;
-    t.saleQty += qty; t.amount += qty * price;
+    t.amount += qty * price;
   }
   return t;
 }
@@ -28232,7 +28232,6 @@ function _peRenderTotals(){
     + (t.noSale ? ` (incl. ${t.noSale} WD/NA)` : '');
   document.getElementById('pe-tot-bags').textContent = _peInt(t.bags);
   document.getElementById('pe-tot-qty').textContent  = _peFmt(t.qty);
-  document.getElementById('pe-tot-avg').textContent  = t.saleQty ? _peFmt(t.amount / t.saleQty) : '';
   document.getElementById('pe-tot-amt').textContent  = _peFmt(t.amount);
 }
 function _peRenderSummary(){
