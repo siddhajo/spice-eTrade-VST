@@ -3977,6 +3977,12 @@ input[type="search"]:focus{
           <select id="pe-filter-branch" onchange="peSetFilter('branch',this.value)" style="min-width:130px;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px"><option value="">All branches</option></select>
           <input id="pe-filter-seller" placeholder="Seller" oninput="peSetFilter('seller',this.value)" style="width:180px;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px">
           <button class="btn btn-o" style="height:32px;padding:0 10px;font-weight:600" onclick="peClearFilters()">Clear filters</button>
+          <!-- Completed rows (priced + buyer set, or WD/NA) are hidden by
+               default so the operator only sees what still needs work.
+               Tick to show every lot in the trade. -->
+          <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--text2);white-space:nowrap;margin-left:6px;cursor:pointer">
+            <input type="checkbox" id="pe-show-all" onchange="peToggleShowAll(this.checked)" style="width:15px;height:15px;cursor:pointer"> Show all
+          </label>
         </div>
         <!-- Assign-buyer bar (always visible). Tick lots by number (or use the
              row checkboxes), type a buyer code, then Set Buyer to write it to
@@ -28035,7 +28041,17 @@ const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
 // bring-to-front), so clearing the selection restores every lot's place.
 // dirty/sel/front are keyed by lot id (stable across re-render/reorder).
 let _pe = { aid: null, lots: [], byId: new Map(), view: [], dirty: new Set(), sel: new Set(),
-            front: [], sort: { col: null, dir: 1 }, filter: { lot: '', branch: '', seller: '' } };
+            front: [], sort: { col: null, dir: 1 }, filter: { lot: '', branch: '', seller: '' },
+            showAll: false };
+// A row is "complete" (needs no more work) when it's priced AND has a buyer
+// code, OR it's a WD/NA lot (withdrawn / not-auctioned → nothing to price).
+// Completed rows are hidden unless "Show all" is ticked, so the operator only
+// ever looks at what still needs typing.
+function _peIsComplete(l){
+  const code = String(l && l.code || '').trim().toUpperCase();
+  if (code === 'WD' || code === 'NA') return true;
+  return Number(l && l.price) > 0 && !!String(l && l.buyer || '').trim();
+}
 // Normalise a lot number for matching: uppercase, strip leading zeros so a
 // file's "1" matches a stored "001" (empty → '', all-zeros → '0').
 function _peNormLot(v){
@@ -28108,8 +28124,13 @@ function _pePasses(l){
   if (f.lot    && !String(l.lot_no || '').toLowerCase().includes(f.lot.toLowerCase()))    return false;
   if (f.branch && String(l.branch || '') !== f.branch)                                    return false;
   if (f.seller && !String(l.name   || '').toLowerCase().includes(f.seller.toLowerCase())) return false;
+  // Hide completed rows unless "Show all" is ticked — but always keep a lot that
+  // was explicitly brought to front (a deliberate edit of a completed lot).
+  if (!_pe.showAll && _peIsComplete(l) && !_pe.front.includes(l.id)) return false;
   return true;
 }
+// Toggle showing completed rows (from the "Show all" checkbox).
+function peToggleShowAll(on){ _pe.showAll = !!on; renderPriceEntryGrid(); }
 // Derive the display order from the canonical list: filter, then sort, with
 // any bring-to-front lots pinned on top (in the order they were entered).
 function _peViewLots(){
@@ -28177,7 +28198,7 @@ function renderPriceEntryGrid(){
   const thStyle = 'cursor:pointer;user-select:none';
   const bodyHtml = view.length
     ? rows
-    : `<tr><td colspan="12" style="padding:20px;text-align:center;color:var(--text3);font-size:13px">No lots match the current filter. <a href="#" onclick="peClearFilters();return false" style="color:var(--green)">Clear filters</a></td></tr>`;
+    : `<tr><td colspan="12" style="padding:20px;text-align:center;color:var(--text3);font-size:13px">No incomplete lots to show.${_peHiddenCompleteCount() ? ` Completed rows are hidden — <a href="#" onclick="document.getElementById('pe-show-all').checked=true;peToggleShowAll(true);return false" style="color:var(--green)">Show all</a>.` : ''} <a href="#" onclick="peClearFilters();return false" style="color:var(--green)">Clear filters</a></td></tr>`;
   // Pinned totals row — filled by _peRenderTotals() (kept out of the template
   // so a price keystroke can refresh the numbers without re-rendering rows).
   // 12 columns: 4 (checkbox/Lot/Seller/Branch) + Bags + Qty + Price + Amount + 4.
@@ -28228,7 +28249,11 @@ function _peTotals(){
 function _peRenderTotals(){
   const lotsEl = document.getElementById('pe-tot-lots'); if (!lotsEl) return;
   const t = _peTotals();
-  lotsEl.textContent = `Total · ${_peInt(t.lots)} lot${t.lots === 1 ? '' : 's'}`
+  // The footer totals whatever is ON SCREEN. While completed rows are hidden
+  // that's the incomplete subset only, so say so — otherwise a near-zero
+  // Amount total reads as a bug rather than "nothing priced yet".
+  const noun = _peHiddenCompleteCount() ? 'incomplete lot' : 'lot';
+  lotsEl.textContent = `Total · ${_peInt(t.lots)} ${noun}${t.lots === 1 ? '' : 's'}`
     + (t.noSale ? ` (incl. ${t.noSale} WD/NA)` : '');
   document.getElementById('pe-tot-bags').textContent = _peInt(t.bags);
   document.getElementById('pe-tot-qty').textContent  = _peFmt(t.qty);
@@ -28245,7 +28270,18 @@ function _peRenderSummary(){
   // Note when a filter is hiding some rows so the on-screen count is clear.
   const shown = (_pe.view || []).length;
   const filtered = shown < _pe.lots.length ? ` · showing ${shown} of ${_pe.lots.length}` : '';
-  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : '')) + filtered;
+  // Say how many completed rows are being hidden, so a short grid never reads
+  // as "lots went missing".
+  const hidden = _peHiddenCompleteCount();
+  const hiddenNote = hidden
+    ? ` · <b style="color:#166534">${hidden} complete hidden</b> <span style="color:var(--text3)">(tick “Show all”)</span>`
+    : '';
+  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : '')) + filtered + hiddenNote;
+}
+// Completed rows currently hidden by the "Show all" toggle (0 when it's on).
+function _peHiddenCompleteCount(){
+  if (_pe.showAll) return 0;
+  return _pe.lots.filter(l => _peIsComplete(l) && !_pe.front.includes(l.id)).length;
 }
 function pePriceInput(id){
   const inp = document.querySelector(`[data-peprice="${id}"]`); if (!inp) return;
