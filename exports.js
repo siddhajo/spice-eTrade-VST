@@ -1519,6 +1519,21 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
     return s;
   };
 
+  // Praman rejects zero-padded lot numbers — the portal answers a padded
+  // upload with "Invalid Lot number for the Lot: 001, ... 002, ... 003" and
+  // imports nothing. It wants a plain integer. Our lots.lot_no column stores
+  // inconsistent padding ("1", "001", "010") depending on how the trade was
+  // entered, so drop leading zeros for purely-numeric lot numbers.
+  // Alpha-prefixed schemes (A001, used by branch allocations) and anything
+  // else non-numeric pass through untouched — Praman's handling of those is
+  // unknown, so this stays the narrowest fix that clears the error.
+  const pramanLotNo = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (!/^\d+$/.test(s)) return s;
+    const stripped = s.replace(/^0+/, '');
+    return stripped === '' ? '0' : stripped;
+  };
+
   // GSTIN extractor — `cr` may be stored as "GSTIN.<15>", "gstin.<15>",
   // bare 15-char, or empty. Strip the prefix if present.
   const stripGstinPrefix = (raw) => {
@@ -1553,7 +1568,7 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
     const planterDealer = classify(planterGstin);
 
     lines.push([
-      r.lot_no || '',
+      pramanLotNo(r.lot_no),
       lotCompany,
       r.branch || '',
       planterDealer,
@@ -1573,14 +1588,19 @@ async function exportPramanCSV(db, auctionId, cfg, state) {
     ].map(csvEscape).join(','));
   }
 
-  // CSV text → Buffer. NO UTF-8 BOM: this file is uploaded to the Praman
-  // e-Trade portal, whose parser reads the BOM as part of the FIRST header
-  // cell ("\uFEFFLot Number" instead of "Lot Number"), so the Lot Number
-  // column fails to match and the upload is rejected. The BOM was only ever
-  // there so Excel on Windows picked UTF-8 for accented characters — the
-  // portal upload is what this export exists for, so it wins. (In Excel, use
-  // Data → From Text/CSV and pick UTF-8 if a seller name ever looks mangled.)
-  return Buffer.from(lines.join('\r\n'), 'utf8');
+  // CSV text → Buffer, byte-for-byte what Excel writes for "CSV (Comma
+  // delimited)". Operators used to export, open in Excel, Save As, and only
+  // THEN upload — because that round-trip silently fixed the file. It does
+  // exactly three things, all of which we now do directly:
+  //   1. no UTF-8 BOM (Excel's plain CSV save writes none). With a BOM the
+  //      portal reads the first header as "\uFEFFLot Number", so the Lot
+  //      Number column never matches.
+  //   2. leading zeros dropped from the lot number — Excel parses "001" as
+  //      the number 1 (see pramanLotNo above); the portal rejects padded
+  //      numbers with "Invalid Lot number for the Lot: 001".
+  //   3. a trailing CRLF after the last row.
+  // Keep this matching Excel: that output is the one known to import cleanly.
+  return Buffer.from(lines.join('\r\n') + '\r\n', 'utf8');
 }
 
 // ── Export Type 12: Trade Report (BUYERS LIST FOR VERIFICATION) ──
