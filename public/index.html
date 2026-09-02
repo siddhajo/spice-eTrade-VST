@@ -1259,6 +1259,16 @@ tr:hover td{background:var(--spice-cream)}
 }
 /* The global tr:hover rule would otherwise repaint the pinned totals cream. */
 .pe-grid-table tfoot tr:hover td{background:var(--spice-cardamom-lt,#eef6f0)}
+/* Price Entry row flags. Painted on the CELLS, not the row: the global
+   tr:hover rule sets a td background and would wash out a tr-level colour. */
+/* Amber — an already-saved price is being changed (see _peWarnReprice). */
+.pe-grid-table tr.pe-reprice td{background:#fef6e7}
+.pe-grid-table tr.pe-reprice:hover td{background:#fbecd2}
+/* Red — seller and buyer are the same party. Declared AFTER .pe-reprice so a
+   same-party row keeps the red flag even while its price is being retyped. */
+.pe-grid-table tr.pe-same-party td{background:#fdeaea}
+.pe-grid-table tr.pe-same-party:hover td{background:#fbdada}
+.pe-grid-table tr.pe-same-party td:first-child{box-shadow:inset 3px 0 0 #dc2626}
 .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
 /* Per-field clear (✕) buttons on the desktop Lot Entry form. Each field is a
    cell with the label ABOVE the 40px input, so the ✕ is pinned to the input's
@@ -28040,9 +28050,11 @@ const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
 // Display order is derived on the fly by _peViewLots() (filter → sort →
 // bring-to-front), so clearing the selection restores every lot's place.
 // dirty/sel/front are keyed by lot id (stable across re-render/reorder).
+// `warned` holds the lots we've already warned about re-pricing, so the
+// "already priced" toast fires once per change rather than per keystroke.
 let _pe = { aid: null, lots: [], byId: new Map(), view: [], dirty: new Set(), sel: new Set(),
             front: [], sort: { col: null, dir: 1 }, filter: { lot: '', branch: '', seller: '' },
-            showAll: false };
+            showAll: false, warned: new Set() };
 // A row is "complete" (needs no more work) when it's priced AND has a buyer
 // code, OR it's a WD/NA lot (withdrawn / not-auctioned → nothing to price).
 // Completed rows are hidden unless "Show all" is ticked, so the operator only
@@ -28051,6 +28063,39 @@ function _peIsComplete(l){
   const code = String(l && l.code || '').trim().toUpperCase();
   if (code === 'WD' || code === 'NA') return true;
   return Number(l && l.price) > 0 && !!String(l && l.buyer || '').trim();
+}
+// ── Seller-is-also-the-buyer guard ────────────────────────────────
+// Normalise a party name for comparison: uppercase, drop everything that
+// isn't a letter or digit, so "A.R. Traders" and "AR TRADERS" match.
+function _peNormName(v){ return String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+// True when a lot's seller and its assigned buyer are the same party. The
+// seller name (lots.name) is compared against BOTH buyer fields — buyer1 is
+// the buyer name shown in the grid, buyer the buyer code, which in some
+// imported datasets carries a name rather than a code. A code like "B042"
+// can never collide with a seller name, so checking both is safe.
+function _peSameParty(l){
+  if (!l) return false;
+  const s = _peNormName(l && l.name);
+  if (!s) return false;
+  return [l.buyer1, l.buyer].some(b => { const n = _peNormName(b); return !!n && n === s; });
+}
+// Same test, but against a buyer about to be assigned (from the buyers master)
+// rather than the one already on the lot.
+function _peSamePartyAs(l, buyerName, buyerCode){
+  const s = _peNormName(l && l.name);
+  if (!s) return false;
+  return [buyerName, buyerCode].some(b => { const n = _peNormName(b); return !!n && n === s; });
+}
+// Confirmation text for a set of same-party lots. `tail` is the question the
+// operator is answering (OK = go ahead).
+function _peSamePartyMsg(lots, tail){
+  const lines = lots.slice(0, 12)
+    .map(l => `  • Lot ${l.lot_no} — ${l.name || '(no seller)'}`);
+  const more = lots.length > 12 ? `\n  … and ${lots.length - 12} more` : '';
+  const head = lots.length === 1
+    ? `Seller and buyer are the SAME party on this lot:`
+    : `Seller and buyer are the SAME party on ${lots.length} lots:`;
+  return `⚠ ${head}\n\n${lines.join('\n')}${more}\n\n${tail}`;
 }
 // Normalise a lot number for matching: uppercase, strip leading zeros so a
 // file's "1" matches a stored "001" (empty → '', all-zeros → '0').
@@ -28080,7 +28125,7 @@ function loadPriceEntry(){
 async function loadPriceEntryGrid(){
   const aid = document.getElementById('pe-auction').value;
   const tradeChanged = aid !== _pe.aid;
-  _pe.aid = aid; _pe.dirty = new Set(); _pe.sel = new Set(); _pe.front = [];
+  _pe.aid = aid; _pe.dirty = new Set(); _pe.sel = new Set(); _pe.front = []; _pe.warned = new Set();
   // A fresh trade starts with no sort/filter; a same-trade refresh keeps them.
   if (tradeChanged) { _pe.sort = { col: null, dir: 1 }; _pe.filter = { lot: '', branch: '', seller: '' }; }
   const grid = document.getElementById('pe-grid');
@@ -28179,8 +28224,15 @@ function renderPriceEntryGrid(){
           ? `<span style="font-weight:700;color:#15803d">${esc(l.code)}</span>`
           : `<span style="color:var(--text3)">—</span>`);
     const buyerCodeCell = l.buyer  ? esc(l.buyer)  : `<span style="color:var(--text3)">—</span>`;
-    const buyerNameCell = l.buyer1 ? esc(l.buyer1) : `<span style="color:var(--text3)">—</span>`;
-    return `<tr data-lotid="${l.id}"${noSale ? ' style="opacity:.55"' : (pinned ? ' style="background:#f0fdf4"' : '')}>
+    // Seller == buyer → flag the row red and mark the buyer name, so the
+    // operator sees it before typing (saving it also asks for confirmation).
+    const same = _peSameParty(l);
+    const buyerNameCell = (same ? `<span title="Seller and buyer are the same party" style="color:#b91c1c;font-weight:700">⚠ </span>` : '')
+      + (l.buyer1 ? esc(l.buyer1) : `<span style="color:var(--text3)">—</span>`);
+    // Amber flag while an already-saved price is being retyped (see _peWarnReprice).
+    const repricing = _pe.dirty.has(l.id) && Number(l.price) > 0;
+    const rowCls = [same ? 'pe-same-party' : '', repricing ? 'pe-reprice' : ''].filter(Boolean).join(' ');
+    return `<tr data-lotid="${l.id}"${rowCls ? ` class="${rowCls}"` : ''}${noSale ? ' style="opacity:.55"' : (pinned ? ' style="background:#f0fdf4"' : '')}>
       <td style="padding:6px 4px;width:28px;text-align:center"><input type="checkbox" class="pe-cb" data-pesel="${l.id}" ${selDisabled ? 'disabled' : ''} ${ticked ? 'checked' : ''} onchange="peToggleSel(${l.id}, this.checked)" style="width:15px;height:15px;cursor:pointer"></td>
       <td style="padding:6px 8px;white-space:nowrap;font-weight:600">${esc(l.lot_no)}</td>
       <td style="padding:6px 8px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(l.name||'')}</td>
@@ -28276,7 +28328,13 @@ function _peRenderSummary(){
   const hiddenNote = hidden
     ? ` · <b style="color:#166534">${hidden} complete hidden</b> <span style="color:var(--text3)">(tick “Show all”)</span>`
     : '';
-  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : '')) + filtered + hiddenNote;
+  // Same-party lots are counted across the whole trade (not just the view) —
+  // they stay worth knowing about while a filter hides them.
+  const sameCt = _pe.lots.filter(_peSameParty).length;
+  const sameNote = sameCt
+    ? ` · <b style="color:#b91c1c" title="Seller and buyer are the same party">⚠ ${sameCt} seller = buyer</b>`
+    : '';
+  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : '')) + filtered + hiddenNote + sameNote;
 }
 // Completed rows currently hidden by the "Show all" toggle (0 when it's on).
 function _peHiddenCompleteCount(){
@@ -28290,9 +28348,28 @@ function pePriceInput(id){
   const amt = (Number(l.qty)||0) * (Number.isFinite(price) ? price : 0);
   const amtEl = document.querySelector(`[data-peamt="${id}"]`); if (amtEl) amtEl.textContent = _peFmt(amt);
   _pe.dirty.add(id);
+  _peWarnReprice(id, inp);
   const st = document.querySelector(`[data-pestatus="${id}"]`); if (st && !l.locked_at) { st.textContent = '•'; st.style.color = '#a16207'; }
   _peRenderTotals();
   _peRenderSummary();
+}
+// Warn — once per change, not per keystroke — that the price being typed is
+// replacing one that's already saved on the lot, and flag the row amber while
+// it differs. Typing the same number back clears both, so a lot that's put
+// back the way it was warns again if it's changed a second time.
+function _peWarnReprice(id, inp){
+  const l = _pe.byId.get(id); if (!l) return;
+  const saved = Number(l.price) || 0;
+  if (!(saved > 0)) return;                       // nothing entered yet — ordinary first entry
+  const raw = String(inp.value).trim();
+  const typed = raw === '' ? 0 : parseFloat(raw);
+  const changed = !Number.isFinite(typed) || Math.abs(typed - saved) > 0.0001;
+  const row = document.querySelector(`#pe-grid tr[data-lotid="${id}"]`);
+  if (row) row.classList.toggle('pe-reprice', changed);
+  if (!changed) { _pe.warned.delete(id); return; }
+  if (_pe.warned.has(id)) return;
+  _pe.warned.add(id);
+  toast(`⚠ Lot ${l.lot_no} is already priced at ₹${_peFmt(saved)} — you are changing it.`);
 }
 function pePriceKey(e, id){
   if (e.key === 'Enter') {
@@ -28306,7 +28383,9 @@ function pePriceKey(e, id){
     else pePriceSave(id);   // last row — nothing to blur into, so save here
   }
 }
-async function pePriceSave(id){
+// `opts.skipSameParty` suppresses the per-row seller==buyer confirmation for
+// callers that already asked once for the whole batch (Save & Calculate All).
+async function pePriceSave(id, opts){
   if (!_pe.dirty.has(id)) return;   // nothing changed since last save
   const inp = document.querySelector(`[data-peprice="${id}"]`); if (!inp) return;
   const l = _pe.byId.get(id); if (!l) return;
@@ -28314,14 +28393,44 @@ async function pePriceSave(id){
   const price = raw === '' ? 0 : parseFloat(raw);
   const st = document.querySelector(`[data-pestatus="${id}"]`);
   if (!Number.isFinite(price) || price < 0) { if (st) { st.textContent = '✕'; st.style.color = '#b91c1c'; } return; }
+  const prev = Number(l.price) || 0;
+  // Seller and buyer are the same party — never write that without an explicit
+  // OK. The dialog steals keyboard focus, so hand it back to whatever the user
+  // had moved on to (Enter jumps to the next lot before this blur-save runs).
+  if (!(opts && opts.skipSameParty) && _peSameParty(l)) {
+    const active = document.activeElement;
+    const ok = confirm(_peSamePartyMsg([l], `Save price ₹${_peFmt(price)} on this lot anyway?`));
+    try { if (active && active.focus) active.focus(); } catch (_) {}
+    if (!ok) {
+      // Put the row back to its saved value — a half-typed price left on
+      // screen would read as if it had been saved.
+      inp.value = prev > 0 ? prev.toFixed(2) : '';
+      _pe.dirty.delete(id); _pe.warned.delete(id);
+      const row = document.querySelector(`#pe-grid tr[data-lotid="${id}"]`);
+      if (row) row.classList.remove('pe-reprice');
+      const amtEl = document.querySelector(`[data-peamt="${id}"]`);
+      if (amtEl) amtEl.textContent = _peFmt((Number(l.qty)||0) * prev);
+      if (st) { st.textContent = ''; st.style.color = 'var(--text3)'; }
+      _peRenderTotals(); _peRenderSummary();
+      toast('Not saved — change discarded');
+      return;
+    }
+  }
   const amount = (Number(l.qty)||0) * price;
   try {
     await j(`/api/lots/${l.id}`, { method: 'PUT', body: JSON.stringify({ price, amount }) });
-    l.price = price; l.amount = amount; _pe.dirty.delete(id);
+    l.price = price; l.amount = amount; _pe.dirty.delete(id); _pe.warned.delete(id);
     // Normalise the field to 2 decimals once saved (e.g. "2942" → "2942.00").
     // Leave a cleared field blank rather than showing "0.00".
     if (raw !== '' && price > 0) inp.value = price.toFixed(2);
     if (st) { st.textContent = '✓'; st.style.color = 'var(--green)'; }
+    const row = document.querySelector(`#pe-grid tr[data-lotid="${id}"]`);
+    if (row) row.classList.remove('pe-reprice');
+    // Say what actually changed when an existing price was replaced — the ✓
+    // alone doesn't tell the operator which number they overwrote.
+    if (prev > 0 && Math.abs(prev - price) > 0.0001) {
+      toast(`Lot ${l.lot_no} price changed ₹${_peFmt(prev)} → ₹${_peFmt(price)}`);
+    }
     _peRenderSummary();
   } catch (e) {
     if (st) { st.textContent = '✕'; st.style.color = '#b91c1c'; }
@@ -28332,9 +28441,17 @@ async function pePriceSave(id){
 async function peSaveAndCalculate(){
   if (!_pe.aid) { toast('Select a trade first'); return; }
   const btn = document.getElementById('pe-save-calc');
+  // Ask ONCE for the whole batch when any unsaved row has the same party on
+  // both sides, then let the per-row saves through without re-asking.
+  const pending = Array.from(_pe.dirty);
+  const flagged = pending.map(id => _pe.byId.get(id)).filter(l => l && _peSameParty(l));
+  if (flagged.length && !confirm(_peSamePartyMsg(flagged, 'Save these prices and calculate anyway?'))) {
+    toast('Not saved');
+    return;
+  }
   try {
     await withBusy(btn, async () => {
-      for (const id of Array.from(_pe.dirty)) { await pePriceSave(id); }
+      for (const id of pending) { await pePriceSave(id, { skipSameParty: true }); }
       const d = await j(`/api/lots/calculate/${_pe.aid}`, { method: 'POST' });
       toast(`Saved prices · calculated ${d.calculated} lots`);
       await loadPriceEntryGrid();
@@ -28518,6 +28635,13 @@ async function peSetBuyerInline(){
   await _peLoadBuyerCache();
   const match = (_lotBuyerCache || []).find(b => b.codeUp === codeStr.toUpperCase());
   if (!match) { toast(`No buyer registered with code "${codeStr}" — add them in the Buyers tab first`); return; }
+  // Assigning this buyer is what CREATES a same-party lot, so check the ticked
+  // lots against the buyer being written and confirm before it's saved.
+  const clash = ids.map(id => _pe.byId.get(id)).filter(l => _peSamePartyAs(l, match.buyer1, match.buyer));
+  if (clash.length && !confirm(_peSamePartyMsg(clash, `Set buyer ${match.code} — ${match.buyer1 || match.buyer} — on ${clash.length === ids.length ? 'them' : 'the ticked lots'} anyway?`))) {
+    toast('Buyer not set');
+    return;
+  }
   const btn = document.getElementById('pe-setbuyer-btn');
   try {
     await withBusy(btn, async () => {
@@ -28659,6 +28783,30 @@ async function peiApply(){
   }
   if (!updates.length) {
     toast(unmatched.length ? 'No lot numbers matched this trade' : 'Nothing to import');
+    return;
+  }
+  // An import silently replaces prices that are already entered — say how many
+  // before it runs, and list the first few with their before→after values.
+  const overwrites = updates.filter(u => u.price != null && (Number(u.lot.price) || 0) > 0
+                                      && Math.abs((Number(u.lot.price) || 0) - u.price) > 0.0001);
+  if (overwrites.length) {
+    const lines = overwrites.slice(0, 12)
+      .map(u => `  • Lot ${u.lot.lot_no} — ₹${_peFmt(u.lot.price)} → ₹${_peFmt(u.price)}`);
+    const more = overwrites.length > 12 ? `\n  … and ${overwrites.length - 12} more` : '';
+    if (!confirm(`⚠ ${overwrites.length} lot(s) already have a price and it will be CHANGED:\n\n${lines.join('\n')}${more}\n\nImport anyway?`)) {
+      toast('Import cancelled');
+      return;
+    }
+  }
+  // Same-party check for the rows this import touches. When the file carries a
+  // buyer code, resolve it through the buyers master — that's the buyer the
+  // lot will end up with; otherwise judge by the buyer already on the lot.
+  const flagged = updates.filter(u => {
+    const b = u.code ? (_lotBuyerCache || []).find(x => x.codeUp === String(u.code).toUpperCase()) : null;
+    return b ? _peSamePartyAs(u.lot, b.buyer1, b.buyer) : _peSameParty(u.lot);
+  }).map(u => u.lot);
+  if (flagged.length && !confirm(_peSamePartyMsg(flagged, 'Import these rows anyway?'))) {
+    toast('Import cancelled');
     return;
   }
   const btn = document.getElementById('pei-apply');
