@@ -3994,9 +3994,10 @@ input[type="search"]:focus{
             <input type="checkbox" id="pe-show-all" onchange="peToggleShowAll(this.checked)" style="width:15px;height:15px;cursor:pointer"> Show all
           </label>
         </div>
-        <!-- Filled by _peCheckLotFilterWarn(): warns that the lot just typed
-             into the Lot filter is already priced / already has a buyer, and
-             asks whether the operator really means to change it. -->
+        <!-- Filled by _peLotWarnShow(): warns that the lot(s) just picked —
+             either typed into the Lot filter or ticked via "Tick & bring to
+             front" — are already priced / already have a buyer, and asks
+             whether the operator really means to change them. -->
         <div id="pe-lot-warn" role="alert" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid #F0C476;border-left:4px solid #d97706;background:#FFF8EC;border-radius:8px;font-size:13px;color:#7A4A06;line-height:1.5"></div>
         <!-- Assign-buyer bar (always visible). Tick lots by number (or use the
              row checkboxes), type a buyer code, then Set Buyer to write it to
@@ -28058,7 +28059,7 @@ const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
 // "already priced" toast fires once per change rather than per keystroke.
 let _pe = { aid: null, lots: [], byId: new Map(), view: [], dirty: new Set(), sel: new Set(),
             front: [], sort: { col: null, dir: 1 }, filter: { lot: '', branch: '', seller: '' },
-            showAll: false, warned: new Set(), lotWarnAck: new Set() };
+            showAll: false, warned: new Set(), lotWarnAck: new Set(), lotWarn: null };
 // A row is "complete" (needs no more work) when it's priced AND has a buyer
 // code, OR it's a WD/NA lot (withdrawn / not-auctioned → nothing to price).
 // Completed rows are hidden unless "Show all" is ticked, so the operator only
@@ -28130,7 +28131,7 @@ async function loadPriceEntryGrid(){
   const aid = document.getElementById('pe-auction').value;
   const tradeChanged = aid !== _pe.aid;
   _pe.aid = aid; _pe.dirty = new Set(); _pe.sel = new Set(); _pe.front = []; _pe.warned = new Set();
-  _pe.lotWarnAck = new Set(); _peLotWarnHide();
+  _pe.lotWarnAck = new Set(); _pe.lotWarn = null; _peLotWarnHide();
   // A fresh trade starts with no sort/filter; a same-trade refresh keeps them.
   if (tradeChanged) { _pe.sort = { col: null, dir: 1 }; _pe.filter = { lot: '', branch: '', seller: '' }; }
   const grid = document.getElementById('pe-grid');
@@ -28540,53 +28541,98 @@ function _peBuyerLabel(l){
   const name = String(l && l.buyer1 || '').trim();
   return codes && name ? `${codes} · ${name}` : (codes || name);
 }
-function _peCheckLotFilterWarn(val){
-  const host = document.getElementById('pe-lot-warn'); if (!host) return;
-  const l = _peLotFilterTarget(val);
-  // Acknowledged once ("Yes, change it") → stay out of the way for that lot.
-  if (!l || _pe.lotWarnAck.has(l.id)) { _peLotWarnHide(); return; }
-  const noSale = ['WD', 'NA'].includes(String(l.code || '').trim().toUpperCase());
+// Is there anything on this lot worth warning about before it's changed?
+// WD/NA lots carry no price or buyer by definition, so they never qualify.
+function _peLotHasWork(l){
+  if (!l) return false;
+  if (['WD', 'NA'].includes(String(l.code || '').trim().toUpperCase())) return false;
+  return Number(l.price) > 0 || !!_peBuyerLabel(l);
+}
+// One lot's "already priced at ₹X and assigned to buyer Y" clause.
+function _peLotWarnBits(l){
   const priced = Number(l.price) > 0;
-  const buyer = noSale ? '' : _peBuyerLabel(l);
-  // Nothing entered on it yet (or it's a WD/NA lot that can't be priced at
-  // all) → this is ordinary first-time entry, so no warning.
-  if (noSale || (!priced && !buyer)) { _peLotWarnHide(); return; }
+  const buyer = _peBuyerLabel(l);
   const bits = [];
   if (priced) bits.push(`already <b>priced at ₹${_peFmt(l.price)}</b>`);
   if (buyer)  bits.push(`${priced ? '' : 'already '}assigned to buyer <b>${esc(buyer)}</b>`);
-  const lockNote = l.locked_at
-    ? ` <span style="color:#b91c1c">This lot is <b>locked</b> — it can only be edited from the Lots tab.</span>`
+  return bits.join(' and ');
+}
+// Show the banner for one or more lots. `source` decides what "No" does:
+//   'filter' → clear the Lot filter box
+//   'tick'   → untick + unpin the lots that were just brought to the front
+// Lots the operator has already said "Yes, change it" to are dropped, so the
+// banner doesn't re-appear for a lot they're deliberately working on.
+function _peLotWarnShow(lots, source){
+  const host = document.getElementById('pe-lot-warn'); if (!host) return false;
+  const flagged = (lots || []).filter(l => l && !_pe.lotWarnAck.has(l.id) && _peLotHasWork(l));
+  if (!flagged.length) { _peLotWarnHide(); return false; }
+  _pe.lotWarn = { ids: flagged.map(l => l.id), source };
+  const locked = flagged.filter(l => l.locked_at);
+  const lockNote = locked.length
+    ? ` <span style="color:#b91c1c">${locked.length === 1 ? 'That lot is <b>locked</b>' : `${locked.length} of them are <b>locked</b>`} — locked lots can only be edited from the Lots tab.</span>`
     : '';
+  let head;
+  if (flagged.length === 1) {
+    const l = flagged[0];
+    head = `⚠ <b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) is ${_peLotWarnBits(l)}.`;
+  } else {
+    const lines = flagged.slice(0, 8)
+      .map(l => `<div style="margin-left:14px">• <b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) — ${_peLotWarnBits(l)}</div>`)
+      .join('');
+    const more = flagged.length > 8 ? `<div style="margin-left:14px;color:var(--text3)">… and ${flagged.length - 8} more</div>` : '';
+    head = `⚠ <b>${flagged.length} of the lots you picked are already done:</b>${lines}${more}`;
+  }
+  const one = flagged.length === 1;
   host.innerHTML = `<div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
-      <div style="flex:1;min-width:260px">⚠ <b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) is ${bits.join(' and ')}.${lockNote}
-        <div style="margin-top:2px;font-weight:700">Do you still want to change it?</div></div>
+      <div style="flex:1;min-width:260px">${head}${lockNote}
+        <div style="margin-top:2px;font-weight:700">Do you still want to change ${one ? 'it' : 'them'}?</div></div>
       <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn btn-o" style="height:32px;padding:0 12px;font-weight:600" onclick="_peLotWarnProceed(${l.id})">Yes, change it</button>
-        <button class="btn btn-o" style="height:32px;padding:0 12px;font-weight:600" onclick="_peLotWarnCancel()">No, leave it</button>
+        <button class="btn btn-o" style="height:32px;padding:0 12px;font-weight:600" onclick="_peLotWarnProceed()">Yes, change ${one ? 'it' : 'them'}</button>
+        <button class="btn btn-o" style="height:32px;padding:0 12px;font-weight:600" onclick="_peLotWarnCancel()">No, leave ${one ? 'it' : 'them'}</button>
       </div>
     </div>`;
   host.style.display = 'block';
+  return true;
 }
-// "Yes, change it" — pin the lot to the top (so it shows even while completed
-// rows are hidden) and drop the cursor straight into its price box.
-function _peLotWarnProceed(id){
-  _pe.lotWarnAck.add(id);
-  if (!_pe.front.includes(id)) _pe.front = [id].concat(_pe.front);
+// Lot-filter entry point: re-evaluated on every keystroke in the Lot box.
+function _peCheckLotFilterWarn(val){
+  const l = _peLotFilterTarget(val);
+  if (!l) { _peLotWarnHide(); return; }
+  _peLotWarnShow([l], 'filter');
+}
+// "Yes, change it" — pin the lots to the top (so they show even while
+// completed rows are hidden) and drop the cursor into the first price box.
+function _peLotWarnProceed(){
+  const ids = ((_pe.lotWarn || {}).ids) || [];
+  ids.forEach(id => _pe.lotWarnAck.add(id));
+  const fresh = ids.filter(id => !_pe.front.includes(id));
+  if (fresh.length) _pe.front = fresh.concat(_pe.front);
   _peLotWarnHide();
   renderPriceEntryGrid();
-  const inp = document.querySelector(`[data-peprice="${id}"]`);
-  if (inp && !inp.disabled) { inp.focus(); if (inp.select) inp.select(); }
+  const first = ids.map(id => document.querySelector(`[data-peprice="${id}"]`)).find(x => x && !x.disabled);
+  if (first) { first.focus(); if (first.select) first.select(); }
   else {
-    const l = _pe.byId.get(id);
+    const l = _pe.byId.get(ids[0]);
     if (l && l.locked_at) toast(`Lot ${l.lot_no} is locked — edit it from the Lots tab.`);
   }
 }
-// "No, leave it" — clear the Lot filter and put the cursor back in it, ready
-// for the lot they actually meant.
+// "No, leave it" — undo whatever selected these lots, so the operator is back
+// where they were before they typed the number.
 function _peLotWarnCancel(){
-  _pe.filter.lot = '';
-  const lf = document.getElementById('pe-filter-lot');
-  if (lf) { lf.value = ''; lf.focus(); }
+  const w = _pe.lotWarn || { ids: [], source: 'filter' };
+  if (w.source === 'tick') {
+    // Untick and unpin the lots this warning covers; anything else the
+    // operator had already ticked stays ticked.
+    w.ids.forEach(id => _pe.sel.delete(id));
+    _pe.front = _pe.front.filter(id => !w.ids.includes(id));
+    const inp = document.getElementById('pe-lotno-input');
+    if (inp) { inp.value = ''; peToggleLotNoClear(); inp.focus(); }
+    toast(w.ids.length === 1 ? 'Left unchanged — lot unticked' : `Left unchanged — ${w.ids.length} lots unticked`);
+  } else {
+    _pe.filter.lot = '';
+    const lf = document.getElementById('pe-filter-lot');
+    if (lf) { lf.value = ''; lf.focus(); }
+  }
   _peLotWarnHide();
   renderPriceEntryGrid();
 }
@@ -28710,6 +28756,9 @@ function peSelectByLotNos(){
   if (notFound.length) msg.push(`${notFound.length} not found`);
   if (notSelectable.length) msg.push(`${notSelectable.length} locked/WD/NA`);
   toast(msg.join(' · '));
+  // Warn about any ticked lot that's already priced / already has a buyer —
+  // "No, leave them" unticks exactly those again.
+  _peLotWarnShow(matchedIds.map(id => _pe.byId.get(id)), 'tick');
 }
 // Resolve the typed buyer code against the buyers master and write it (with
 // its Buyer / Buyer Name / Sale type) onto every ticked lot.
