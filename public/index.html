@@ -1269,6 +1269,35 @@ tr:hover td{background:var(--spice-cream)}
 .pe-grid-table tr.pe-same-party td{background:#fdeaea}
 .pe-grid-table tr.pe-same-party:hover td{background:#fbdada}
 .pe-grid-table tr.pe-same-party td:first-child{box-shadow:inset 3px 0 0 #dc2626}
+/* Price Entry — the "this lot is already done" alert. Same solid-fill
+   language as the app's error banner (showError), in warning amber: it's the
+   last thing between the operator and overwriting finished work, so a pale
+   tint doesn't carry it. Fixed hex values, not palette vars — the theme
+   picker swaps those, and a warning has to stay amber in every theme. */
+.pe-alert{
+  display:none;margin-top:10px;padding:12px 14px;border-radius:10px;
+  background:#B45309;color:#fff;font-size:13.5px;line-height:1.5;
+  box-shadow:0 6px 18px rgba(180,83,9,.32);animation:peAlertIn .18s ease-out
+}
+@keyframes peAlertIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.pe-alert b{color:#fff;font-weight:800}
+.pe-alert-row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.pe-alert-ico{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.22);
+  display:inline-flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;margin-top:1px}
+.pe-alert-txt{flex:1;min-width:250px}
+.pe-alert-q{margin-top:5px;font-weight:800;font-size:14px}
+.pe-alert-more{color:rgba(255,255,255,.82)}
+/* Secondary detail (e.g. "that lot is locked") — darkened chip rather than a
+   second colour, which would vanish against the amber fill. */
+.pe-alert-note{display:inline-block;margin-top:5px;padding:1px 8px;border-radius:6px;background:rgba(0,0,0,.2)}
+.pe-alert-btns{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+.pe-alert-btn{height:34px;padding:0 14px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;
+  cursor:pointer;border:1.5px solid rgba(255,255,255,.55);background:transparent;color:#fff;white-space:nowrap}
+.pe-alert-btn:hover{background:rgba(255,255,255,.15)}
+/* The safe answer ("No, leave it") is the solid one — the default a hurried
+   operator hits. Changing finished work stays the deliberate, outlined choice. */
+.pe-alert-btn.keep{background:#fff;color:#92400E;border-color:#fff}
+.pe-alert-btn.keep:hover{background:#FFF7ED}
 .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
 /* Per-field clear (✕) buttons on the desktop Lot Entry form. Each field is a
    cell with the label ABOVE the 40px input, so the ✕ is pinned to the input's
@@ -3998,7 +4027,7 @@ input[type="search"]:focus{
              either typed into the Lot filter or ticked via "Tick & bring to
              front" — are already priced / already have a buyer, and asks
              whether the operator really means to change them. -->
-        <div id="pe-lot-warn" role="alert" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid #F0C476;border-left:4px solid #d97706;background:#FFF8EC;border-radius:8px;font-size:13px;color:#7A4A06;line-height:1.5"></div>
+        <div id="pe-lot-warn" class="pe-alert" role="alert" aria-live="assertive"></div>
         <!-- Assign-buyer bar (always visible). Tick lots by number (or use the
              row checkboxes), type a buyer code, then Set Buyer to write it to
              every ticked lot. The count on the Set Buyer button = ticked lots.
@@ -28569,26 +28598,27 @@ function _peLotWarnShow(lots, source){
   _pe.lotWarn = { ids: flagged.map(l => l.id), source };
   const locked = flagged.filter(l => l.locked_at);
   const lockNote = locked.length
-    ? ` <span style="color:#b91c1c">${locked.length === 1 ? 'That lot is <b>locked</b>' : `${locked.length} of them are <b>locked</b>`} — locked lots can only be edited from the Lots tab.</span>`
+    ? `<div class="pe-alert-note">${locked.length === 1 ? 'That lot is <b>locked</b>' : `${locked.length} of them are <b>locked</b>`} — locked lots can only be edited from the Lots tab.</div>`
     : '';
   let head;
   if (flagged.length === 1) {
     const l = flagged[0];
-    head = `⚠ <b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) is ${_peLotWarnBits(l)}.`;
+    head = `<b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) is ${_peLotWarnBits(l)}.`;
   } else {
     const lines = flagged.slice(0, 8)
-      .map(l => `<div style="margin-left:14px">• <b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) — ${_peLotWarnBits(l)}</div>`)
+      .map(l => `<div>• <b>Lot ${esc(l.lot_no)}</b> (${esc(l.name || 'no seller')}) — ${_peLotWarnBits(l)}</div>`)
       .join('');
-    const more = flagged.length > 8 ? `<div style="margin-left:14px;color:var(--text3)">… and ${flagged.length - 8} more</div>` : '';
-    head = `⚠ <b>${flagged.length} of the lots you picked are already done:</b>${lines}${more}`;
+    const more = flagged.length > 8 ? `<div class="pe-alert-more">… and ${flagged.length - 8} more</div>` : '';
+    head = `<b>${flagged.length} of the lots you picked are already done:</b>${lines}${more}`;
   }
   const one = flagged.length === 1;
-  host.innerHTML = `<div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
-      <div style="flex:1;min-width:260px">${head}${lockNote}
-        <div style="margin-top:2px;font-weight:700">Do you still want to change ${one ? 'it' : 'them'}?</div></div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn btn-o" style="height:32px;padding:0 12px;font-weight:600" onclick="_peLotWarnProceed()">Yes, change ${one ? 'it' : 'them'}</button>
-        <button class="btn btn-o" style="height:32px;padding:0 12px;font-weight:600" onclick="_peLotWarnCancel()">No, leave ${one ? 'it' : 'them'}</button>
+  host.innerHTML = `<div class="pe-alert-row">
+      <span class="pe-alert-ico" aria-hidden="true">!</span>
+      <div class="pe-alert-txt">${head}${lockNote}
+        <div class="pe-alert-q">Do you still want to change ${one ? 'it' : 'them'}?</div></div>
+      <div class="pe-alert-btns">
+        <button type="button" class="pe-alert-btn" onclick="_peLotWarnProceed()">Yes, change ${one ? 'it' : 'them'}</button>
+        <button type="button" class="pe-alert-btn keep" onclick="_peLotWarnCancel()">No, leave ${one ? 'it' : 'them'}</button>
       </div>
     </div>`;
   host.style.display = 'block';
