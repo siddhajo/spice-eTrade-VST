@@ -13202,6 +13202,78 @@ app.get('/api/system/backups', requireAdmin, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Resolve one snapshot filename to an absolute path inside the backups
+// folder. The name arrives from the client, so it is basename-stripped,
+// charset-checked AND the resolved path is re-verified to sit inside the
+// folder — three independent guards against `../` traversal. Returns
+// null when the name is unsafe or the file doesn't exist.
+function _resolveBackupFile(name) {
+  const bkDir = path.join(path.dirname(DB_PATH), 'backups');
+  const base  = path.basename(String(name || ''));
+  if (!/^[A-Za-z0-9._-]+\.db$/.test(base)) return null;
+  const full = path.resolve(bkDir, base);
+  if (path.dirname(full) !== path.resolve(bkDir)) return null;
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
+  return full;
+}
+
+// Download one on-disk snapshot (admin-only). This is the only way to
+// get an auto-backup off a cloud host without shell access.
+app.get('/api/system/backups/:name/download', requireAdmin, (req, res) => {
+  try {
+    const full = _resolveBackupFile(req.params.name);
+    if (!full) return res.status(404).json({ error: 'Backup file not found' });
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(full)}"`);
+    fs.createReadStream(full).pipe(res);
+  } catch (e) {
+    console.error('[backup] snapshot download failed:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Restore straight from an on-disk snapshot (admin-only) — same swap as
+// /api/system/restore but without the download/re-upload round trip.
+// A `pre-restore-*.db` snapshot of the CURRENT database is taken first,
+// so restoring the wrong file is itself recoverable.
+app.post('/api/system/backups/:name/restore', requireAdmin, async (req, res) => {
+  try {
+    const full = _resolveBackupFile(req.params.name);
+    if (!full) return res.status(404).json({ error: 'Backup file not found' });
+    const bkDir = path.dirname(full);
+    try {
+      require('./db').flushSave();
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      fs.copyFileSync(DB_PATH, path.join(bkDir, `pre-restore-${stamp}.db`));
+    } catch (e) {
+      // A failed safety snapshot must not silently proceed into a wipe.
+      return res.status(500).json({ error: 'Could not snapshot the current DB first: ' + e.message });
+    }
+    const r = await replaceFromBuffer(fs.readFileSync(full));
+    console.log('[restore] restored from snapshot:', path.basename(full));
+    res.json({ ok: true, restoredBytes: r.size, file: path.basename(full) });
+  } catch (e) {
+    console.error('[restore] snapshot restore failed:', e);
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Delete one snapshot (admin-only). The auto-prune only touches auto-*
+// files, so safety snapshots accumulate until removed here — which
+// matters on a cloud host with a small volume.
+app.delete('/api/system/backups/:name', requireAdmin, (req, res) => {
+  try {
+    const full = _resolveBackupFile(req.params.name);
+    if (!full) return res.status(404).json({ error: 'Backup file not found' });
+    fs.unlinkSync(full);
+    console.log('[backup] deleted snapshot:', path.basename(full));
+    res.json({ ok: true, file: path.basename(full) });
+  } catch (e) {
+    console.error('[backup] snapshot delete failed:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Trigger a backup snapshot now (admin-only). Mirrors the auto-ticker
 // path; useful for "test the schedule" or one-off snapshots.
 app.post('/api/system/backup-now', requireAdmin, (req, res) => {
@@ -14651,9 +14723,15 @@ function runBackupTickerOnce() {
     const dbDir = path.dirname(DB_PATH);
     const bkDir = path.join(dbDir, 'backups');
     if (!fs.existsSync(bkDir)) fs.mkdirSync(bkDir, { recursive: true });
-    // Most recent backup mtime — drives the "is one due?" check.
+    // Scheduled snapshots only. The folder also holds safety snapshots
+    // taken by other code paths (before-delete-*, predev-*, pre-restore-*)
+    // and on-demand manual-* ones; counting those here would let a single
+    // "Backup Now" click push the next scheduled run out by a full
+    // interval, and would let them be pruned as if they were scheduled.
+    const isAuto = f => /^auto-.*\.db$/.test(f);
+    // Most recent AUTO backup mtime — drives the "is one due?" check.
     const files = fs.readdirSync(bkDir)
-      .filter(f => f.endsWith('.db'))
+      .filter(isAuto)
       .map(f => ({ f, m: fs.statSync(path.join(bkDir, f)).mtimeMs }))
       .sort((a, b) => b.m - a.m);
     const latest = files[0] ? files[0].m : 0;
@@ -14665,9 +14743,12 @@ function runBackupTickerOnce() {
     const out = path.join(bkDir, `auto-${stamp}.db`);
     fs.copyFileSync(DB_PATH, out);
     console.log('[backup] auto snapshot written:', out);
-    // Prune older snapshots beyond keepN.
+    // Prune older AUTO snapshots beyond keepN. Safety snapshots are never
+    // pruned — losing a before-delete-* to the rolling window would defeat
+    // the whole point of taking it. They're removed by hand from the
+    // Backup tab (Saved Snapshots → 🗑).
     const fresh = fs.readdirSync(bkDir)
-      .filter(f => f.endsWith('.db'))
+      .filter(isAuto)
       .map(f => ({ f, m: fs.statSync(path.join(bkDir, f)).mtimeMs }))
       .sort((a, b) => b.m - a.m);
     for (const old of fresh.slice(keepN)) {

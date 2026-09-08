@@ -3572,6 +3572,30 @@ input[type="search"]:focus{
           </div>
         </div>
 
+        <!-- ── Saved Snapshots ─────────────────────────────────
+             Lists the .db files sitting in the server's `backups`
+             folder (auto-*, manual-*, before-delete-*, predev-*,
+             pre-restore-*). On a cloud host this is the ONLY way to
+             reach them without shell access — hence download AND
+             restore-in-place buttons per row. -->
+        <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+            <div style="font-weight:700;color:var(--text);font-size:14px;flex:1;min-width:200px">Saved Snapshots</div>
+            <button class="btn btn-sm" onclick="backupNow()">＋ Backup Now</button>
+            <button class="btn btn-sm" onclick="loadBackupList()">↻ Refresh</button>
+          </div>
+          <div style="font-size:12.5px;color:var(--text3);line-height:1.55;max-width:720px">
+            Snapshots on the server (newest first). <strong>Download</strong> saves one to this computer; <strong>Restore</strong> swaps the live database to it without a download/upload round trip.
+            Only <code style="background:var(--bg);padding:1px 4px;border-radius:3px">auto-</code> snapshots are pruned by the "keep last N" setting — safety copies taken before a delete or restore are kept until you remove them with 🗑.
+          </div>
+          <div style="overflow-x:auto;margin-top:12px">
+            <table style="width:100%;min-width:520px">
+              <thead><tr><th>File</th><th>Taken</th><th style="text-align:right">Size</th><th style="width:250px">Actions</th></tr></thead>
+              <tbody id="backup-list"><tr><td colspan="4" style="color:var(--text3)">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- ── Download ───────────────────────────────────────── -->
         <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
@@ -9492,7 +9516,7 @@ function go(tab){
     // Lazy-load the Delete All audit log when Backup opens so the
     // <details> drawer shows fresh data on first expand (loadDeleteLog
     // is idempotent — re-running it just re-renders the table).
-    backup: () => { if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadActivityLog === 'function') loadActivityLog(1); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
+    backup: () => { if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadBackupList === 'function') loadBackupList(); if (typeof loadActivityLog === 'function') loadActivityLog(1); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
     // Import Old Data has its own History panel; pre-load on tab open
     // so the operator sees recent imports without clicking the button.
     importold: () => { if (typeof impLoadHistory === 'function') impLoadHistory(); },
@@ -16868,6 +16892,93 @@ async function saveBackupConfig(){
       updateSdataField('backup_keep_count', settings.backup_keep_count);
     }
     toast('Auto backup settings saved');
+  }catch(e){ showError(e); }
+}
+
+// ── Saved snapshots list (server-side backups folder) ────────
+// The files live on the server's disk, so on a cloud host (Railway et
+// al) this table is the only route to them — File → Open Backups
+// Folder only exists in the desktop build.
+async function loadBackupList(){
+  const tb = document.getElementById('backup-list');
+  if (!tb) return;
+  try{
+    const d = await j('/api/system/backups');
+    const rows = (d && d.backups) || [];
+    if (!rows.length){
+      tb.innerHTML = '<tr><td colspan="4" style="color:var(--text3)">No snapshots yet. Enable Auto Backup above, or press "Backup Now".</td></tr>';
+      return;
+    }
+    tb.innerHTML = rows.map(b => {
+      const mb = (b.size/1024/1024).toFixed(2) + ' MB';
+      const when = new Date(b.mtime).toLocaleString();
+      const n = escAttr(b.name).replace(/'/g, "\\'");
+      return `<tr>
+        <td style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(b.name)}</td>
+        <td style="white-space:nowrap">${esc(when)}</td>
+        <td style="text-align:right;white-space:nowrap">${mb}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-sm" onclick="downloadBackupFile('${n}')">⬇ Download</button>
+          <button class="btn btn-sm" onclick="restoreBackupFile('${n}')" style="background:#DC2626;color:#fff;border-color:#DC2626">⬆ Restore</button>
+          <button class="btn btn-sm" onclick="deleteBackupFile('${n}')" title="Delete this snapshot from the server">🗑</button>
+        </td></tr>`;
+    }).join('');
+  }catch(e){
+    tb.innerHTML = `<tr><td colspan="4" style="color:#B91C1C">Could not load snapshots: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+// Take a snapshot on demand — writes manual-<timestamp>.db server-side.
+async function backupNow(){
+  try{
+    const d = await j('/api/system/backup-now',{method:'POST'});
+    toast('Snapshot saved: ' + (d.file || 'ok'));
+    loadBackupList();
+  }catch(e){ showError(e); }
+}
+
+// Download one snapshot. Same fetch+blob dance as downloadDbBackup —
+// a plain anchor wouldn't carry the bearer token.
+async function downloadBackupFile(name){
+  try{
+    const r = await fetch(B+'/api/system/backups/'+encodeURIComponent(name)+'/download',
+      {headers:{'Authorization':'Bearer '+T}});
+    if(!r.ok){
+      let err = `Download failed (HTTP ${r.status})`;
+      try{ const e = await r.json(); err = e.error || err; }catch(_){}
+      toast(err);
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 5000);
+    toast(`Downloaded ${name}`);
+  }catch(e){ toast('Download failed: '+e.message); }
+}
+
+// Restore in place from a server-side snapshot. Same destructive swap
+// as the file-upload restore, so it carries the same confirmation. The
+// server snapshots the CURRENT db to pre-restore-*.db first.
+async function restoreBackupFile(name){
+  if (!confirm(`Restore the database from "${name}"?\n\nThis REPLACES all current data with the contents of that snapshot.\nThe current database is snapshotted to pre-restore-….db first, so this is reversible.\n\nContinue?`)) return;
+  try{
+    const d = await j('/api/system/backups/'+encodeURIComponent(name)+'/restore',{method:'POST'});
+    toast(`Restored ${(d.restoredBytes/1024/1024).toFixed(2)} MB from ${name}. Reloading…`);
+    setTimeout(()=>location.reload(), 1200);
+  }catch(e){ showError(e); }
+}
+
+// Delete a snapshot off the server. Auto-prune only trims auto-* files,
+// so this is how before-delete-/pre-restore-/manual- ones get cleared
+// before they fill a small cloud volume.
+async function deleteBackupFile(name){
+  if (!confirm(`Delete the snapshot "${name}" from the server?\n\nThis cannot be undone — download it first if you might need it.`)) return;
+  try{
+    await j('/api/system/backups/'+encodeURIComponent(name),{method:'DELETE'});
+    toast(`Deleted ${name}`);
+    loadBackupList();
   }catch(e){ showError(e); }
 }
 
