@@ -2307,6 +2307,76 @@ body[data-comfort="1"] .le-lot-chip{min-width:48px;height:34px;font-size:13px}
 /* Sortable headers on the Backup → App Activity Log (solid-green header row). */
 .act-log-th:hover{background:rgba(255,255,255,.14)}
 
+/* ── Collapsible sections (Backup screen) ─────────────────────────
+   One pattern for a coloured, clickable header bar plus a body that
+   hides when the section carries .sec-collapsed. Pure display toggle,
+   no height animation — the panels contain sticky table headers and a
+   max-height transition fights them. Colours come from the theme vars
+   so the coral/ocean presets recolour these along with everything else. */
+.sec-head{
+  display:flex;align-items:center;gap:11px;
+  padding:10px 14px;border-radius:10px;cursor:pointer;user-select:none;
+  background:var(--spice-cardamom);border:1px solid var(--spice-cardamom-dk);
+  transition:filter .15s
+}
+.sec-head:hover{filter:brightness(1.10)}
+.sec-head .sec-title{
+  margin:0;flex:1;min-width:0;color:#fff;font-size:16px;font-weight:700;
+  letter-spacing:.01em
+}
+/* Saffron variant — used for a panel NESTED inside an already-green card,
+   so the two header bars don't read as the same level. */
+.sec-head.sec-amber{background:var(--spice-saffron);border-color:var(--spice-saffron-dk)}
+.sec-ico{
+  width:28px;height:28px;border-radius:8px;flex:0 0 28px;
+  background:rgba(255,255,255,.20);
+  display:inline-flex;align-items:center;justify-content:center;font-size:16px
+}
+.sec-chev{
+  flex:0 0 auto;color:#fff;font-size:11px;line-height:1;opacity:.95;
+  transition:transform .18s
+}
+.sec-collapsed > .sec-head .sec-chev{transform:rotate(-90deg)}
+.sec-body{margin-top:14px}
+.sec-collapsed > .sec-body{display:none}
+/* Controls sitting on the coloured bar (Refresh, Backup Now…). */
+.sec-btn{
+  height:28px;padding:0 12px;font-size:12px;font-weight:600;flex:0 0 auto;
+  border-radius:7px;cursor:pointer;white-space:nowrap;
+  color:#fff;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.42);
+  transition:background .15s
+}
+.sec-btn:hover{background:rgba(255,255,255,.30)}
+
+/* ── App Activity Log: detail chips ───────────────────────────────
+   The details column used to be a run-on "Label: value · Label: value"
+   string. Each pair is its own chip now so the eye can land on one
+   field; long values ellipsis inside the chip and keep the full text
+   on the row's title attribute. */
+.act-d-wrap{display:flex;flex-wrap:wrap;gap:3px 5px;font-size:11.5px;line-height:1.5}
+.act-chip{
+  display:inline-flex;align-items:baseline;gap:5px;max-width:100%;
+  padding:1px 7px;border-radius:6px;
+  background:var(--bg);border:1px solid var(--border)
+}
+.act-chip-k{
+  color:var(--text3);font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.04em;white-space:nowrap
+}
+.act-chip-v{
+  color:var(--text);font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px
+}
+/* The lot-count chip on a bulk row — the number is the headline. */
+.act-chip-count{background:var(--spice-cardamom-lt);border-color:var(--spice-cardamom)}
+.act-chip-count .act-chip-v{color:var(--spice-cardamom-dk)}
+/* Field-level diff rows: old value struck through, new value bold. */
+.act-diff{display:block;white-space:normal;margin:1px 0}
+.act-diff-k{color:var(--text2);font-weight:700}
+.act-diff-o{color:var(--text3);text-decoration:line-through;text-decoration-thickness:1px}
+.act-diff-n{color:var(--text);font-weight:700}
+.act-chip-count .act-chip-v{max-width:320px}
+
 /* ── Lot-entry print toolbar (Print Selected / by Seller / Clear) ── */
 .le-toolbar-btn{
   display:inline-flex;align-items:center;gap:6px;
@@ -3512,12 +3582,14 @@ input[type="search"]:focus{
          which conflicts with the .tc tab-switching rules. -->
     <div class="tc" id="tc-backup">
       <!-- ── App Activity Log — global create / edit / delete feed ─── -->
-      <div class="card">
-        <h2 style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-          <span style="width:36px;height:36px;border-radius:10px;background:#E0F2FE;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 36px">📋</span>
-          <span>App Activity Log</span>
-          <button class="btn btn-o" style="margin-left:auto;height:30px;padding:0 14px;font-size:12px;font-weight:600" onclick="loadActivityLog(1)">🔄 Refresh</button>
-        </h2>
+      <div class="card" id="sec-actlog" data-sec>
+        <div class="sec-head" onclick="secToggle('sec-actlog',event)" title="Click the bar to collapse or expand this section">
+          <span class="sec-chev">▼</span>
+          <span class="sec-ico">📋</span>
+          <h2 class="sec-title">App Activity Log</h2>
+          <button class="sec-btn" onclick="loadActivityLog(1)">🔄 Refresh</button>
+        </div>
+        <div class="sec-body">
         <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 14px;max-width:760px;line-height:1.55">
           Every create, edit and delete across the whole app — the office desktop AND the field-staff mobile app — including lots, invoices, sellers, buyers, users and settings. Use the filters to narrow by user, action, entity, device or date.
         </p>
@@ -3536,13 +3608,16 @@ input[type="search"]:focus{
           <div style="padding:12px;color:var(--text3);font-style:italic">Loading…</div>
         </div>
         <div id="act-log-pager" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:12.5px;color:var(--text2);flex-wrap:wrap"></div>
+        </div><!-- /.sec-body -->
       </div>
 
-      <div class="card">
-        <h2 style="display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:8px">
-          <span style="width:36px;height:36px;border-radius:10px;background:#FEF3C7;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 36px">💾</span>
-          <span>Backup &amp; Restore</span>
-        </h2>
+      <div class="card" id="sec-backup" data-sec>
+        <div class="sec-head" onclick="secToggle('sec-backup',event)" title="Click the bar to collapse or expand this section">
+          <span class="sec-chev">▼</span>
+          <span class="sec-ico">💾</span>
+          <h2 class="sec-title">Backup &amp; Restore</h2>
+        </div>
+        <div class="sec-body">
         <p style="color:var(--spice-text-mute);font-size:13px;margin:0 0 20px;max-width:720px;line-height:1.55">
           Download the entire database as a single <code style="background:var(--bg);padding:1px 5px;border-radius:3px">.db</code> file, or restore from one you saved earlier. A backup captures every auction, lot, invoice, payment, debit note, setting and user — bit-for-bit identical to what's running right now.
         </p>
@@ -3578,22 +3653,29 @@ input[type="search"]:focus{
              pre-restore-*). On a cloud host this is the ONLY way to
              reach them without shell access — hence download AND
              restore-in-place buttons per row. -->
-        <div style="padding:18px;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px">
-            <div style="font-weight:700;color:var(--text);font-size:14px;flex:1;min-width:200px">Saved Snapshots</div>
-            <button class="btn btn-sm" onclick="backupNow()">＋ Backup Now</button>
-            <button class="btn btn-sm" onclick="loadBackupList()">↻ Refresh</button>
+        <div id="sec-snaps" data-sec style="padding:0;border:1px solid var(--border);border-radius:12px;background:#fff;margin-bottom:12px;overflow:hidden">
+          <div class="sec-head sec-amber" style="border:0;border-radius:0" onclick="secToggle('sec-snaps',event)" title="Click the bar to collapse or expand this section">
+            <span class="sec-chev">▼</span>
+            <span class="sec-ico">🗄️</span>
+            <h2 class="sec-title" style="font-size:14px">Saved Snapshots</h2>
+            <button class="sec-btn" onclick="backupNow()">＋ Backup Now</button>
+            <button class="sec-btn" onclick="loadBackupList()">↻ Refresh</button>
           </div>
+          <div class="sec-body" style="margin:0;padding:16px 18px 18px">
           <div style="font-size:12.5px;color:var(--text3);line-height:1.55;max-width:720px">
             Snapshots on the server (newest first). <strong>Download</strong> saves one to this computer; <strong>Restore</strong> swaps the live database to it without a download/upload round trip.
             Only <code style="background:var(--bg);padding:1px 4px;border-radius:3px">auto-</code> snapshots are pruned by the "keep last N" setting — safety copies taken before a delete or restore are kept until you remove them with 🗑.
           </div>
-          <div style="overflow-x:auto;margin-top:12px">
+          <!-- Vertical scroll as well as horizontal: the folder accumulates a
+               snapshot per auto-backup interval, and an unbounded list pushed
+               Download / Restore far down the page. Header row stays put. -->
+          <div style="overflow:auto;max-height:300px;margin-top:12px;border:1px solid var(--spice-line);border-radius:8px">
             <table style="width:100%;min-width:520px">
-              <thead><tr><th>File</th><th>Taken</th><th style="text-align:right">Size</th><th style="width:250px">Actions</th></tr></thead>
+              <thead><tr><th style="position:sticky;top:0;z-index:1">File</th><th style="position:sticky;top:0;z-index:1">Taken</th><th style="position:sticky;top:0;z-index:1;text-align:right">Size</th><th style="position:sticky;top:0;z-index:1;width:250px">Actions</th></tr></thead>
               <tbody id="backup-list"><tr><td colspan="4" style="color:var(--text3)">Loading…</td></tr></tbody>
             </table>
           </div>
+          </div><!-- /.sec-body -->
         </div>
 
         <!-- ── Download ───────────────────────────────────────── -->
@@ -3670,6 +3752,7 @@ input[type="search"]:focus{
             </div>
           </details>
         </div>
+        </div><!-- /.sec-body -->
       </div>
     </div>
 
@@ -9516,7 +9599,7 @@ function go(tab){
     // Lazy-load the Delete All audit log when Backup opens so the
     // <details> drawer shows fresh data on first expand (loadDeleteLog
     // is idempotent — re-running it just re-renders the table).
-    backup: () => { if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadBackupList === 'function') loadBackupList(); if (typeof loadActivityLog === 'function') loadActivityLog(1); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
+    backup: () => { if (typeof secRestore === 'function') secRestore(); if (typeof loadBackupConfig === 'function') loadBackupConfig(); if (typeof loadBackupList === 'function') loadBackupList(); if (typeof loadActivityLog === 'function') loadActivityLog(1); if (typeof loadDeleteLog === 'function') loadDeleteLog(); },
     // Import Old Data has its own History panel; pre-load on tab open
     // so the operator sees recent imports without clicking the button.
     importold: () => { if (typeof impLoadHistory === 'function') impLoadHistory(); },
@@ -17621,6 +17704,29 @@ async function deleteAll(resource,label,ev){
 // Pull the most recent Delete All actions and render them as a table.
 // Each row shows when, who, the resource, how many rows went away, the
 // per-table cascade breakdown, the snapshot path, and the client IP.
+// ── Collapsible sections (Backup screen) ──────────────────────────────
+// Any element carrying `data-sec` + an id is collapsible: clicking its
+// .sec-head bar toggles .sec-collapsed, which hides the sibling .sec-body.
+// State is remembered per section so a panel someone collapsed stays that
+// way on the next visit. Clicks that land on a control INSIDE the bar
+// (Refresh, Backup Now…) must run that control and not toggle the section.
+function secToggle(id, ev){
+  if (ev && ev.target && ev.target.closest && ev.target.closest('button,a,input,select,label')) return;
+  const el = document.getElementById(id); if (!el) return;
+  const collapsed = el.classList.toggle('sec-collapsed');
+  try { localStorage.setItem('sec:' + id, collapsed ? '1' : '0'); } catch (_) { /* private mode */ }
+}
+// Re-apply saved collapse state. Called when the Backup tab opens, because
+// the markup renders expanded by default and we don't want a flash of the
+// wrong state on first paint of the tab.
+function secRestore(){
+  document.querySelectorAll('[data-sec]').forEach(el => {
+    if (!el.id) return;
+    let v = null;
+    try { v = localStorage.getItem('sec:' + el.id); } catch (_) {}
+    el.classList.toggle('sec-collapsed', v === '1');
+  });
+}
 // ── App Activity Log (Backup screen) — global create/edit/delete feed ──
 let _actPage = 1;
 let _actFilterTimer = null;
@@ -17713,9 +17819,16 @@ const _ACT_DETAIL_LABELS = Object.assign({}, (typeof LOT_FIELD_LABELS !== 'undef
 function _actPrettyKey(k){
   return String(k).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
-// Turn the redacted-JSON `details` blob into readable "Label: value" chips.
-// Falls back to the request path when details isn't a JSON object (e.g. plain
-// GET-style rows). The raw JSON stays available on hover via the title attr.
+// Turn the redacted-JSON `details` blob into readable chips. Falls back to
+// the request path when details isn't a JSON object (e.g. plain GET-style
+// rows). The raw JSON stays available on hover via the title attr.
+//
+// Three shapes reach this function:
+//   { changes:[{f,from,to}] }  a field-level edit diff
+//   { deleted:{...} }          what a removed record was
+//   { ...requestBody }         a create / bulk action
+// Each label+value becomes its own chip rather than one run-on
+// "Label: value · Label: value" string, so the eye can land on one field.
 function _actReadableDetails(it){
   const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   const raw = it.details;
@@ -17730,37 +17843,64 @@ function _actReadableDetails(it){
       : '<span style="color:var(--text3)">—</span>';
   }
   const label = k => _ACT_DETAIL_LABELS[k] || _actPrettyKey(k);
+  // Long values are clipped in the chip; the row's title carries the full JSON.
+  const CLAMP = 64;
   const val = v => {
-    if (v === '***') return '••• (hidden)';
+    if (v === '***') return '••• hidden';
     if (v == null || String(v).trim() === '') return '(empty)';
-    if (Array.isArray(v)) return '[' + v.length + ']';
-    return String(v);
+    if (Array.isArray(v)) return v.length + (v.length === 1 ? ' item' : ' items');
+    const s = String(v);
+    return s.length > CLAMP ? s.slice(0, CLAMP) + '…' : s;
   };
-  // New-style rows: a real field-level diff (edit) — "Label: from → to".
+  const chip = (k, innerHtml, cls) =>
+    '<span class="act-chip' + (cls ? ' ' + cls : '') + '">' +
+      '<span class="act-chip-k">' + _esc(label(k)) + '</span>' +
+      '<span class="act-chip-v">' + innerHtml + '</span></span>';
+  const wrap = inner => '<div class="act-d-wrap" title="' + _esc(raw) + '">' + inner + '</div>';
+
+  // Field-level diff (edit) — old value struck through, new value bold.
   if (Array.isArray(obj.changes)) {
     if (!obj.changes.length) return '<span style="color:var(--text3)">no field changes</span>';
     const rows = obj.changes.map(c =>
-      '<span style="display:block;white-space:normal">' +
-        '<b style="color:var(--text2)">' + _esc(label(c.f)) + ':</b> ' +
-        '<span style="color:var(--text3)">' + _esc(val(c.from)) + '</span> ' +
+      '<span class="act-diff">' +
+        '<span class="act-diff-k">' + _esc(label(c.f)) + '</span> ' +
+        '<span class="act-diff-o">' + _esc(val(c.from)) + '</span> ' +
         '<span style="color:var(--spice-cardamom)">→</span> ' +
-        '<b>' + _esc(val(c.to)) + '</b></span>');
-    return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text)">' + rows.join('') + '</div>';
+        '<span class="act-diff-n">' + _esc(val(c.to)) + '</span></span>');
+    return '<div class="act-d-wrap" style="display:block" title="' + _esc(raw) + '">' + rows.join('') + '</div>';
   }
-  // New-style rows: what a deleted record was — "Deleted: Label value · …".
+  // What a deleted record was.
   if (obj.deleted && typeof obj.deleted === 'object') {
     const keys = Object.keys(obj.deleted);
-    const ident = keys.length
-      ? keys.map(k => '<b style="color:var(--text2)">' + _esc(label(k)) + '</b> ' + _esc(val(obj.deleted[k]))).join(' <span style="color:var(--text3)">·</span> ')
+    const inner = keys.length
+      ? keys.map(k => chip(k, _esc(val(obj.deleted[k])))).join('')
       : '<span style="color:var(--text3)">(no identifying details)</span>';
-    return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text)"><b style="color:#B91C1C">Deleted:</b> ' + ident + '</div>';
+    return wrap('<span class="act-chip" style="background:#FEE2E2;border-color:#FCA5A5">' +
+      '<span class="act-chip-v" style="color:#B91C1C;font-weight:700">Deleted</span></span>' + inner);
   }
-  // Legacy / create rows: flat request-body values — "Label: value".
-  const parts = Object.keys(obj).map(k =>
-    '<span style="display:inline-block;margin:1px 0;white-space:normal">' +
-      '<b style="color:var(--text2)">' + _esc(label(k)) + ':</b> ' + _esc(val(obj[k])) + '</span>');
-  return '<div title="' + _esc(raw) + '" style="font-size:11.5px;color:var(--text);display:flex;flex-wrap:wrap;gap:2px 10px">' +
-    parts.join('') + '</div>';
+  // Create / bulk-action request body.
+  const parts = Object.keys(obj).map(k => {
+    const ids = (k === 'ids') ? _actIdsChip(obj[k], _esc) : null;
+    return ids ? chip(k, ids, 'act-chip-count') : chip(k, _esc(val(obj[k])));
+  });
+  return wrap(parts.join(''));
+}
+// `ids` arrives as "[169] 7000,7001,…" — a count plus a bounded sample of the
+// real ids (see _activityRedact in server.js). Lead with the COUNT, because on
+// a bulk row that is the number an operator reads first — "169 lots" tells the
+// story that a wall of ids does not. Returns null if the value isn't that shape,
+// so anything unexpected falls through to the plain chip.
+function _actIdsChip(v, esc){
+  const m = String(v == null ? '' : v).match(/^\[(\d+)\]\s*(.*)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const sample = m[2].replace(/[,\s]*…\s*$/, '').trim();
+  const shown = sample ? sample.split(',').filter(Boolean) : [];
+  const head = '<b>' + esc(n) + '</b> ' + (n === 1 ? 'lot' : 'lots');
+  if (!shown.length) return head;
+  const more = shown.length > 5 || /…\s*$/.test(m[2]);
+  return head + '<span style="color:var(--text3);font-weight:500"> · #' +
+    esc(shown.slice(0, 5).join(', ')) + (more ? ' …' : '') + '</span>';
 }
 function _actSeedFacets(facets){
   const seed = (id, vals) => {
@@ -28912,6 +29052,30 @@ async function peSetBuyerInline(){
   await _peLoadBuyerCache();
   const match = (_lotBuyerCache || []).find(b => b.codeUp === codeStr.toUpperCase());
   if (!match) { toast(`No buyer registered with code "${codeStr}" — add them in the Buyers tab first`); return; }
+  // ── Destructive-write guard ───────────────────────────────────────
+  // _peLotWarnShow() fires only when lots are picked one at a time or by typed
+  // lot numbers; the header select-all checkbox bypasses it completely, which
+  // is how a whole trade went to WITH DRAWN in a single click. Re-check HERE,
+  // at the moment of the write, so every selection route is covered — and call
+  // out withdrawal by name, because it also zeroes the money columns.
+  const done = ids.map(id => _pe.byId.get(id)).filter(l => _peLotHasWork(l));
+  const isWD = match.codeUp === 'WD';
+  if (done.length || ids.length >= 10) {
+    const lines = done.slice(0, 8)
+      .map(l => `  • Lot ${l.lot_no} (${l.name || 'no seller'}) — ${_peLotWarnBits(l).replace(/<\/?b>/g, '')}`)
+      .join('\n');
+    const more = done.length > 8 ? `\n  … and ${done.length - 8} more` : '';
+    const head = isWD
+      ? `WITHDRAW ${ids.length} lot(s)?\n\nThey will be set to ${match.buyer1 || match.buyer}, and their price and amount zeroed.`
+      : `Set buyer ${match.code} — ${match.buyer1 || match.buyer} — on ${ids.length} lot(s)?`;
+    const body = done.length
+      ? `\n\n${done.length} of them ${done.length === 1 ? 'is' : 'are'} already done:\n${lines}${more}`
+      : '';
+    if (!confirm(`${head}${body}\n\nThis cannot be undone.`)) {
+      toast(isWD ? 'Not withdrawn' : 'Buyer not set');
+      return;
+    }
+  }
   // Assigning this buyer is what CREATES a same-party lot, so check the ticked
   // lots against the buyer being written and confirm before it's saved.
   const clash = ids.map(id => _pe.byId.get(id)).filter(l => _peSamePartyAs(l, match.buyer1, match.buyer));

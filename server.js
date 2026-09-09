@@ -132,7 +132,14 @@ function _activityRedact(body) {
     if (/pass|token|secret|hash|otp|cookie/i.test(k)) { out[k] = '***'; continue; }
     const v = body[k];
     if (v === null || v === undefined || v === '') continue;
-    if (typeof v === 'object') out[k] = Array.isArray(v) ? `[${v.length}]` : '{…}';
+    // Arrays keep a bounded SAMPLE of their values, not just a count. A bulk
+    // action logged as {"ids":"[169]"} says 169 lots changed but never which,
+    // which is what made a mass-withdrawal untraceable from this log alone.
+    if (Array.isArray(v)) {
+      const head = v.slice(0, 20).map(x => (x && typeof x === 'object') ? '{…}' : String(x).slice(0, 24));
+      out[k] = `[${v.length}] ` + head.join(',') + (v.length > head.length ? ',…' : '');
+    }
+    else if (typeof v === 'object') out[k] = '{…}';
     else out[k] = String(v).slice(0, 80);
   }
   try { return JSON.stringify(out).slice(0, 500); } catch (_) { return ''; }
@@ -6750,6 +6757,14 @@ app.post('/api/lots/bulk-set-buyer', requireLotWrite, (req, res) => {
   if (buyer1) { sets.push('buyer1 = ?'); vals.push(buyer1); }
   if (req.body.sale !== undefined) { sets.push('sale = ?'); vals.push(sale); }
   if (hasPrice) { sets.push('price = ?'); vals.push(priceNum); }
+  // The { column: newValue } map this UPDATE actually writes — mirrors `sets`
+  // above and feeds the field-level audit diff below.
+  const applied = {};
+  if (code)   applied.code   = code;
+  if (buyer)  applied.buyer  = buyer;
+  if (buyer1) applied.buyer1 = buyer1;
+  if (req.body.sale !== undefined) applied.sale = sale;
+  if (hasPrice) applied.price = priceNum;
   const CHUNK = 500;
   let updated = 0;
   // Capture every auction touched so we can clear their price-check
@@ -6758,16 +6773,25 @@ app.post('/api/lots/bulk-set-buyer', requireLotWrite, (req, res) => {
   for (let i = 0; i < mutableIds.length; i += CHUNK) {
     const slice = mutableIds.slice(i, i + CHUNK);
     const placeholders = slice.map(() => '?').join(',');
-    const affectedRows = db.all(
-      `SELECT DISTINCT auction_id FROM lots WHERE id IN (${placeholders})`,
+    // Full before-snapshot, not just auction_id. This is the endpoint the
+    // Price Entry grid's Set Buyer uses, so without it a bulk buyer or WD
+    // change left NO trace in the lot activity log — its siblings
+    // bulk-buyer / bulk-grade / bulk-seller have always logged, this one
+    // never did. The extra columns are what logBulkLotChanges diffs against.
+    const _before = db.all(
+      `SELECT id, auction_id, lot_no, name, buyer, buyer1, code, sale, price
+         FROM lots WHERE id IN (${placeholders})`,
       slice
     );
-    affectedRows.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
+    _before.forEach(r => { if (r.auction_id) touchedAuctions.add(r.auction_id); });
     const info = db.run(
       `UPDATE lots SET ${sets.join(', ')} WHERE id IN (${placeholders})`,
       [...vals, ...slice]
     );
     if (info && typeof info.changes === 'number') updated += info.changes;
+    // Per-chunk so the 500-row cap inside logBulkLotChanges lines up with
+    // CHUNK and a multi-chunk apply still logs every lot.
+    logBulkLotChanges(db, req, _before, applied);
   }
   for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); if (hasPrice) _markPricesChanged(db, aid); }
   res.json({ success: true, updated, requested: ids.length, skipped_locked: lockedIds.length });
