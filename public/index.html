@@ -1269,6 +1269,17 @@ tr:hover td{background:var(--spice-cream)}
 .pe-grid-table tr.pe-same-party td{background:#fdeaea}
 .pe-grid-table tr.pe-same-party:hover td{background:#fbdada}
 .pe-grid-table tr.pe-same-party td:first-child{box-shadow:inset 3px 0 0 #dc2626}
+/* The "⚠ N seller = buyer" count in the Price Entry summary line is a
+   BUTTON that filters the grid down to those lots. Styled as a chip rather
+   than a link so it reads as pressable at 12px, and inherits the same red
+   as the rows it reveals. `.on` is the pressed state — solid fill, because
+   a narrowed grid must be obviously narrowed. */
+.pe-same-chip{font:inherit;font-weight:700;color:#b91c1c;background:#fdeaea;border:1px solid #f3bcbc;
+  border-radius:999px;padding:1px 9px;cursor:pointer;line-height:1.5;vertical-align:baseline}
+.pe-same-chip:hover{background:#fbdada;border-color:#e59b9b}
+.pe-same-chip:focus-visible{outline:2px solid #dc2626;outline-offset:1px}
+.pe-same-chip.on{background:#b91c1c;border-color:#b91c1c;color:#fff}
+.pe-same-chip.on:hover{background:#a01717;border-color:#a01717}
 /* Price Entry — the "this lot is already done" alert. Same solid-fill
    language as the app's error banner (showError), in warning amber: it's the
    last thing between the operator and overwriting finished work, so a pale
@@ -28700,7 +28711,7 @@ const _pcKeptDb = (lotId) => lotId != null && _pcKeepDb.has(Number(lotId));
 // "already priced" toast fires once per change rather than per keystroke.
 let _pe = { aid: null, lots: [], byId: new Map(), view: [], dirty: new Set(), sel: new Set(),
             front: [], sort: { col: null, dir: 1 }, filter: { lot: '', branch: '', seller: '' },
-            showAll: false, warned: new Set(), lotWarnAck: new Set(), lotWarn: null };
+            showAll: false, sameOnly: false, warned: new Set(), lotWarnAck: new Set(), lotWarn: null };
 // A row is "complete" (needs no more work) when it's priced AND has a buyer
 // code, OR it's a WD/NA lot (withdrawn / not-auctioned → nothing to price).
 // Completed rows are hidden unless "Show all" is ticked, so the operator only
@@ -28774,7 +28785,7 @@ async function loadPriceEntryGrid(){
   _pe.aid = aid; _pe.dirty = new Set(); _pe.sel = new Set(); _pe.front = []; _pe.warned = new Set();
   _pe.lotWarnAck = new Set(); _pe.lotWarn = null; _peLotWarnHide();
   // A fresh trade starts with no sort/filter; a same-trade refresh keeps them.
-  if (tradeChanged) { _pe.sort = { col: null, dir: 1 }; _pe.filter = { lot: '', branch: '', seller: '' }; }
+  if (tradeChanged) { _pe.sort = { col: null, dir: 1 }; _pe.filter = { lot: '', branch: '', seller: '' }; _pe.sameOnly = false; }
   const grid = document.getElementById('pe-grid');
   const sumEl = document.getElementById('pe-summary');
   const fbar = document.getElementById('pe-filter-bar');
@@ -28816,6 +28827,11 @@ function _pePasses(l){
   if (f.lot    && !String(l.lot_no || '').toLowerCase().includes(f.lot.toLowerCase()))    return false;
   if (f.branch && String(l.branch || '') !== f.branch)                                    return false;
   if (f.seller && !String(l.name   || '').toLowerCase().includes(f.seller.toLowerCase())) return false;
+  // "Seller = buyer" view: show those lots and nothing else. It deliberately
+  // overrides the completed-row hiding below — a same-party lot that is
+  // already priced WITH a buyer saved on it is the most important one to see,
+  // and that is exactly the row "complete" would hide.
+  if (_pe.sameOnly) return _peSameParty(l);
   // Hide completed rows unless "Show all" is ticked — but always keep a lot that
   // was explicitly brought to front (a deliberate edit of a completed lot).
   if (!_pe.showAll && _peIsComplete(l) && !_pe.front.includes(l.id)) return false;
@@ -28823,6 +28839,25 @@ function _pePasses(l){
 }
 // Toggle showing completed rows (from the "Show all" checkbox).
 function peToggleShowAll(on){ _pe.showAll = !!on; renderPriceEntryGrid(); }
+// ── "⚠ N seller = buyer" → show me which ones ──────────────────────
+// The count alone tells an operator there is a problem but not where it is;
+// on a 400-lot trade, finding 15 flagged rows by scrolling is the whole job.
+// Clicking the badge filters the grid down to exactly those lots, and
+// clicking it again puts the grid back.
+function peToggleSameOnly(on){
+  _pe.sameOnly = (on === undefined) ? !_pe.sameOnly : !!on;
+  // Scanning a short list of problem rows is pointless if a half-typed lot
+  // number or a branch is still hiding some of them, so entering this view
+  // clears the column filters. The user asked for THESE lots; give them all.
+  if (_pe.sameOnly) {
+    _pe.filter = { lot: '', branch: '', seller: '' };
+    const lf = document.getElementById('pe-filter-lot');    if (lf) lf.value = '';
+    const bf = document.getElementById('pe-filter-branch'); if (bf) bf.value = '';
+    const sf = document.getElementById('pe-filter-seller'); if (sf) sf.value = '';
+    _peLotWarnHide();
+  }
+  renderPriceEntryGrid();
+}
 // Derive the display order from the canonical list: filter, then sort, with
 // any bring-to-front lots pinned on top (in the order they were entered).
 function _peViewLots(){
@@ -28895,9 +28930,13 @@ function renderPriceEntryGrid(){
     </tr>`;
   }).join('');
   const thStyle = 'cursor:pointer;user-select:none';
-  const bodyHtml = view.length
-    ? rows
+  // An empty grid must say WHICH emptiness it is. In the seller = buyer view
+  // that is good news — nothing left to fix — and it reads as broken without
+  // a line saying so and a way back.
+  const emptyHtml = _pe.sameOnly
+    ? `<tr><td colspan="12" style="padding:20px;text-align:center;color:var(--text3);font-size:13px">No lots in this trade have the same party as seller and buyer. <a href="#" onclick="peToggleSameOnly(false);return false" style="color:var(--green)">Back to all lots</a></td></tr>`
     : `<tr><td colspan="12" style="padding:20px;text-align:center;color:var(--text3);font-size:13px">No incomplete lots to show.${_peHiddenCompleteCount() ? ` Completed rows are hidden — <a href="#" onclick="document.getElementById('pe-show-all').checked=true;peToggleShowAll(true);return false" style="color:var(--green)">Show all</a>.` : ''} <a href="#" onclick="peClearFilters();return false" style="color:var(--green)">Clear filters</a></td></tr>`;
+  const bodyHtml = view.length ? rows : emptyHtml;
   // Pinned totals row — filled by _peRenderTotals() (kept out of the template
   // so a price keystroke can refresh the numbers without re-rendering rows).
   // 12 columns: 4 (checkbox/Lot/Seller/Branch) + Bags + Qty + Price + Amount + 4.
@@ -28978,14 +29017,32 @@ function _peRenderSummary(){
   // Same-party lots are counted across the whole trade (not just the view) —
   // they stay worth knowing about while a filter hides them.
   const sameCt = _pe.lots.filter(_peSameParty).length;
-  const sameNote = sameCt
-    ? ` · <b style="color:#b91c1c" title="Seller and buyer are the same party">⚠ ${sameCt} seller = buyer</b>`
+  // The badge is a BUTTON: clicking it filters the grid down to those lots
+  // and clicking it again puts the grid back. A bare count leaves the
+  // operator to find 15 rows in 400 by eye, which is the actual work.
+  //
+  // Still rendered at zero while the view is on, otherwise switching it off
+  // means hunting for "Clear filters" — the control that got you in has to
+  // be the control that gets you out.
+  const sameNote = (sameCt || _pe.sameOnly)
+    ? ` · <button type="button" class="pe-same-chip${_pe.sameOnly ? ' on' : ''}" onclick="peToggleSameOnly()"
+         title="${_pe.sameOnly ? 'Back to all lots' : 'Show only the lots where the seller and the buyer are the same party'}"
+         aria-pressed="${_pe.sameOnly ? 'true' : 'false'}">⚠ ${sameCt} seller = buyer${_pe.sameOnly ? ' <span aria-hidden="true">✕</span>' : ''}</button>`
     : '';
-  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : '')) + filtered + hiddenNote + sameNote;
+  // While the view is on, the other counts describe a deliberately narrowed
+  // grid — say which view you are in, rather than letting "3/400 priced"
+  // read as work gone missing.
+  const sameMode = _pe.sameOnly
+    ? ` <span style="color:#b91c1c;font-weight:700">· showing these only</span>`
+    : '';
+  sumEl.innerHTML = `${priced}/${total} lots priced` + (dirty ? ` · <b style="color:#a16207">${dirty} unsaved</b>` : (total ? ' · all saved' : '')) + (_pe.sameOnly ? '' : filtered + hiddenNote) + sameNote + sameMode;
 }
 // Completed rows currently hidden by the "Show all" toggle (0 when it's on).
 function _peHiddenCompleteCount(){
-  if (_pe.showAll) return 0;
+  // The seller = buyer view does not hide by completeness at all, so nothing
+  // is being held back on those grounds. Reporting a count here would make
+  // the footer call a finished lot "incomplete".
+  if (_pe.showAll || _pe.sameOnly) return 0;
   return _pe.lots.filter(l => _peIsComplete(l) && !_pe.front.includes(l.id)).length;
 }
 function pePriceInput(id){
@@ -29146,6 +29203,7 @@ function peSetFilter(key, val){
 }
 function peClearFilters(){
   _pe.filter = { lot: '', branch: '', seller: '' };
+  _pe.sameOnly = false;
   const lf = document.getElementById('pe-filter-lot');    if (lf) lf.value = '';
   const bf = document.getElementById('pe-filter-branch'); if (bf) bf.value = '';
   const sf = document.getElementById('pe-filter-seller'); if (sf) sf.value = '';
