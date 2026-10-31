@@ -6,6 +6,31 @@
 const DEFAULTS = [
   // ── COMPANY ────────────────────────────────────────────────
   { key: 'logo',            value: '',           category: 'company',   label: 'Logo Code',                type: 'text' },
+  // ── THIS SOFTWARE's own identity ───────────────────────────
+  // Distinct from trade_name below, which is the CUSTOMER's company. The
+  // two are different things and were conflated: every screen showed the
+  // customer's name and the product had none.
+  //
+  // Shown on the SCREENSAVER and in the login page's product chip.
+  // Deliberately NOT on the top bar or any document — those keep the
+  // customer's own name, which is what an operator wants to see while
+  // working. The product name earns its place on the sign-in page and on
+  // the one screen nobody is working on.
+  //
+  // Settings rather than constants so a reseller can badge the build, and
+  // so a changed support number never means editing HTML.
+  { key: 'app_name',        value: 'SpiceFlow eAuction Suite', category: 'company', label: 'Application Name (this software)', type: 'text' },
+  // The SOFTWARE's mark, which is NOT the customer's logo: logo-ispl.png is
+  // uploaded per install and belongs to the auction house, this one ships
+  // with the build and belongs to the product. A path rather than an upload
+  // so a reseller can point it at their own file without a rebuild; blank
+  // shows no mark at all.
+  { key: 'app_logo',        value: '/logo-app.svg', category: 'company', label: 'Application logo (path)', type: 'text' },
+  // The two lines UNDER the name on the screensaver. Blank either one and
+  // its line simply does not render — an install with no support number
+  // must not show an empty row where one should be.
+  { key: 'app_credit',      value: 'Powered by KJ & Co', category: 'company', label: 'Screensaver credit line', type: 'text' },
+  { key: 'app_contact',     value: '9790745462 / 8248922434', category: 'company', label: 'Screensaver support number(s)', type: 'text' },
   { key: 'trade_name',      value: '',  category: 'company',   label: 'Trade Name',               type: 'text' },
   { key: 'legal_name',      value: '', category: 'company', label: 'Legal Name Suffix',        type: 'text' },
   { key: 'short_name',      value: '', category: 'company', label: 'Short Name', type: 'text' },
@@ -125,6 +150,10 @@ const DEFAULTS = [
   { key: 'bank_tn_name',    value: '',               category: 'bank',      label: 'TN Bank Name',             type: 'text' },
   { key: 'bank_tn_acct',    value: '',               category: 'bank',      label: 'TN Account No.',           type: 'text' },
   { key: 'bank_tn_ifsc',    value: '',               category: 'bank',      label: 'TN IFSC Code',             type: 'text' },
+  // Bank Payment XLSX layout. Value is a profile key from bank-formats.js;
+  // rendered as a dropdown (see FIELD_OPTIONS.bank_format in public/index.html).
+  // Default keeps the standard 12-column layout so existing installs are unchanged.
+  { key: 'bank_format',     value: 'default_12col',  category: 'bank',      label: 'Bank Payment File Format', type: 'select' },
 
   // ── SEASON ─────────────────────────────────────────────────
   { key: 'season',          value: '',      category: 'season',    label: 'Season Name',              type: 'text' },
@@ -245,6 +274,28 @@ const DEFAULTS = [
   { key: 'mask_acct',       value: 'last4',          category: 'display',   label: 'Mask Bank Account No.',    type: 'select', options: ['none','last4','last6','first4','first6','full'] },
   { key: 'mask_ifsc',       value: 'none',           category: 'display',   label: 'Mask IFSC Code',           type: 'select', options: ['none','last4','last6','first4','first6','full'] },
   { key: 'mask_phone',      value: 'none',           category: 'display',   label: 'Mask Phone Number',        type: 'select', options: ['none','last4','last6','first4','first6','first2last2','full'] },
+
+  // ── Screensaver ────────────────────────────────────────────
+  // The office machines sit on one screen all day — a priced lot grid, a
+  // seller's bank details — in a room people walk through. The screensaver
+  // covers that after a few quiet minutes and clears on the first key or
+  // click.
+  //
+  // It is NOT a sign-out and must never stand in for one: it only covers
+  // the screen, the session is untouched. If an auto sign-out is ever
+  // added, its warning draws OVER this (z-index 9999 against 9000) so a
+  // countdown can never be hidden behind scenery.
+  //
+  // 0 = never, and that is the default: an install that never asked for
+  // this must not start blanking screens on upgrade.
+  { key: 'screensaver_minutes',   value: '0',    category: 'display', label: 'Screensaver after inactivity (minutes; 0 = never)', type: 'number' },
+  // Fireworks on the screensaver panel. On by default, but that costs an
+  // install nothing: the screensaver itself is off until somebody sets the
+  // minutes above, so nothing animates on an install that never asked.
+  //
+  // Switchable because this is taste, and because a machine driving a wall
+  // display over remote desktop is better off with a still panel.
+  { key: 'screensaver_fireworks', value: 'true', category: 'display', label: 'Screensaver: fireworks animation', type: 'boolean' },
 
   // ── LOT ENTRY DEFAULTS (ported from PWA app.html) ──────────
   // These values pre-populate the Lot Entry form so field staff don't
@@ -437,7 +488,7 @@ const CATEGORIES = {
   bank:       { order: 8, title: 'Bank Details',          icon: '🏦' },
   season:     { order: 9, title: 'Season / Financial Year', icon: '📅' },
   invoice:    { order: 10, title: 'Invoice Settings',     icon: '📄' },
-  display:    { order: 10.5, title: 'Display',            icon: '🖼', description: 'Visual / formatting preferences. The date format is applied across UI tables, PDFs and Excel exports — storage in the database is always ISO (YYYY-MM-DD). Masking hides bank account no., IFSC and phone on receipts and on-screen lists/panels (pick how many digits stay visible); the bank payment file, DBF, Tally and WhatsApp targets always keep the real numbers.' },
+  display:    { order: 10.5, title: 'Display',            icon: '🖼', description: 'Visual / formatting preferences. The date format is applied across UI tables, PDFs and Excel exports — storage in the database is always ISO (YYYY-MM-DD). Masking hides bank account no., IFSC and phone on receipts and on-screen lists/panels (pick how many digits stay visible); the bank payment file, DBF, Tally and WhatsApp targets always keep the real numbers. The screensaver covers the screen after a few quiet minutes \u2014 an office machine sits on a priced lot grid or a seller\u2019s bank details all day, in a room people walk through \u2014 and any key or click clears it; 0 = never. It only covers the screen: nobody is signed out.' },
   flags:      { order: 11, title: 'Feature Flags',        icon: '🔧' },
   lot_entry:  { order: 11.5, title: 'Lot Entry Defaults',   icon: '📝', description: 'Defaults applied when field staff enter lots from the Lot Entry tab. Sample weight is auto-filled into each new lot; moisture column shows when enabled; edit timeout limits how long after creation a non-admin user can edit their own lots.' },
   integrations: { order: 12, title: 'Integrations',       icon: '🔌', description: 'Optional third-party services. The GST API key enables auto-fetching trade name and address when you enter a GSTIN. Get a free key at gstincheck.co.in — sign up, copy the key from your dashboard, paste here.' },

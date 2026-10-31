@@ -86,6 +86,8 @@ Pair this with [ARCHITECTURE.md](ARCHITECTURE.md).
 | Company settings (~109 keys) | ✅ | Identity, addresses, rates, feature flags |
 | Logo upload (stored in DB) | ✅ | With bundled fallback |
 | Settings import / export (JSON) | ✅ | Backup & clone a configuration |
+| Application name / branding | ✅ | `app_name` + credit, support numbers and app logo — the SOFTWARE's identity, separate from the customer's trade name |
+| Screensaver | ✅ | Covers the screen after N idle minutes (`screensaver_minutes`, 0 = never); optional fireworks; any key or click clears it; nobody is signed out |
 
 ## Platforms & deployment
 

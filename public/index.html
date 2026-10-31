@@ -3060,7 +3060,13 @@ input[type="search"]:focus{
         <div class="login-hero-brand">
           <span class="login-hero-logo"><img id="login-hero-logo-img" alt="" onerror="this.remove()"></span>
           <div>
-            <div class="login-hero-eyebrow" id="login-hero-eyebrow">Spice e-Trade</div>
+            <!-- The name of THIS SOFTWARE (app_name) — the product chip at
+                 the top of the hero, where it cannot be missed. Falls back
+                 to the built-in strapline when an install has not named
+                 itself: an empty chip would be worse than a generic one.
+                 The CUSTOMER's own company keeps the line below it, the
+                 sign-in card and the top bar. -->
+            <div class="login-hero-eyebrow" id="login-hero-app">Spice e-Trade</div>
             <div class="login-hero-sub" id="login-hero-sub">Trade · Invoices · Payments · Reports</div>
           </div>
         </div>
@@ -9052,6 +9058,10 @@ function logout(){h('/api/logout',{method:'POST'});T='';localStorage.removeItem(
   // Clear shared-auction state + hide topbar widget on logout
   try { sessionStorage.removeItem('spice.sharedAucId'); } catch(_){}
   const tw = document.getElementById('topbar-trade-wrap'); if (tw) tw.style.display = 'none';
+  // Stop the screensaver clock and its render loop: no token means no
+  // screensaver, and an animation left running on the sign-in page would
+  // burn CPU on a machine nobody is using.
+  try { ssHide(); ssArm(); } catch(_){}
   document.getElementById('app').style.display='none';document.getElementById('login').style.display='flex'}
 // Reads feature flags from the public branding endpoint extension and
 // flips body[data-feat-*] attributes so CSS can show/hide whole feature
@@ -9123,7 +9133,320 @@ async function applyFeatureFlags() {
   // Sensitive-field masking policy (Settings → Display) — cache so list
   // and detail renderers mask consistently with the receipt PDFs.
   refreshMaskCfg(cfg);
+  // Same settings trip configures the screensaver, so it picks up a changed
+  // number (and a changed app name) at the moment it is saved, with no
+  // reload. Guarded: a throw here must not cost the flags above.
+  try { ssConfigure(cfg || {}); } catch (_) {}
 }
+
+// ══════════════════════════════════════════════════════════════
+// SCREENSAVER (screensaver_minutes / screensaver_fireworks)
+// ══════════════════════════════════════════════════════════════
+// The office machines sit on one screen all day — a priced lot grid, a
+// seller's bank details — in a room people walk through. After a few quiet
+// minutes this covers the screen, and the first key or click clears it.
+//
+// What it is NOT, and must never become:
+//   • it is not a sign-out. Nobody is logged out, no session is touched —
+//     it only covers the screen. Were an auto sign-out added later, its
+//     warning must draw OVER this (the 9999 band against 9000) and this
+//     must step out of its way, because a countdown hidden behind scenery
+//     costs somebody their half-typed work. ssShow() already honours a
+//     `_idle.warning` flag if one ever appears.
+//   • it is not shown on the sign-in page: no token, no screensaver.
+//
+// "Idle" means NO INTERACTION — not "no requests". The app polls in the
+// background every few seconds, so request traffic says nothing about
+// whether anyone is still at the desk. Hence real input events.
+//
+// 0 minutes (the shipped default) switches the whole thing off, so an
+// install that never asked for this does not start blanking screens on
+// upgrade.
+const _ss = {
+  minutes: 0,            // window, from settings; 0 = never
+  timer: null,           // the "show now" timeout
+  tick: null,            // the clock interval while showing
+  on: false,             // is the panel up?
+  armed: false,          // activity listeners attached?
+  fireworks: true,       // screensaver_fireworks
+  app: '', credit: '', contact: '', logo: '',   // what the panel says
+};
+const SS_FALLBACK_APP_NAME = 'SpiceFlow eAuction Suite';
+
+// Pull the window and the panel's text from settings and (re)start. Called
+// from applyFeatureFlags(), which runs at boot and after every settings
+// save — so changing the number takes effect at once, with no reload.
+function ssConfigure(cfg){
+  cfg = cfg || {};
+  // parseFloat, not parseInt: truncating a sub-minute window to 0 would
+  // mean "never" — the exact opposite of what was typed.
+  const n = parseFloat(cfg.screensaver_minutes);
+  _ss.minutes = (Number.isFinite(n) && n > 0) ? Math.min(n, 1440) : 0;
+  _ss.fireworks = String(cfg.screensaver_fireworks == null ? 'true' : cfg.screensaver_fireworks) !== 'false';
+  // Captured here rather than read at show time: the flat-settings cache is
+  // not guaranteed to be populated on the machine that has been sitting
+  // idle, and the panel must never come up unnamed.
+  _ss.app     = String(cfg.app_name    || '').trim();
+  _ss.credit  = String(cfg.app_credit  || '').trim();
+  _ss.contact = String(cfg.app_contact || '').trim();
+  _ss.logo    = String(cfg.app_logo    || '').trim();
+  if (!_ss.armed) {
+    // `capture` so a click a modal swallows still counts as activity, and
+    // passive so scroll/touch listeners never block painting.
+    for (const ev of ['mousedown', 'keydown', 'wheel', 'touchstart', 'scroll']) {
+      document.addEventListener(ev, ssBump, { capture: true, passive: true });
+    }
+    // Coming back to the tab is activity too — the operator is looking at it.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) ssBump(); });
+    _ss.armed = true;
+  }
+  ssHide();
+  ssArm();
+}
+
+// Activity: clear the panel if it is up, and restart the clock either way.
+function ssBump(){
+  if (_ss.on) ssHide();
+  ssArm();
+}
+
+function ssArm(){
+  if (_ss.timer) { clearTimeout(_ss.timer); _ss.timer = null; }
+  if (!_ss.minutes || !T) return;
+  // Floored at 5s so a tiny test value still exercises the real path
+  // rather than firing in the same tick.
+  _ss.timer = setTimeout(ssShow, Math.max(5000, _ss.minutes * 60 * 1000));
+}
+
+function ssShow(){
+  // Off means off, even if a stale timer fires. Not on the sign-in screen,
+  // and never over a sign-out countdown (see the header).
+  if (!_ss.minutes || !T) return;
+  if (window._idle && _idle.warning) return;
+  const el = document.getElementById('screensaver');
+  if (!el) return;
+  const setText = (id, v) => { const n = document.getElementById(id); if (n) n.textContent = v; };
+  setText('ss-app', _ss.app || SS_FALLBACK_APP_NAME);
+  // Credit and support numbers. Each line is dropped when blank, and the
+  // whole block (hairline included) goes when neither is set — an unbadged
+  // install shows no empty rule.
+  setText('ss-credit', _ss.credit);
+  setText('ss-contact', _ss.contact);
+  const hide = (id, gone) => { const n = document.getElementById(id); if (n) n.style.display = gone ? 'none' : ''; };
+  hide('ss-credit', !_ss.credit);
+  hide('ss-contact', !_ss.contact);
+  hide('ss-by', !_ss.credit && !_ss.contact);
+  // The APPLICATION's mark (app_logo) — never the topbar image, which is
+  // the CUSTOMER's logo and the one thing this panel should not show.
+  const logo = document.getElementById('ss-logo');
+  if (logo) {
+    if (_ss.logo) {
+      // A path that 404s must leave no gap where a mark would be.
+      logo.onerror = function(){ this.style.display = 'none'; };
+      if (logo.getAttribute('src') !== _ss.logo) logo.src = _ss.logo;
+      logo.style.display = '';
+    } else {
+      logo.style.display = 'none';
+    }
+  }
+  el.style.display = 'flex';
+  _ss.on = true;
+  ssTick();
+  if (_ss.tick) clearInterval(_ss.tick);
+  _ss.tick = setInterval(ssTick, 1000);
+  ssFxStart();
+}
+
+function ssHide(){
+  if (_ss.tick) { clearInterval(_ss.tick); _ss.tick = null; }
+  ssFxStop();
+  const el = document.getElementById('screensaver');
+  if (el) el.style.display = 'none';
+  _ss.on = false;
+}
+
+function ssTick(){
+  // IST, not the device clock — same rule as every other stamp in the app.
+  // A machine left on UTC would otherwise show the wrong time in letters
+  // big enough to read across the room.
+  const el = document.getElementById('ss-clock');
+  if (!el) return;
+  const now = new Date();
+  let out = '';
+  try {
+    const d = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata',
+      weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+    const t = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata',
+      hour: '2-digit', minute: '2-digit', hour12: false });
+    out = `${d}  ·  ${t} IST`;
+  } catch (_) { out = ''; }
+  el.textContent = out;
+}
+
+// ── Screensaver fireworks (screensaver_fireworks) ────────────────────
+//
+// This draws on a machine NOBODY IS SITTING AT, possibly until morning, so
+// it is written to be frugal before it is written to be pretty:
+//
+//   • at most SS_FX_MAX rockets in the air, and sparks die on a timer, so
+//     the particle count has a hard ceiling rather than growing with uptime;
+//   • the rAF loop is started by ssShow and cancelled by ssHide — nothing
+//     keeps running behind a dismissed screensaver;
+//   • a hidden tab stops it: browsers already park rAF there, and the frame
+//     guard below drops the oversized dt that arrives on the way back, so a
+//     machine waking after hours does not replay them as one lurch;
+//   • prefers-reduced-motion means no animation at all.
+//
+// Sizes are fractions of the panel, never pixels, so the same burst reads
+// the same on a counter-top laptop and on a wall display.
+const _ssFx = { raf: 0, cv: null, ctx: null, rockets: [], sparks: [], flashes: [], next: 0, last: 0, w: 0, h: 0 };
+const SS_FX_COLORS = ['#ffd166', '#ffb703', '#ff8f3f', '#ff5d5d', '#ffe9a8', '#b6f5c8', '#9fd8ff'];
+const SS_FX_MAX = 4;
+
+// Honours the setting first, then the operator's own OS-level motion
+// preference — a person who has asked the machine for less movement does
+// not get fireworks because an admin liked them.
+function ssFxEnabled(){
+  if (!_ss.fireworks) return false;
+  try { if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false; } catch (_) {}
+  return true;
+}
+// Back the canvas with real device pixels, capped at 2× — a 3× phone panel
+// triples the fill cost for a difference nobody sees across a room.
+function ssFxSize(){
+  const cv = _ssFx.cv; if (!cv) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = cv.clientWidth || window.innerWidth;
+  const h = cv.clientHeight || window.innerHeight;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  _ssFx.w = w; _ssFx.h = h;
+  if (_ssFx.ctx) _ssFx.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+const ssFxPick = () => SS_FX_COLORS[(Math.random() * SS_FX_COLORS.length) | 0];
+
+function ssFxLaunch(){
+  const h = _ssFx.h;
+  _ssFx.rockets.push({
+    x: _ssFx.w * (0.12 + Math.random() * 0.76), y: h, py: h,
+    vy: -(h * 0.0128 + Math.random() * h * 0.0042),
+    // Detonate in the upper third, above the lockup. Bursting level with
+    // the name puts sparks THROUGH it at the brightest moment; sparks still
+    // drift down across the panel afterwards, which is the part worth having.
+    burstY: h * (0.09 + Math.random() * 0.25),
+    color: ssFxPick(),
+  });
+}
+function ssFxBurst(r){
+  const h = _ssFx.h;
+  _ssFx.flashes.push({ x: r.x, y: r.y, life: 0, max: 220, r: h * 0.055, color: r.color });
+  const n = 68 + ((Math.random() * 30) | 0);
+  for (let i = 0; i < n; i++) {
+    // Jittered ring rather than pure random: an even spread reads as a
+    // burst, where clustering just looks like a handful of stray dots.
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.22;
+    const sp = h * (0.0062 + Math.random() * 0.0118);
+    _ssFx.sparks.push({
+      x: r.x, y: r.y, px: r.x, py: r.y,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0, max: 1150 + Math.random() * 1150,
+      // A few white sparks per burst give it a hot centre.
+      color: Math.random() < 0.18 ? '#ffffff' : r.color,
+    });
+  }
+}
+function ssFxFrame(ts){
+  if (!_ssFx.ctx) return;
+  // First frame, and any frame after a long park (hidden tab, lid closed),
+  // advances by one step instead of replaying the whole gap at once.
+  const raw = _ssFx.last ? ts - _ssFx.last : 16.7;
+  _ssFx.last = ts;
+  const dt = Math.min(raw, 50);
+  const f = dt / 16.7;
+  const { ctx, w, h } = _ssFx;
+  const g = h * 0.00026;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+
+  _ssFx.next -= dt;
+  if (_ssFx.next <= 0 && _ssFx.rockets.length < SS_FX_MAX) {
+    ssFxLaunch();
+    _ssFx.next = 330 + Math.random() * 560;
+  }
+
+  for (let i = _ssFx.rockets.length - 1; i >= 0; i--) {
+    const r = _ssFx.rockets[i];
+    r.py = r.y; r.y += r.vy * f; r.vy += g * f;
+    if (r.y <= r.burstY || r.vy >= 0) { ssFxBurst(r); _ssFx.rockets.splice(i, 1); continue; }
+    ctx.strokeStyle = r.color;
+    ctx.beginPath(); ctx.moveTo(r.x, r.py); ctx.lineTo(r.x, r.y);
+    ctx.globalAlpha = 0.30; ctx.lineWidth = 6;   ctx.stroke();
+    ctx.globalAlpha = 0.95; ctx.lineWidth = 2.2; ctx.stroke();
+  }
+
+  for (let i = _ssFx.flashes.length - 1; i >= 0; i--) {
+    const fl = _ssFx.flashes[i];
+    fl.life += dt;
+    if (fl.life >= fl.max) { _ssFx.flashes.splice(i, 1); continue; }
+    const k = 1 - fl.life / fl.max;
+    const gr = ctx.createRadialGradient(fl.x, fl.y, 0, fl.x, fl.y, fl.r * (1.7 - k));
+    gr.addColorStop(0, fl.color); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = k * 0.55;
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(fl.x, fl.y, fl.r * (1.7 - k), 0, Math.PI * 2); ctx.fill();
+  }
+
+  for (let i = _ssFx.sparks.length - 1; i >= 0; i--) {
+    const s = _ssFx.sparks[i];
+    s.life += dt;
+    if (s.life >= s.max) { _ssFx.sparks.splice(i, 1); continue; }
+    s.px = s.x; s.py = s.y;
+    s.x += s.vx * f; s.y += s.vy * f;
+    s.vy += g * 0.58 * f;
+    const drag = Math.pow(0.986, f);
+    s.vx *= drag; s.vy *= drag;
+    // Sparks hold their colour then go out fast — a linear fade reads as a
+    // slow dissolve, which is not what a cracker does. k^1.4 keeps them
+    // legible for most of their life and then drops them.
+    const k = 1 - s.life / s.max;
+    const a = Math.pow(k, 1.4);
+    ctx.strokeStyle = s.color;
+    ctx.beginPath(); ctx.moveTo(s.px, s.py); ctx.lineTo(s.x, s.y);
+    // Halo first, bright core over it. Two strokes per spark is what makes
+    // a 2px line read as a point of LIGHT on a dark panel rather than as a
+    // coloured dash — and it is still cheap at this particle count.
+    ctx.globalAlpha = a * 0.30; ctx.lineWidth = 7;   ctx.stroke();
+    ctx.globalAlpha = a;        ctx.lineWidth = 2.3; ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  _ssFx.raf = requestAnimationFrame(ssFxFrame);
+}
+function ssFxStart(){
+  ssFxStop();
+  if (!ssFxEnabled()) return;
+  const cv = document.getElementById('ss-fx');
+  if (!cv || !cv.getContext) return;
+  _ssFx.cv = cv;
+  _ssFx.ctx = cv.getContext('2d');
+  ssFxSize();
+  _ssFx.rockets = []; _ssFx.sparks = []; _ssFx.flashes = [];
+  _ssFx.last = 0;
+  _ssFx.next = 220;              // one goes up almost at once, not after a wait
+  _ssFx.raf = requestAnimationFrame(ssFxFrame);
+}
+function ssFxStop(){
+  if (_ssFx.raf) { cancelAnimationFrame(_ssFx.raf); _ssFx.raf = 0; }
+  _ssFx.rockets = []; _ssFx.sparks = []; _ssFx.flashes = [];
+  _ssFx.last = 0;
+  if (_ssFx.ctx && _ssFx.w) _ssFx.ctx.clearRect(0, 0, _ssFx.w, _ssFx.h);
+}
+// The panel is fixed to the viewport, so a resized window must re-back the
+// canvas or the burst stretches. Only while it is actually up.
+window.addEventListener('resize', () => { if (_ss.on && _ssFx.ctx) ssFxSize(); });
 
 // Public branding (no auth) — drives the login + topbar from settings.
 // Falls back to the configured trade name; only shows generic placeholder
@@ -9138,12 +9461,26 @@ async function applyBranding(){
   if (name) {
     setText('login-brand-name', 'Sign in to your account');
     setText('topbar-brand-name', name);
-    setText('login-hero-eyebrow', name);
     document.title = `${name} — Admin`;
   }
-  if (sub) {
+  // The customer's company now leads the line UNDER the product chip,
+  // because the chip itself became the app name (below). Both are named:
+  // the software says what it is, the install says whose it is.
+  const heroSub = [name, sub].filter(Boolean).join(' · ');
+  if (heroSub) {
     setText('login-brand-sub', 'Enter your credentials to continue.');
-    setText('login-hero-sub', sub);
+    setText('login-hero-sub', heroSub);
+  }
+  // The app's own name in the product chip (app_name — the SOFTWARE, not
+  // the customer's company, which is what every other slot on this page
+  // shows). Public, because the login page is pre-auth: it rides
+  // /api/branding with the trade name and the logo.
+  const appEl = document.getElementById('login-hero-app');
+  if (appEl) {
+    const appName = String(b.appName || '').trim();
+    // Blank leaves the markup's own strapline in place — an install that
+    // has not named itself must not show an empty chip.
+    if (appName) appEl.textContent = appName;
   }
   // Logo on every brand surface — same uploaded file. Cache-bust so a
   // fresh upload appears without a hard reload.
@@ -16461,6 +16798,14 @@ function renderSettings(){renderSettingsNav();renderSettingsPanel()}
 // ── Settings field help text ───────────────────────────
 // Shown as a ? tooltip next to the label. Keep concise (1-2 lines).
 const FIELD_HELP = {
+  // ── This software's own identity (not the customer's company) ──
+  app_name:        'The name of THIS SOFTWARE — shown on the screensaver and in the product chip on the sign-in page. Not the same thing as Trade Name, which is your company and is what appears on every document and in the top bar. Leave blank to keep the built-in name.',
+  app_logo:        'Path to the APPLICATION logo shown on the screensaver (ships with the build as /logo-app.svg). This is not your company logo — that is the upload above and appears on invoices. Blank shows no mark on the screensaver.',
+  app_credit:      'Credit line printed under the application name on the screensaver, e.g. "Powered by KJ & Co". Blank hides the line.',
+  app_contact:     'Support phone number(s) printed under the credit line on the screensaver. Blank hides the line.',
+  // ── Screensaver ──
+  screensaver_minutes:   'Minutes of no keyboard/mouse activity before the screen is covered by the application panel. Any key or click clears it instantly. 0 = never. Nobody is signed out — it only covers the screen, so a priced lot grid or a seller\u2019s bank details are not left on display in a room people walk through.',
+  screensaver_fireworks: 'Animated fireworks on the screensaver panel. Turn it off for a still panel — worth doing on a machine driven over remote desktop, or for anyone who prefers less movement.',
   commission:      'In e-Auction mode, the percentage commission charged on (Amount + Refund). Default 1%.',
   hpc:             'Handling percentage applied on the commission. e.g. 10% means Handling = Commission × 10%.',
   deduction1:      'Company margin % on Grade 1 (Pooler) lots. P_Rate = round(Price × (1 − Deduction%)).',
@@ -20490,7 +20835,9 @@ function gotoLotsPage(p){
 
 async function loadLots(opts){
   const aid=document.getElementById('lot-auction').value;
-  if(!aid)return;
+  // No trade selected — drop any stale-figures banner left over from the
+  // trade that was open before, then bail.
+  if(!aid){ try { calcStaleBanner(''); } catch (_) {} return; }
   // Switching trades clears the bulk-tick set — ids from a different
   // auction are meaningless here. Same auction reload (refresh /
   // branch filter / post-action recalc) keeps the set so the sort-
@@ -20663,6 +21010,9 @@ async function loadLots(opts){
   // avoids confusion when business mode + state map to different companies.
   const calcBtn = document.getElementById('btn-calculate-all');
   if (calcBtn) calcBtn.textContent = `Calculate All (${getCurrentLogoCode()} · ${mode})`;
+  // Fire-and-forget: tell the operator if this trade is carrying stale
+  // figures instead of waiting for them to remember to press Calculate.
+  try { calcStaleBanner(aid); } catch (_) {}
   // Column set depends on mode:
   //   e-Auction: show Refund, Commission, Handling; HIDE P_Qty, P_Rate, PurAmt, Discount
   //   e-Trade:   show Discount, P_Qty, P_Rate, PurAmt; HIDE Refund, Commission, Handling
@@ -21203,7 +21553,15 @@ async function calculateAll(){
   const btn = document.getElementById('btn-calculate-all');
   await withBusy(btn, async () => {
     const d=await j(`/api/lots/calculate/${aid}`,{method:'POST'});
-    toast(`Calculated ${d.calculated} lots`);
+    // `changed` is how many were actually stale. Every write path now
+    // recalculates inline, so 0 is the healthy answer — say so plainly
+    // rather than reporting a number that looks like work was needed.
+    const _n = Number(d.changed);
+    toast(Number.isFinite(_n)
+      ? (_n === 0
+          ? `Checked ${d.calculated} lot${d.calculated === 1 ? '' : 's'} — all up to date`
+          : `Recalculated ${_n} of ${d.calculated} lot${d.calculated === 1 ? '' : 's'}`)
+      : `Calculated ${d.calculated} lots`);
     await loadLots();
   });
 }
@@ -21221,7 +21579,10 @@ async function recalcIncludingLocked(){
   const btn = document.getElementById('btn-recalc-locked');
   await withBusy(btn, async () => {
     const d = await j(`/api/lots/recalc-including-locked/${aid}`, { method:'POST' });
-    toast(`Recalculated ${d.calculated} lot${d.calculated===1?'':'s'}${d.locked?` (incl. ${d.locked} locked)`:''}`);
+    const _n = Number(d.changed);
+    toast(Number.isFinite(_n) && _n === 0
+      ? `Checked ${d.calculated} lot${d.calculated===1?'':'s'}${d.locked?` (incl. ${d.locked} locked)`:''} — all up to date`
+      : `Recalculated ${Number.isFinite(_n) ? _n : d.calculated} lot${(Number.isFinite(_n) ? _n : d.calculated)===1?'':'s'}${d.locked?` (incl. ${d.locked} locked)`:''}`);
     await loadLots();
   });
 }
@@ -29946,6 +30307,61 @@ async function regenRefreshBanner(auctionId, tabScope, docKey, label){
   scope.insertBefore(banner, scope.firstChild);
 }
 
+// Amber banner shown on the Lots screen when a trade is carrying lots
+// whose stamped figures no longer match their own price/qty under the
+// current settings — i.e. someone changed something and the recalculate
+// never happened.
+//
+// In normal operation this NEVER shows: every write path re-stamps in
+// the same request, and Payments / exports / document generation heal
+// on read. It's the safety net for drift the app didn't cause — a
+// restored backup, a hand-edited DB, an older client hitting an
+// endpoint we haven't wired — which is exactly the case where the
+// operator has to be told rather than left to remember.
+//
+// Locked lots are reported on a separate line: nothing automatic may
+// rewrite a finalised lot, so they need the admin "Recalc incl. locked"
+// button rather than plain Calculate All.
+async function calcStaleBanner(auctionId){
+  const scope = document.querySelector('#tc-lots');
+  if (!scope) return;
+  const existing = scope.querySelector(':scope > .calc-stale-banner');
+  let d = null;
+  if (auctionId) {
+    try { d = await j('/api/auctions/' + auctionId + '/calc-freshness'); }
+    catch (_) { d = null; }
+  }
+  const stale  = (d && Number(d.stale))       || 0;
+  const locked = (d && Number(d.lockedStale)) || 0;
+  if (!stale && !locked) { if (existing) existing.remove(); return; }
+  const banner = existing || document.createElement('div');
+  banner.className = 'calc-stale-banner';
+  banner.style.cssText = [
+    'display:flex','align-items:center','gap:12px',
+    'margin:0 0 12px 0','padding:10px 14px',
+    'background:#FEF3C7','border:1px solid #F59E0B',
+    'border-radius:8px','color:#7C2D12',
+    'font-size:13px','line-height:1.5',
+  ].join(';');
+  const parts = [];
+  if (stale) {
+    parts.push('<b>' + stale + ' lot' + (stale === 1 ? '' : 's') + ' need recalculating.</b> '
+      + 'Their Discount / P_Rate / PurAmt / Payable were worked out before the last change. '
+      + 'Press <b>Calculate All</b> — Payments and every export fix themselves on the way out, '
+      + 'but the Lots screen shows the old figures until you do.');
+  }
+  if (locked) {
+    parts.push((stale ? '<br>' : '')
+      + '<b>' + locked + ' locked lot' + (locked === 1 ? '' : 's') + '</b> also differ. '
+      + 'Locked rows are finalised, so nothing recalculates them automatically — '
+      + 'an admin can use <b>↻ Recalc incl. locked</b> if they should be re-stamped.');
+  }
+  banner.innerHTML =
+    '<span style="font-size:18px;line-height:1">⚠</span>'
+    + '<span style="flex:1">' + parts.join('') + '</span>';
+  if (!existing) scope.insertBefore(banner, scope.firstChild);
+}
+
 // Re-run pcRefreshGate against every gated tab scope that is currently
 // in the DOM, but only when that scope's auction selector points at
 // the auction we just verified. Used right after pcVerify so a clean
@@ -30286,6 +30702,57 @@ async function pcDownload(){
     <button type="button" onclick="document.getElementById('help-ov').style.display='none'" style="background:rgba(255,255,255,.22);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;padding:7px 16px;cursor:pointer">✕ Close</button>
   </div>
   <iframe title="How-to Guide" style="flex:1;width:100%;border:0;background:#fff"></iframe>
+</div>
+
+<!-- ── Screensaver ───────────────────────────────────────────────
+     An office machine sits on one screen all day — a priced lot grid, a
+     seller's bank details — in a room people walk through. After a few
+     quiet minutes this covers it, and the first key or click clears it.
+
+     A direct child of <body>, not of #app: #app is display:none on the
+     sign-in screen, and a hidden ancestor would leave the fireworks canvas
+     with no measurable size.
+
+     z-index 9000: ABOVE everything the app draws, and deliberately BELOW
+     the 9999 band every warning banner and overlay uses. Scenery must
+     never hide something the operator has to read.
+
+     aria-hidden + inert-by-display: it is scenery, so it never takes focus
+     or appears in the tab order. -->
+<div id="screensaver" aria-hidden="true" style="display:none;position:fixed;inset:0;z-index:9000;
+     background:linear-gradient(145deg,#06281d 0%,#0b3d2c 45%,#06281d 100%);
+     align-items:center;justify-content:center;cursor:none;user-select:none">
+  <!-- Fireworks. Behind the lockup and pointer-events:none, so it is
+       scenery in the literal sense — it can never intercept the key or
+       click that dismisses the screensaver. -->
+  <canvas id="ss-fx" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
+  <!-- One centred column, and every line in it shares that one axis —
+       name, credit, numbers, clock. 860px rather than 640: a three-word
+       product name ("SpiceFlow eAuction Suite") overflows the narrower box
+       and wraps mid-name, which is what makes the block look crooked. -->
+  <div style="position:relative;z-index:1;text-align:center;color:#fff;padding:24px;max-width:860px;margin:0 auto">
+    <!-- The APPLICATION's mark (app_logo), not the customer's upload. The
+         two are easily conflated, and showing the company logo here would
+         put the customer's brand on the one screen that is about the
+         software. -->
+    <img id="ss-logo" alt="" style="display:none;width:104px;height:104px;object-fit:contain;
+         margin:0 auto 22px;filter:drop-shadow(0 6px 18px rgba(0,0,0,.35))">
+    <!-- clamp(), not a fixed 46px: the name is operator-typed and can be
+         any length, so it scales with the viewport instead of spilling out
+         of the box on a laptop or a phone. balance keeps a wrap, if one is
+         still needed, from leaving a single orphan word. -->
+    <div id="ss-app" style="font-size:clamp(27px,4.4vw,46px);font-weight:800;letter-spacing:1.5px;line-height:1.14;text-wrap:balance">SpiceFlow eAuction Suite</div>
+    <!-- Credit + support numbers, as one block under a hairline so they
+         read as attribution rather than as part of the product name. The
+         rule is drawn by the wrapper, so it disappears along with the
+         block when both lines are blank. -->
+    <div id="ss-by" style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.14);display:none">
+      <div id="ss-credit" style="font-size:13.5px;font-weight:600;letter-spacing:1.2px;color:rgba(255,255,255,.78)"></div>
+      <div id="ss-contact" style="margin-top:5px;font-size:13.5px;letter-spacing:1.4px;color:rgba(255,255,255,.58);font-variant-numeric:tabular-nums"></div>
+    </div>
+    <div id="ss-clock" style="margin-top:26px;font-size:19px;font-weight:600;color:rgba(255,255,255,.88);font-variant-numeric:tabular-nums"></div>
+    <div style="margin-top:28px;font-size:12.5px;letter-spacing:.6px;color:rgba(255,255,255,.45)">Press any key or click to resume</div>
+  </div>
 </div>
 </body>
 </html>

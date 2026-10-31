@@ -704,6 +704,10 @@ app.get('/api/branding', (req, res) => {
     res.json({
       tradeName: cfg.trade_name || cfg.short_name || '',
       shortName: cfg.short_name || cfg.trade_name || '',
+      // The name of the SOFTWARE (app_name), which is NOT the customer's
+      // company above. Rides this endpoint rather than company-settings
+      // because the login page is pre-auth and that is where it prints.
+      appName: cfg.app_name || '',
       branch,
       gstin,
       logoUrl: '/logo-ispl.png',
@@ -719,7 +723,7 @@ app.get('/api/branding', (req, res) => {
       presetConfig,
     });
   } catch (e) {
-    res.json({ tradeName: '', shortName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '', preset: '', presetConfig: null });
+    res.json({ tradeName: '', shortName: '', appName: '', branch: '', gstin: '', logoUrl: null, theme: '', themeCustomColor: '', preset: '', presetConfig: null });
   }
 });
 
@@ -1436,6 +1440,148 @@ app.delete('/api/me/sessions/:tokenSuffix', requireView, (req, res) => {
 app.get('/api/company-settings', requireViewOrLotEntry, (req, res) => {
   res.json({ categories: CATEGORIES, settings: getAllSettings(getDb()) });
 });
+// ══════════════════════════════════════════════════════════════
+// LOT CALC — one writer, one staleness test
+// ══════════════════════════════════════════════════════════════
+// Every path that re-stamps a lot's planter columns used to carry its
+// own copy of the 20-column UPDATE plus its own idea of which rows were
+// in scope. That drift is how "the user forgot to recalculate" turned
+// into wrong money: the copies on the generate/preview paths only
+// healed lots that had NEVER been calculated (`puramt = 0`), so a lot
+// whose price changed AFTER a calculate — non-zero but wrong puramt —
+// slipped through every one of them and flowed into Payments and the
+// bank payment file.
+//
+// That logic now lives here, once:
+//   stampLotCalc    — the single UPDATE
+//   lotCalcDiffers  — is this lot's stamp stale under the current cfg?
+//   recalcLots / recalcLotIds / recalcAuctionLots — write back the stale
+//   countStaleLots  — the same test, read-only, for the UI badge
+//   healAuctionCalc — what the money endpoints call before reading
+const LOT_CALC_COLUMNS = [
+  'amount', 'pqty', 'prate', 'puramt', 'com', 'sertax', 'cgst', 'sgst', 'igst',
+  'advance', 'balance', 'bilamt', 'refund', 'refud',
+  'isp_pqty', 'isp_prate', 'isp_puramt', 'asp_pqty', 'asp_prate', 'asp_puramt',
+];
+const LOT_CALC_UPDATE_SQL =
+  `UPDATE lots SET ${LOT_CALC_COLUMNS.map(c => `${c}=?`).join(',')} WHERE id=?`;
+// `refud` (sample refund kg) is an INPUT that calculateLot passes through
+// untouched, so it can never differ — comparing it would be noise. Every
+// other column is derived: any of them being off means the lot's stamps
+// no longer match its own price/qty under the current settings.
+const LOT_CALC_COMPARE = LOT_CALC_COLUMNS.filter(c => c !== 'refud');
+// Which rows a calculate touches at all: a real sale (`amount`, or a
+// qty × price not yet stamped into `amount`), or a row still carrying
+// planter stamps that must be refreshed or cleared — e.g. a lot marked
+// WD after its math was computed, whose stale prate/puramt would
+// otherwise leak into bills, purchases and debit notes. One string so
+// the detector can never disagree with the writer about what's in scope.
+const CALCULABLE_LOTS_SQL = `( amount > 0
+        OR (qty > 0 AND price > 0)
+        OR puramt > 0 OR prate > 0
+        OR cgst > 0 OR sgst > 0 OR igst > 0 )`;
+
+function stampLotCalc(db, calc, id) {
+  db.run(LOT_CALC_UPDATE_SQL, [...LOT_CALC_COLUMNS.map(c => calc[c] || 0), id]);
+}
+
+// True when a lot's stored planter columns no longer match what
+// calculateLot() produces from its own inputs + the current settings.
+// Half-paisa tolerance: SQLite hands the stored values back as floats,
+// and re-stamping a whole trade over a 1e-13 drift would make the
+// "anything stale?" badge cry wolf on every read.
+function lotCalcDiffers(lot, calc) {
+  for (const col of LOT_CALC_COMPARE) {
+    if (Math.abs((Number(lot[col]) || 0) - (Number(calc[col]) || 0)) > 0.005) return true;
+  }
+  return false;
+}
+
+// Recalculate the given lot rows, writing back ONLY the ones whose
+// stamps actually moved. Returns { scanned, changed } — `scanned` is
+// what the routes have always reported as `calculated`; `changed` is how
+// many were genuinely stale (0 = there was nothing to forget).
+function recalcLots(db, lots, cfg) {
+  let scanned = 0, changed = 0;
+  for (const lot of lots) {
+    scanned++;
+    const calc = calculateLot(lot, cfg);
+    if (!lotCalcDiffers(lot, calc)) continue;
+    stampLotCalc(db, calc, lot.id);
+    changed++;
+  }
+  return { scanned, changed };
+}
+
+// Recalculate every calculable lot in ONE trade.
+//   opts.includeLocked — re-stamp finalised rows too. Admin action only;
+//   every automatic caller leaves locked lots alone.
+function recalcAuctionLots(db, auctionId, cfg, opts) {
+  if (!auctionId) return { scanned: 0, changed: 0 };
+  const lockClause = (opts && opts.includeLocked) ? '' : 'AND locked_at IS NULL';
+  return recalcLots(db, db.all(
+    `SELECT * FROM lots WHERE auction_id = ? ${lockClause} AND ${CALCULABLE_LOTS_SQL}`,
+    [auctionId]
+  ), cfg);
+}
+
+// Recalculate specific lot ids — what every bulk write calls on the way
+// out, so a price / grade / buyer / seller change is stamped in the SAME
+// request that made it. Removes the "forgot to press Calculate" window
+// instead of warning about it. Locked rows are skipped, as everywhere.
+function recalcLotIds(db, ids, cfg) {
+  const numeric = (Array.isArray(ids) ? ids : []).map(Number).filter(Number.isFinite);
+  let scanned = 0, changed = 0;
+  const CHUNK = 500;
+  for (let i = 0; i < numeric.length; i += CHUNK) {
+    const slice = numeric.slice(i, i + CHUNK);
+    const lots = db.all(
+      `SELECT * FROM lots
+        WHERE id IN (${slice.map(() => '?').join(',')})
+          AND locked_at IS NULL
+          AND ${CALCULABLE_LOTS_SQL}`,
+      slice
+    );
+    const r = recalcLots(db, lots, cfg);
+    scanned += r.scanned; changed += r.changed;
+  }
+  return { scanned, changed };
+}
+
+// Read-only twin of recalcAuctionLots: how many lots in this trade carry
+// stale stamps right now. Derived from the same compare, so it can never
+// disagree with the writer, and flag-free, so it also catches drift from
+// a path we forgot to wire up, a restored backup or a hand-edited DB.
+// Locked rows are counted separately — nothing automatic may rewrite
+// them, so they need the admin "Recalc incl. locked" action.
+function countStaleLots(db, auctionId, cfg) {
+  const out = { stale: 0, lockedStale: 0, scanned: 0 };
+  if (!auctionId) return out;
+  const lots = db.all(
+    `SELECT * FROM lots WHERE auction_id = ? AND ${CALCULABLE_LOTS_SQL}`, [auctionId]);
+  for (const lot of lots) {
+    out.scanned++;
+    if (!lotCalcDiffers(lot, calculateLot(lot, cfg))) continue;
+    if (lot.locked_at) out.lockedStale++; else out.stale++;
+  }
+  return out;
+}
+
+// Heal-on-read for the money paths. Called by every endpoint that turns
+// lots into a document or a payment figure — Payments, the bank file,
+// invoice / purchase / bill generation and their previews — so those
+// numbers come from the CURRENT price and settings whether or not
+// anyone remembered to press Calculate All. Replaces the old
+// `puramt = 0` top-up, which only caught never-calculated lots.
+// Best-effort: a heal failure must never take down a read.
+function healAuctionCalc(db, auctionId, cfg) {
+  try { return recalcAuctionLots(db, auctionId, cfg); }
+  catch (e) {
+    console.error('[calc heal] failed:', e && (e.stack || e.message || e));
+    return { scanned: 0, changed: 0 };
+  }
+}
+
 // Settings whose value feeds calculateLot — i.e. changing any of them makes
 // every already-calculated lot's stamped planter columns (prate/puramt/refund/
 // cgst/sgst/igst/advance/balance) stale. The classic symptom: turning on
@@ -1453,21 +1599,9 @@ const CALC_AFFECTING_SETTINGS = [
 // manual "Calculate All" uses; locked (finalised) lots are left untouched.
 function recalcUnlockedLots(db, cfg) {
   const lots = db.all(
-    `SELECT * FROM lots
-       WHERE locked_at IS NULL
-         AND ( amount > 0
-               OR (qty > 0 AND price > 0)
-               OR puramt > 0 OR prate > 0
-               OR cgst > 0 OR sgst > 0 OR igst > 0 )`
+    `SELECT * FROM lots WHERE locked_at IS NULL AND ${CALCULABLE_LOTS_SQL}`
   );
-  let n = 0;
-  for (const lot of lots) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.amount,c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-    n++;
-  }
-  return n;
+  return recalcLots(db, lots, cfg).scanned;
 }
 
 // Rates & charges whose changes are logged to settings_history and shown
@@ -5292,11 +5426,23 @@ function runLotImport(db, filePath, body) {
       }
     }
 
+    // Re-stamp every trade this import touched, in the same request that
+    // wrote the rows. A price import is the single biggest source of
+    // "changed but never recalculated" — the operator's next stop is
+    // usually Payments or the bank file, not the Calculate button.
+    // Locked lots are skipped by recalcAuctionLots, as everywhere.
+    const _importCfg = getSettingsFlat(db);
+    let recalculated = 0;
+
     // Build auction breakdown for the response
     const auctionBreakdown = [];
     for (const [key, count] of auctionStats) {
       const [ano, date] = key.split('|');
       const auc = auctionCache.get(key);
+      if (auc?.id) {
+        try { recalculated += recalcAuctionLots(db, auc.id, _importCfg).changed; }
+        catch (e) { console.error('[import recalc] failed:', e && (e.message || e)); }
+      }
       auctionBreakdown.push({ id: auc?.id, ano, date, count });
     }
     auctionBreakdown.sort((a,b) => String(a.ano).localeCompare(String(b.ano), undefined, {numeric:true}));
@@ -5304,6 +5450,7 @@ function runLotImport(db, filePath, body) {
     return {
       success: true,
       imported, updated, skipped, total: rows.length,
+      recalculated,
       auctionCount: auctionBreakdown.length,
       auctionBreakdown,
       autoAllocCreated,
@@ -5696,6 +5843,31 @@ app.get('/api/auctions/:id/resolve-buyers', requireViewOrLotEntry, (req, res) =>
     names,
     lots,
   });
+});
+
+// GET /api/auctions/:id/calc-freshness — how many lots in this trade are
+// carrying stale planter stamps right now. Read-only: it recomputes and
+// compares, but never writes, so the Lots screen can poll it to show a
+// "N lots need recalculating" badge without side effects.
+//
+// In normal operation this should always be 0 — every write path
+// re-stamps inline and every money path heals on read. A non-zero count
+// means something bypassed those paths (a restored backup, a hand-edited
+// DB, or a code path we haven't wired up), which is exactly when the
+// operator needs to be told rather than left to remember.
+//
+// `lockedStale` is reported separately: nothing automatic may rewrite a
+// finalised lot, so those need the admin "Recalc incl. locked" action.
+app.get('/api/auctions/:id/calc-freshness', requireView, (req, res) => {
+  const db = getDb();
+  const aid = parseInt(req.params.id, 10);
+  if (!aid) return res.status(400).json({ error: 'invalid auction id' });
+  try {
+    const out = countStaleLots(db, aid, getSettingsFlat(db));
+    res.json({ auctionId: aid, ...out });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/auctions/:id/doc-freshness — for each transaction doc type
@@ -6199,10 +6371,9 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   // If a field that feeds calculateLot changed, refresh the planter-side
   // columns in-place. Otherwise `prate`/`puramt`/`com`/`cgst`/`sgst`/
   // `igst`/`bilamt`/`advance`/`balance` stay frozen at their pre-edit
-  // values until the operator clicks Calculate All — and the generate
-  // endpoints' auto-calc only heals rows where `puramt = 0`, so a
-  // stale-but-non-zero puramt would silently flow into purchase
-  // invoices / bills / debit notes after a price tweak.
+  // values until the operator clicks Calculate All. The generate and
+  // payment endpoints now heal stale rows on read as well, but this
+  // keeps the Lots screen itself honest the moment the edit lands.
   //
   // Recalc runs even when the lot ends up with zero inputs (e.g.
   // code → WD, which zeroes price): calculateLot produces zeros for
@@ -6216,12 +6387,7 @@ app.put('/api/lots/:id', requireLotWrite, (req, res) => {
   if (current && !current.locked_at &&
       CALC_TRIGGER_FIELDS.some(f => Object.prototype.hasOwnProperty.call(l, f))) {
     const fresh = db.get('SELECT * FROM lots WHERE id = ?', [lotId]);
-    if (fresh) {
-      const cfg = getSettingsFlat(db);
-      const calc = calculateLot(fresh, cfg);
-      db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-        [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lotId]);
-    }
+    if (fresh) stampLotCalc(db, calculateLot(fresh, getSettingsFlat(db)), lotId);
   }
   // Any lot edit invalidates a previous price-check stamp — the data
   // the verify run looked at has changed. Operator must re-verify
@@ -6524,24 +6690,11 @@ app.post('/api/lots/calculate/:auctionId',
   // math was computed). Without this branch, Calculate All would leave
   // stale prate/puramt/cgst/sgst/igst on withdrawn lots — those values
   // would then leak into bills, purchases, and debit notes.
-  const lots = db.all(
-    `SELECT * FROM lots
-       WHERE auction_id = ?
-         AND locked_at IS NULL
-         AND ( amount > 0
-               OR (qty > 0 AND price > 0)
-               OR puramt > 0 OR prate > 0
-               OR cgst > 0 OR sgst > 0 OR igst > 0 )`,
-    [req.params.auctionId]
-  );
-  let count = 0;
-  for (const lot of lots) {
-    const calc = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
-    count++;
-  }
-  res.json({ success: true, calculated: count });
+  // `changed` is the honest number — how many lots were actually stale.
+  // Every write path now recalculates inline, so on a healthy trade this
+  // comes back 0 and the button is pure reassurance.
+  const r = recalcAuctionLots(db, parseInt(req.params.auctionId, 10), cfg);
+  res.json({ success: true, calculated: r.scanned, changed: r.changed });
 });
 
 // ── Admin: recalc ALL lots for ONE trade, INCLUDING locked ones ──────
@@ -6568,24 +6721,21 @@ app.post('/api/lots/recalc-including-locked/:auctionId', requireAdmin, (req, res
   if (!auctionId) return res.status(400).json({ error: 'Invalid auction id' });
   // Same row filter as Calculate All, but WITHOUT the `locked_at IS NULL`
   // guard so finalised lots are included.
-  const lots = db.all(
-    `SELECT * FROM lots
-       WHERE auction_id = ?
-         AND ( amount > 0
-               OR (qty > 0 AND price > 0)
-               OR puramt > 0 OR prate > 0
-               OR cgst > 0 OR sgst > 0 OR igst > 0 )`,
+  // Count the locked rows in scope BEFORE the recalc so the response can
+  // still say "incl. N locked" — the recalc itself no longer walks the
+  // rows here, it delegates to the shared writer.
+  const lockedRow = db.get(
+    `SELECT COUNT(*) AS n FROM lots
+      WHERE auction_id = ? AND locked_at IS NOT NULL AND ${CALCULABLE_LOTS_SQL}`,
     [auctionId]
   );
-  let count = 0, locked = 0;
-  for (const lot of lots) {
-    const calc = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
-    if (lot.locked_at) locked++;
-    count++;
-  }
-  res.json({ success: true, calculated: count, locked });
+  const r = recalcAuctionLots(db, auctionId, cfg, { includeLocked: true });
+  res.json({
+    success: true,
+    calculated: r.scanned,
+    changed: r.changed,
+    locked: (lockedRow && lockedRow.n) || 0,
+  });
 });
 
 // Recalculate every lot in every auction with the CURRENT business
@@ -6604,21 +6754,10 @@ app.post('/api/lots/calculate-all', requireLotWrite, (req, res) => {
   const db = getDb(); const cfg = getSettingsFlat(db);
   // Skip locked lots (same rationale as the per-auction calculate above).
   const lots = db.all(
-    `SELECT * FROM lots
-       WHERE locked_at IS NULL
-         AND ( amount > 0
-               OR (qty > 0 AND price > 0)
-               OR puramt > 0 OR prate > 0
-               OR cgst > 0 OR sgst > 0 OR igst > 0 )`
+    `SELECT * FROM lots WHERE locked_at IS NULL AND ${CALCULABLE_LOTS_SQL}`
   );
-  let count = 0;
-  for (const lot of lots) {
-    const calc = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET amount=?,pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [calc.amount,calc.pqty,calc.prate,calc.puramt,calc.com,calc.sertax,calc.cgst,calc.sgst,calc.igst,calc.advance,calc.balance,calc.bilamt,calc.refund||0,calc.refud||0,calc.isp_pqty||0,calc.isp_prate||0,calc.isp_puramt||0,calc.asp_pqty||0,calc.asp_prate||0,calc.asp_puramt||0,lot.id]);
-    count++;
-  }
-  res.json({ success: true, calculated: count });
+  const { scanned: count, changed } = recalcLots(db, lots, cfg);
+  res.json({ success: true, calculated: count, changed });
 });
 
 // ── Data validation (PRICHECK.PRG) ───────────────────────────
@@ -6658,7 +6797,13 @@ app.post('/api/lots/bulk-grade', requireLotWrite, (req, res) => {
     const _before = db.all(`SELECT id, auction_id, lot_no, name, grade FROM lots WHERE id IN (${placeholders})`, allowed);
     db.run(`UPDATE lots SET grade = ? WHERE id IN (${placeholders})`, [g, ...allowed]);
     logBulkLotChanges(db, req, _before, { grade: g });
-    res.json({ success: true, updated: allowed.length, grade: g, skipped_locked: skipped.length });
+    // Grade selects which deduction feeds P_Rate, so these lots' planter
+    // columns are now stale. Re-stamp them HERE rather than relying on the
+    // browser to fire Calculate afterwards — if that call is skipped, the
+    // tab is closed, or the network drops, the stale figures would flow
+    // straight into Payments and the bank file.
+    const _recalc = recalcLotIds(db, allowed, getSettingsFlat(db));
+    res.json({ success: true, updated: allowed.length, grade: g, skipped_locked: skipped.length, recalculated: _recalc.changed });
   } catch (e) {
     res.status(500).json({ error: 'Bulk grade update failed: ' + (e.message || e) });
   }
@@ -6794,7 +6939,11 @@ app.post('/api/lots/bulk-set-buyer', requireLotWrite, (req, res) => {
     logBulkLotChanges(db, req, _before, applied);
   }
   for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); if (hasPrice) _markPricesChanged(db, aid); }
-  res.json({ success: true, updated, requested: ids.length, skipped_locked: lockedIds.length });
+  // Re-stamp in the SAME request that changed the price/code — the client
+  // also fires Calculate after this, but that call must not be the only
+  // thing standing between a price edit and the bank payment file.
+  const _recalc = recalcLotIds(db, mutableIds, getSettingsFlat(db));
+  res.json({ success: true, updated, requested: ids.length, skipped_locked: lockedIds.length, recalculated: _recalc.changed });
 });
 
 app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
@@ -6838,11 +6987,16 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
       );
       logBulkLotChanges(db, req, _before, { buyer: 'WD', buyer1: 'Withdrawn', code: 'WD', sale: 'W', price: 0, amount: 0 });
       for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); _markPricesChanged(db, aid); }
+      // Zero the planter columns too — a withdrawn lot that keeps its old
+      // prate/puramt/GST leaks those figures into bills, purchases and
+      // debit notes. Done here, not left to a follow-up Calculate.
+      const _recalcWd = recalcLotIds(db, mutableIds, getSettingsFlat(db));
       return res.json({
         success: true,
         updated: mutableIds.length,
         buyer: 'WD', buyer1: 'Withdrawn', code: 'WD', sale: 'W',
         skipped_locked: lockedIds.length,
+        recalculated: _recalcWd.changed,
       });
     }
     const b = db.get(
@@ -6894,9 +7048,13 @@ app.post('/api/lots/bulk-buyer', requireLotWrite, (req, res) => {
       ? { buyer: b.buyer, buyer1: b.buyer1 || '', code: b.code || '', sale: saleVal, price: 0, amount: 0 }
       : { buyer: b.buyer, buyer1: b.buyer1 || '', code: b.code || '', sale: saleVal });
     for (const aid of touchedAuctions) { pcClearGate(db, aid); lvClearGate(db, aid); if (isWithdrawn) _markPricesChanged(db, aid); }
+    // The buyer's sale type (L/I/E/W) decides the GST regime, and a
+    // registered-WD buyer zeroes the price — either way the stamps move.
+    const _recalc = recalcLotIds(db, mutableIds, getSettingsFlat(db));
     res.json({
       success: true,
       updated: mutableIds.length,
+      recalculated: _recalc.changed,
       buyer: b.buyer,
       buyer1: b.buyer1 || '',
       code: b.code || '',
@@ -6986,12 +7144,17 @@ app.post('/api/lots/bulk-seller', requireLotWrite, (req, res) => {
       tel: t.tel || '', aadhar: t.aadhar || '', padd: t.padd || '', ppla: t.ppla || '',
       ppin: t.pin || '', pstate: t.pstate || '', pst_code: t.pst_code || '',
     });
+    // The new seller's `cr` decides intra- vs inter-state GST and which
+    // discount-days setting applies (dealer vs agriculturist), so the
+    // planter columns must be re-stamped for the reassigned lots.
+    const _recalc = recalcLotIds(db, mutableIds, getSettingsFlat(db));
     res.json({
       success: true,
       updated: mutableIds.length,
       trader_id: tid,
       name: t.name || '',
       skipped_locked: lockedIds.length,
+      recalculated: _recalc.changed,
     });
   } catch (e) {
     res.status(500).json({ error: 'Bulk seller update failed: ' + (e.message || e) });
@@ -7144,16 +7307,13 @@ app.post('/api/invoices/generate/:auctionId',
     return res.status(400).json({ error: 'saleType, buyerCode, and invoiceNo are required' });
   }
   
-  // Auto-calculate lots if puramt is missing (user might not have clicked Calculate)
-  // Locked lots are skipped — recalculating would overwrite the planter-side
-  // values they were confirmed at. The buildSalesInvoice call below also
-  // filters locked rows, so this is consistent.
-  const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0) AND locked_at IS NULL`, [req.params.auctionId]);
-  for (const lot of uncalc) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-  }
+  // Re-stamp any lot whose planter columns no longer match its own
+  // price/qty under the current settings — the user may never have
+  // pressed Calculate, or may have changed a price after they did.
+  // Locked lots are skipped: recalculating would overwrite the
+  // planter-side values they were confirmed at, and buildSalesInvoice
+  // filters locked rows too, so this stays consistent.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
 
   const invoice = buildSalesInvoice(db, req.params.auctionId, buyerCode, saleType, cfg, { noTI });
   if (!invoice) return res.status(404).json({ error: `No lots found for buyer "${buyerCode}" in this auction. Make sure lots have this buyer code assigned.` });
@@ -7367,14 +7527,9 @@ app.post('/api/invoices/generate-all/:auctionId',
   let nextNo = parseInt(startInvoiceNo);
   if (!nextNo || nextNo < 1) return res.status(400).json({ error: 'startInvoiceNo must be a positive integer' });
   
-  // Auto-calculate uncalculated lots — skip locked rows (recalc would
-  // overwrite the planter-side values they were finalised at).
-  const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0) AND locked_at IS NULL`, [req.params.auctionId]);
-  for (const lot of uncalc) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-  }
+  // Re-stamp every stale lot (never-calculated OR calculated-then-edited)
+  // — skip locked rows, which were finalised at their planter values.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
   
   // Get distinct buyers. When saleType filter is set, only buyers whose
   // default sale matches (or whose lots already have that sale assigned) are included.
@@ -8373,13 +8528,9 @@ app.post('/api/purchases/generate-all/:auctionId',
   let nextNo = parseInt(startInvoiceNo);
   if (!nextNo || nextNo < 1) return res.status(400).json({ error: 'startInvoiceNo must be a positive integer' });
   
-  // Auto-calculate
-  const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [req.params.auctionId]);
-  for (const lot of uncalc) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-  }
+  // Re-stamp stale lots so every document in this batch is built from
+  // current price + settings, calculated or not.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
   
   // Same dual-format GSTIN filter as the eligible-sellers endpoint —
   // ensures bare-GSTIN imports aren't silently skipped during batch
@@ -8712,13 +8863,8 @@ app.post('/api/bills/generate/:auctionId',
     return res.status(400).json({ error: 'sellerName and billNo are required' });
   }
   
-  // Auto-calculate if needed
-  const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [req.params.auctionId]);
-  for (const lot of uncalc) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-  }
+  // Re-stamp stale lots so the bill is built from current figures.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
   
   const bill = buildAgriBill(db, req.params.auctionId, sellerName, cfg);
   if (!bill || bill.error) {
@@ -8778,13 +8924,9 @@ app.post('/api/bills/generate-all/:auctionId',
   let nextNo = parseInt(startBillNo);
   if (!nextNo || nextNo < 1) return res.status(400).json({ error: 'startBillNo must be a positive integer' });
   
-  // Auto-calculate
-  const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [req.params.auctionId]);
-  for (const lot of uncalc) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-  }
+  // Re-stamp stale lots so every document in this batch is built from
+  // current price + settings, calculated or not.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
   
   const sellers = listAgriSellers(db, req.params.auctionId);
   if (!sellers.length) return res.status(404).json({ error: 'No agriculturist sellers (without GSTIN) with lots in this auction' });
@@ -10252,13 +10394,10 @@ app.post('/api/invoices/preview/:auctionId', requireView, (req, res) => {
   // Per-invoice "No Transport & Insurance" — preview reflects the toggle.
   const noTI = (req.body.noTI === true || String(req.body.noTI || '').toLowerCase() === 'true' || Number(req.body.noTI) === 1) ? 1 : 0;
 
-  // Auto-calculate any uncalculated lots first (read-only would be better but we need the data)
-  const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [req.params.auctionId]);
-  for (const lot of uncalc) {
-    const c = calculateLot(lot, cfg);
-    db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-      [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-  }
+  // Re-stamp stale lots first, so the preview shows exactly what
+  // Generate would produce (read-only would be better, but the builders
+  // read the stamped columns).
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
   
   let invoice;
   if (type === 'purchase') {
@@ -10286,16 +10425,11 @@ app.post('/api/invoices/preview-pdf/:auctionId', requireView, async (req, res) =
     const noTI = (req.body.noTI === true || String(req.body.noTI || '').toLowerCase() === 'true' || Number(req.body.noTI) === 1) ? 1 : 0;
     if (!saleType || !buyerCode) return res.status(400).json({ error: 'saleType and buyerCode are required' });
 
-    // Same uncalculated-lot top-up the JSON preview + Generate flows do, so the
-    // previewed figures match exactly what Generate would produce. This only
-    // fills derived calc fields on already-priced lots; it never touches
-    // invoice numbers or the invoices table.
-    const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [req.params.auctionId]);
-    for (const lot of uncalc) {
-      const c = calculateLot(lot, cfg);
-      db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-        [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-    }
+    // Same re-stamp the JSON preview + Generate flows do, so the previewed
+    // figures match exactly what Generate would produce. This only refreshes
+    // derived calc fields on already-priced lots; it never touches invoice
+    // numbers or the invoices table.
+    healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
 
     // includeLocked — the Pre-Invoice PDF is read-only, so it can also render
     // an already-generated (locked) buyer's invoice for verification.
@@ -10357,14 +10491,9 @@ app.get('/api/invoices/preview-all/:auctionId', requireView, (req, res) => {
 
     const previews = [];
     if (toBuild.length) {
-      // Only top up uncalculated priced lots when we're actually building a
-      // preview — keeps the buyers-list call side-effect-free.
-      const uncalc = db.all(`SELECT * FROM lots WHERE auction_id = ? AND amount > 0 AND (puramt IS NULL OR puramt = 0)`, [aid]);
-      for (const lot of uncalc) {
-        const c = calculateLot(lot, cfg);
-        db.run(`UPDATE lots SET pqty=?,prate=?,puramt=?,com=?,sertax=?,cgst=?,sgst=?,igst=?,advance=?,balance=?,bilamt=?,refund=?,refud=?,isp_pqty=?,isp_prate=?,isp_puramt=?,asp_pqty=?,asp_prate=?,asp_puramt=? WHERE id=?`,
-          [c.pqty,c.prate,c.puramt,c.com,c.sertax,c.cgst,c.sgst,c.igst,c.advance,c.balance,c.bilamt,c.refund||0,c.refud||0,c.isp_pqty||0,c.isp_prate||0,c.isp_puramt||0,c.asp_pqty||0,c.asp_prate||0,c.asp_puramt||0,lot.id]);
-      }
+      // Only re-stamp stale lots when we're actually building a preview —
+      // keeps the buyers-list call side-effect-free.
+      healAuctionCalc(db, parseInt(aid, 10), cfg);
       for (const b of toBuild) {
         // includeLocked — preview even already-generated (locked) invoices;
         // this endpoint is read-only.
@@ -10386,6 +10515,12 @@ app.get('/api/invoices/preview-all/:auctionId', requireView, (req, res) => {
 app.get('/api/payments/:auctionId', requireView, (req, res) => {
   const db = getDb();
   const cfg = getSettingsFlat(db);
+  // getPaymentSummary SUMs the stamped columns (puramt / refund / GST /
+  // balance) straight off the lots table — it does not recompute. So a
+  // lot edited after its last calculate would pay out at the OLD figure,
+  // and the bank file below would carry it. Re-stamp stale lots first;
+  // this is the last point before money leaves.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
   const summary = getPaymentSummary(db, req.params.auctionId, req.query.state, cfg);
   res.json(summary);
 });
@@ -10466,8 +10601,12 @@ app.post('/api/payments/:auctionId/delete-sellers', requireDelete, (req, res) =>
 
 // ── Bank payment data (BANKPAY.PRG) ──────────────────────────
 app.get('/api/payments/bank/:auctionId', requireView, (req, res) => {
-  const cfg = getSettingsFlat(getDb());
-  const data = getBankPaymentData(getDb(), req.params.auctionId, cfg);
+  const db = getDb();
+  const cfg = getSettingsFlat(db);
+  // Same heal as the Payments tab — this is the actual bank transfer
+  // file, so a stale payable here is money paid at the wrong amount.
+  healAuctionCalc(db, parseInt(req.params.auctionId, 10), cfg);
+  const data = getBankPaymentData(db, req.params.auctionId, cfg);
   res.json(data);
 });
 
@@ -10757,6 +10896,12 @@ app.get('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
   const { type, auctionId } = req.params;
   const format = (req.query.format || 'xlsx').toLowerCase();
 
+  // Every exporter here (bank payment, payment register, Tally, DBF,
+  // journals…) reads the STAMPED lot columns. Re-stamp the stale ones
+  // before the file is built — a document that leaves the app must not
+  // carry figures from before the last price / grade / buyer edit.
+  healAuctionCalc(getDb(), parseInt(auctionId, 10), getSettingsFlat(getDb()));
+
   if (format === 'pdf') {
     try {
       const db = getDb();
@@ -10841,6 +10986,10 @@ app.post('/api/exports/:type/:auctionId', requireExport, async (req, res) => {
 
   const exportDef = EXPORT_TYPES[type];
   if (!exportDef) return res.status(400).json({ error: 'Unknown export type', available: Object.keys(EXPORT_TYPES) });
+
+  // Same re-stamp as the GET form — this is the "Export Selected" path
+  // for the bank payment file, so stale figures here are money.
+  healAuctionCalc(getDb(), parseInt(auctionId, 10), getSettingsFlat(getDb()));
 
   try {
     const db = getDb();
