@@ -8026,6 +8026,10 @@ function applyPermissionAttributes(){
   // Set role attribute for role-based UI gating (lot_entry hides
   // everything except Lot Entry sidebar item, etc.)
   if (window._userRole) body.setAttribute('data-role', window._userRole);
+  // The sidebar accordion stands down for lot_entry (that role has no group
+  // labels to click, and its one item would vanish with its group), so it
+  // has to be re-evaluated the moment the role lands.
+  if (typeof sideAccordionApply === 'function') { try { sideAccordionApply(); } catch(_){} }
   // Update the role badge in the topbar with role-themed colors
   const badge = document.getElementById('user-role-badge');
   const usernameEl = document.getElementById('user-lbl');
@@ -9926,6 +9930,9 @@ async function fdRunQuery(){
 function go(tab){
   window._currentTab = tab;
   document.querySelectorAll('.side-item').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
+  // Sidebar accordion: the open group follows the screen, so switching to a
+  // tab in another group closes the one you came from.
+  if (typeof sideAccordionSyncToTab === 'function') { try { sideAccordionSyncToTab(tab); } catch(_){} }
   document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
   const el=document.getElementById('tc-'+tab);if(el)el.classList.add('active');
   // Paint the plain-English guide banner for this screen.
@@ -9980,37 +9987,93 @@ function go(tab){
   // Auto-close sidebar on mobile after selection
   if(window.innerWidth<=900){const sb=document.getElementById('sidebar');const ov=document.getElementById('sb-overlay');if(sb)sb.classList.remove('open');if(ov)ov.classList.remove('open')}
 }
-// Click on a side-group label toggles its "section-collapsed" class —
-// hides the items beneath, leaves the label as a clickable header. State
-// persists per group label text, so reloads remember which sections the
-// user closed. Only active when the sidebar is FULL-width: in collapsed
-// (icon-only) mode the labels are hidden anyway, so per-group collapse
-// has no meaning.
-(function wireSideGroupCollapse(){
-  // Read the persisted set of collapsed group names. Falls back to an
-  // empty set when nothing's been saved or when the JSON is malformed.
-  let collapsedGroups = new Set();
-  try {
-    const raw = localStorage.getItem('sideGroupsCollapsed');
-    if (raw) collapsedGroups = new Set(JSON.parse(raw));
-  } catch(e){}
-  const persist = () => {
-    try { localStorage.setItem('sideGroupsCollapsed', JSON.stringify([...collapsedGroups])); } catch(e){}
-  };
-  // Apply persisted state on DOM ready, then attach click handlers.
+// ── Sidebar groups: one open at a time (accordion) ──────────────────
+//
+// Seven groups and some thirty items: with every group open the list ran
+// well past the fold on a laptop, so the screen you wanted was a scroll
+// away and the shape of the menu was impossible to take in at a glance.
+//
+// The rule is now: exactly ONE group is open — the one holding the screen
+// you are on. Opening another closes the rest, and navigating moves the
+// open group to wherever you landed. Nothing is remembered across reloads,
+// because there is nothing to remember: the open group is derived from the
+// current screen, and a reload always lands on the same one.
+//
+// Clicking the open group's own label closes it, leaving everything shut.
+// That is the one state the rule above does not produce, and it is worth
+// having — it is how you see the whole menu at once.
+//
+// The label text is the group's identity. Nothing else distinguishes them
+// in the markup, and it is stable: these seven are hard-coded above.
+let _sideOpenGroup = null;
+
+function _sideGroupName(group){
+  const lbl = group && group.querySelector('.side-group-lbl');
+  return lbl ? (lbl.textContent || '').trim() : '';
+}
+// Is per-group collapse meaningful right now? Two modes hide the labels,
+// and in both, collapsing a group would hide its items with NO WAY to get
+// them back — `.side-group.section-collapsed .side-item` is
+// display:none!important, deliberately outranking the permission rules:
+//   • the icon-only rail — labels are display:none, so the rail would go
+//     blank except for one group's icons;
+//   • the lot_entry role — every label is hidden and a single item is
+//     left, which would vanish with its group.
+// In those the class is stripped from the DOM rather than merely ignored.
+function _sideAccordionActive(){
+  if (document.documentElement.classList.contains('sidebar-collapsed')) return false;
+  const sb = document.getElementById('sidebar');
+  if (sb && sb.classList.contains('collapsed')) return false;
+  if (document.body.getAttribute('data-role') === 'lot_entry') return false;
+  return true;
+}
+// Paint _sideOpenGroup onto the DOM.
+function sideAccordionApply(){
+  const live = _sideAccordionActive();
+  document.querySelectorAll('.side-group').forEach(group => {
+    const open = !live || _sideGroupName(group) === _sideOpenGroup;
+    group.classList.toggle('section-collapsed', !open);
+  });
+}
+// Open one group and close every other. null closes them all.
+function sideAccordionOpen(name){
+  _sideOpenGroup = name || null;
+  sideAccordionApply();
+}
+// Move the open group to whichever one holds `tab`. A tab that lives in no
+// group (the Help overlay is a sidebar button with no data-tab, and a
+// future screen might be reached only from a button) leaves the accordion
+// exactly where it is rather than closing everything under the operator.
+function sideAccordionSyncToTab(tab){
+  if (!tab) return;
+  // Matched in JS rather than through a built selector — `tab` reaches this
+  // from go(), and a selector assembled from a caller's string is a trap
+  // waiting for the first tab name with a quote in it.
+  const item = Array.from(document.querySelectorAll('.side-item'))
+    .find(el => el.dataset && el.dataset.tab === tab);
+  const group = item && item.closest('.side-group');
+  if (group) sideAccordionOpen(_sideGroupName(group));
+}
+(function wireSideGroupAccordion(){
+  // The previous build persisted a set of CLOSED groups under this key.
+  // The accordion derives its state from the current screen instead, so the
+  // old value is dead weight that would only confuse the next reader.
+  try { localStorage.removeItem('sideGroupsCollapsed'); } catch(e){}
   document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.side-group').forEach(group => {
       const lbl = group.querySelector('.side-group-lbl');
       if (!lbl) return;
-      const name = (lbl.textContent || '').trim();
-      if (collapsedGroups.has(name)) group.classList.add('section-collapsed');
       lbl.addEventListener('click', () => {
-        const nowCollapsed = group.classList.toggle('section-collapsed');
-        if (nowCollapsed) collapsedGroups.add(name);
-        else collapsedGroups.delete(name);
-        persist();
+        const name = _sideGroupName(group);
+        // Clicking the open group's own label shuts it: a header that does
+        // nothing when clicked reads as broken.
+        sideAccordionOpen(name === _sideOpenGroup ? null : name);
       });
     });
+    // Open the group holding whatever screen we booted onto, and collapse
+    // the other six. This is the "collapsed by default" state: the menu
+    // opens showing where you are, not all thirty items.
+    sideAccordionSyncToTab(window._currentTab || 'dash');
   });
 })();
 function toggleSidebar(){
@@ -10033,6 +10096,10 @@ function toggleSidebarCollapse(){
   const wasCollapsed = sb.classList.toggle('collapsed');
   document.documentElement.classList.toggle('sidebar-collapsed', wasCollapsed);
   try { localStorage.setItem('sidebarCollapsed', wasCollapsed ? '1' : '0'); } catch(e){}
+  // The icon rail has no group labels, so a collapsed group there would
+  // hide its icons with nothing left to click. Strip the class on the way
+  // in, put it back on the way out.
+  if (typeof sideAccordionApply === 'function') { try { sideAccordionApply(); } catch(_){} }
 }
 
 // Sync .collapsed class on <aside> with the .sidebar-collapsed class
